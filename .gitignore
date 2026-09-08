@@ -1,0 +1,12 @@
+/target
+**/target
+node_modules/
+dist-app/
+*.mp4
+*.ts
+!src/**/*.ts
+.env
+/dist
+
+# local tool state and worktrees; never commit them
+.claude/

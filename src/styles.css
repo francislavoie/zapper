@@ -1,0 +1,4 @@
+/* Every layer must stay transparent or the video surface beneath is hidden. */
+html, body, #root { margin: 0; height: 100%; background: transparent; }
+body { font: 14px system-ui, sans-serif; color: #fff; overflow: hidden; }
+.shell { position: fixed; inset: 0; pointer-events: none; }
