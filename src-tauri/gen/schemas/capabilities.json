@@ -1,1 +1,1 @@
-{}
+{"default":{"identifier":"default","description":"Permissions the main window needs. Deliberately minimal: only fullscreen, which the player chrome toggles with F.","local":true,"windows":["main"],"permissions":["core:default","core:window:allow-set-fullscreen","core:window:allow-is-fullscreen"]}}

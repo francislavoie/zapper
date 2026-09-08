@@ -52,6 +52,14 @@ CREATE TABLE IF NOT EXISTS quality (
     last_error  TEXT
 );
 
+-- Small key/value store for state that must outlive the process, such as
+-- when the mirror last refreshed. Reported to the UI, so a restart should not
+-- claim the catalogue has never synced.
+CREATE TABLE IF NOT EXISTS meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS activity (
     stream_id     INTEGER PRIMARY KEY,
     watch_seconds INTEGER NOT NULL DEFAULT 0,

@@ -44,6 +44,11 @@ pub fn run() {
             // Not app.manage(): the overlay holds Rc and GTK objects, so it is
             // !Send. It lives in a GTK-main-thread local instead.
             surface::set_installed(overlay);
+
+            // Refresh the mirror in the background. Startup never waits on it:
+            // reads answer from SQLite, and a week-old cache opens as fast as
+            // a fresh one.
+            catalog::sync_engine::spawn(app.handle().clone());
             Ok(())
         })
         .run(tauri::generate_context!())

@@ -89,6 +89,22 @@ impl XtreamClient {
         )
     }
 
+    /// Opens the XMLTV guide as a stream.
+    ///
+    /// Returns the response rather than the bytes: a guide can run to tens
+    /// of megabytes and must be parsed incrementally, never buffered whole.
+    /// Lives here so callers do not rebuild a client and re-guess the user
+    /// agent some servers require.
+    pub async fn xmltv_stream(&self) -> Result<reqwest::Response> {
+        self.http
+            .get(self.xmltv_url())
+            .send()
+            .await
+            .context("fetching the guide")?
+            .error_for_status()
+            .context("the panel refused the guide")
+    }
+
     pub async fn login(&self) -> Result<UserInfo> {
         #[derive(serde::Deserialize)]
         struct Envelope {

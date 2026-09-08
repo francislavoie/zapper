@@ -1,0 +1,155 @@
+// The two-zone pixel/time mapping. Property tests here, because a linear scale over 3 days would make the 4-minute buffer one pixel
+// wide and the bug would be invisible rather than obvious.
+
+import test from "node:test";
+import assert from "node:assert/strict";
+import {
+  ARCHIVE_FRACTION,
+  DAY,
+  behindLiveAt,
+  catchupRequest,
+  geometry,
+  pixelAtTime,
+  seekCost,
+  timeAtPixel,
+  zoneAtPixel,
+} from "../logic/scrubber.ts";
+
+const NOW = 1_757_000_000;
+const W = 800;
+
+const archived = geometry({
+  width: W,
+  hasArchive: true,
+  archiveDays: 3,
+  bufferedBack: 240,
+  now: NOW,
+});
+
+const plain = geometry({
+  width: W,
+  hasArchive: false,
+  archiveDays: null,
+  bufferedBack: 240,
+  now: NOW,
+});
+
+const near = (a, b, eps = 1e-6) => assert.ok(Math.abs(a - b) < eps, `${a} !≈ ${b}`);
+
+test("the seam sits where the archive zone ends", () => {
+  near(archived.seamPx, W * ARCHIVE_FRACTION);
+  assert.equal(plain.seamPx, 0);
+});
+
+test("the archive zone spans exactly the advertised days", () => {
+  near(archived.archiveStart, NOW - 3 * DAY);
+  near(timeAtPixel(archived, 0), NOW - 3 * DAY);
+});
+
+test("the seam is the boundary between reconnect and instant", () => {
+  near(timeAtPixel(archived, archived.seamPx), NOW - 240);
+  assert.equal(seekCost(archived, NOW - 241), "reconnect");
+  assert.equal(seekCost(archived, NOW - 239), "instant");
+  // Without catchup nothing costs a reconnect: there is nowhere to reconnect to.
+  assert.equal(seekCost(plain, NOW - 100000), "instant");
+});
+
+test("the right edge is live in both layouts", () => {
+  near(timeAtPixel(archived, W), NOW);
+  near(timeAtPixel(plain, W), NOW);
+});
+
+test("without archive the whole bar is the buffer", () => {
+  near(timeAtPixel(plain, 0), NOW - 240);
+  near(timeAtPixel(plain, W / 2), NOW - 120);
+  assert.equal(zoneAtPixel(plain, 0), "buffer");
+  assert.equal(zoneAtPixel(plain, W - 1), "buffer");
+});
+
+test("the four-minute buffer gets a real share of the width, not one pixel", () => {
+  const bufferPixels = W - archived.seamPx;
+  assert.ok(bufferPixels > 200, `buffer got ${bufferPixels}px`);
+  // A linear scale would have given it this, which is the bug being avoided.
+  const linear = (240 / (3 * DAY)) * W;
+  assert.ok(linear < 1);
+});
+
+test("pixel and time round-trip across both zones", () => {
+  for (let px = 0; px <= W; px += 7) {
+    near(pixelAtTime(archived, timeAtPixel(archived, px)), px, 1e-6);
+    near(pixelAtTime(plain, timeAtPixel(plain, px)), px, 1e-6);
+  }
+});
+
+test("time and pixel round-trip from the time side too", () => {
+  const samples = [
+    NOW,
+    NOW - 1,
+    NOW - 239,
+    NOW - 240,
+    NOW - 241,
+    NOW - 3600,
+    NOW - DAY,
+    NOW - 3 * DAY,
+  ];
+  for (const t of samples) {
+    near(timeAtPixel(archived, pixelAtTime(archived, t)), t, 1e-3);
+  }
+});
+
+test("the mapping is monotonic — later time is never further left", () => {
+  let prev = -Infinity;
+  for (let px = 0; px <= W; px += 1) {
+    const t = timeAtPixel(archived, px);
+    assert.ok(t >= prev, `went backwards at ${px}`);
+    prev = t;
+  }
+});
+
+test("pixels outside the bar clamp to its ends", () => {
+  near(timeAtPixel(archived, -500), NOW - 3 * DAY);
+  near(timeAtPixel(archived, W + 500), NOW);
+  near(pixelAtTime(archived, NOW + 9999), W);
+  near(pixelAtTime(archived, NOW - 99 * DAY), 0);
+});
+
+test("an empty buffer puts the playhead at the live edge instead of dividing by zero", () => {
+  const g = geometry({ width: W, hasArchive: false, archiveDays: null, bufferedBack: 0, now: NOW });
+  near(pixelAtTime(g, NOW), W);
+  near(timeAtPixel(g, 0), NOW);
+  assert.ok(Number.isFinite(pixelAtTime(g, NOW - 10)));
+});
+
+test("a zero-width bar answers without NaN", () => {
+  const g = geometry({ width: 0, hasArchive: true, archiveDays: 7, bufferedBack: 60, now: NOW });
+  assert.equal(timeAtPixel(g, 10), NOW);
+  assert.equal(pixelAtTime(g, NOW - 60), 0);
+});
+
+test("hasArchive with no archiveDays is treated as no archive", () => {
+  const g = geometry({ width: W, hasArchive: true, archiveDays: null, bufferedBack: 60, now: NOW });
+  assert.equal(g.hasArchive, false);
+  assert.equal(g.seamPx, 0);
+});
+
+test("behindLiveAt is what seek_relative and the readout speak in", () => {
+  near(behindLiveAt(archived, NOW), 0);
+  near(behindLiveAt(archived, NOW - 90), 90);
+  near(behindLiveAt(archived, NOW + 10), 0);
+});
+
+test("a catchup request starts on a minute boundary and runs to live", () => {
+  const t = NOW - 2 * 3600 - 37;
+  const r = catchupRequest(archived, t);
+  assert.equal(r.start % 60, 0);
+  assert.ok(r.start <= t);
+  assert.ok(r.durationMinutes >= 120);
+  // Clamped into the archive: asking for buffer time as catchup makes no sense.
+  assert.ok(catchupRequest(archived, NOW).start <= archived.bufferStart);
+});
+
+test("a seven-day archive is seven days wide", () => {
+  const g = geometry({ width: W, hasArchive: true, archiveDays: 7, bufferedBack: 240, now: NOW });
+  near(timeAtPixel(g, 0), NOW - 7 * DAY);
+  near(timeAtPixel(g, g.seamPx), NOW - 240);
+});

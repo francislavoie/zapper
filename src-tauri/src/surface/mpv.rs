@@ -13,7 +13,7 @@ use anyhow::{anyhow, Context, Result};
 use gtk::prelude::*;
 use libmpv2::render::{OpenGLInitParams, RenderContext, RenderParam, RenderParamApiType};
 use libmpv2::Mpv;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::surface::gl;
@@ -78,6 +78,9 @@ impl Player {
         let mpv: &'static Mpv = Box::leak(Box::new(mpv));
         MPV.with(|m| *m.borrow_mut() = Some(mpv));
         AREA.with(|a| *a.borrow_mut() = Some(area.clone()));
+        // Register on the way out so command code can reach the player without
+        // `lib.rs` having to remember a second call.
+        set_installed(Player);
         Ok(Self)
     }
 
@@ -245,4 +248,307 @@ pub(crate) fn draw(area: &gtk::GLArea) -> bool {
             }
         }
     })
+}
+
+// ---------------------------------------------------------------------------
+// Command-facing API: registry, event pump, and property probe.
+//
+// Everything below is main-thread-only for the same reason as the rest of this
+// module: `MPV` is a thread-local. Tauri commands reach it through
+// `AppHandle::run_on_main_thread` and [`with_player`].
+// ---------------------------------------------------------------------------
+
+thread_local! {
+    /// The installed player, reachable only from the GTK main thread.
+    ///
+    /// `Player` is zero-sized, but the registry still has to exist: the real
+    /// state is in `MPV`/`CTX`/`AREA`, which are thread-locals of *this*
+    /// thread, so "is there a player here" is a per-thread question.
+    static INSTALLED: RefCell<Option<Player>> = const { RefCell::new(None) };
+
+    /// One ticker per process. A second one would double every state update
+    /// and drain the event queue behind the first one's back.
+    static TICKING: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Records the player for later command access. Called by [`Player::new`], so
+/// no caller has to remember to.
+pub fn set_installed(p: Player) {
+    INSTALLED.with(|i| *i.borrow_mut() = Some(p));
+}
+
+/// Runs `f` against the player. Returns `None` off the GTK main thread or
+/// before the player is created - never blocks, so a command that arrives
+/// early fails fast instead of hanging.
+pub fn with_player<R>(f: impl FnOnce(&Player) -> R) -> Option<R> {
+    INSTALLED.with(|i| i.borrow().as_ref().map(f))
+}
+
+/// Installs a main-thread timer handing the player to `f` every `interval`.
+///
+/// The state feed needs a heartbeat: mpv reports first frame, end of file and
+/// cache movement through an event queue that somebody has to drain, and an
+/// undrained queue eventually overflows. Idempotent - a second call is a
+/// no-op, because two tickers would each emit a state event per change.
+///
+/// Must be called on the GTK main thread.
+pub fn start_ticker(interval: std::time::Duration, mut f: impl FnMut(&Player) + 'static) {
+    if TICKING.with(|t| t.replace(true)) {
+        return;
+    }
+    gtk::glib::timeout_add_local(interval, move || {
+        with_player(&mut f);
+        gtk::glib::ControlFlow::Continue
+    });
+}
+
+/// What mpv reported since the last pump. Plain data: it crosses back to the
+/// command thread, where GTK types may not go.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Signal {
+    StartFile,
+    FileLoaded,
+    /// First frame of a new size - the honest "playing" signal. `file-loaded`
+    /// fires before a single frame is decoded, so a stream that connects and
+    /// then stalls would otherwise look healthy.
+    VideoReconfig,
+    /// Playback of a file ended.
+    EndFile {
+        /// Set when mpv called it a failure rather than an ending.
+        error: Option<String>,
+        /// True when it ended only because something else was loaded over it.
+        /// The obituary of the *previous* stream arrives after the next one
+        /// has already opened, and acting on it would knock a healthy channel
+        /// change back to stopped.
+        replaced: bool,
+    },
+}
+
+/// A snapshot of the properties the UI shows. Plain data, same reason.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Probe {
+    pub width: Option<i64>,
+    pub height: Option<i64>,
+    pub fps: Option<f64>,
+    pub codec: Option<String>,
+    /// Seconds between the newest demuxed packet and where playback is.
+    pub behind_live: f64,
+    /// Seconds of scrollback the demuxer is still holding.
+    pub buffered_back: f64,
+    pub paused: bool,
+    /// The end of mpv's seekable window, in stream time - the furthest
+    /// forward a seek can actually land.
+    pub live_edge: Option<f64>,
+    pub time_pos: Option<f64>,
+}
+
+/// Logged once if mpv will not hand back `demuxer-cache-state`, so the
+/// degraded scrollback figure is explained exactly once rather than never or
+/// four times a second.
+static CACHE_STATE_WARNED: AtomicBool = AtomicBool::new(false);
+
+impl Player {
+    /// Sends a raw mpv command, as written in `input.conf`.
+    pub fn command(&self, name: &str, args: &[&str]) -> Result<()> {
+        Self::mpv()?
+            .command(name, args)
+            .with_context(|| format!("mpv command {name}"))
+    }
+
+    pub fn set_flag(&self, key: &str, value: bool) -> Result<()> {
+        Self::mpv()?
+            .set_property(key, value)
+            .with_context(|| format!("setting {key}"))
+    }
+
+    pub fn set_f64(&self, key: &str, value: f64) -> Result<()> {
+        Self::mpv()?
+            .set_property(key, value)
+            .with_context(|| format!("setting {key}"))
+    }
+
+    /// `None` rather than `Err` throughout the getters: almost every property
+    /// here is legitimately unavailable before the first frame, and a caller
+    /// polling for it does not want an error per tick.
+    pub fn get_f64(&self, key: &str) -> Option<f64> {
+        Self::mpv().ok()?.get_property::<f64>(key).ok()
+    }
+
+    pub fn get_i64(&self, key: &str) -> Option<i64> {
+        Self::mpv().ok()?.get_property::<i64>(key).ok()
+    }
+
+    pub fn get_bool(&self, key: &str) -> Option<bool> {
+        Self::mpv().ok()?.get_property::<bool>(key).ok()
+    }
+
+    pub fn get_string(&self, key: &str) -> Option<String> {
+        let s = Self::mpv().ok()?.get_property::<String>(key).ok()?;
+        (!s.is_empty()).then_some(s)
+    }
+
+    /// Drains mpv's event queue.
+    ///
+    /// Somebody must: mpv buffers events and eventually reports
+    /// `QueueOverflow`, and the "first frame arrived" edge exists nowhere
+    /// else. Called from the ticker, on the main thread.
+    pub fn pump(&self) -> Vec<Signal> {
+        let Ok(mpv) = Self::mpv() else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        // 0.0 polls rather than waits; this runs on the GTK main thread and
+        // must never block it.
+        while let Some(ev) = mpv.wait_event(0.0) {
+            match ev {
+                Ok(libmpv2::events::Event::StartFile) => out.push(Signal::StartFile),
+                Ok(libmpv2::events::Event::FileLoaded) => out.push(Signal::FileLoaded),
+                Ok(libmpv2::events::Event::VideoReconfig) => out.push(Signal::VideoReconfig),
+                Ok(libmpv2::events::Event::EndFile(reason)) => out.push(Signal::EndFile {
+                    error: None,
+                    replaced: matches!(
+                        reason,
+                        libmpv2::mpv_end_file_reason::Stop
+                            | libmpv2::mpv_end_file_reason::Redirect
+                            | libmpv2::mpv_end_file_reason::Quit
+                    ),
+                }),
+                Ok(libmpv2::events::Event::QueueOverflow) => {
+                    tracing::warn!("mpv event queue overflowed; some state changes were lost");
+                }
+                Ok(_) => {}
+                // libmpv2 folds a failed `end-file` into `Err`, so this is the
+                // only place a playback failure is reported.
+                Err(e) => out.push(Signal::EndFile {
+                    error: Some(e.to_string()),
+                    replaced: false,
+                }),
+            }
+        }
+        out
+    }
+
+    /// The window mpv will actually seek within, plus where it is reading.
+    ///
+    /// Two traps live here, both found by measuring against a real server
+    /// rather than read out of the manual.
+    ///
+    /// `demuxer-cache-state` is an `MPV_FORMAT_NODE` map whose handler
+    /// implements only a plain GET, so the `demuxer-cache-state/cache-end`
+    /// path does not resolve. The whole node is read as a string instead -
+    /// mpv renders a node as JSON - and parsed here.
+    ///
+    /// And the seekable window is **not** `cache-begin`..`cache-end`. There
+    /// is no `cache-begin` key at all, and `seekable-ranges` ends one to three
+    /// seconds short of `cache-end`, because the tail of the cache is buffered
+    /// but not yet seekable. A seek past that end is refused silently -
+    /// playback simply stays where it was - so this is the number that must
+    /// drive both the live edge and the forward clamp.
+    fn cache_window(&self) -> Option<(Option<f64>, Option<f64>, Option<f64>)> {
+        let raw = self.get_string("demuxer-cache-state")?;
+        let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
+        let ranges = v.get("seekable-ranges").and_then(|r| r.as_array());
+        let bound = |which: fn(&[serde_json::Value]) -> Option<&serde_json::Value>, key| {
+            ranges
+                .and_then(|r| which(r))
+                .and_then(|r| r.get(key))
+                .and_then(|x| x.as_f64())
+        };
+        let start = bound(<[_]>::first, "start");
+        let end = bound(<[_]>::last, "end").or_else(|| v.get("cache-end").and_then(|x| x.as_f64()));
+        let reader = v.get("reader-pts").and_then(|x| x.as_f64());
+        Some((start, end, reader))
+    }
+
+    /// Everything the state feed needs, in one main-thread visit.
+    pub fn probe(&self) -> Probe {
+        let time_pos = self.get_f64("time-pos");
+        let (begin, end, reader) = match self.cache_window() {
+            Some(w) => w,
+            None => {
+                // Silent before a file is loaded: the property is legitimately
+                // unavailable then, and warning about it would fire once, at
+                // startup, about nothing.
+                if time_pos.is_some() && !CACHE_STATE_WARNED.swap(true, Ordering::AcqRel) {
+                    tracing::warn!(
+                        "demuxer-cache-state unreadable; scrollback depth will be approximate"
+                    );
+                }
+                (None, self.get_f64("demuxer-cache-time"), None)
+            }
+        };
+        let pos = reader.or(time_pos);
+        let behind_live = match (end, pos) {
+            (Some(e), Some(p)) => (e - p).max(0.0),
+            _ => 0.0,
+        };
+        let buffered_back = match (begin, pos) {
+            (Some(b), Some(p)) => (p - b).max(0.0),
+            // No cache window: everything played so far is the best guess.
+            _ => time_pos.unwrap_or(0.0).max(0.0),
+        };
+        Probe {
+            width: self.get_i64("video-params/w"),
+            height: self.get_i64("video-params/h"),
+            // `container-fps` is absent on a raw MPEG-TS multiplex, where the
+            // measured rate is the only figure the stream ever reports.
+            fps: self
+                .get_f64("container-fps")
+                .or_else(|| self.get_f64("estimated-vf-fps"))
+                .filter(|f| f.is_finite() && *f > 0.0),
+            codec: self.get_string("video-format"),
+            behind_live,
+            buffered_back,
+            paused: self.get_bool("pause").unwrap_or(false),
+            live_edge: end,
+            time_pos,
+        }
+    }
+
+    /// Every transport property as mpv itself renders it, errors included.
+    ///
+    /// The seek behaviour of a live MPEG-TS cache is not documented anywhere
+    /// that matches what a given server actually does, so the verification
+    /// harness prints this rather than guessing. Carries timings only - never
+    /// a URL, which would carry the account password.
+    pub fn diagnostics(&self) -> String {
+        const KEYS: &[&str] = &[
+            "time-pos",
+            "duration",
+            "seekable",
+            "partially-seekable",
+            "demuxer-cache-time",
+            "demuxer-cache-duration",
+            "cache-buffering-state",
+            "video-params/w",
+            "video-params/h",
+            "container-fps",
+            "estimated-vf-fps",
+            "video-format",
+            "demuxer-cache-state",
+        ];
+        let Ok(m) = Self::mpv() else {
+            return "no mpv on this thread".to_owned();
+        };
+        KEYS.iter()
+            .map(|k| match m.get_property::<String>(k) {
+                Ok(v) => format!("{k}={v}"),
+                Err(e) => format!("{k}=<{e}>"),
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_thread_with_no_player_gets_none_rather_than_a_hang() {
+        // Every command hops to the GTK main thread; one that arrives before
+        // `setup` has built the player must fail immediately, not block on a
+        // reply that will never come.
+        assert!(with_player(|_| ()).is_none());
+    }
 }
