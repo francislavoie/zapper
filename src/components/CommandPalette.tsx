@@ -81,6 +81,9 @@ export function CommandPalette() {
         case "sync":
           void run(dispatch, "sync", backend.syncNow());
           break;
+        case "guide":
+          dispatch({ type: "mode", mode: "guide" });
+          break;
         case "settings":
           dispatch({ type: "settings", open: true });
           break;

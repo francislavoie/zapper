@@ -126,6 +126,96 @@ impl Default for PlayerStateDto {
     }
 }
 
+/// How subtitles are drawn. Maps onto libass through mpv properties.
+///
+/// Modelled on Vimeo's controls rather than mpv's: people think in "box behind
+/// the text" and "outline", not `sub-border-style`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SubtitleBackdrop {
+    /// A translucent box hugging the text. The default.
+    Background,
+    /// A full-width band behind the line.
+    Window,
+    /// Outline only.
+    Outline,
+    /// Drop shadow only.
+    Shadow,
+    None,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SubtitleStyleDto {
+    pub font: String,
+    /// Points at 720p, scaled by mpv to the window.
+    pub size: u32,
+    /// `#rrggbb`.
+    pub color: String,
+    pub backdrop: SubtitleBackdrop,
+    /// 0.0-1.0. Defaults to 0.25.
+    pub backdrop_opacity: f64,
+    pub outline_size: f64,
+    pub shadow_offset: f64,
+}
+
+impl Default for SubtitleStyleDto {
+    fn default() -> Self {
+        Self {
+            font: "sans-serif".into(),
+            size: 38,
+            color: "#ffffff".into(),
+            backdrop: SubtitleBackdrop::Background,
+            backdrop_opacity: 0.25,
+            outline_size: 0.0,
+            shadow_offset: 0.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SettingsDto {
+    /// How far back live playback can be rewound. Stored as minutes because
+    /// that is the question a person actually asks; converted to the byte
+    /// budget mpv wants.
+    pub rewind_minutes: f64,
+    pub hardware_decode: bool,
+    /// Tone-map HDR down to SDR. Off would leave HDR washed out on an SDR
+    /// panel, so it defaults on.
+    pub tone_map_hdr: bool,
+    /// Hours of programming the guide shows at once.
+    pub guide_hours: u32,
+    /// How often the background refresh runs.
+    pub sync_interval_hours: u32,
+    pub subtitle: SubtitleStyleDto,
+}
+
+impl Default for SettingsDto {
+    fn default() -> Self {
+        Self {
+            rewind_minutes: 4.0,
+            hardware_decode: true,
+            tone_map_hdr: true,
+            guide_hours: 3,
+            sync_interval_hours: 6,
+            subtitle: SubtitleStyleDto::default(),
+        }
+    }
+}
+
+/// One channel's row in the guide.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuideRowDto {
+    pub stream_id: i64,
+    pub name: String,
+    pub logo_url: Option<String>,
+    pub has_archive: bool,
+    pub archive_days: Option<u32>,
+    pub programmes: Vec<ProgrammeDto>,
+}
+
 /// Event names. Emitted by Rust, subscribed by React.
 pub mod events {
     pub const SYNC_STATUS: &str = "zapper://sync-status";

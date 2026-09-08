@@ -6,8 +6,11 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::catalog::settings as settings_store;
 use crate::catalog::{db, index, status, store, sync_engine};
-use crate::ipc::types::{CategoryDto, ChannelDto, ProgrammeDto, SyncStatusDto};
+use crate::ipc::types::{
+    CategoryDto, ChannelDto, GuideRowDto, ProgrammeDto, SettingsDto, SyncStatusDto,
+};
 
 fn now() -> i64 {
     SystemTime::now()
@@ -207,9 +210,86 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn guide_rows_carry_the_channel_beside_its_programmes() {
+        seed(5000, "cmd-guide-rows");
+        db::with_db(|c| {
+            c.execute(
+                "INSERT INTO epg (channel_ref, start, stop, title, description)
+                 VALUES ('epg-5001', 100, 200, 'Show', NULL)",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+        let rows = guide_rows(vec![5002, 5001], 0, 1000).await.unwrap();
+        assert_eq!(
+            rows.iter().map(|r| r.stream_id).collect::<Vec<_>>(),
+            [5002, 5001]
+        );
+        // The row exists even with nothing on it, or the grid's rows and its
+        // header stop lining up.
+        assert!(rows[0].programmes.is_empty());
+        assert_eq!(rows[0].name, "Beta");
+        assert_eq!(rows[1].programmes.len(), 1);
+        assert_eq!(rows[1].programmes[0].title, "Show");
+    }
+
+    #[tokio::test]
+    async fn settings_default_before_anything_is_saved_and_round_trip_after() {
+        db::install_test_db();
+        // The key is process-wide, so this is deliberately the only test that
+        // writes it.
+        let first = settings().await.unwrap();
+        assert_eq!(first.guide_hours, SettingsDto::default().guide_hours);
+
+        let want = SettingsDto {
+            guide_hours: 9,
+            rewind_minutes: 15.0,
+            ..Default::default()
+        };
+        set_settings(want).await.unwrap();
+
+        let got = settings().await.unwrap();
+        assert_eq!(got.guide_hours, 9);
+        assert_eq!(got.rewind_minutes, 15.0);
+    }
+
+    #[tokio::test]
     async fn sync_status_answers_without_a_network() {
         db::install_test_db();
         let s = sync_status().await.unwrap();
         assert!(s.channels_total >= 0);
     }
+}
+
+/// Settings as stored. Defaults on first run; never fails for a missing row.
+///
+/// Infallible by construction: a missing row, an unparseable blob, or a
+/// database that will not open all read as defaults. Settings must never be
+/// the reason the app will not open.
+#[tauri::command]
+pub async fn settings() -> Result<SettingsDto, String> {
+    Ok(settings_store::load_or_default())
+}
+
+/// Persists settings. Applying the playback-relevant parts to the running
+/// player is `apply_playback_settings`, which the frontend calls alongside.
+#[tauri::command]
+pub async fn set_settings(settings: SettingsDto) -> Result<(), String> {
+    db::with_db(|c| settings_store::save(c, &settings)).map_err(|e| e.to_string())
+}
+
+/// Guide rows for a window, one per channel, ordered as requested.
+///
+/// Distinct from `guide`, which returns bare programmes: the grid needs the
+/// channel's name, logo and archive flag beside its programmes, and fetching
+/// those separately would mean a second round trip per row.
+#[tauri::command]
+pub async fn guide_rows(
+    stream_ids: Vec<i64>,
+    from: i64,
+    to: i64,
+) -> Result<Vec<GuideRowDto>, String> {
+    db::with_db(|conn| store::guide_rows(conn, &stream_ids, from, to)).map_err(|e| e.to_string())
 }

@@ -136,6 +136,26 @@ pub unsafe fn get_integer(pname: u32) -> i32 {
 }
 
 /// # Safety
+/// Requires a current GL context, and `dst` must have room for
+/// `width * height * 4` bytes.
+#[allow(clippy::too_many_arguments)]
+pub unsafe fn read_pixels(
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    format: u32,
+    ty: u32,
+    dst: *mut u8,
+) {
+    if let Some(f) =
+        sym::<extern "C" fn(i32, i32, i32, i32, u32, u32, *mut u8)>(b"glReadPixels\0")
+    {
+        f(x, y, width, height, format, ty, dst);
+    }
+}
+
+/// # Safety
 /// Requires a current GL context; `name` must be a valid `glGetString` enum.
 pub unsafe fn get_string(name: u32) -> Option<String> {
     let f = sym::<extern "C" fn(u32) -> *const i8>(b"glGetString\0")?;

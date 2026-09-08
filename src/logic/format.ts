@@ -87,3 +87,19 @@ export function programmeProgress(
 export function clampVolume(v: number, max: number): number {
   return Math.min(max, Math.max(0, Math.round(v)));
 }
+
+/** The badge for whatever is playing, from what the player actually measured.
+ *  Same rule as the row badge — height decides, a name proves nothing — and
+ *  nothing measured means no badge at all. */
+export function playerBadge(p: PlayerStateDto): string | null {
+  if (p.width == null && p.height == null) return null;
+  return qualityBadge({
+    codec: p.codec,
+    width: p.width,
+    height: p.height,
+    fps: p.fps,
+    isHdr: false,
+    okCount: 0,
+    failCount: 0,
+  });
+}

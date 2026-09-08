@@ -91,13 +91,17 @@ struct Machine {
     opened_at: Option<Instant>,
     /// The last payload actually emitted, so an unchanged tick stays silent.
     last_emitted: Option<String>,
-    /// Whether this open still owes a jump to the live edge.
+    /// Whether playback should stay at the live edge.
     ///
-    /// The panel bursts on connect and mpv starts at the oldest cached frame,
-    /// which lands playback ~20s in the past. For live TV that is simply
-    /// wrong: you asked for the channel, not for what it showed half a minute
-    /// ago. Cleared once the jump is made, or once the stream stops.
-    live_seek_pending: bool,
+    /// True from the moment a channel opens: the server bursts on connect and
+    /// mpv starts at the oldest cached frame, which lands playback ~20s in the
+    /// past, and the burst keeps the edge running away for a while afterwards.
+    /// A single catch-up at first frame is not enough. Cleared when the viewer
+    /// deliberately rewinds - at that point being behind is the point - and
+    /// set again by `seek_live`.
+    following_live: bool,
+    /// When the last automatic catch-up ran, so chasing cannot thrash.
+    last_live_nudge: Option<Instant>,
 }
 
 impl Machine {
@@ -106,12 +110,14 @@ impl Machine {
             dto: PlayerStateDto::default(),
             opened_at: None,
             last_emitted: None,
-            live_seek_pending: false,
+            following_live: false,
+            last_live_nudge: None,
         }
     }
 
     fn opening(&mut self, stream_id: i64) {
-        self.live_seek_pending = true;
+        self.following_live = true;
+        self.last_live_nudge = None;
         self.dto.state = PlaybackState::Opening;
         self.dto.stream_id = Some(stream_id);
         self.dto.error = None;
@@ -150,14 +156,14 @@ impl Machine {
     }
 
     fn failed(&mut self, why: impl Into<String>) {
-        self.live_seek_pending = false;
+        self.following_live = false;
         self.dto.state = PlaybackState::Failed;
         self.dto.error = Some(why.into());
         self.opened_at = None;
     }
 
     fn stopped(&mut self) {
-        self.live_seek_pending = false;
+        self.following_live = false;
         self.dto.state = PlaybackState::Stopped;
         self.dto.stream_id = None;
         self.dto.error = None;
@@ -169,7 +175,7 @@ impl Machine {
     /// mpv ended the file on its own. Before a first frame that is a failure,
     /// not a tidy stop.
     fn ended(&mut self) {
-        self.live_seek_pending = false;
+        self.following_live = false;
         match self.dto.state {
             PlaybackState::Opening => self.failed("the stream ended before a frame arrived"),
             PlaybackState::Playing | PlaybackState::Paused => self.stopped(),
@@ -303,11 +309,15 @@ fn tick(app: &AppHandle, p: &Player) {
         m.apply(&probe);
         m.check_deadline();
 
-        // Land on the live edge, once, as soon as there is a picture.
-        if m.live_seek_pending && m.dto.state == PlaybackState::Playing {
-            m.live_seek_pending = false;
-            let by = (probe.behind_live - LIVE_EDGE_MARGIN).max(0.0);
-            if by > 1.0 {
+        // Stay at the live edge unless the viewer chose otherwise.
+        if m.following_live && m.dto.state == PlaybackState::Playing {
+            let drifted = probe.behind_live > LIVE_FOLLOW_SLACK;
+            let settled = m
+                .last_live_nudge
+                .is_none_or(|t| t.elapsed() >= LIVE_NUDGE_INTERVAL);
+            if drifted && settled {
+                m.last_live_nudge = Some(Instant::now());
+                let by = (probe.behind_live - LIVE_EDGE_MARGIN).max(0.0);
                 // Best-effort: failing to catch up is not a reason to fail a
                 // stream that is otherwise playing fine.
                 let _ = p.command("seek", &[&format!("{by:.3}"), "relative"]);
@@ -435,6 +445,15 @@ pub async fn toggle_pause(app: AppHandle) -> Result<(), String> {
 /// Negative seeks back. Clamped to the buffered window.
 #[tauri::command]
 pub async fn seek_relative(app: AppHandle, seconds: f64) -> Result<(), String> {
+    // Rewinding is a deliberate choice to be behind, so stop chasing the edge.
+    // Seeking forward is the viewer catching up themselves and leaves the mode
+    // alone; the automatic follow will finish the job if they stop short.
+    if seconds < 0.0 {
+        STATE
+            .lock()
+            .expect("player state mutex poisoned")
+            .following_live = false;
+    }
     on_player(&app, move |p| {
         let probe = p.probe();
         let by = clamp_seek(seconds, probe.buffered_back, probe.behind_live);
@@ -454,8 +473,26 @@ pub async fn seek_relative(app: AppHandle, seconds: f64) -> Result<(), String> {
 /// silently rather than clamped.
 const LIVE_EDGE_MARGIN: f64 = 0.5;
 
+/// How far behind the edge playback may drift before it is pulled back.
+///
+/// Generous on purpose. The panel bursts at roughly 2.2x realtime on connect,
+/// so the seekable end runs away for the first several seconds; chasing it
+/// tightly would seek repeatedly during exactly the period the picture is
+/// settling.
+const LIVE_FOLLOW_SLACK: f64 = 6.0;
+
+/// Minimum gap between automatic catch-ups, so a stream that cannot keep up
+/// is not seeked on every tick.
+const LIVE_NUDGE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3);
+
 #[tauri::command]
 pub async fn seek_live(app: AppHandle) -> Result<(), String> {
+    // Asking for live means staying there, not visiting once.
+    {
+        let mut m = STATE.lock().expect("player state mutex poisoned");
+        m.following_live = true;
+        m.last_live_nudge = None;
+    }
     on_player(&app, |p| {
         let probe = p.probe();
         // Relative, the same operation the backward seek already does, in
@@ -649,6 +686,7 @@ fn local_utc_offset(unix: i64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ipc::types::{SettingsDto, SubtitleBackdrop, SubtitleStyleDto};
 
     #[test]
     fn state_walks_stopped_to_opening_to_playing() {
@@ -800,5 +838,445 @@ mod tests {
         assert_eq!(timeshift_stamp(0, 0), "1970-01-01:00-00");
         // 2024-02-29T23:59:00Z.
         assert_eq!(timeshift_stamp(1_709_251_140, 0), "2024-02-29:23-59");
+    }
+
+    // -----------------------------------------------------------------
+    // Settings
+    // -----------------------------------------------------------------
+
+    fn prop<'a>(props: &'a [(&str, String)], key: &str) -> &'a str {
+        props
+            .iter()
+            .find(|(k, _)| *k == key)
+            .map(|(_, v)| v.as_str())
+            .unwrap_or_else(|| panic!("no {key} in {props:?}"))
+    }
+
+    fn styled(f: impl FnOnce(&mut SubtitleStyleDto)) -> Vec<(&'static str, String)> {
+        let mut s = SubtitleStyleDto::default();
+        f(&mut s);
+        subtitle_properties(&s)
+    }
+
+    #[test]
+    fn a_colour_carries_its_alpha_byte_first() {
+        // The one the settings panel actually ships: white at a quarter.
+        // 0.25 x 255 is 63.75, and the byte is 0x40, not 0x3F.
+        assert_eq!(mpv_color("#ffffff", 0.25), "#40FFFFFF");
+        assert_eq!(mpv_color("#ffffff", 1.0), "#FFFFFFFF");
+        assert_eq!(mpv_color("#ffffff", 0.0), "#00FFFFFF");
+        assert_eq!(mpv_color("#ffffff", 0.5), "#80FFFFFF");
+        // Channel order survives: mpv is RRGGBB after the alpha, so a colour
+        // that is not grey would come back reversed if it did not.
+        assert_eq!(mpv_color("#123456", 1.0), "#FF123456");
+        assert_eq!(mpv_color("#ff0000", 1.0), "#FFFF0000");
+    }
+
+    #[test]
+    fn a_colour_is_forgiving_about_its_input() {
+        assert_eq!(mpv_color("ffffff", 1.0), "#FFFFFFFF");
+        assert_eq!(mpv_color("#ABCDEF", 1.0), "#FFABCDEF");
+        assert_eq!(mpv_color("  #abcdef  ", 1.0), "#FFABCDEF");
+        // CSS shorthand, because a colour input may well hand one over.
+        assert_eq!(mpv_color("#f0a", 1.0), "#FFFF00AA");
+        // Anything unreadable is white, not a panic and not a black subtitle
+        // on a dark scene.
+        assert_eq!(mpv_color("rebeccapurple", 1.0), "#FFFFFFFF");
+        assert_eq!(mpv_color("", 1.0), "#FFFFFFFF");
+        assert_eq!(mpv_color("#12345", 1.0), "#FFFFFFFF");
+        assert_eq!(mpv_color("#gggggg", 1.0), "#FFFFFFFF");
+    }
+
+    #[test]
+    fn an_opacity_outside_the_unit_range_is_clamped() {
+        assert_eq!(mpv_color("#ffffff", 4.0), "#FFFFFFFF");
+        assert_eq!(mpv_color("#ffffff", -1.0), "#00FFFFFF");
+        assert_eq!(mpv_color("#ffffff", f64::NAN), "#FFFFFFFF");
+    }
+
+    #[test]
+    fn the_font_and_size_reach_mpv_by_their_own_names() {
+        let p = styled(|s| {
+            s.font = "Inter".into();
+            s.size = 52;
+            s.color = "#ffee00".into();
+        });
+        assert_eq!(prop(&p, "sub-font"), "Inter");
+        assert_eq!(prop(&p, "sub-font-size"), "52");
+        // The text itself is always opaque; the opacity control is the
+        // backdrop's, not the letters'.
+        assert_eq!(prop(&p, "sub-color"), "#FFFFEE00");
+    }
+
+    #[test]
+    fn an_empty_font_falls_back_rather_than_unsetting_mpvs() {
+        let p = styled(|s| s.font = "   ".into());
+        assert_eq!(prop(&p, "sub-font"), "sans-serif");
+    }
+
+    #[test]
+    fn background_is_a_box_hugging_the_text_at_the_chosen_opacity() {
+        let p = styled(|s| {
+            s.backdrop = SubtitleBackdrop::Background;
+            s.backdrop_opacity = 0.25;
+        });
+        assert_eq!(prop(&p, "sub-border-style"), "background-box");
+        assert_eq!(prop(&p, "sub-back-color"), "#40000000");
+    }
+
+    #[test]
+    fn window_is_the_opaque_box() {
+        let p = styled(|s| {
+            s.backdrop = SubtitleBackdrop::Window;
+            s.backdrop_opacity = 0.8;
+        });
+        assert_eq!(prop(&p, "sub-border-style"), "opaque-box");
+        assert_eq!(prop(&p, "sub-back-color"), "#CC000000");
+    }
+
+    #[test]
+    fn outline_draws_a_border_and_no_box() {
+        let p = styled(|s| {
+            s.backdrop = SubtitleBackdrop::Outline;
+            s.outline_size = 2.5;
+            s.shadow_offset = 9.0;
+        });
+        assert_eq!(prop(&p, "sub-border-style"), "outline-and-shadow");
+        assert_eq!(prop(&p, "sub-outline-size"), "2.5");
+        // The other backdrops' controls are inert here, and must be sent as
+        // zero rather than left at whatever the last backdrop set.
+        assert_eq!(prop(&p, "sub-shadow-offset"), "0");
+        assert_eq!(prop(&p, "sub-back-color"), TRANSPARENT);
+    }
+
+    #[test]
+    fn shadow_draws_an_offset_and_no_border() {
+        let p = styled(|s| {
+            s.backdrop = SubtitleBackdrop::Shadow;
+            s.outline_size = 9.0;
+            s.shadow_offset = 1.5;
+        });
+        assert_eq!(prop(&p, "sub-border-style"), "outline-and-shadow");
+        assert_eq!(prop(&p, "sub-outline-size"), "0");
+        assert_eq!(prop(&p, "sub-shadow-offset"), "1.5");
+        assert_eq!(prop(&p, "sub-back-color"), TRANSPARENT);
+    }
+
+    #[test]
+    fn none_draws_the_letters_and_nothing_else() {
+        let p = styled(|s| {
+            s.backdrop = SubtitleBackdrop::None;
+            s.outline_size = 9.0;
+            s.shadow_offset = 9.0;
+            s.backdrop_opacity = 0.9;
+        });
+        assert_eq!(prop(&p, "sub-outline-size"), "0");
+        assert_eq!(prop(&p, "sub-shadow-offset"), "0");
+        assert_eq!(prop(&p, "sub-back-color"), TRANSPARENT);
+    }
+
+    #[test]
+    fn every_backdrop_sets_the_same_properties() {
+        // Switching backdrop must not leave the previous one's box or border
+        // behind: mpv keeps whatever was last set.
+        let keys = |b| {
+            let mut k: Vec<&str> = styled(|s| s.backdrop = b)
+                .iter()
+                .map(|(k, _)| *k)
+                .collect();
+            k.sort_unstable();
+            k
+        };
+        let want = keys(SubtitleBackdrop::Background);
+        for b in [
+            SubtitleBackdrop::Window,
+            SubtitleBackdrop::Outline,
+            SubtitleBackdrop::Shadow,
+            SubtitleBackdrop::None,
+        ] {
+            assert_eq!(keys(b), want, "{b:?} sets a different set of properties");
+        }
+    }
+
+    #[test]
+    fn the_rewind_budget_is_minutes_at_the_measured_bitrate() {
+        // 18.2 Mbps measured on a 1080p59.94 feed: a minute is 136.5 MB.
+        assert_eq!(rewind_bytes(1.0), 136_500_000);
+        // The default, which lands near the 512 MiB mpv is initialised with.
+        assert_eq!(rewind_bytes(4.0), 546_000_000);
+        assert_eq!(rewind_bytes(0.5), 68_250_000);
+    }
+
+    #[test]
+    fn a_rewind_of_zero_is_a_floor_not_a_disabled_cache() {
+        // demuxer-max-back-bytes=0 does not mean "no rewind", it means no
+        // back buffer at all - and mpv then cannot seek back even the second
+        // it already has, which reads as a broken player rather than a
+        // setting.
+        assert_eq!(rewind_bytes(0.0), MIN_BACK_BYTES);
+        assert_eq!(rewind_bytes(-5.0), MIN_BACK_BYTES);
+        assert_eq!(rewind_bytes(f64::NAN), MIN_BACK_BYTES);
+        assert_eq!(rewind_bytes(0.000_001), MIN_BACK_BYTES);
+    }
+
+    #[test]
+    fn an_absurd_rewind_is_capped_rather_than_swapping_the_machine() {
+        assert_eq!(rewind_bytes(100_000.0), MAX_BACK_BYTES);
+        assert_eq!(rewind_bytes(f64::INFINITY), MAX_BACK_BYTES);
+    }
+
+    #[test]
+    fn apply_saved_settings_keeps_the_signature_lib_rs_wires() {
+        // `lib.rs` belongs to the coordinator, so this is the only place the
+        // shape of that call can be held still.
+        let _: fn(&tauri::AppHandle) = apply_saved_settings;
+    }
+
+    #[test]
+    fn playback_settings_map_onto_mpvs_own_names() {
+        let on = playback_properties(&SettingsDto {
+            rewind_minutes: 2.0,
+            hardware_decode: true,
+            tone_map_hdr: true,
+            ..Default::default()
+        });
+        assert_eq!(prop(&on, "demuxer-max-back-bytes"), "273000000");
+        assert_eq!(prop(&on, "hwdec"), "auto-safe");
+        assert_eq!(prop(&on, "tone-mapping"), "auto");
+
+        let off = playback_properties(&SettingsDto {
+            hardware_decode: false,
+            tone_map_hdr: false,
+            ..Default::default()
+        });
+        assert_eq!(prop(&off, "hwdec"), "no");
+        // Not "no": tone-mapping is a choice, and clipping is what "off"
+        // means for it.
+        assert_eq!(prop(&off, "tone-mapping"), "clip");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Settings
+// ---------------------------------------------------------------------------
+
+/// mpv's colour syntax is `#AARRGGBB` — alpha first, and `FF` is opaque.
+///
+/// Kept pure and tested because the alpha byte is exactly the sort of thing
+/// that is off by one forever: a quarter is 63.75 of 255, and rounding it the
+/// wrong way is invisible on screen and wrong in every stored setting.
+/// Anything unreadable becomes white rather than failing, since a subtitle
+/// nobody can read is worse than one in the wrong colour.
+fn mpv_color(rgb: &str, opacity: f64) -> String {
+    let hex = rgb.trim().trim_start_matches('#');
+    let rgb = match hex.len() {
+        // CSS shorthand: each digit doubles.
+        3 => u32::from_str_radix(hex, 16).ok().map(|v| {
+            let (r, g, b) = ((v >> 8) & 0xf, (v >> 4) & 0xf, v & 0xf);
+            (r * 0x11) << 16 | (g * 0x11) << 8 | (b * 0x11)
+        }),
+        6 => u32::from_str_radix(hex, 16).ok(),
+        _ => None,
+    }
+    .unwrap_or(0xff_ff_ff);
+    // NaN clamps to the high end, which is the safe way to be wrong: opaque
+    // rather than invisible.
+    let alpha = if opacity.is_nan() {
+        255
+    } else {
+        (opacity.clamp(0.0, 1.0) * 255.0).round() as u8
+    };
+    format!("#{alpha:02X}{rgb:06X}")
+}
+
+/// No box at all. mpv keeps the last value it was given, so the backdrops
+/// that draw no box must say so rather than leave the previous one's behind.
+const TRANSPARENT: &str = "#00000000";
+
+/// Formats a subtitle measurement for mpv, which takes these as floats.
+/// Non-finite and negative values become zero: they are a settings bug, not
+/// a reason for the property write to fail and take the rest with it.
+fn sub_len(v: f64) -> String {
+    let v = if v.is_finite() { v.max(0.0) } else { 0.0 };
+    format!("{v}")
+}
+
+/// The mpv properties that express a subtitle style.
+///
+/// Every backdrop sets the same set of properties. mpv has no "reset to the
+/// other backdrop's defaults", so switching from a box to an outline has to
+/// zero the box explicitly or the box simply stays.
+fn subtitle_properties(style: &crate::ipc::types::SubtitleStyleDto) -> Vec<(&'static str, String)> {
+    use crate::ipc::types::SubtitleBackdrop as B;
+
+    let font = match style.font.trim() {
+        "" => "sans-serif",
+        f => f,
+    };
+    // The opacity control belongs to the backdrop; the letters are opaque.
+    // A translucent glyph over a translucent box reads as neither.
+    let text = mpv_color(&style.color, 1.0);
+    let backdrop = mpv_color("#000000", style.backdrop_opacity);
+
+    let (border_style, back_color, outline, shadow) = match style.backdrop {
+        B::Background => ("background-box", backdrop, 0.0, 0.0),
+        B::Window => ("opaque-box", backdrop, 0.0, 0.0),
+        B::Outline => (
+            "outline-and-shadow",
+            TRANSPARENT.to_owned(),
+            style.outline_size,
+            0.0,
+        ),
+        B::Shadow => (
+            "outline-and-shadow",
+            TRANSPARENT.to_owned(),
+            0.0,
+            style.shadow_offset,
+        ),
+        B::None => ("outline-and-shadow", TRANSPARENT.to_owned(), 0.0, 0.0),
+    };
+
+    vec![
+        ("sub-font", font.to_owned()),
+        ("sub-font-size", style.size.to_string()),
+        ("sub-color", text),
+        ("sub-border-style", border_style.to_owned()),
+        ("sub-back-color", back_color),
+        // `sub-border-size` in mpv's older documentation; this build reports
+        // `sub-outline-size` as the canonical name and keeps the old one as
+        // a deprecated alias.
+        ("sub-outline-size", sub_len(outline)),
+        ("sub-shadow-offset", sub_len(shadow)),
+    ]
+}
+
+/// Bits per second of live video, measured on a 1080p59.94 feed from this
+/// panel . Every stream sampled was H.264 SDR at roughly
+/// this rate, so it is the honest number to size a byte budget with — but it
+/// is a *typical* rate, not a ceiling: a genuinely 4K channel would fill the
+/// budget faster and rewind correspondingly less far.
+const LIVE_BITS_PER_SEC: f64 = 18_200_000.0;
+
+/// Roughly fourteen seconds at the measured rate. `demuxer-max-back-bytes=0`
+/// does not mean "no rewind limit", it means no back buffer at all, and mpv
+/// then refuses to seek back even the second it is holding — which reads as
+/// a broken player rather than as a setting.
+const MIN_BACK_BYTES: i64 = 32 * 1024 * 1024;
+
+/// The back buffer is resident memory. Two gigabytes is about eight minutes
+/// of the measured feed and as much as this is willing to take from the rest
+/// of the machine.
+const MAX_BACK_BYTES: i64 = 2 * 1024 * 1024 * 1024;
+
+/// Minutes of scrollback as the byte budget mpv actually wants.
+fn rewind_bytes(minutes: f64) -> i64 {
+    // NaN is a broken setting and takes the floor; an infinity is someone
+    // asking for everything and takes the ceiling.
+    if minutes.is_nan() || minutes <= 0.0 {
+        return MIN_BACK_BYTES;
+    }
+    let bytes = minutes * 60.0 * LIVE_BITS_PER_SEC / 8.0;
+    // Through f64 rather than a cast on an unbounded value: `as` saturates,
+    // but the clamp is the thing being tested and it should be visible.
+    if bytes >= MAX_BACK_BYTES as f64 {
+        return MAX_BACK_BYTES;
+    }
+    (bytes.round() as i64).clamp(MIN_BACK_BYTES, MAX_BACK_BYTES)
+}
+
+/// The mpv properties that express the playback settings.
+fn playback_properties(s: &crate::ipc::types::SettingsDto) -> Vec<(&'static str, String)> {
+    vec![
+        (
+            "demuxer-max-back-bytes",
+            rewind_bytes(s.rewind_minutes).to_string(),
+        ),
+        (
+            "hwdec",
+            // `auto-safe` rather than `auto`: the same value mpv is
+            // initialised with, which excludes the decoders that fail
+            // silently on this hardware.
+            match s.hardware_decode {
+                true => "auto-safe",
+                false => "no",
+            }
+            .to_owned(),
+        ),
+        (
+            "tone-mapping",
+            // mpv's "off" for a tone curve is `clip`, not `no`.
+            match s.tone_map_hdr {
+                true => "auto",
+                false => "clip",
+            }
+            .to_owned(),
+        ),
+    ]
+}
+
+/// Sets every property, then reports. One property mpv dislikes must not stop
+/// the rest: a font it cannot find should not also cost you hardware decoding.
+fn apply_properties(p: &Player, props: &[(&'static str, String)]) -> Result<(), String> {
+    let failures: Vec<String> = props
+        .iter()
+        .filter_map(|(k, v)| match p.set_property(k, v) {
+            Ok(()) => None,
+            Err(e) => Some(format!("{k}: {e}")),
+        })
+        .collect();
+    match failures.is_empty() {
+        true => Ok(()),
+        false => Err(failures.join("; ")),
+    }
+}
+
+/// Applies subtitle styling to the running player.
+///
+/// Subtitles are drawn by libass inside the video layer, not the DOM, so this
+/// is the only way to style them.
+#[tauri::command]
+pub async fn set_subtitle_style(
+    app: AppHandle,
+    style: crate::ipc::types::SubtitleStyleDto,
+) -> Result<(), String> {
+    let props = subtitle_properties(&style);
+    on_player(&app, move |p| apply_properties(p, &props)).await
+}
+
+/// Applies playback settings that mpv owns: rewind budget, hardware decode,
+/// tone mapping. Persisted by the caller.
+#[tauri::command]
+pub async fn apply_playback_settings(
+    app: AppHandle,
+    settings: crate::ipc::types::SettingsDto,
+) -> Result<(), String> {
+    let props = playback_properties(&settings);
+    on_player(&app, move |p| apply_properties(p, &props)).await
+}
+
+/// Applies the settings on disk to the player, once, at startup.
+///
+/// Settings that only take effect when you change them are settings that
+/// silently reset every launch. `lib.rs` calls this from `setup`, after the
+/// player is built.
+///
+/// Deliberately infallible and non-blocking: it queues onto the GTK main
+/// thread and returns, so it is safe to call from `setup` (which is already
+/// on that thread) without deadlocking on itself. Nothing here is worth
+/// failing a launch over — the defaults mpv was initialised with are a
+/// working player.
+pub fn apply_saved_settings(app: &tauri::AppHandle) {
+    let saved = crate::catalog::settings::load_or_default();
+    let mut props = playback_properties(&saved);
+    props.extend(subtitle_properties(&saved.subtitle));
+
+    if let Err(e) = app.run_on_main_thread(move || {
+        match mpv::with_player(|p| apply_properties(p, &props)) {
+            None => tracing::warn!("no player yet; saved settings were not applied"),
+            Some(Err(e)) => tracing::warn!("some saved settings were not applied: {e}"),
+            Some(Ok(())) => tracing::info!("saved settings applied"),
+        }
+    }) {
+        tracing::warn!("could not reach the GTK main thread to apply saved settings: {e}");
     }
 }

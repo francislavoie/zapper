@@ -86,6 +86,50 @@ export interface VideoRect {
   h: number;
 }
 
+/** How subtitles are drawn. Modelled on Vimeo's controls, not mpv's: people
+ *  think in "box behind the text" and "outline". */
+export type SubtitleBackdrop =
+  | "background"
+  | "window"
+  | "outline"
+  | "shadow"
+  | "none";
+
+export interface SubtitleStyleDto {
+  font: string;
+  /** Points at 720p; mpv scales to the window. */
+  size: number;
+  /** `#rrggbb`. */
+  color: string;
+  backdrop: SubtitleBackdrop;
+  /** 0–1, defaults to 0.25. */
+  backdropOpacity: number;
+  outlineSize: number;
+  shadowOffset: number;
+}
+
+export interface SettingsDto {
+  /** Minutes of live rewind; converted to mpv's byte budget behind the scenes. */
+  rewindMinutes: number;
+  hardwareDecode: boolean;
+  /** Tone-map HDR to SDR. Off leaves HDR washed out on an SDR panel. */
+  toneMapHdr: boolean;
+  guideHours: number;
+  syncIntervalHours: number;
+  subtitle: SubtitleStyleDto;
+}
+
+/** One channel's row in the guide, programmes included, so the grid needs no
+ *  second round trip per row. */
+export interface GuideRowDto {
+  streamId: number;
+  name: string;
+  logoUrl: string | null;
+  hasArchive: boolean;
+  archiveDays: number | null;
+  programmes: ProgrammeDto[];
+}
+
 export const EVENTS = {
   syncStatus: "zapper://sync-status",
   playerState: "zapper://player-state",

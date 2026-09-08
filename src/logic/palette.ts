@@ -25,6 +25,7 @@ export const ACTIONS: PaletteAction[] = [
   { id: "pause", label: "Play / pause", hint: "Space", needsPlayer: true },
   { id: "stop", label: "Stop playback", hint: "", needsPlayer: true },
   { id: "fullscreen", label: "Toggle fullscreen", hint: "F", needsPlayer: true },
+  { id: "guide", label: "Open the guide", hint: "G" },
   { id: "sync", label: "Refresh data from the panel", hint: "sync" },
   { id: "settings", label: "Open settings", hint: "⚙" },
 ];

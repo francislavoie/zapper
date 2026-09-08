@@ -16,15 +16,18 @@ import type {
   CategoryDto,
   ChannelDto,
   PlayerStateDto,
+  SettingsDto,
   SyncStatusDto,
 } from "./types";
 import { errorMessage, idle, type Async } from "./logic/async";
+import { DEFAULT_SETTINGS, clampSettings } from "./logic/settings";
 
 export const ALL_CATEGORIES = "*all*";
 
-/** Browse shows the rail and the list with video docked to a corner; watch
- *  gives the whole window to video and only paints chrome. */
-export type Mode = "browse" | "watch";
+/** Browse shows the rail and the list with the picture in the watch panel;
+ *  watch gives the whole window to video and only paints chrome; guide is the
+ *  grid, which covers the window while the stream keeps playing underneath. */
+export type Mode = "browse" | "watch" | "guide";
 
 export interface Toast {
   id: number;
@@ -52,6 +55,14 @@ export interface State {
   /** Metadata for whatever is playing, painted immediately from SQLite while
    *  the stream opens. */
   nowChannel: ChannelDto | null;
+  /** How far the guide has been paged away from now, in hours. */
+  guideOffsetHours: number;
+  /** Always a usable value: the contract's documented defaults until the
+   *  backend answers. The load state is kept beside it rather than wrapping
+   *  it in an Async, because the guide has to draw something either way. */
+  settings: SettingsDto;
+  settingsStatus: Async<null>;
+  settingsSaveError: string | null;
   toasts: Toast[];
 }
 
@@ -89,6 +100,10 @@ export const initialState: State = {
   player: initialPlayer,
   pendingStreamId: null,
   nowChannel: null,
+  guideOffsetHours: 0,
+  settings: DEFAULT_SETTINGS,
+  settingsStatus: idle(),
+  settingsSaveError: null,
   toasts: [],
 };
 
@@ -103,6 +118,11 @@ export type Action =
   | { type: "sync"; value: SyncStatusDto }
   | { type: "player"; value: PlayerStateDto }
   | { type: "opening"; channel: ChannelDto }
+  | { type: "guideShift"; hours: number }
+  | { type: "guideNow" }
+  | { type: "settingsStatus"; value: Async<null> }
+  | { type: "settingsValue"; value: SettingsDto }
+  | { type: "settingsSaveError"; message: string | null }
   | { type: "toast"; text: string; kind?: "error" | "info" }
   | { type: "dismissToast"; id: number };
 
@@ -139,6 +159,18 @@ export function reducer(state: State, action: Action): State {
             ? null
             : state.pendingStreamId,
       };
+    case "guideShift":
+      return { ...state, guideOffsetHours: state.guideOffsetHours + action.hours };
+    case "guideNow":
+      return { ...state, guideOffsetHours: 0 };
+    case "settingsStatus":
+      return { ...state, settingsStatus: action.value };
+    case "settingsValue":
+      // Clamped on the way in as well as on the way out: a config the backend
+      // hands back is not automatically sane.
+      return { ...state, settings: clampSettings(action.value) };
+    case "settingsSaveError":
+      return { ...state, settingsSaveError: action.message };
     case "opening":
       return {
         ...state,

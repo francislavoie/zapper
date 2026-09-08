@@ -228,6 +228,37 @@ pub fn spawn(app: tauri::AppHandle) {
     });
 }
 
+/// Clamp for the configured interval.
+///
+/// The guide alone can be tens of megabytes, so a runaway setting could
+/// hammer the server; and a very long one leaves the mirror stale for days.
+/// Neither extreme is worth honouring literally.
+const MIN_SYNC_INTERVAL_HOURS: u32 = 1;
+const MAX_SYNC_INTERVAL_HOURS: u32 = 48;
+
+pub fn interval_from_settings(hours: u32) -> std::time::Duration {
+    let h = hours.clamp(MIN_SYNC_INTERVAL_HOURS, MAX_SYNC_INTERVAL_HOURS);
+    std::time::Duration::from_secs(u64::from(h) * 3600)
+}
+
+/// Runs a sync now, then again on the configured interval, forever.
+///
+/// The interval is re-read each cycle rather than captured once, so changing
+/// it in settings takes effect without a restart.
+pub fn spawn_periodic(app: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        loop {
+            if let Err(e) = run_once(&app).await {
+                tracing::warn!("sync aborted: {}", scrub(&format!("{e:#}")));
+            }
+            let hours = crate::catalog::settings::load_or_default().sync_interval_hours;
+            let wait = interval_from_settings(hours);
+            tracing::info!("next sync in {} hours", wait.as_secs() / 3600);
+            tokio::time::sleep(wait).await;
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -355,5 +386,15 @@ mod tests {
         }
         drop(tx);
         assert_eq!(joined.await.unwrap(), "<tv><programme/></tv>");
+    }
+
+    #[test]
+    fn the_sync_interval_is_clamped_at_both_ends() {
+        use std::time::Duration;
+        // Zero would mean syncing continuously against a server whose guide
+        // runs to tens of megabytes.
+        assert_eq!(interval_from_settings(0), Duration::from_secs(3600));
+        assert_eq!(interval_from_settings(6), Duration::from_secs(6 * 3600));
+        assert_eq!(interval_from_settings(9_999), Duration::from_secs(48 * 3600));
     }
 }

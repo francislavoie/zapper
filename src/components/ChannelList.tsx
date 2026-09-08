@@ -117,6 +117,13 @@ export function ChannelList() {
           value={state.query}
           onChange={(e) => dispatch({ type: "query", text: e.target.value })}
         />
+        <button
+          className="ctl ghost"
+          title="Guide (G)"
+          onClick={() => dispatch({ type: "mode", mode: "guide" })}
+        >
+          Guide
+        </button>
       </div>
       <ListHead searching={searching} total={source.total} loading={source.loading} />
 
@@ -140,7 +147,13 @@ export function ChannelList() {
         {sticky ? <div className="sticky-head">{sticky.cleanName}</div> : null}
         {source.total === 0 && !source.loading && !source.error ? (
           <div className="pane-note">
-            {searching ? `Nothing matches “${state.query}”.` : "No channels here."}
+            {searching
+              ? `Nothing matches “${state.query}”.`
+              : state.categories.status === "error"
+                ? // Empty because there is nothing here, or because the
+                  // catalogue could not be read? Different things.
+                  `Channels unavailable — ${state.categories.message}`
+                : "No channels here."}
           </div>
         ) : null}
       </div>

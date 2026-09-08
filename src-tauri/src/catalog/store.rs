@@ -8,7 +8,7 @@ use anyhow::Result;
 use rusqlite::{Connection, Row};
 use std::collections::HashMap;
 
-use crate::ipc::types::{CategoryDto, ChannelDto, ProgrammeDto, QualityDto};
+use crate::ipc::types::{CategoryDto, ChannelDto, GuideRowDto, ProgrammeDto, QualityDto};
 
 /// The channel columns every listing selects, in the order
 /// [`channel_from_row`] expects. Kept in one place so the two callers cannot
@@ -74,6 +74,21 @@ fn placeholders(n: usize) -> String {
             s.push(',');
         }
         s.push('?');
+    }
+    s
+}
+
+/// `?3,?4,…` for an `IN` list that shares a statement with numbered
+/// parameters. SQLite gives a bare `?` the index after the highest one seen so
+/// far, which depends on where in the SQL text it appears — explicit indices
+/// take that trap away.
+fn numbered_placeholders(n: usize, start: usize) -> String {
+    let mut s = String::with_capacity(n * 4);
+    for i in 0..n {
+        if i > 0 {
+            s.push(',');
+        }
+        s.push_str(&format!("?{}", start + i));
     }
     s
 }
@@ -211,6 +226,73 @@ pub fn now_playing(conn: &Connection, ids: &[i64], at: i64) -> Result<HashMap<i6
         out.insert(id, p);
     }
     Ok(out)
+}
+
+/// Guide rows: each channel's header fields beside the programmes overlapping
+/// `[from, to)`, in the order the ids were given.
+///
+/// One query rather than a channel fetch followed by [`programmes`]: the grid
+/// asks for a screenful of rows at a time, and two passes over the same ids is
+/// work the join already does.
+///
+/// A channel with no `epg_channel_id`, or none in the window, still gets a row
+/// with an empty `programmes` — the left join is the point. Omitting it would
+/// slide every row beneath it against the wrong channel in the grid. An id
+/// with no channel row at all is skipped, as in [`channels_by_ids`]: there is
+/// no name to draw.
+pub fn guide_rows(conn: &Connection, ids: &[i64], from: i64, to: i64) -> Result<Vec<GuideRowDto>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    // The window lives in the join condition, not the WHERE clause: as a
+    // filter it would drop the channel along with its absent programmes and
+    // turn the left join back into an inner one.
+    // Numbered throughout, and the bounds first. A bare `?` takes the index
+    // after the highest seen so far, so mixing the two forms while the join
+    // predicate precedes the `IN` list would silently renumber the ids.
+    let sql = format!(
+        "SELECT ch.stream_id, ch.name, ch.logo_url, ch.has_archive, ch.archive_days,
+                e.start, e.stop, e.title, e.description
+         FROM channels ch
+         LEFT JOIN epg e
+                ON e.channel_ref = ch.epg_channel_id
+               AND e.start < ?1 AND e.stop > ?2
+         WHERE ch.stream_id IN ({})
+         ORDER BY e.start",
+        numbered_placeholders(ids.len(), 3),
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let bounds = [to, from];
+    let args = rusqlite::params_from_iter(bounds.iter().chain(ids.iter()));
+    let mut by_id: HashMap<i64, GuideRowDto> = HashMap::with_capacity(ids.len());
+    let mut rows = stmt.query(args)?;
+    while let Some(row) = rows.next()? {
+        let stream_id: i64 = row.get(0)?;
+        let entry = match by_id.entry(stream_id) {
+            std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
+            std::collections::hash_map::Entry::Vacant(e) => e.insert(GuideRowDto {
+                stream_id,
+                name: row.get(1)?,
+                logo_url: row.get(2)?,
+                has_archive: row.get::<_, i64>(3)? != 0,
+                archive_days: row
+                    .get::<_, Option<i64>>(4)?
+                    .and_then(|d| u32::try_from(d).ok()),
+                programmes: Vec::new(),
+            }),
+        };
+        // A NULL start is the left join saying "nothing in the window", which
+        // is a row with no programmes rather than a programme.
+        if let Some(start) = row.get::<_, Option<i64>>(5)? {
+            entry.programmes.push(ProgrammeDto {
+                start,
+                stop: row.get(6)?,
+                title: row.get(7)?,
+                description: row.get(8)?,
+            });
+        }
+    }
+    Ok(ids.iter().filter_map(|id| by_id.remove(id)).collect())
 }
 
 /// `(stream_id, name)` for the fuzzy index. The cleaned name is preferred:
@@ -441,6 +523,92 @@ mod tests {
         // A gap in the guide is not "the nearest programme"; it is nothing.
         let gap = now_playing(&c, &[1], 500).unwrap();
         assert!(gap.is_empty(), "expected no programme in a guide gap");
+    }
+
+    #[test]
+    fn guide_rows_keep_the_requested_order() {
+        let c = open_in_memory().unwrap();
+        chan(&c, 1, "One", Some("1"), Some(1));
+        chan(&c, 2, "Two", Some("1"), Some(2));
+        chan(&c, 3, "Three", Some("1"), Some(3));
+
+        let got = guide_rows(&c, &[3, 1, 2], 0, 1000).unwrap();
+        assert_eq!(
+            got.iter().map(|r| r.stream_id).collect::<Vec<_>>(),
+            [3, 1, 2]
+        );
+        assert_eq!(got[0].name, "Three");
+    }
+
+    #[test]
+    fn a_channel_with_no_guide_still_gets_a_row() {
+        let c = open_in_memory().unwrap();
+        chan(&c, 1, "With guide", Some("1"), Some(1));
+        chan(&c, 2, "No epg id", Some("1"), Some(2));
+        chan(&c, 3, "Epg id, nothing in the window", Some("1"), Some(3));
+        with_epg_id(&c, 1, "a");
+        with_epg_id(&c, 3, "c");
+        epg_row(&c, "a", 100, 200, "Show");
+        epg_row(&c, "c", 5000, 6000, "Much later");
+
+        // Drop a row and every row beneath it lines up against the wrong
+        // channel in the grid.
+        let got = guide_rows(&c, &[1, 2, 3], 0, 1000).unwrap();
+        assert_eq!(got.len(), 3);
+        assert_eq!(got[0].programmes.len(), 1);
+        assert!(got[1].programmes.is_empty());
+        assert!(got[2].programmes.is_empty());
+    }
+
+    #[test]
+    fn guide_rows_clip_to_the_window_and_keep_the_straddlers() {
+        let c = open_in_memory().unwrap();
+        chan(&c, 1, "NWN", Some("1"), Some(1));
+        with_epg_id(&c, 1, "nwn.uk");
+        epg_row(&c, "nwn.uk", 0, 40, "wholly before");
+        epg_row(&c, "nwn.uk", 50, 150, "straddles the start");
+        epg_row(&c, "nwn.uk", 150, 250, "inside");
+        epg_row(&c, "nwn.uk", 250, 350, "straddles the end");
+        epg_row(&c, "nwn.uk", 400, 500, "wholly after");
+        // Abutting either edge is outside: the window is half open, and a
+        // programme that ends as it opens is not in it.
+        epg_row(&c, "nwn.uk", 20, 100, "ends at the start");
+        epg_row(&c, "nwn.uk", 300, 400, "begins at the end");
+
+        let got = guide_rows(&c, &[1], 100, 300).unwrap();
+        let titles: Vec<&str> = got[0].programmes.iter().map(|p| p.title.as_str()).collect();
+        assert_eq!(
+            titles,
+            ["straddles the start", "inside", "straddles the end"]
+        );
+    }
+
+    #[test]
+    fn guide_rows_carry_the_channels_header_fields() {
+        let c = open_in_memory().unwrap();
+        c.execute(
+            "INSERT INTO channels (stream_id, category_id, name, clean_name, num,
+                                   logo_url, has_archive, archive_days)
+             VALUES (1,'1','NWN One','NWN One',1,'http://logo/1.png',1,7)",
+            [],
+        )
+        .unwrap();
+
+        let got = guide_rows(&c, &[1], 0, 1000).unwrap();
+        assert_eq!(got[0].name, "NWN One");
+        assert_eq!(got[0].logo_url.as_deref(), Some("http://logo/1.png"));
+        assert!(got[0].has_archive);
+        assert_eq!(got[0].archive_days, Some(7));
+    }
+
+    #[test]
+    fn guide_rows_skip_ids_with_no_channel_and_handle_none() {
+        let c = open_in_memory().unwrap();
+        chan(&c, 1, "Real", Some("1"), Some(1));
+        let got = guide_rows(&c, &[9999, 1], 0, 1000).unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].stream_id, 1);
+        assert!(guide_rows(&c, &[], 0, 1000).unwrap().is_empty());
     }
 
     #[test]

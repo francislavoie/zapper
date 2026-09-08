@@ -152,7 +152,18 @@ pub fn install(window: &tauri::WebviewWindow) -> Result<Overlay> {
             counter.set(n);
             // The ONLY render handler. mpv draws through this hook once it
             // exists; until then we clear to black.
-            if crate::surface::mpv::draw(area) {
+            let painted = crate::surface::mpv::draw(area);
+            // Read back here rather than inside mpv's draw: this handler runs
+            // every frame, so a capture still works when nothing is playing
+            // and the surface is only being cleared.
+            {
+                let scale = area.scale_factor();
+                crate::surface::capture::maybe_grab(
+                    area.allocated_width() * scale,
+                    area.allocated_height() * scale,
+                );
+            }
+            if painted {
                 drawn.set(drawn.get() + 1);
                 // Twice a second, look at what actually landed in the
                 // framebuffer. Cheap, and the only thing that can tell a

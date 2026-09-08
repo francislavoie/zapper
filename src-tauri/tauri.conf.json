@@ -5,15 +5,28 @@
   "identifier": "dev.lavoie.zapper",
   "build": {
     "frontendDist": "../dist",
-    "devUrl": "http://localhost:5173",
+    "devUrl": "http://localhost:5180",
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build"
   },
   "app": {
     "windows": [
-      { "title": "zapper", "width": 1400, "height": 860, "transparent": true }
+      {
+        "title": "zapper",
+        "width": 1400,
+        "height": 860,
+        "transparent": true
+      }
     ],
-    "security": { "csp": null }
+    "security": {
+      "csp": null
+    }
   },
-  "bundle": { "active": true, "targets": "deb", "icon": ["icons/icon.png"] }
+  "bundle": {
+    "active": true,
+    "targets": "deb",
+    "icon": [
+      "icons/icon.png"
+    ]
+  }
 }

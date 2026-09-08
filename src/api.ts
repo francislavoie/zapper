@@ -11,6 +11,9 @@ import {
   type ChannelDto,
   type PlayerStateDto,
   type ProgrammeDto,
+  type SettingsDto,
+  type SubtitleStyleDto,
+  type GuideRowDto,
   type SyncStatusDto,
   type VideoRect,
 } from "./types";
@@ -43,6 +46,15 @@ export const api = {
     invoke<void>("set_compressor", { enabled }),
   setVideoRect: (rect: VideoRect) => invoke<void>("set_video_rect", { rect }),
   playerState: () => invoke<PlayerStateDto>("player_state"),
+
+  settings: () => invoke<SettingsDto>("settings"),
+  setSettings: (settings: SettingsDto) => invoke<void>("set_settings", { settings }),
+  setSubtitleStyle: (style: SubtitleStyleDto) =>
+    invoke<void>("set_subtitle_style", { style }),
+  applyPlaybackSettings: (settings: SettingsDto) =>
+    invoke<void>("apply_playback_settings", { settings }),
+  guideRows: (streamIds: number[], from: number, to: number) =>
+    invoke<GuideRowDto[]>("guide_rows", { streamIds, from, to }),
 };
 
 export const onSyncStatus = (f: (s: SyncStatusDto) => void): Promise<UnlistenFn> =>

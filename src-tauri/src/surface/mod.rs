@@ -1,5 +1,6 @@
 //! Playback surface: the only module aware that GTK exists.
 
+pub mod capture;
 pub mod gl;
 pub mod mpv;
 pub mod overlay;

@@ -102,5 +102,55 @@ async fn run() -> Result<(), String> {
     check!("the mirror reports its size", st.channels_total > 10_000);
     check!("a previous sync is remembered", st.last_synced.is_some());
 
+    // --- settings ---------------------------------------------------------
+
+    let before = cmd::settings().await?;
+    println!(
+        "settings: rewind={}min hwdec={} tonemap={} guide={}h backdrop={:?}",
+        before.rewind_minutes,
+        before.hardware_decode,
+        before.tone_map_hdr,
+        before.guide_hours,
+        before.subtitle.backdrop
+    );
+    check!("HDR is tone-mapped by default", before.tone_map_hdr);
+    check!(
+        "subtitles default to a backdrop at 0.25",
+        (before.subtitle.backdrop_opacity - 0.25).abs() < 1e-9
+    );
+
+    let mut changed = before.clone();
+    changed.rewind_minutes = 9.0;
+    changed.subtitle.size = 44;
+    cmd::set_settings(changed).await?;
+    let after = cmd::settings().await?;
+    check!("a saved setting reads back", after.rewind_minutes == 9.0);
+    check!("nested subtitle fields persist", after.subtitle.size == 44);
+    cmd::set_settings(before).await?;
+    let restored = cmd::settings().await?;
+    check!("settings restore cleanly", restored.rewind_minutes != 9.0);
+
+    // --- guide rows -------------------------------------------------------
+
+    let rows = cmd::guide_rows(ids.clone(), now - 3600, now + 3600).await?;
+    println!("guide_rows for {} channels: {}", ids.len(), rows.len());
+    check!("a row per channel, none dropped", rows.len() == ids.len());
+    check!(
+        "rows come back in the order asked for",
+        rows.iter().zip(&ids).all(|(r, id)| r.stream_id == *id)
+    );
+    check!(
+        "every row carries its channel name",
+        rows.iter().all(|r| !r.name.is_empty())
+    );
+    let with_prog = rows.iter().filter(|r| !r.programmes.is_empty()).count();
+    println!("  ...of which {with_prog} have programmes");
+    check!(
+        "programmes fall inside the window",
+        rows.iter()
+            .flat_map(|r| &r.programmes)
+            .all(|p| p.start < now + 3600 && p.stop > now - 3600)
+    );
+
     Ok(())
 }

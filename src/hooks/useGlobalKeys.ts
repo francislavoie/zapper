@@ -7,6 +7,7 @@ import { useEffect } from "react";
 import { backend } from "../backend";
 import { focusSearch, typingInto } from "../focus";
 import { toggleFullscreen } from "../fullscreen";
+import { clampHours } from "../logic/guide";
 import { run } from "../store";
 import type { State } from "../store";
 import type { Action } from "../store";
@@ -29,6 +30,8 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
           dispatch({ type: "palette", open: false });
         } else if (state.query !== "") {
           dispatch({ type: "query", text: "" });
+        } else if (state.mode === "guide") {
+          dispatch({ type: "mode", mode: "browse" });
         } else if (state.mode === "watch") {
           dispatch({ type: "mode", mode: "browse" });
         } else if (state.player.state !== "stopped") {
@@ -47,6 +50,33 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
         if (state.mode !== "browse") dispatch({ type: "mode", mode: "browse" });
         requestAnimationFrame(focusSearch);
         return;
+      }
+
+      // The guide is a view, not a player function: it works with nothing
+      // playing, and it owns the arrow keys while it is up.
+      if (e.key === "g" || e.key === "G") {
+        e.preventDefault();
+        dispatch({ type: "mode", mode: state.mode === "guide" ? "browse" : "guide" });
+        return;
+      }
+
+      if (state.mode === "guide") {
+        const page = clampHours(state.settings.guideHours);
+        if (e.key === "ArrowLeft") {
+          e.preventDefault();
+          dispatch({ type: "guideShift", hours: -page });
+          return;
+        }
+        if (e.key === "ArrowRight") {
+          e.preventDefault();
+          dispatch({ type: "guideShift", hours: page });
+          return;
+        }
+        if (e.key === "Home") {
+          e.preventDefault();
+          dispatch({ type: "guideNow" });
+          return;
+        }
       }
 
       // Fullscreen is a window property whether or not anything is playing.
@@ -90,6 +120,7 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
     state.paletteOpen,
     state.player.state,
     state.query,
+    state.settings.guideHours,
     state.settingsOpen,
   ]);
 }

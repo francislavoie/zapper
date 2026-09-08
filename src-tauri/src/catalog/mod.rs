@@ -9,6 +9,7 @@ pub mod epg;
 pub mod index;
 pub mod schema;
 pub mod search;
+pub mod settings;
 pub mod status;
 pub mod store;
 pub mod sync;

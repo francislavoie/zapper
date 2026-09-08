@@ -9,16 +9,18 @@ import { useEffect, useRef } from "react";
 import { backend, isMock, subscribePlayer, subscribeSync } from "./backend";
 import { errorMessage } from "./logic/async";
 import { useGlobalKeys } from "./hooks/useGlobalKeys";
+import { useSettings } from "./hooks/useSettings";
 import { useVideoRect } from "./hooks/useVideoRect";
 import { useApp, useDispatch } from "./store";
 import { CategoryRail } from "./components/CategoryRail";
 import { ChannelList } from "./components/ChannelList";
 import { CommandPalette } from "./components/CommandPalette";
+import { GuideGrid } from "./components/GuideGrid";
 import { PlayerChrome } from "./components/PlayerChrome";
 import { SettingsModal } from "./components/SettingsModal";
 import { SyncStrip } from "./components/SyncStrip";
+import { WatchBand } from "./components/WatchBand";
 import { Toasts } from "./components/Toasts";
-import { NowCard } from "./components/NowCard";
 
 export function App() {
   const state = useApp();
@@ -29,6 +31,13 @@ export function App() {
 
   useGlobalKeys(state, dispatch);
 
+  // Read once at boot rather than when the modal opens: the guide needs
+  // guideHours whether or not anyone has been to the settings pane.
+  useSettings(true);
+
+  // Only browse has a slot to dock into. The guide covers the window with an
+  // opaque grid, so the video goes back to full-window underneath it — mpv
+  // draws below the webview, and covered is covered.
   useVideoRect({
     dockRef,
     docked: browsing,
@@ -79,38 +88,20 @@ export function App() {
 
       {browsing ? (
         <div className="browse">
+          {/* First in the DOM as well as on screen: the band owns the top of
+              the window, and the list below it scrolls under a picture that
+              never moves. */}
+          <WatchBand videoRef={dockRef} />
           <CategoryRail />
           <ChannelList />
-          <section className="side">
-            <div className="side-spacer" />
-            {/* The dock is a hole, not a surface: no background, ever. It
-                still takes clicks — a transparent element is perfectly
-                clickable, and clicking the picture is how you go back to it. */}
-            <div
-              className="dock"
-              ref={dockRef}
-              role="button"
-              tabIndex={0}
-              title="Back to full screen"
-              onClick={() => {
-                if (state.player.state !== "stopped") {
-                  dispatch({ type: "mode", mode: "watch" });
-                }
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && state.player.state !== "stopped") {
-                  dispatch({ type: "mode", mode: "watch" });
-                }
-              }}
-            />
-            <NowCard />
-          </section>
         </div>
       ) : null}
 
+      {state.mode === "guide" ? <GuideGrid /> : null}
+
       {/* Chrome belongs to watch mode. Browsing shows the docked picture and
           the metadata beside it, not a full set of transport controls. */}
-      {browsing ? null : <PlayerChrome />}
+      {state.mode === "watch" ? <PlayerChrome /> : null}
 
       {state.paletteOpen ? <CommandPalette /> : null}
       {state.settingsOpen ? <SettingsModal /> : null}

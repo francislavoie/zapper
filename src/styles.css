@@ -1,7 +1,7 @@
 /* Every layer must stay transparent or the video surface beneath is hidden.
    mpv draws below the webview: an opaque pixel anywhere over the video rect
    is a black hole in the picture, so backgrounds are attached to chrome
-   surfaces only — never to html, body, #root, .app, or .dock. */
+   surfaces only — never to html, body, #root, .app, or .watch-video. */
 
 :root {
   --bg: #0d0f12;
@@ -17,7 +17,10 @@
   --good: #59d08a;
   --row-h: 26px;
   --rail-w: 260px;
-  --side-w: 420px;
+  /* The docked picture. One number moves it; the height and the band follow,
+     and the rect handed to mpv is measured from the slot. */
+  --video-w: 356px;
+  --video-h: calc(var(--video-w) * 9 / 16);
 }
 
 html,
@@ -57,6 +60,96 @@ input {
   position: fixed;
   inset: 0;
   background: transparent;
+  /* Dark UA widgets — scrollbars, range tracks, checkboxes, pickers — for
+     everything in the app.
+     Deliberately NOT on :root. The canvas background is the root element's,
+     and a dark color-scheme there makes a transparent WebView paint itself
+     opaque, which would hide mpv completely. `.app` is a descendant of body,
+     so the widgets go dark and the canvas is left alone. */
+  color-scheme: dark;
+}
+
+/* Native controls, styled rather than trusted: a UA range track or checkbox
+   is a light rectangle in several engines whatever color-scheme says. */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 18px;
+  background: transparent;
+  cursor: pointer;
+}
+
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--bg-3);
+  border: 1px solid var(--line);
+}
+
+input[type="range"]::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--bg-3);
+  border: 1px solid var(--line);
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  margin-top: -6px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 1px solid var(--bg);
+}
+
+input[type="range"]::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--bg);
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+input[type="checkbox"] {
+  accent-color: var(--accent);
+}
+
+select {
+  font: inherit;
+  color: var(--text);
+  background: var(--bg-3);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 4px 8px;
+}
+
+select option {
+  background: var(--bg-2);
+  color: var(--text);
+}
+
+/* Firefox; Chromium takes the same colours from color-scheme above. */
+.scroller,
+.viewport,
+.settings-side,
+.settings-body,
+.palette-list,
+.guide-body,
+.watch-info {
+  scrollbar-color: #39414f transparent;
+  scrollbar-width: thin;
+}
+
+:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+::selection {
+  background: var(--accent-dim);
+  color: var(--text);
 }
 
 /* Mock only: a stand-in for the video plane, so a browser screenshot shows
@@ -82,6 +175,12 @@ input {
   right: 0;
   z-index: 40;
   pointer-events: none;
+}
+
+/* Browsing puts the picture in the top right corner, and the sweep line is a
+   painted 2px bar: stop it short of the video rather than draw across it. */
+.app[data-mode="browse"] .sync-strip {
+  right: var(--video-w);
 }
 
 .sync-bar {
@@ -137,11 +236,15 @@ input {
 
 /* ---------------------------------------------------------------- browse */
 
+/* A band across the top — what is playing on the left, the picture pinned
+   top right — and the rail plus the scrolling list underneath it. The list
+   scrolls; the band does not, so the picture never moves. */
 .browse {
   position: absolute;
   inset: 0;
   display: grid;
-  grid-template-columns: var(--rail-w) minmax(0, 1fr) var(--side-w);
+  grid-template-columns: var(--rail-w) minmax(0, 1fr);
+  grid-template-rows: var(--video-h) minmax(0, 1fr);
   z-index: 10;
 }
 
@@ -161,60 +264,235 @@ input {
   border-right: 1px solid var(--line);
 }
 
-/* Transparent by construction: the docked video lives in this column. */
-.side {
+/* ------------------------------------------------------------ watch band */
+
+/* Spans both columns at the top of the window. Height comes from the video,
+   so --video-w is the one number that moves the picture. */
+.watch-band {
+  grid-column: 1 / -1;
+  grid-row: 1;
   display: flex;
-  flex-direction: column;
-  justify-content: flex-end;
-  gap: 10px;
-  padding: 12px;
+  align-items: stretch;
+  min-width: 0;
   background: transparent;
-  min-height: 0;
-  overflow: hidden;
 }
 
-.dock {
-  width: 100%;
-  cursor: pointer;
-  aspect-ratio: 16 / 9;
+/* The hole. No background, no box-shadow, no ::before — anything painted here
+   is a black rectangle punched through the picture. The hairline beside it
+   belongs to .watch-info's border, never to this. */
+.watch-video {
+  flex: 0 0 var(--video-w);
+  width: var(--video-w);
+  height: var(--video-h);
   background: transparent;
-  flex: 0 0 auto;
-  /* An outline paints outside the box, so it never covers the video. */
-  outline: 1px solid var(--line);
-  outline-offset: 3px;
-}
-
-.dock-empty {
   display: grid;
   place-items: center;
+}
+
+.watch-video.live {
+  cursor: pointer;
+}
+
+.watch-video-empty {
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
   color: var(--dimmer);
-  font-size: 11px;
-  height: 100%;
 }
 
-.now-card {
+.watch-info {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
   background: var(--bg-2);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 10px 12px;
-  flex: 0 0 auto;
+  border-bottom: 1px solid var(--line);
+  border-right: 1px solid var(--line);
+  display: flex;
+  gap: 18px;
+  padding: 12px 16px;
 }
 
-.now-card h3 {
-  margin: 0 0 2px;
-  font-size: 13px;
-  font-weight: 600;
+.watch-col {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
-.now-card p {
+.watch-col.identity {
+  flex: 1 1 30%;
+}
+
+.watch-col.epg {
+  flex: 1 1 42%;
+  gap: 10px;
+}
+
+.watch-col.facts {
+  /* Wide enough for "1920×1080 · 59.94 fps · hevc" without an ellipsis: the
+     measured line is the one number in this app that must never be truncated,
+     because the channel name already lies about it. */
+  flex: 0 1 300px;
   margin: 0;
+  gap: 3px;
+}
+
+.watch-col.identity h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.watch-sub {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.watch-num {
+  font-variant-numeric: tabular-nums;
   font-size: 11px;
+  color: var(--dimmer);
+}
+
+.watch-state {
+  margin: 0;
+  font-size: 12px;
   color: var(--dim);
 }
 
-.side-spacer {
-  flex: 1 1 auto;
-  min-height: 0;
+.watch-state.bad {
+  color: var(--bad);
+}
+
+.watch-prog {
+  border-left: 2px solid var(--accent-dim);
+  padding-left: 8px;
+  min-width: 0;
+}
+
+/* Missing EPG is the normal case at 15% coverage: muted, not flagged. */
+.watch-prog.none {
+  border-left-color: var(--line);
+  color: var(--dimmer);
+  font-size: 12px;
+  font-style: italic;
+}
+
+.watch-prog-head {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  color: var(--dimmer);
+}
+
+.watch-when {
+  color: var(--accent);
+}
+
+.watch-time {
+  font-variant-numeric: tabular-nums;
+}
+
+.watch-title {
+  font-size: 13px;
+  margin-top: 1px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.watch-progress {
+  height: 2px;
+  margin-top: 6px;
+  background: var(--bg-3);
+  border-radius: 1px;
+  overflow: hidden;
+}
+
+.watch-progress span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+.watch-desc {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: var(--dim);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+
+.watch-col.facts > div {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.watch-col.facts dt {
+  flex: 0 0 auto;
+  width: 88px;
+  font-size: 11px;
+  color: var(--dimmer);
+}
+
+.watch-col.facts dd {
+  margin: 0;
+  min-width: 0;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.watch-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: auto;
+}
+
+.watch-idle {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.watch-idle h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--dim);
+}
+
+.watch-idle p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--dim);
+  max-width: 60ch;
+}
+
+.watch-hints {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  gap: 18px;
+  font-size: 12px;
+  color: var(--dimmer);
+}
+
+.watch-hints b {
+  color: var(--dim);
 }
 
 /* ------------------------------------------------------------------ rail */
@@ -453,6 +731,264 @@ input {
   padding: 12px;
   color: var(--dimmer);
   font-size: 12px;
+}
+
+/* ----------------------------------------------------------------- guide */
+
+/* The grid covers the window. Opaque on purpose: the stream keeps playing
+   underneath and mpv draws below the webview, so covered really is covered. */
+.guide {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  --guide-gutter: 210px;
+}
+
+.guide-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-2);
+  flex: 0 0 auto;
+}
+
+.guide-head h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 40ch;
+}
+
+.guide-window {
+  font-size: 12px;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.guide-body {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/* Inside the scroller, so it is exactly as wide as the rows: the axis and the
+   programmes cannot disagree about where a time is. */
+.guide-axis {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  height: 26px;
+  background: var(--bg-3);
+  border-bottom: 1px solid var(--line);
+}
+
+.axis-corner {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--dimmer);
+  display: flex;
+  align-items: center;
+}
+
+.guide-tick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  padding-left: 6px;
+  border-left: 1px solid var(--line);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--dim);
+  pointer-events: none;
+}
+
+.guide-spacer {
+  position: relative;
+  width: 100%;
+}
+
+.guide-row {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 34px;
+  display: flex;
+  border-bottom: 1px solid var(--bg-3);
+  contain: content;
+}
+
+.guide-row.sel {
+  background: var(--accent-dim);
+}
+
+.guide-row.sep {
+  background: var(--bg-3);
+  color: var(--dim);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  align-items: center;
+}
+
+.guide-chan {
+  flex: 0 0 var(--guide-gutter);
+  width: var(--guide-gutter);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border-right: 1px solid var(--line);
+  overflow: hidden;
+}
+
+.guide-num {
+  flex: 0 0 auto;
+  width: 42px;
+  text-align: right;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--dimmer);
+}
+
+.guide-name {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.guide-arch {
+  flex: 0 0 auto;
+  font-size: 10px;
+  color: var(--good);
+}
+
+.guide-track {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* A programme. Absolutely placed from the arithmetic in logic/guide.ts. */
+.prog {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  border-radius: 4px;
+  border: 1px solid var(--line);
+  background: var(--bg-2);
+  color: var(--text);
+  font-size: 12px;
+  text-align: left;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.prog-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.prog-time {
+  margin-left: auto;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--dimmer);
+}
+
+button.prog:hover {
+  background: var(--bg-3);
+  border-color: var(--accent-dim);
+}
+
+.prog.live {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+
+/* Past and playable: the archive. Past and not: inert, and it says so by
+   being flat and unhoverable rather than by shouting. */
+.prog.past {
+  color: var(--dim);
+}
+
+.prog.inert {
+  background: transparent;
+  border-style: dashed;
+  border-color: var(--bg-3);
+  color: var(--dimmer);
+  cursor: default;
+}
+
+.prog.future {
+  background: var(--bg);
+}
+
+/* Clipped at a window edge: square that corner off so it reads as continuing
+   rather than as a short programme. */
+.prog.clip-start {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  border-left-style: dotted;
+}
+
+.prog.clip-end {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  border-right-style: dotted;
+}
+
+/* Most channels have no EPG. They get this, once, across the row —
+   deliberate, not a hole. */
+.prog.none {
+  left: 0;
+  right: 0;
+  border: 1px dashed var(--bg-3);
+  background: transparent;
+  color: var(--dimmer);
+  font-style: italic;
+  font-size: 11px;
+  justify-content: center;
+}
+
+.prog.loading {
+  left: 0;
+  right: 0;
+  border: 0;
+  background: linear-gradient(90deg, var(--bg-2), var(--bg-3), var(--bg-2));
+  opacity: 0.5;
+}
+
+.guide-now {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--bad);
+  opacity: 0.9;
+  z-index: 2;
+  pointer-events: none;
 }
 
 /* ---------------------------------------------------------------- chrome */
@@ -811,6 +1347,102 @@ input {
   flex: 1 1 auto;
   font-size: 12px;
 }
+
+.row-field.wrap {
+  flex-wrap: wrap;
+}
+
+.row-field input[type="range"] {
+  flex: 0 0 200px;
+}
+
+.settings-note {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 6px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--bg-3);
+  color: var(--dim);
+  font-size: 12px;
+}
+
+.settings-note.bad {
+  border-color: #45262a;
+  color: #ffc9c9;
+}
+
+.choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.swatches {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.swatch {
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  border: 1px solid var(--line);
+}
+
+.swatch.sel {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.field.hex {
+  width: 88px;
+  font-variant-numeric: tabular-nums;
+  flex: 0 0 auto;
+}
+
+/* The stand-in for a frame of video. Inside the modal, which is opaque
+   already, so this paints nothing over the real video plane. */
+.sub-preview {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  max-height: 240px;
+  margin-bottom: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+
+.sub-frame {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(120% 80% at 30% 20%, #2b3550 0%, #141a26 55%, #0b0e14 100%),
+    repeating-linear-gradient(
+      100deg,
+      rgba(255, 255, 255, 0.03) 0 18px,
+      rgba(0, 0, 0, 0.03) 18px 36px
+    );
+}
+
+.sub-line {
+  position: relative;
+  width: 100%;
+  padding: 8px 10px 12px;
+  text-align: center;
+}
+
+.sub-line span {
+  display: inline-block;
+  border-radius: 3px;
+}
+
 
 /* ---------------------------------------------------------------- toasts */
 

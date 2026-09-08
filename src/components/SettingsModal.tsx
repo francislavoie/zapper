@@ -1,16 +1,27 @@
 // The ⚙ modal: a left sidebar of sections, and no curation page by design.
 //
-// Most of what belongs here is mpv properties and sync preferences, and there
-// are no commands for those in the contract — `src/api.ts` exposes playback,
-// catalogue and sync, nothing else. So each section says plainly what it will
-// hold rather than pretending to a control that goes nowhere. The two things
-// that *are* wired are wired.
+// Every control writes through useSettings: the value moves at once,
+// the save is debounced, and a failed save is said out loud without taking the
+// user's value away.
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { backend } from "../backend";
-import { run, useApp, useDispatch } from "../store";
+import { useSettings } from "../hooks/useSettings";
 import { clampVolume } from "../logic/format";
+import {
+  REWIND_MAX,
+  REWIND_MIN,
+  SUB_SIZE_MAX,
+  SUB_SIZE_MIN,
+  SYNC_MAX,
+  SYNC_MIN,
+  normaliseColor,
+  subtitlePreview,
+} from "../logic/settings";
+import { MAX_GUIDE_HOURS, MIN_GUIDE_HOURS } from "../logic/guide";
 import { VOLUME_MAX } from "../logic/volume";
+import { run, useApp, useDispatch } from "../store";
+import type { SubtitleBackdrop } from "../types";
 
 const SECTIONS = [
   "Playback",
@@ -24,10 +35,26 @@ const SECTIONS = [
 
 type Section = (typeof SECTIONS)[number];
 
+const FONTS = ["Sans", "Serif", "Monospace"];
+
+/** Presets rather than <input type="color">: the native swatch is a light
+ *  button that opens an OS picker, and these are the four colours anyone
+ *  actually uses for subtitles. The hex field is there for the rest. */
+const COLORS = ["#ffffff", "#f2e600", "#00e5ff", "#c8c8c8"];
+
+const BACKDROPS: { id: SubtitleBackdrop; label: string; note: string }[] = [
+  { id: "background", label: "Background", note: "a box behind each line" },
+  { id: "window", label: "Window", note: "a band across the whole line" },
+  { id: "outline", label: "Outline", note: "an edge around the letters" },
+  { id: "shadow", label: "Shadow", note: "offset behind the letters" },
+  { id: "none", label: "None", note: "letters only" },
+];
+
 export function SettingsModal() {
   const { player, sync } = useApp();
   const dispatch = useDispatch();
   const [section, setSection] = useState<Section>("Playback");
+  const s = useSettings(true);
   const close = () => dispatch({ type: "settings", open: false });
 
   return (
@@ -39,19 +66,252 @@ export function SettingsModal() {
     >
       <div className="settings" role="dialog" aria-label="Settings">
         <nav className="settings-side">
-          {SECTIONS.map((s) => (
+          {SECTIONS.map((x) => (
             <button
-              key={s}
-              className={s === section ? "sel" : ""}
-              onClick={() => setSection(s)}
+              key={x}
+              className={x === section ? "sel" : ""}
+              onClick={() => setSection(x)}
             >
-              {s}
+              {x}
             </button>
           ))}
         </nav>
 
         <div className="settings-body">
           <h3>{section}</h3>
+
+          {/* One line, at the top of every pane that writes settings, saying
+              what state the settings themselves are in. */}
+          {section === "Playback" || section === "Subtitles" || section === "Guide" ? (
+            <Status
+              status={s.status}
+              saveError={s.saveError}
+              saving={s.saving}
+              onRetry={s.reload}
+            />
+          ) : null}
+
+          {section === "Playback" ? (
+            <>
+              <div className="row-field">
+                <label htmlFor="set-rewind">
+                  Live rewind — {s.settings.rewindMinutes} min
+                </label>
+                <input
+                  id="set-rewind"
+                  type="range"
+                  min={REWIND_MIN}
+                  max={REWIND_MAX}
+                  step={1}
+                  value={s.settings.rewindMinutes}
+                  onChange={(e) => s.patch({ rewindMinutes: Number(e.target.value) })}
+                />
+              </div>
+              <div className="row-field">
+                <label htmlFor="set-hwdec">Hardware decode</label>
+                <button
+                  id="set-hwdec"
+                  className={`ctl ${s.settings.hardwareDecode ? "on" : ""}`}
+                  aria-pressed={s.settings.hardwareDecode}
+                  onClick={() => s.patch({ hardwareDecode: !s.settings.hardwareDecode })}
+                >
+                  {s.settings.hardwareDecode ? "on" : "off"}
+                </button>
+              </div>
+              <div className="row-field">
+                <label htmlFor="set-hdr">Tone-map HDR to SDR</label>
+                <button
+                  id="set-hdr"
+                  className={`ctl ${s.settings.toneMapHdr ? "on" : ""}`}
+                  aria-pressed={s.settings.toneMapHdr}
+                  onClick={() => s.patch({ toneMapHdr: !s.settings.toneMapHdr })}
+                >
+                  {s.settings.toneMapHdr ? "on" : "off"}
+                </button>
+              </div>
+              <p>
+                Rewind is minutes of live scrollback, converted to mpv’s byte
+                budget behind the scenes; longer costs memory. Turning tone
+                mapping off leaves HDR channels washed out on an SDR panel.
+              </p>
+            </>
+          ) : null}
+
+          {section === "Subtitles" ? (
+            <>
+              <Preview />
+
+              <div className="row-field">
+                <label htmlFor="set-font">Font</label>
+                <select
+                  id="set-font"
+                  value={FONTS.includes(s.settings.subtitle.font) ? s.settings.subtitle.font : ""}
+                  onChange={(e) => s.patchSubtitle({ font: e.target.value })}
+                >
+                  {FONTS.map((f) => (
+                    <option key={f} value={f}>
+                      {f}
+                    </option>
+                  ))}
+                  {FONTS.includes(s.settings.subtitle.font) ? null : (
+                    <option value="">{s.settings.subtitle.font}</option>
+                  )}
+                </select>
+              </div>
+
+              <div className="row-field">
+                <label htmlFor="set-size">Size — {s.settings.subtitle.size}pt at 720p</label>
+                <input
+                  id="set-size"
+                  type="range"
+                  min={SUB_SIZE_MIN}
+                  max={SUB_SIZE_MAX}
+                  step={1}
+                  value={s.settings.subtitle.size}
+                  onChange={(e) => s.patchSubtitle({ size: Number(e.target.value) })}
+                />
+              </div>
+
+              <div className="row-field">
+                <label>Colour</label>
+                <div className="swatches">
+                  {COLORS.map((c) => (
+                    <button
+                      key={c}
+                      className={`swatch ${s.settings.subtitle.color === c ? "sel" : ""}`}
+                      style={{ background: c }}
+                      title={c}
+                      aria-label={c}
+                      onClick={() => s.patchSubtitle({ color: c })}
+                    />
+                  ))}
+                  <input
+                    className="field hex"
+                    value={s.settings.subtitle.color}
+                    spellCheck={false}
+                    aria-label="Subtitle colour, hex"
+                    onChange={(e) => s.patchSubtitle({ color: normaliseColor(e.target.value) })}
+                  />
+                </div>
+              </div>
+
+              <div className="row-field wrap">
+                <label>Backdrop</label>
+                <div className="choices">
+                  {BACKDROPS.map((b) => (
+                    <button
+                      key={b.id}
+                      className={`ctl ${s.settings.subtitle.backdrop === b.id ? "on" : ""}`}
+                      title={b.note}
+                      onClick={() => s.patchSubtitle({ backdrop: b.id })}
+                    >
+                      {b.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {s.settings.subtitle.backdrop === "background" ||
+              s.settings.subtitle.backdrop === "window" ? (
+                <div className="row-field">
+                  <label htmlFor="set-op">
+                    Backdrop opacity — {Math.round(s.settings.subtitle.backdropOpacity * 100)}%
+                  </label>
+                  <input
+                    id="set-op"
+                    type="range"
+                    min={0}
+                    max={100}
+                    step={5}
+                    value={Math.round(s.settings.subtitle.backdropOpacity * 100)}
+                    onChange={(e) =>
+                      s.patchSubtitle({ backdropOpacity: Number(e.target.value) / 100 })
+                    }
+                  />
+                </div>
+              ) : null}
+
+              {s.settings.subtitle.backdrop === "outline" ? (
+                <div className="row-field">
+                  <label htmlFor="set-outline">
+                    Outline size — {s.settings.subtitle.outlineSize}
+                  </label>
+                  <input
+                    id="set-outline"
+                    type="range"
+                    min={0}
+                    max={8}
+                    step={0.5}
+                    value={s.settings.subtitle.outlineSize}
+                    onChange={(e) => s.patchSubtitle({ outlineSize: Number(e.target.value) })}
+                  />
+                </div>
+              ) : null}
+
+              {s.settings.subtitle.backdrop === "shadow" ? (
+                <div className="row-field">
+                  <label htmlFor="set-shadow">
+                    Shadow offset — {s.settings.subtitle.shadowOffset}
+                  </label>
+                  <input
+                    id="set-shadow"
+                    type="range"
+                    min={0}
+                    max={8}
+                    step={0.5}
+                    value={s.settings.subtitle.shadowOffset}
+                    onChange={(e) => s.patchSubtitle({ shadowOffset: Number(e.target.value) })}
+                  />
+                </div>
+              ) : null}
+
+              <p>
+                The real subtitles are drawn by libass into the video plane,
+                underneath this window, so they cannot be shown here. The
+                preview is CSS standing in for them: the size scales the same
+                way mpv scales it — points at 720p — and each backdrop is the
+                shape mpv will draw.
+              </p>
+            </>
+          ) : null}
+
+          {section === "Guide" ? (
+            <>
+              <div className="row-field">
+                <label htmlFor="set-hours">
+                  Hours per screen — {s.settings.guideHours}
+                </label>
+                <input
+                  id="set-hours"
+                  type="range"
+                  min={MIN_GUIDE_HOURS}
+                  max={MAX_GUIDE_HOURS}
+                  step={1}
+                  value={s.settings.guideHours}
+                  onChange={(e) => s.patch({ guideHours: Number(e.target.value) })}
+                />
+              </div>
+              <div className="row-field">
+                <label htmlFor="set-sync">
+                  Refresh the catalogue every {s.settings.syncIntervalHours}h
+                </label>
+                <input
+                  id="set-sync"
+                  type="range"
+                  min={SYNC_MIN}
+                  max={SYNC_MAX}
+                  step={1}
+                  value={s.settings.syncIntervalHours}
+                  onChange={(e) => s.patch({ syncIntervalHours: Number(e.target.value) })}
+                />
+              </div>
+              <p>
+                Fewer hours per screen means wider programme blocks and less
+                squinting; more means less paging. The guide reads this
+                immediately — press <b>G</b> to see it.
+              </p>
+            </>
+          ) : null}
 
           {section === "Audio" ? (
             <>
@@ -125,6 +385,9 @@ export function SettingsModal() {
                 <b>/</b> — search channels
               </li>
               <li>
+                <b>G</b> — guide · <b>←</b>/<b>→</b> page it · <b>Home</b> back to now
+              </li>
+              <li>
                 <b>Ctrl+P</b> — command palette
               </li>
               <li>
@@ -145,16 +408,74 @@ export function SettingsModal() {
               by the browser engine.
             </p>
           ) : null}
-
-          {section === "Playback" || section === "Subtitles" || section === "Guide" ? (
-            <p>
-              Nothing to set here yet: these are mpv properties and sync
-              preferences, and the command boundary in <code>src/api.ts</code>{" "}
-              does not expose them. Rather than show a control that silently
-              does nothing, this page waits for the commands to exist.
-            </p>
-          ) : null}
         </div>
+      </div>
+    </div>
+  );
+}
+
+function Status({
+  status,
+  saveError,
+  saving,
+  onRetry,
+}: {
+  status: ReturnType<typeof useSettings>["status"];
+  saveError: string | null;
+  saving: boolean;
+  onRetry: () => void;
+}) {
+  return (
+    <>
+      {status.status === "error" ? (
+        <div className="settings-note bad">
+          <span>
+            Settings could not be read — {status.message}. These are the
+            defaults; changes will not stick until the backend answers.
+          </span>
+          <button className="link" onClick={onRetry}>
+            try again
+          </button>
+        </div>
+      ) : null}
+      {saveError ? (
+        <div className="settings-note bad">
+          <span>Not saved — {saveError}. Your value is still here.</span>
+        </div>
+      ) : null}
+      {saving && !saveError ? <div className="settings-note">Saving…</div> : null}
+    </>
+  );
+}
+
+/** A sample frame with the subtitle drawn the way mpv will draw it.
+ *
+ *  The frame's own height is measured rather than assumed, because the size is
+ *  points at 720p and the only honest way to show it is to scale by how tall
+ *  this stand-in frame actually is. */
+function Preview() {
+  const { settings } = useApp();
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [height, setHeight] = useState(240);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const read = () => setHeight(el.clientHeight || 240);
+    read();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(read);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const p = subtitlePreview(settings.subtitle, height);
+
+  return (
+    <div className="sub-preview" ref={ref}>
+      <div className="sub-frame" aria-hidden />
+      <div className="sub-line" style={p.band ? { background: p.band.background } : undefined}>
+        <span style={p.text}>— And that is how the whole thing started.</span>
       </div>
     </div>
   );

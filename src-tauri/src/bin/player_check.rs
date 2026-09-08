@@ -27,6 +27,22 @@ fn main() {
 }
 
 #[cfg(target_os = "linux")]
+async fn quiesce() {
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+}
+
+/// Exits without unwinding. Destructors for mpv and GTK objects owned by the
+/// main thread cannot run safely from here, and there is nothing left worth
+/// cleaning up in a one-shot harness.
+#[cfg(target_os = "linux")]
+fn finish(code: i32) -> ! {
+    use std::io::Write;
+    let _ = std::io::stdout().flush();
+    let _ = std::io::stderr().flush();
+    std::process::exit(code)
+}
+
+#[cfg(target_os = "linux")]
 fn main() {
     use gtk::prelude::GLAreaExt;
     use tauri::Manager;
@@ -61,14 +77,21 @@ fn main() {
 
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                match run(&handle).await {
+                let verdict = run(&handle).await;
+                // Let the GTK render loop finish the frame it is in before the
+                // process goes away. Exiting straight out of this task tears
+                // mpv's render context down underneath a live GL callback,
+                // which segfaults and leaves a core dump - and that dump holds
+                // the stream URL, credentials and all.
+                quiesce().await;
+                match verdict {
                     Ok(msg) => {
                         println!("PASS: {msg}");
-                        std::process::exit(0);
+                        finish(0);
                     }
                     Err(e) => {
                         eprintln!("FAIL: {e}");
-                        std::process::exit(1);
+                        finish(1);
                     }
                 }
             });

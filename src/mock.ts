@@ -7,12 +7,16 @@
 // Shapes here mirror src/types.ts exactly. Nothing in this file is imported by
 // the Tauri path at runtime beyond the module load itself.
 
+import { auditLightSurfaces, auditOverVideo } from "./audit";
 import type {
   CategoryDto,
   ChannelDto,
+  GuideRowDto,
   PlayerStateDto,
   ProgrammeDto,
   QualityDto,
+  SettingsDto,
+  SubtitleStyleDto,
   SyncStatusDto,
   VideoRect,
 } from "./types";
@@ -203,6 +207,33 @@ function makeProgramme(nowSec: number): ProgrammeDto {
   };
 }
 
+/** A whole schedule for one channel, tiled from its now-playing slot.
+ *
+ *  A channel with no `nowPlaying` gets nothing at all: most of a large
+ *  catalogue typically has no EPG, and the grid has to show that honestly rather than inventing rows
+ *  it would never have in the wild. */
+function schedule(row: ChannelDto, from: number, to: number): ProgrammeDto[] {
+  const seed = row.nowPlaying;
+  if (!seed) return [];
+  const dur = Math.max(900, seed.stop - seed.start);
+  // Align the tiling to the seed so the grid and the channel row agree about
+  // what is on now.
+  const first = seed.start - Math.ceil(Math.max(0, seed.start - from) / dur) * dur;
+  const out: ProgrammeDto[] = [];
+  for (let start = first; start < to; start += dur) {
+    if (start + dur <= from) continue;
+    const slot = Math.round((start - seed.start) / dur);
+    out.push({
+      start,
+      stop: start + dur,
+      title: slot === 0 ? seed.title : PROGRAMMES[Math.abs(slot * 7 + row.streamId) % PROGRAMMES.length],
+      description: slot % 3 === 0 ? seed.description : null,
+    });
+    if (out.length > 400) break;
+  }
+  return out;
+}
+
 function buildCatalog(): MockCatalog {
   const nowSec = Math.floor(Date.now() / 1000);
   const categories: CategoryDto[] = [];
@@ -374,6 +405,27 @@ const syncEmitter = new Emitter<SyncStatusDto>({
 
 let bufferTimer: number | undefined;
 
+/** Settings survive for the life of the page, so a save can be read back and
+ *  a reload of the pane shows what was stored rather than the defaults. Not
+ *  the contract's defaults on purpose: if the UI ever ignored what the backend
+ *  returned and painted its own defaults, these values would show it. */
+let storedSettings: SettingsDto = {
+  rewindMinutes: 8,
+  hardwareDecode: true,
+  toneMapHdr: false,
+  guideHours: 3,
+  syncIntervalHours: 12,
+  subtitle: {
+    font: "Sans",
+    size: 42,
+    color: "#ffffff",
+    backdrop: "background",
+    backdropOpacity: 0.25,
+    outlineSize: 2,
+    shadowOffset: 0,
+  },
+};
+
 function patchPlayer(p: Partial<PlayerStateDto>) {
   playerEmitter.emit({ ...playerEmitter.last, ...p });
 }
@@ -448,6 +500,37 @@ export const mockApi = {
     return out;
   },
 
+  guideRows: async (streamIds: number[], from: number, to: number) => {
+    // The grid asks only for the rows it can see, so this is a short list even
+    // though the catalogue is tens of thousands long. Counted, so a driver can
+    // prove that: one request per scroll, tens of ids, never sixty thousand.
+    const g = globalThis as Record<string, unknown>;
+    const calls = (g.__guideRowsCalls as { n: number; biggest: number }) ?? {
+      n: 0,
+      biggest: 0,
+    };
+    calls.n += 1;
+    calls.biggest = Math.max(calls.biggest, streamIds.length);
+    g.__guideRowsCalls = calls;
+
+    await delay(45);
+    const byId = new Map(getCatalog().rows.map((r) => [r.streamId, r]));
+    const out: GuideRowDto[] = [];
+    for (const id of streamIds) {
+      const r = byId.get(id);
+      if (!r) continue;
+      out.push({
+        streamId: r.streamId,
+        name: r.name,
+        logoUrl: r.logoUrl,
+        hasArchive: r.hasArchive,
+        archiveDays: r.archiveDays,
+        programmes: r.isSeparator ? [] : schedule(r, from, to),
+      });
+    }
+    return out;
+  },
+
   syncStatus: async () => syncEmitter.last,
 
   syncNow: async () => {
@@ -509,7 +592,46 @@ export const mockApi = {
   },
 
   playerState: async () => playerEmitter.last,
+
+  settings: async () => {
+    await delay(80);
+    return structuredClone(storedSettings);
+  },
+
+  setSettings: async (next: SettingsDto) => {
+    await delay(30);
+    storedSettings = structuredClone(next);
+    // Exposed so a driver can prove a change actually reached the backend
+    // rather than only moving the control.
+    (globalThis as Record<string, unknown>).__mockSettings = storedSettings;
+  },
+
+  setSubtitleStyle: async (style: SubtitleStyleDto) => {
+    await delay(20);
+    storedSettings = { ...storedSettings, subtitle: structuredClone(style) };
+    (globalThis as Record<string, unknown>).__mockSubtitleStyle = storedSettings.subtitle;
+  },
+
+  applyPlaybackSettings: async (next: SettingsDto) => {
+    await delay(20);
+    (globalThis as Record<string, unknown>).__mockPlaybackApplied = {
+      rewindMinutes: next.rewindMinutes,
+      hardwareDecode: next.hardwareDecode,
+      toneMapHdr: next.toneMapHdr,
+    };
+  },
 };
+
+// Assertions a browser driver can run against the live page: no light surface
+// anywhere, and nothing painted over the video rect. Mock-only, like
+// `__lastVideoRect` — the real app never reads these.
+if (typeof globalThis !== "undefined") {
+  const g = globalThis as Record<string, unknown>;
+  g.__audit = {
+    lightSurfaces: (minSize?: number) => auditLightSurfaces(minSize),
+    overVideo: () => auditOverVideo(g.__lastVideoRect as VideoRect | undefined),
+  };
+}
 
 /** `?backend=broken` makes every command reject the way the real backend does
  *  today, so the degraded UI can be seen rather than imagined. */

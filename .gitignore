@@ -13,3 +13,6 @@ dist-app/
 
 # test stream fixtures live in ~/.cache/zapper/fixtures (tools/make_fixtures.sh), never here
 *.ts.fixture
+
+# browser-automation artifacts: screenshots and console logs, not source
+.playwright-mcp/
