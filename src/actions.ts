@@ -4,6 +4,7 @@
 import type { Dispatch } from "react";
 import { backend } from "./backend";
 import { toggleFullscreen } from "./fullscreen";
+import { errorMessage, failed, loading, ready } from "./logic/async";
 import { catchupMinutes } from "./logic/guide";
 import type { ActionId } from "./logic/palette";
 import { run, type Action, type Mode } from "./store";
@@ -98,4 +99,21 @@ export async function playCatchupProgramme(
     backend.playCatchup(ch.streamId, programme.start, catchupMinutes(programme)),
   );
   if (!ok) dispatch({ type: "mode", mode: back });
+}
+
+/** Fetches the category list into the store.
+ *
+ *  Here rather than inside CategoryRail because the catalogue is not that
+ *  pane's private data: the favourites rail names each channel's
+ *  category from it too. And a hidden `<Activity>` subtree does not run
+ *  effects, so a load that lived in the rail simply never happened while the
+ *  Favourites tab was the one on screen — which is exactly when the
+ *  favourites needed it. */
+export async function loadCategories(dispatch: Dispatch<Action>) {
+  dispatch({ type: "categories", value: loading() });
+  try {
+    dispatch({ type: "categories", value: ready(await backend.categories()) });
+  } catch (e) {
+    dispatch({ type: "categories", value: failed(errorMessage(e)) });
+  }
 }

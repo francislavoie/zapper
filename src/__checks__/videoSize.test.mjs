@@ -17,6 +17,13 @@ import {
   widthAfterDrag,
 } from "../logic/videoSize.ts";
 
+test("the picture can take most of the band", () => {
+  // The information beside it wraps rather than being crushed, so the
+  // ceiling is about leaving something rather than about leaving room for
+  // a particular layout.
+  assert.ok(VIDEO_WIDTH_MAX >= 60, "the picture cannot be made large enough to be worth it");
+});
+
 test("the default sits inside the bounds", () => {
   assert.ok(VIDEO_WIDTH_MIN < VIDEO_WIDTH_DEFAULT);
   assert.ok(VIDEO_WIDTH_DEFAULT < VIDEO_WIDTH_MAX);

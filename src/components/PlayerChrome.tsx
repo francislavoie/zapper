@@ -133,6 +133,13 @@ export function PlayerChrome() {
         });
         void run(dispatch, "volume", backend.setVolume(next));
       }}
+      onContextMenu={(e) => {
+        // Only over the picture: a right-click on a control belongs to that
+        // control, if it ever grows one.
+        if ((e.target as HTMLElement).closest(".chrome-top, .chrome-bottom")) return;
+        e.preventDefault();
+        dispatch({ type: "videoMenu", at: { x: e.clientX, y: e.clientY } });
+      }}
       onDoubleClick={(e) => {
         // Only over the picture. A double-click that lands on the control bar
         // belongs to the control it hit, and seeking as well would be a second

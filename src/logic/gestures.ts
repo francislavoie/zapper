@@ -13,8 +13,13 @@
 
 export type VideoZone = "back" | "middle" | "forward";
 
-/** How much of the width each seek zone takes, from its own edge. */
-export const SEEK_ZONE_FRACTION = 0.3;
+/** How much of the width each seek zone takes, from its own edge.
+ *
+ *  Narrow on purpose. Fullscreen is the gesture people reach for most, a
+ *  mis-hit that toggles it undoes itself with the same gesture, and a
+ *  mis-hit that seeks does not — so the middle keeps the overwhelming
+ *  majority of the picture and the sides are corners you have to mean. */
+export const SEEK_ZONE_FRACTION = 0.15;
 
 export function zoneAtFraction(fraction: number): VideoZone {
   // A pointer outside the box, or a box with no width, is not a seek. Falling

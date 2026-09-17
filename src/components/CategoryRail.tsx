@@ -11,17 +11,14 @@
 // entry is simply row zero rather than a special case outside the window.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { backend } from "../backend";
-import { errorMessage, failed, loading, ready } from "../logic/async";
 import { OVERSCAN, ROW_HEIGHT, computeWindow } from "../logic/virtual";
 import { loadSession, saveSession } from "../session";
-import { ALL_CATEGORIES, useApp, useDispatch, type Action } from "../store";
-import type { Dispatch } from "react";
+import { loadCategories } from "../actions";
+import { ALL_CATEGORIES, useApp, useDispatch } from "../store";
 
 export function CategoryRail() {
   const { categories, categoryId, categoryFilter, sync } = useApp();
   const dispatch = useDispatch();
-  const requested = useRef(false);
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const restoreTo = useRef(loadSession().railScrollTop);
   const [scrollTop, setScrollTop] = useState(0);
@@ -38,17 +35,6 @@ export function CategoryRail() {
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
-
-  // Activity keeps this component's state and refs while the tab is hidden
-  // but does tear its effects down and build them again, so this runs afresh
-  // every time the tab comes back. Both guards matter: the ref survives that
-  // cycle and stops a second fetch, and the status check means an already
-  // loaded catalogue is never re-fetched even if the ref were lost.
-  useEffect(() => {
-    if (requested.current || categories.status === "ready") return;
-    requested.current = true;
-    void load(dispatch);
-  }, [dispatch, categories.status]);
 
   // Applied once the rows exist — before they do there is nothing to scroll,
   // and the assignment is silently clamped to zero.
@@ -141,7 +127,7 @@ export function CategoryRail() {
         {categories.status === "error" ? (
           <div className="pane-error">
             <span>Categories unavailable — {categories.message}</span>
-            <button className="link" onClick={() => void load(dispatch)}>
+            <button className="link" onClick={() => void loadCategories(dispatch)}>
               try again
             </button>
           </div>
@@ -177,11 +163,4 @@ export function CategoryRail() {
   );
 }
 
-async function load(dispatch: Dispatch<Action>) {
-  dispatch({ type: "categories", value: loading() });
-  try {
-    dispatch({ type: "categories", value: ready(await backend.categories()) });
-  } catch (e) {
-    dispatch({ type: "categories", value: failed(errorMessage(e)) });
-  }
-}
+

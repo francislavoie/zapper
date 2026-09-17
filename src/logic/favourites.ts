@@ -20,7 +20,7 @@ const relativeFormats = new Map<string, Intl.RelativeTimeFormat>();
 function unitFormat(
   locale: string | undefined,
   unit: "hour" | "minute" | "second",
-  unitDisplay: "long" | "narrow",
+  unitDisplay: "long" | "short" | "narrow",
 ): Intl.NumberFormat {
   const key = `${locale ?? ""}|${unit}|${unitDisplay}`;
   let f = numberFormats.get(key);
@@ -41,27 +41,43 @@ function relativeFormat(locale: string | undefined): Intl.RelativeTimeFormat {
   let f = relativeFormats.get(key);
   if (!f) {
     // "auto" is what turns -1 day into "yesterday" instead of "1 day ago".
-    f = new Intl.RelativeTimeFormat(locale, { numeric: "auto" });
+    // Short, to match the watch time beside it: "Watched 5 min" next to
+    // "10 minutes ago" reads as two different clocks.
+    f = new Intl.RelativeTimeFormat(locale, { numeric: "auto", style: "short" });
     relativeFormats.set(key, f);
   }
   return f;
 }
 
-/** Seconds, said the way a person would: "4h 20m", "12 minutes", "45 seconds".
+/** Seconds, said the way a person would: "4h 20m", "12 min", "45 sec".
  *
- *  Long units below an hour because that is a whole phrase and there is room
- *  for it; narrow units above, because "4 hours, 20 minutes" in a 16rem rail
- *  is an ellipsis. Truncated rather than rounded, so a channel never claims a
- *  minute it has not been watched. */
+ *  Abbreviated, because the rail is 16rem wide and this sits beside a
+ *  channel name: "4 hours, 20 minutes" there is an ellipsis, and the row is
+ *  scanned rather than read. Short units below an hour, where there is room
+ *  for a space and a word; narrow above, where two units have to share the
+ *  line. Truncated rather than rounded, so a channel never claims a minute
+ *  it has not been watched.
+ *
+ *  The exact abbreviation is the locale's: en-US says "5 min", en-GB says
+ *  "5 mins", and both are right where they are spoken. */
 export function watchTimeLabel(seconds: number, locale?: string): string {
   const s = Number.isFinite(seconds) ? Math.max(0, Math.floor(seconds)) : 0;
-  if (s < 60) return unitFormat(locale, "second", "long").format(s);
-  if (s < 3600) return unitFormat(locale, "minute", "long").format(Math.floor(s / 60));
+  if (s < 60) return unitFormat(locale, "second", "short").format(s);
+  if (s < 3600) return unitFormat(locale, "minute", "short").format(Math.floor(s / 60));
   const hours = Math.floor(s / 3600);
   const minutes = Math.floor((s % 3600) / 60);
   const h = unitFormat(locale, "hour", "narrow").format(hours);
   if (minutes === 0) return h;
   return `${h} ${unitFormat(locale, "minute", "narrow").format(minutes)}`;
+}
+
+/** The watch time with its label: "Watched 5 min".
+ *
+ *  A bare duration beside a channel name is ambiguous — it could as easily
+ *  be how long the programme runs — and this column is the reason the
+ *  channel is in the list at all. */
+export function watchedLabel(seconds: number, locale?: string): string {
+  return `Watched ${watchTimeLabel(seconds, locale)}`;
 }
 
 /** How long ago something was last watched: "now", "20 minutes ago",
@@ -71,6 +87,21 @@ export function watchTimeLabel(seconds: number, locale?: string): string {
  *  A timestamp in the future reads as "now" rather than as a countdown — the
  *  same clamp the backend's score applies, and for the same reason: clocks
  *  change, and a database outlives any one boot. */
+/** Drops the full stop an abbreviated relative time ends its unit with.
+ *
+ *  `Intl.RelativeTimeFormat` in the short style says "10 min. ago", and the
+ *  stop reads as a typo beside "Watched 5 min" — which is the same
+ *  abbreviation without one, because `Intl.NumberFormat` does not add it.
+ *  Only stops followed by a space or the end are touched, so a decimal
+ *  cannot be mangled.
+ *
+ *  English-shaped, and it should be revisited with the translations: a
+ *  locale that punctuates abbreviations differently deserves better than
+ *  having them stripped. */
+function tidy(s: string): string {
+  return s.replace(/\.(?=\s|$)/g, "");
+}
+
 export function lastWatchedLabel(
   lastWatched: number | null,
   nowSeconds: number,
@@ -79,12 +110,13 @@ export function lastWatchedLabel(
   if (lastWatched === null || !Number.isFinite(lastWatched)) return "";
   const ago = Math.max(0, Math.round(nowSeconds - lastWatched));
   const rtf = relativeFormat(locale);
-  if (ago < 45) return rtf.format(0, "second");
-  if (ago < 3600) return rtf.format(-Math.round(ago / 60), "minute");
-  if (ago < 86_400) return rtf.format(-Math.round(ago / 3600), "hour");
-  if (ago < 2_592_000) return rtf.format(-Math.round(ago / 86_400), "day");
-  if (ago < 31_536_000) return rtf.format(-Math.round(ago / 2_592_000), "month");
-  return rtf.format(-Math.round(ago / 31_536_000), "year");
+  const said = (n: number, unit: Intl.RelativeTimeFormatUnit) => tidy(rtf.format(n, unit));
+  if (ago < 45) return said(0, "second");
+  if (ago < 3600) return said(-Math.round(ago / 60), "minute");
+  if (ago < 86_400) return said(-Math.round(ago / 3600), "hour");
+  if (ago < 2_592_000) return said(-Math.round(ago / 86_400), "day");
+  if (ago < 31_536_000) return said(-Math.round(ago / 2_592_000), "month");
+  return said(-Math.round(ago / 31_536_000), "year");
 }
 
 /** The one line under a favourite's name: what it has earned its place with,

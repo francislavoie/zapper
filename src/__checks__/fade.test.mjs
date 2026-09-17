@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { IDLE_MS, atScreenEdge, initialFade, nextFade } from "../logic/fade.ts";
-import { volumeAfterWheel, VOLUME_MAX } from "../logic/volume.ts";
+import { VOLUME_MAX, VOLUME_STEP, volumeAfterWheel } from "../logic/volume.ts";
 import { clock, liveOffset, measuredLine, programmeProgress, qualityBadge, looksBroken } from "../logic/format.ts";
 
 // ------------------------------------------------------------------- fade
@@ -82,8 +82,10 @@ test("edges are only the outer few pixels", () => {
 // ----------------------------------------------------------------- volume
 
 test("scrolling up is louder, down is quieter", () => {
-  assert.equal(volumeAfterWheel(100, -1), 104);
-  assert.equal(volumeAfterWheel(100, 1), 96);
+  // Expressed against the step rather than against its value, so changing
+  // the notch size is one edit and not a hunt through the checks.
+  assert.equal(volumeAfterWheel(100, -1), 100 + VOLUME_STEP);
+  assert.equal(volumeAfterWheel(100, 1), 100 - VOLUME_STEP);
   assert.equal(volumeAfterWheel(100, 0), 100);
 });
 

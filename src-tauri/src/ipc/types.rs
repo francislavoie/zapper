@@ -272,3 +272,84 @@ pub struct ThumbnailDto {
     /// Seconds behind the live edge of the frame this actually is.
     pub behind_live: f64,
 }
+
+/// One reading for the diagnostics panel — "stats for nerds".
+///
+/// Deliberately not part of `PlayerStateDto`. That one is pushed to every
+/// window on every change; this is a great deal more, is only wanted while
+/// the panel is open, and is therefore polled.
+///
+/// **No stream URL and no credentials.** The panel exists to be
+/// screenshotted into a bug report, and an Xtream URL carries the account's
+/// username and password in its query string.
+///
+/// Everything is optional because mpv drops most of it between files and
+/// half of it never exists for a raw MPEG-TS multiplex. Absent means "this
+/// stream does not say", which the interface draws as a dash.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StatsDto {
+    pub container: Option<String>,
+    pub video_codec: Option<String>,
+    pub audio_codec: Option<String>,
+    /// Which hardware decoder is actually in use, as opposed to requested.
+    pub hwdec: Option<String>,
+    pub pixel_format: Option<String>,
+    /// Colour primaries and transfer. An HDR stream on an SDR screen is the
+    /// washed-out picture these two explain.
+    pub primaries: Option<String>,
+    pub gamma: Option<String>,
+    pub video_bitrate: Option<f64>,
+    pub audio_bitrate: Option<f64>,
+    /// What the renderer is actually achieving, against what the container
+    /// claims. They differ when frames are being dropped.
+    pub measured_fps: Option<f64>,
+    pub container_fps: Option<f64>,
+    pub audio_samplerate: Option<i64>,
+    pub audio_channels: Option<i64>,
+    /// Seconds of demuxed data ahead of the playhead: buffer health.
+    pub cache_duration: Option<f64>,
+    /// Bytes per second currently arriving.
+    pub cache_speed: Option<f64>,
+    pub demuxer_bytes: Option<i64>,
+    /// True while playback is stopped waiting for the cache to refill. This
+    /// is a stutter, caught in the act.
+    pub buffering: Option<bool>,
+    pub cache_buffering_percent: Option<f64>,
+    pub dropped_frames: Option<i64>,
+    pub decoder_dropped_frames: Option<i64>,
+    /// Audio ahead of video, in seconds. Drifting from zero is the thing
+    /// that makes a stream feel wrong without looking wrong.
+    pub avsync: Option<f64>,
+    /// Seconds behind the end of the seekable window, and scrollback depth.
+    /// Repeated from the player state so the panel is one round trip.
+    pub behind_live: f64,
+    pub buffered_back: f64,
+    /// The last minute of buffer, throughput, drops and starvation, oldest
+    /// first. Collected on the player heartbeat rather than by whoever is
+    /// asking, so the graphs are already drawn when the panel opens — see
+    /// `crate::ipc::health`.
+    pub history: Vec<crate::ipc::health::SampleDto>,
+}
+
+/// The Xtream account, as much of it as the interface may see.
+///
+/// **No password.** It is write-only from the frontend's point of view: it
+/// can be set and it can be replaced, but it is never sent back, so it
+/// cannot leak through a devtools inspector, a screenshot of one, or a
+/// serialised state dump.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountDto {
+    pub host: String,
+    pub username: String,
+    /// Whether a password is on file. Enough to draw the field as "set"
+    /// without carrying the value.
+    pub has_password: bool,
+    /// "zapper" when an account is on file, "none" when there is not one
+    /// yet.
+    pub source: String,
+    /// Where the account is kept, so the answer to "where is this?" is on
+    /// screen rather than in a commit message.
+    pub path: String,
+}

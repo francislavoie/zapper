@@ -241,20 +241,66 @@ pub fn interval_from_settings(hours: u32) -> std::time::Duration {
     std::time::Duration::from_secs(u64::from(h) * 3600)
 }
 
-/// Runs a sync now, then again on the configured interval, forever.
+/// How long to wait before the next pass, given when the last one finished.
+///
+/// The mirror is on disk and `last_synced` is stored beside it, so a restart
+/// knows how old the catalogue is. Without this the loop would sync
+/// immediately on every launch — re-fetching the catalogue and a guide of tens
+/// of megabytes that was already there, minutes after the last time — and
+/// only then start honouring the interval: opening the app four times in an
+/// evening would mean four full syncs.
+///
+/// Zero means "now": never synced, or the mirror is older than the interval.
+/// A `last_synced` in the future is treated the same way, because the only
+/// ways to get one are a clock that has moved backwards or a copied
+/// database, and both are better answered by syncing than by waiting days.
+pub fn wait_before_next(
+    last_synced: Option<i64>,
+    now: i64,
+    interval: std::time::Duration,
+) -> std::time::Duration {
+    let Some(last) = last_synced else {
+        return std::time::Duration::ZERO;
+    };
+    if last > now {
+        return std::time::Duration::ZERO;
+    }
+    let age = std::time::Duration::from_secs(now.saturating_sub(last).unsigned_abs());
+    interval.saturating_sub(age)
+}
+
+/// How long to wait before trying again after a failed pass.
+///
+/// A failure leaves `last_synced` alone, so without this the loop would find
+/// the mirror still stale and retry immediately, forever, as fast as the
+/// panel could refuse it.
+const RETRY_AFTER_FAILURE: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Syncs when the mirror is due, then again on the configured interval.
 ///
 /// The interval is re-read each cycle rather than captured once, so changing
 /// it in settings takes effect without a restart.
 pub fn spawn_periodic(app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
         loop {
+            let hours = crate::catalog::settings::load_or_default().sync_interval_hours;
+            let interval = interval_from_settings(hours);
+            let wait = wait_before_next(crate::catalog::status::last_synced(), now(), interval);
+            if !wait.is_zero() {
+                tracing::info!(
+                    "mirror is current; next sync in {} minutes",
+                    wait.as_secs() / 60
+                );
+                tokio::time::sleep(wait).await;
+                continue;
+            }
+
             if let Err(e) = run_once(&app).await {
                 tracing::warn!("sync aborted: {}", scrub(&format!("{e:#}")));
+                // `last_synced` is untouched by a failure, so the check above
+                // would send us straight back here.
+                tokio::time::sleep(RETRY_AFTER_FAILURE).await;
             }
-            let hours = crate::catalog::settings::load_or_default().sync_interval_hours;
-            let wait = interval_from_settings(hours);
-            tracing::info!("next sync in {} hours", wait.as_secs() / 3600);
-            tokio::time::sleep(wait).await;
         }
     });
 }
@@ -386,6 +432,38 @@ mod tests {
         }
         drop(tx);
         assert_eq!(joined.await.unwrap(), "<tv><programme/></tv>");
+    }
+
+    #[test]
+    fn a_fresh_mirror_is_not_re_fetched_on_launch() {
+        let six_hours = interval_from_settings(6);
+        let now = 1_757_000_000;
+
+        // Synced a minute ago: wait almost the whole interval.
+        let wait = wait_before_next(Some(now - 60), now, six_hours);
+        assert_eq!(wait.as_secs(), 6 * 3600 - 60);
+
+        // Synced five hours ago: one hour left.
+        assert_eq!(
+            wait_before_next(Some(now - 5 * 3600), now, six_hours).as_secs(),
+            3600
+        );
+    }
+
+    #[test]
+    fn a_stale_or_missing_mirror_syncs_at_once() {
+        let six_hours = interval_from_settings(6);
+        let now = 1_757_000_000;
+
+        // Never synced.
+        assert!(wait_before_next(None, now, six_hours).is_zero());
+        // Older than the interval.
+        assert!(wait_before_next(Some(now - 7 * 3600), now, six_hours).is_zero());
+        // Exactly due.
+        assert!(wait_before_next(Some(now - 6 * 3600), now, six_hours).is_zero());
+        // A timestamp from the future: a clock that went backwards, or a
+        // database copied from another machine. Syncing beats waiting days.
+        assert!(wait_before_next(Some(now + 90_000), now, six_hours).is_zero());
     }
 
     #[test]

@@ -15,13 +15,38 @@ import { playChannel } from "../actions";
 import { backend } from "../backend";
 import { useClock } from "../hooks/useClock";
 import { errorMessage, failed, loading, ready, type Async } from "../logic/async";
-import { FAVOURITE_LIMIT, favouriteMeta } from "../logic/favourites";
+import {
+  FAVOURITE_LIMIT,
+  lastWatchedLabel,
+  watchedLabel,
+} from "../logic/favourites";
 import { run, useApp, useDispatch } from "../store";
 import type { FavouriteDto } from "../types";
 import { FavouriteMenu } from "./FavouriteMenu";
+import { Logo } from "./Logo";
 
 export function FavouritesRail() {
-  const { player, pendingStreamId, favouriteMenu } = useApp();
+  const { player, pendingStreamId, favouriteMenu, categories } = useApp();
+
+  // The channel knows its category by id; only the rail's own catalogue
+  // knows what that is called. Absent while the categories are still
+  // loading, and for a channel whose category has since vanished.
+  const categoryName = (id: string | null): string | null => {
+    if (id === null || categories.status !== "ready") return null;
+    return categories.data.find((c) => c.id === id)?.name ?? null;
+  };
+
+  /** Playing a favourite also points the channel list at where it lives, so
+   *  "what else is on this?" is one click rather than a hunt through 769
+   *  categories. The rail stays on Favourites: the list moved, and throwing
+   *  away the list you are picking from would be a second, unasked-for
+   *  change. */
+  const open = (f: (typeof list extends never ? never : FavouriteDto)) => {
+    if (f.channel.categoryId) {
+      dispatch({ type: "selectCategory", id: f.channel.categoryId });
+    }
+    void playChannel(dispatch, f.channel);
+  };
   const dispatch = useDispatch();
   const [list, setList] = useState<Async<FavouriteDto[]>>(loading());
   // "3 days ago" has to stop being true eventually; a coarse tick is plenty.
@@ -83,7 +108,7 @@ export function FavouritesRail() {
                 pendingStreamId === f.channel.streamId ? "pending" : ""
               }`}
               title={f.channel.name}
-              onClick={() => void playChannel(dispatch, f.channel)}
+              onClick={() => open(f)}
               onContextMenu={(e) => {
                 // WebKit's own menu is suppressed at the GTK level, so this
                 // event arrives here in the real app exactly as it does in a
@@ -100,9 +125,18 @@ export function FavouritesRail() {
                 });
               }}
             >
-              <span className="fav-name">{f.channel.cleanName}</span>
-              <span className="fav-meta">
-                {favouriteMeta(f.watchSeconds, f.lastWatched, now)}
+              <Logo url={f.channel.logoUrl} className="fav-logo" />
+              <span className="fav-text">
+                {/* Where it lives, first: it is the coarsest thing about the
+                    row and the one that groups a column of them. */}
+                {categoryName(f.channel.categoryId) ? (
+                  <span className="fav-cat">{categoryName(f.channel.categoryId)}</span>
+                ) : null}
+                <span className="fav-name">{f.channel.cleanName}</span>
+                <span className="fav-meta">
+                  <span className="fav-watched">{watchedLabel(f.watchSeconds)}</span>
+                  <span className="fav-ago">{lastWatchedLabel(f.lastWatched, now)}</span>
+                </span>
               </span>
             </button>
           ))

@@ -404,6 +404,102 @@ mod tests {
 /// Infallible by construction: a missing row, an unparseable blob, or a
 /// database that will not open all read as defaults. Settings must never be
 /// the reason the app will not open.
+/// The Xtream account, without the password.
+#[tauri::command]
+pub async fn account() -> Result<crate::ipc::types::AccountDto, String> {
+    use crate::catalog::credentials::{account_path, summary, Source};
+    let (creds, source) = summary();
+    Ok(crate::ipc::types::AccountDto {
+        host: creds.as_ref().map(|c| c.host.clone()).unwrap_or_default(),
+        username: creds.as_ref().map(|c| c.username.clone()).unwrap_or_default(),
+        has_password: creds.as_ref().is_some_and(|c| !c.password.is_empty()),
+        source: match source {
+            Source::Zapper => "zapper",
+            Source::None => "none",
+        }
+        .to_owned(),
+        path: account_path().display().to_string(),
+    })
+}
+
+/// Replaces the stored account and drops the cached client, so the next
+/// request goes to the new server without a restart.
+///
+/// An empty password means "keep the one already on file", which is what
+/// lets the interface show the field as set without ever being given the
+/// value to send back.
+#[tauri::command]
+pub async fn set_account(
+    host: String,
+    username: String,
+    password: String,
+) -> Result<(), String> {
+    use crate::catalog::credentials;
+    use crate::xtream::Credentials;
+
+    let host = host.trim().to_owned();
+    let username = username.trim().to_owned();
+    if host.is_empty() {
+        return Err("a host is required".to_owned());
+    }
+    if username.is_empty() {
+        return Err("a username is required".to_owned());
+    }
+
+    let password = if password.is_empty() {
+        let (existing, _) = credentials::summary();
+        match existing.map(|c| c.password).filter(|p| !p.is_empty()) {
+            Some(p) => p,
+            None => return Err("a password is required".to_owned()),
+        }
+    } else {
+        password
+    };
+
+    credentials::save(&Credentials {
+        host,
+        username,
+        password,
+    })
+    .map_err(|e| e.to_string())?;
+    crate::ipc::player_cmds::forget_panel();
+    Ok(())
+}
+
+/// Asks the server who we are. The one honest test of an account: it either
+/// answers or it does not.
+///
+/// The message is scrubbed, because a failure from `reqwest` quotes the URL
+/// it was given and that URL carries the username and password.
+#[tauri::command]
+pub async fn test_account() -> Result<String, String> {
+    let panel = crate::ipc::player_cmds::panel()?;
+    let info = panel
+        .login()
+        .await
+        .map_err(|e| crate::catalog::sync_engine::scrub(&format!("{e:#}")))?;
+    if !info.auth {
+        // The server answered and said no, which is a different thing from
+        // not answering and worth saying differently.
+        let status = if info.status.is_empty() {
+            "rejected".to_owned()
+        } else {
+            info.status.clone()
+        };
+        return Err(format!("the panel rejected these credentials ({status})"));
+    }
+    let conns = match (info.active_cons, info.max_connections) {
+        (Some(a), Some(m)) => format!(" · {a} of {m} connections in use"),
+        _ => String::new(),
+    };
+    let status = if info.status.is_empty() {
+        "Active".to_owned()
+    } else {
+        info.status
+    };
+    Ok(format!("{status}{conns}"))
+}
+
 #[tauri::command]
 pub async fn settings() -> Result<SettingsDto, String> {
     Ok(settings_store::load_or_default())

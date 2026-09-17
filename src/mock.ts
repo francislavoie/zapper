@@ -488,6 +488,18 @@ const syncEmitter = new Emitter<SyncStatusDto>({
   lastSynced: Math.floor(Date.now() / 1000) - 3600,
 });
 
+let mockDropped = 0;
+
+/** Samples in the mock's synthetic history. Matches HISTORY_LENGTH in
+ *  src/logic/stats.ts, so the graphs are drawn full. */
+const MOCK_HISTORY = 120;
+let mockAccount = {
+  host: "http://panel.example.com:8080",
+  username: "demo",
+  hasPassword: true,
+  source: "zapper",
+  path: "~/.config/zapper/account.json",
+};
 let bufferTimer: number | undefined;
 
 /** Settings survive for the life of the page, so a save can be read back and
@@ -695,6 +707,59 @@ export const mockApi = {
 
   playerState: async () => playerEmitter.last,
 
+  // Synthetic but not static: the graphs are the point of the panel, and a
+  // flat line would make a broken one look fine. The buffer breathes, the
+  // rate wanders, and a frame is dropped now and then.
+  playerStats: async () => {
+    const p = playerEmitter.last;
+    const t = Date.now() / 1000;
+    const breathing = 14 + Math.sin(t / 7) * 6;
+    mockDropped += Math.random() < 0.12 ? 1 : 0;
+    // Synthesised backwards from now rather than accumulated, which is the
+    // mock's version of what the backend does: the real one has been
+    // recording all along, so the panel must open onto a full graph here
+    // too, or the mock would make a fixed bug look unfixed.
+    const history = Array.from({ length: MOCK_HISTORY }, (_, i) => {
+      const at = t - (MOCK_HISTORY - 1 - i) * 0.5;
+      const buffer = 14 + Math.sin(at / 7) * 6;
+      return {
+        buffer: Math.max(0, buffer),
+        speed: 1_100_000 + Math.sin(at / 2) * 400_000,
+        // Bursty rather than uniform: a graph of evenly spaced drops looks
+        // like a measurement error, and clustered ones are what a stutter
+        // actually produces.
+        dropped: i % 17 === 0 ? 2 : i % 5 === 0 ? 1 : 0,
+        starved: buffer < 9,
+      };
+    });
+    return {
+      container: "mpegts",
+      videoCodec: "h264 (High)",
+      audioCodec: "aac",
+      hwdec: "vaapi",
+      pixelFormat: "yuv420p",
+      primaries: "bt.709",
+      gamma: "bt.1886",
+      videoBitrate: 8_200_000 + Math.sin(t / 3) * 900_000,
+      audioBitrate: 128_000,
+      measuredFps: 49.8 + Math.sin(t) * 0.3,
+      containerFps: 50,
+      audioSamplerate: 48_000,
+      audioChannels: 2,
+      cacheDuration: Math.max(0, breathing),
+      cacheSpeed: 1_100_000 + Math.sin(t / 2) * 400_000,
+      demuxerBytes: Math.round(t * 1_000_000) % 400_000_000,
+      buffering: breathing < 9,
+      cacheBufferingPercent: 100,
+      droppedFrames: mockDropped,
+      decoderDroppedFrames: 0,
+      avsync: Math.sin(t / 5) * 0.004,
+      behindLive: p.behindLive,
+      bufferedBack: p.bufferedBack,
+      history,
+    };
+  },
+
   // A synthetic frame, drawn rather than decoded, so the scrubber's preview
   // can be seen and driven without mpv. Same shape as the real answer: it
   // snaps to a four-second grid and refuses anything outside the buffer,
@@ -721,6 +786,31 @@ export const mockApi = {
     g.textAlign = "center";
     g.fillText(`-${snapped}s`, 80, 40);
     return { dataUrl: c.toDataURL("image/png"), behindLive: snapped };
+  },
+
+  account: async () => {
+    await delay(40);
+    return { ...mockAccount, path: "~/.config/zapper/account.json" };
+  },
+
+  setAccount: async (host: string, username: string, password: string) => {
+    await delay(60);
+    if (host.trim() === "") throw "a host is required";
+    if (username.trim() === "") throw "a username is required";
+    if (password === "" && !mockAccount.hasPassword) throw "a password is required";
+    mockAccount = {
+      host: host.trim(),
+      username: username.trim(),
+      hasPassword: mockAccount.hasPassword || password !== "",
+      source: "zapper",
+      path: "~/.config/zapper/account.json",
+    };
+  },
+
+  testAccount: async () => {
+    await delay(300);
+    if (!mockAccount.hasPassword) throw "the panel rejected these credentials (no password)";
+    return "Active · 1 of 1 connections in use";
   },
 
   settings: async () => {

@@ -5,13 +5,49 @@
 //! persistence, and `ipc` is the only thing that talks to the frontend.
 //! Nothing else may reach across those lines.
 
+/// Names the process so the compositor can identify the window.
+///
+/// Only GLib calls, and that is a constraint rather than an oversight: this
+/// runs before Tauri has created anything, because the `app_id` is sent when
+/// the surface is created and nothing later can change it. GDK is not
+/// initialised yet, so anything from `gdk` — `set_program_class`, which
+/// looks like the obvious companion to this — panics outright with "GDK has
+/// not been initialized".
+///
+/// `g_set_prgname` is what GTK reads for the Wayland `app_id`, and on X11
+/// GDK derives the WM_CLASS from the same name, so one call covers both.
+#[cfg(target_os = "linux")]
+fn set_app_id() {
+    gtk::glib::set_prgname(Some(APP_ID));
+    gtk::glib::set_application_name("zapper");
+}
+
+#[cfg(not(target_os = "linux"))]
+fn set_app_id() {}
+
 pub mod catalog;
 pub mod ipc;
 pub mod surface;
 pub mod xtream;
 
+/// The name the desktop matches this window to.
+///
+/// On Wayland a window has no icon of its own: the compositor pairs the
+/// toplevel's `app_id` with an installed `.desktop` file and takes the icon
+/// from there. Setting a GTK window icon, which is what most advice
+/// suggests, is an X11 mechanism and is simply ignored — the app shows the
+/// generic placeholder however many PNGs are bundled.
+///
+/// So the `app_id` has to be a known, stable string rather than whatever
+/// GTK infers from argv, and `tools/install-desktop.sh` installs
+/// `zapper.desktop` under that exact name.
+const APP_ID: &str = "zapper";
+
 pub fn run() {
     tracing_subscriber::fmt::init();
+    // Before any window exists: the app_id is sent when the surface is
+    // created, and Tauri creates it before the setup hook runs.
+    set_app_id();
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             ipc::catalog_cmds::categories,
@@ -22,6 +58,9 @@ pub fn run() {
             ipc::catalog_cmds::sync_status,
             ipc::catalog_cmds::sync_now,
             ipc::catalog_cmds::settings,
+            ipc::catalog_cmds::account,
+            ipc::catalog_cmds::set_account,
+            ipc::catalog_cmds::test_account,
             ipc::catalog_cmds::set_settings,
             ipc::catalog_cmds::guide_rows,
             ipc::catalog_cmds::favourites,
@@ -38,6 +77,7 @@ pub fn run() {
             ipc::player_cmds::set_compressor,
             ipc::player_cmds::set_video_rect,
             ipc::player_cmds::player_state,
+            ipc::player_cmds::player_stats,
             ipc::player_cmds::set_subtitle_style,
             ipc::player_cmds::apply_playback_settings,
         ])

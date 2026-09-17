@@ -165,3 +165,75 @@ export interface ThumbnailDto {
   dataUrl: string;
   behindLive: number;
 }
+
+/** One reading for the diagnostics panel — "stats for nerds".
+ *
+ *  Polled rather than pushed: it is far more than the state feed needs and
+ *  nothing should pay for it while the panel is closed.
+ *
+ *  Carries no stream URL and no credentials. The panel exists to be
+ *  screenshotted into a bug report, and an Xtream URL has the account's
+ *  username and password in its query string.
+ *
+ *  Everything is nullable because mpv drops most of it between files and
+ *  half of it never exists for a raw MPEG-TS multiplex. Null means "this
+ *  stream does not say", drawn as a dash. */
+export interface StatsDto {
+  container: string | null;
+  videoCodec: string | null;
+  audioCodec: string | null;
+  hwdec: string | null;
+  pixelFormat: string | null;
+  primaries: string | null;
+  gamma: string | null;
+  videoBitrate: number | null;
+  audioBitrate: number | null;
+  measuredFps: number | null;
+  containerFps: number | null;
+  audioSamplerate: number | null;
+  audioChannels: number | null;
+  cacheDuration: number | null;
+  cacheSpeed: number | null;
+  demuxerBytes: number | null;
+  buffering: boolean | null;
+  cacheBufferingPercent: number | null;
+  droppedFrames: number | null;
+  decoderDroppedFrames: number | null;
+  avsync: number | null;
+  behindLive: number;
+  bufferedBack: number;
+  /** The last minute of health, oldest first. Collected by the backend on
+   *  the player's own heartbeat rather than by whoever is asking, so the
+   *  graphs are already drawn the moment the panel opens. */
+  history: StatsSampleDto[];
+}
+
+/** One point on a diagnostics graph. Mirrors `ipc::health::SampleDto`. */
+export interface StatsSampleDto {
+  /** Seconds of demuxed data ahead of the playhead. */
+  buffer: number;
+  /** Bytes per second arriving. */
+  speed: number;
+  /** Frames dropped since the previous sample — a difference, not a running
+   *  total, because a total only ever climbs and says nothing about when. */
+  dropped: number;
+  /** Whether playback was stopped waiting for data at this instant. */
+  starved: boolean;
+}
+
+/** The account, as much of it as this window may see.
+ *
+ *  No password. It is write-only: it can be set and replaced, but it is
+ *  never sent back, so it cannot leak through a devtools inspector, a
+ *  screenshot of one, or a serialised state dump. */
+export interface AccountDto {
+  host: string;
+  username: string;
+  /** Whether one is on file — enough to draw the field as "set". */
+  hasPassword: boolean;
+  /** "zapper" when an account is on file, "none" when there is not one
+   *  yet. */
+  source: string;
+  /** Where it is kept, so "where is this?" is answerable on screen. */
+  path: string;
+}

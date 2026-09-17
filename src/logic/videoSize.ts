@@ -21,8 +21,13 @@ export const VIDEO_WIDTH_DEFAULT = 22.25;
 export const VIDEO_WIDTH_MIN = 14;
 
 /** Above this the docked picture stops being docked and starts being the
- *  layout. The list beside it needs room to be a list. */
-export const VIDEO_WIDTH_MAX = 44;
+ *  layout.
+ *
+ *  Generous, because the information beside it wraps rather than being
+ *  crushed: the picture may take most of the band and the facts rearrange
+ *  into fewer columns. What it may not do is leave nothing, which is what
+ *  this bound is for. */
+export const VIDEO_WIDTH_MAX = 72;
 
 export function clampVideoWidth(rem: number): number {
   if (!Number.isFinite(rem)) return VIDEO_WIDTH_DEFAULT;

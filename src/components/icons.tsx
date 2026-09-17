@@ -84,7 +84,7 @@ function SkipArrow({
           x={CX}
           y={CY + 2.9}
           textAnchor="middle"
-          fontSize="8"
+          fontSize="9.5"
           fontWeight="600"
           letterSpacing="-0.3"
           fill="currentColor"
@@ -104,17 +104,36 @@ function SkipArrow({
 export function SkipBack({
   seconds = 5,
   showSeconds = true,
+  className,
   ...p
 }: IconProps & { seconds?: number; showSeconds?: boolean }) {
-  return <SkipArrow back seconds={seconds} showSeconds={showSeconds} {...p} />;
+  return (
+    <SkipArrow back seconds={seconds} showSeconds={showSeconds} className={skipClass(className)} {...p} />
+  );
 }
 
 export function SkipForward({
   seconds = 5,
   showSeconds = true,
+  className,
   ...p
 }: IconProps & { seconds?: number; showSeconds?: boolean }) {
-  return <SkipArrow back={false} seconds={seconds} showSeconds={showSeconds} {...p} />;
+  return (
+    <SkipArrow
+      back={false}
+      seconds={seconds}
+      showSeconds={showSeconds}
+      className={skipClass(className)}
+      {...p}
+    />
+  );
+}
+
+/** Marks the skip icons so the stylesheet can draw them larger than the
+ *  rest. They are the only icons carrying a number, and at the size the
+ *  others want, that number is about six pixels tall. */
+function skipClass(className?: string): string {
+  return className ? `${className} skip` : "skip";
 }
 
 export function Play({ className, title }: IconProps) {

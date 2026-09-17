@@ -26,6 +26,8 @@ import { loadZoom } from "./zoom";
 import { loadStacked } from "./stacked";
 import { loadSession } from "./session";
 import { loadVideoWidth } from "./videoSize";
+import { loadRailWidth } from "./railWidth";
+import { clampRailWidth } from "./logic/railWidth";
 import { clampVideoWidth } from "./logic/videoSize";
 
 export const ALL_CATEGORIES = "*all*";
@@ -67,6 +69,14 @@ export interface State {
   /** Which half of the rail is showing. */
   railTab: RailTab;
   favouriteMenu: FavouriteMenu | null;
+  /** Where a right-click on the picture landed, in client pixels. */
+  videoMenu: { x: number; y: number } | null;
+  /** The diagnostics panel. Off by default and polled only while open. */
+  statsOpen: boolean;
+  /** Which view fullscreen was entered from, so leaving it goes back there
+   *  rather than stranding the viewer in the player. Null when fullscreen
+   *  was entered from the player itself, where staying is correct. */
+  fullscreenFrom: Mode | null;
   /** The text in the channel-search box. Empty means "browse the category".
    *  The results themselves are not stored: they belong to whichever pane
    *  asked for them, so the list and the palette cannot fight over one slot. */
@@ -104,6 +114,8 @@ export interface State {
    *  rather than in a component because resizing it moves the slot the video
    *  rect is measured from, so mpv has to be told. */
   videoWidthRem: number;
+  /** How wide the category/favourites rail is, in rem. Local like zoom. */
+  railWidthRem: number;
   /** Whether watching should put the picture across the top with the guide
    *  underneath, rather than giving the whole window to video.
    *
@@ -150,6 +162,9 @@ export const initialState: State = {
   categoryFilter: "",
   railTab: loadSession().railTab,
   favouriteMenu: null,
+  videoMenu: null,
+  statsOpen: false,
+  fullscreenFrom: null,
   query: "",
   paletteOpen: false,
   settingsOpen: false,
@@ -167,6 +182,7 @@ export const initialState: State = {
   // rather than at 100% for a frame.
   zoom: loadZoom(),
   videoWidthRem: loadVideoWidth(),
+  railWidthRem: loadRailWidth(),
   stacked: loadStacked(),
   toasts: [],
 };
@@ -177,6 +193,9 @@ export type Action =
   | { type: "categoryFilter"; text: string }
   | { type: "railTab"; tab: RailTab }
   | { type: "favouriteMenu"; menu: FavouriteMenu | null }
+  | { type: "videoMenu"; at: { x: number; y: number } | null }
+  | { type: "stats"; open: boolean }
+  | { type: "fullscreenFrom"; mode: Mode | null }
   | { type: "stacked"; on: boolean }
   | { type: "query"; text: string }
   | { type: "palette"; open: boolean }
@@ -197,6 +216,7 @@ export type Action =
   | { type: "zoom"; value: number }
   | { type: "zoomStep"; command: ZoomCommand }
   | { type: "videoWidth"; rem: number }
+  | { type: "railWidth"; rem: number }
   | { type: "toast"; text: string; kind?: "error" | "info" }
   | { type: "dismissToast"; id: number };
 
@@ -212,6 +232,13 @@ export function reducer(state: State, action: Action): State {
       return { ...state, categoryId: action.id, query: "" };
     case "categoryFilter":
       return { ...state, categoryFilter: action.text };
+    case "fullscreenFrom":
+      return { ...state, fullscreenFrom: action.mode };
+    case "videoMenu":
+      return { ...state, videoMenu: action.at };
+    case "stats":
+      // Opening it closes the menu it was chosen from; nothing wants both.
+      return { ...state, statsOpen: action.open, videoMenu: null };
     case "railTab":
       // A menu belongs to the list it was opened over; changing the list
       // leaves it pointing at a row that is no longer there.
@@ -288,6 +315,8 @@ export function reducer(state: State, action: Action): State {
       return { ...state, nowChannel: action.channel };
     case "videoWidth":
       return { ...state, videoWidthRem: clampVideoWidth(action.rem) };
+    case "railWidth":
+      return { ...state, railWidthRem: clampRailWidth(action.rem) };
     case "opening":
       // Deliberately no mode change. Starting a channel is not a decision to
       // stop looking at whatever you were looking at, and the docked picture

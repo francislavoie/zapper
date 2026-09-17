@@ -48,7 +48,7 @@ front_checks(){
   echo "$out" | grep -E '(pass|fail) [0-9]+' | head -2
   return $rc
 }
-ipc_check()   { (cd src-tauri && cargo run -q --bin ipc_check 2>&1 | grep -E '^(PASS|FAIL|  FAIL)'); }
+ipc_check()   { (cd src-tauri && cargo run -q --features harness --bin ipc_check 2>&1 | grep -E '^(PASS|FAIL|  FAIL)'); }
 
 # --- windowed harnesses -----------------------------------------------------
 
@@ -70,7 +70,7 @@ trap stop_fixtures EXIT
 run_windowed() {
   local bin="$1" secs="$2" log; log=$(mktemp)
   ( cd src-tauri && WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run/user/1000 \
-      GDK_BACKEND=wayland ZAPPER_FIXTURE_BASE=http://127.0.0.1:8788 \
+      GDK_BACKEND=wayland ZAPPER_HARNESS=1 ZAPPER_FIXTURE_BASE=http://127.0.0.1:8788 \
       ZAPPER_FIXTURE_NAME=sample1080.ts ZAPPER_STREAM_ID=1 \
       ZAPPER_STREAM_URL=http://127.0.0.1:8788/sample1080.ts \
       ./target/debug/"$bin" >"$log" 2>&1 & echo $! >/tmp/zapper-win.pid )
@@ -85,6 +85,38 @@ run_windowed() {
   grep -q '^PASS' "$log"
 }
 
+# The real binary, not a harness.
+#
+# Every other windowed check runs a purpose-built bin that calls into the
+# library directly, so none of them executes `run()` — and a panic in there
+# is a panic before the app has a window, which is as broken as it gets. For
+# example, `gdk::set_program_class` asserts GDK is initialised while the app
+# id has to be set before Tauri creates anything: get that order wrong and
+# the app dies on launch while every other check passes.
+#
+# Nothing is asserted about what it draws. Still alive after a few seconds,
+# and no panic on the way, is the entire question.
+app_starts() {
+  local log; log=$(mktemp)
+  ( cd src-tauri && WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run/user/1000 \
+      GDK_BACKEND=wayland ZAPPER_HARNESS=1 ./target/debug/zapper >"$log" 2>&1 & echo $! >/tmp/zapper-app.pid )
+  local pid; pid=$(cat /tmp/zapper-app.pid)
+  sleep 6
+  local alive=0
+  kill -0 "$pid" 2>/dev/null && alive=1
+  kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
+  if grep -qiE 'panicked at' "$log"; then
+    grep -iE 'panicked at' "$log" | head -2
+    return 1
+  fi
+  if [[ $alive -eq 0 ]]; then
+    echo "the app exited within 6s of starting"
+    tail -3 "$log"
+    return 1
+  fi
+  echo "still running after 6s, no panic"
+}
+
 step "rust unit tests"      rust_tests
 step "rust clippy"          rust_clippy
 step "frontend build"       front_build
@@ -92,8 +124,9 @@ step "frontend checks"      front_checks
 step "catalogue over the local mirror" ipc_check
 
 if [[ $WINDOWED -eq 1 ]]; then
-  (cd src-tauri && cargo build -q --bins 2>&1 | tail -2)
+  (cd src-tauri && cargo build -q --bins --features harness 2>&1 | tail -2)
   step "fixture server"     start_fixtures
+  step "the app starts"        app_starts
   step "surface: GL + decode"  run_windowed surface_check 40
   step "player: transport"     run_windowed player_check 70
 fi

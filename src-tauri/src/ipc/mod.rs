@@ -5,6 +5,7 @@
 //! the shared contract and is not edited by either.
 
 pub mod catalog_cmds;
+pub mod health;
 pub mod player_cmds;
 pub mod types;
 

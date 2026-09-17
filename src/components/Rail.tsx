@@ -18,9 +18,14 @@
 // immediately either way — and marking it keeps a long list rendering from
 // blocking the click.
 
-import { Activity, useTransition } from "react";
+import { Activity, useRef, useTransition, type PointerEvent as ReactPointerEvent } from "react";
 import { CategoryRail } from "./CategoryRail";
 import { FavouritesRail } from "./FavouritesRail";
+import {
+  RAIL_WIDTH_DEFAULT,
+  isDefaultRailWidth,
+  railAfterDrag,
+} from "../logic/railWidth";
 import { useApp, useDispatch, type RailTab } from "../store";
 
 const TABS: Array<{ id: RailTab; label: string }> = [
@@ -29,12 +34,46 @@ const TABS: Array<{ id: RailTab; label: string }> = [
 ];
 
 export function Rail() {
-  const { railTab } = useApp();
+  const { railTab, railWidthRem } = useApp();
   const dispatch = useDispatch();
   const [switching, startSwitch] = useTransition();
+  const railRef = useRef<HTMLElement | null>(null);
+
+  // Dragging the rail's right edge divides the space between it and the
+  // channel list. The rail is pinned left and grows rightwards, so a
+  // positive drag makes it wider — the opposite of the picture's handle,
+  // which is pinned right.
+  //
+  // `pxPerRem` is measured from the rail rather than assumed to be 16: under
+  // CSS zoom a rem and a client pixel are different sizes.
+  const drag = useRef<{ x: number; rem: number; pxPerRem: number } | null>(null);
+
+  const onGripDown = (e: ReactPointerEvent<HTMLElement>) => {
+    const el = railRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    if (!(rect.width > 0) || !(railWidthRem > 0)) return;
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    drag.current = { x: e.clientX, rem: railWidthRem, pxPerRem: rect.width / railWidthRem };
+  };
+
+  const onGripMove = (e: ReactPointerEvent<HTMLElement>) => {
+    const d = drag.current;
+    if (!d) return;
+    dispatch({ type: "railWidth", rem: railAfterDrag(d.rem, e.clientX - d.x, d.pxPerRem) });
+  };
+
+  const endGrip = (e: ReactPointerEvent<HTMLElement>) => {
+    if (!drag.current) return;
+    drag.current = null;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+  };
 
   return (
-    <aside className={`rail ${switching ? "switching" : ""}`}>
+    <aside className={`rail ${switching ? "switching" : ""}`} ref={railRef}>
       <div className="rail-tabs" role="tablist" aria-label="Channel lists">
         {TABS.map((t) => (
           <button
@@ -58,6 +97,39 @@ export function Rail() {
       <Activity mode={railTab === "favourites" ? "visible" : "hidden"}>
         <FavouritesRail />
       </Activity>
+      {/* On the boundary the two panes share. A separator rather than a
+          button: it sets a value along an axis. */}
+      <span
+        className="rail-grip"
+        role="separator"
+        aria-label="Rail width"
+        aria-orientation="vertical"
+        aria-valuenow={Math.round(railWidthRem * 4) / 4}
+        tabIndex={0}
+        title={
+          isDefaultRailWidth(railWidthRem)
+            ? "Drag to resize the rail"
+            : "Drag to resize · double-click to reset"
+        }
+        onPointerDown={onGripDown}
+        onPointerMove={onGripMove}
+        onPointerUp={endGrip}
+        onPointerCancel={endGrip}
+        onDoubleClick={() => dispatch({ type: "railWidth", rem: RAIL_WIDTH_DEFAULT })}
+        onKeyDown={(e) => {
+          const step = e.shiftKey ? 4 : 1;
+          if (e.key === "ArrowRight") {
+            e.preventDefault();
+            dispatch({ type: "railWidth", rem: railWidthRem + step });
+          } else if (e.key === "ArrowLeft") {
+            e.preventDefault();
+            dispatch({ type: "railWidth", rem: railWidthRem - step });
+          } else if (e.key === "Home") {
+            e.preventDefault();
+            dispatch({ type: "railWidth", rem: RAIL_WIDTH_DEFAULT });
+          }
+        }}
+      />
     </aside>
   );
 }

@@ -6,6 +6,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   UNITY_FRACTION,
+  UNITY_SNAP,
   VOLUME_MAX,
   VOLUME_STEP,
   VOLUME_UNITY,
@@ -66,7 +67,10 @@ test("the boost region is compressed: a decibel up there costs more travel", () 
 });
 
 test("position and volume round-trip at every whole percent", () => {
+  // Except inside the unity snap, where pointing near 100 deliberately
+  // means 100 — see "clicking near unity means unity" below.
   for (let v = 0; v <= VOLUME_MAX; v++) {
+    if (Math.abs(v - 100) <= UNITY_SNAP) continue;
     assert.equal(volumeAtPosition(positionOfVolume(v)), v, `round trip failed at ${v}`);
   }
 });
@@ -123,6 +127,11 @@ test("the wheel and the drag agree: one gesture cannot reach a value the other c
   for (let v = 0; v <= VOLUME_MAX; v++) {
     for (const delta of [-1, 1]) {
       const wheeled = volumeAfterWheel(v, delta);
+      // Inside the snap the two are meant to differ: the wheel steps by a
+      // known amount from where it is, and the pointer rounds to unity.
+      // They do not fight over it — the handle stays where the wheel put
+      // it, and only a later click near 100 moves it there.
+      if (Math.abs(wheeled - 100) <= UNITY_SNAP && wheeled !== 100) continue;
       const dragged = volumeAtPosition(positionOfVolume(wheeled));
       assert.equal(dragged, wheeled, `wheel from ${v} landed on ${wheeled}, drag said ${dragged}`);
     }
@@ -183,4 +192,53 @@ test("the control says its state out loud, so colour is not the only signal", ()
   assert.equal(liveState(false, 12).label, "Behind live by 12s");
   assert.equal(liveState(false, 95).label, "Behind live by 1:35");
   assert.equal(behindGap(-3), "0s");
+});
+
+test("the unity snap is a target you can hit without aiming", () => {
+  // 0-100 spans 70% of the track, so a unit is about 1.4px on the player
+  // bar's slider and 0.8px on the docked picture's shorter one. The window
+  // has to be worth several of those on the *short* one, or the snap only
+  // helps where it was least needed.
+  const shortTrackPx = 112 * 0.7;
+  assert.ok((UNITY_SNAP / 100) * shortTrackPx >= 5, "the snap window is too fine to aim at");
+  // And not so wide that it swallows a meaningful part of the range.
+  assert.ok(UNITY_SNAP <= 12, "the snap has eaten the useful range around unity");
+});
+
+test("clicking near unity means unity", () => {
+  // 100% is the value people come back to, and on a continuous track every
+  // position is as good as its neighbour — so without a snap, "normal" is a
+  // pixel-hunt that lands on 99 or 101.
+  const at = (v) => volumeAtPosition(positionOfVolume(v));
+  assert.equal(at(100), 100);
+  assert.equal(at(100 - UNITY_SNAP), 100);
+  assert.equal(at(100 + UNITY_SNAP), 100);
+  // Just outside the window is left alone: nobody who aimed at 94 wants 100.
+  assert.equal(at(100 - UNITY_SNAP - 2), 100 - UNITY_SNAP - 2);
+  assert.equal(at(100 + UNITY_SNAP + 2), 100 + UNITY_SNAP + 2);
+});
+
+test("the ends of the track are still reachable through the snap", () => {
+  assert.equal(volumeAtPosition(0), 0);
+  assert.equal(volumeAtPosition(1), VOLUME_MAX);
+});
+
+test("only the pointer snaps, not the wheel", () => {
+  // A step that silently became a different step would be worse than a
+  // pixel-hunt. From 100 a notch has to actually move by the step, even
+  // though it lands inside the snap window a click would round away.
+  assert.equal(volumeAfterWheel(100, 1), 100 - VOLUME_STEP);
+  assert.equal(volumeAfterWheel(100 - VOLUME_STEP, -1), 100);
+  // And a notch from somewhere inside the window is still a plain step.
+  assert.equal(volumeAfterWheel(104, 1), 104 - VOLUME_STEP);
+});
+
+test("the wheel steps in fives, so the readout stays round", () => {
+  // Whole multiples of five from unity: 100, 95, 90 — not 96, 92, 88.
+  assert.equal(VOLUME_STEP, 5);
+  let v = 100;
+  for (const expected of [95, 90, 85]) {
+    v = volumeAfterWheel(v, 1);
+    assert.equal(v, expected);
+  }
 });

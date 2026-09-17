@@ -7,6 +7,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   EVENTS,
+  type AccountDto,
   type CategoryDto,
   type ChannelDto,
   type PlayerStateDto,
@@ -16,6 +17,7 @@ import {
   type FavouriteDto,
   type GuideRowDto,
   type SyncStatusDto,
+  type StatsDto,
   type ThumbnailDto,
   type VideoRect,
 } from "./types";
@@ -50,8 +52,14 @@ export const api = {
     invoke<void>("set_compressor", { enabled }),
   setVideoRect: (rect: VideoRect) => invoke<void>("set_video_rect", { rect }),
   playerState: () => invoke<PlayerStateDto>("player_state"),
+  playerStats: () => invoke<StatsDto>("player_stats"),
   thumbnailAt: (behindLive: number) =>
     invoke<ThumbnailDto | null>("thumbnail_at", { behindLive }),
+
+  account: () => invoke<AccountDto>("account"),
+  setAccount: (host: string, username: string, password: string) =>
+    invoke<void>("set_account", { host, username, password }),
+  testAccount: () => invoke<string>("test_account"),
 
   settings: () => invoke<SettingsDto>("settings"),
   setSettings: (settings: SettingsDto) => invoke<void>("set_settings", { settings }),

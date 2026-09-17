@@ -3,33 +3,11 @@
 // have never been opened so their quality is unknown. None of those are
 // errors and none of them get a warning.
 
-import { memo, useState } from "react";
+import { memo } from "react";
 import { hhmm, looksBroken, qualityBadge } from "../logic/format";
 import { ROW_HEIGHT } from "../logic/virtual";
 import type { ChannelDto } from "../types";
-
-/** Logo URLs 404 constantly in large catalogues. One failure per URL is enough. */
-const deadLogos = new Set<string>();
-
-function Logo({ url }: { url: string | null }) {
-  const [broken, setBroken] = useState(false);
-  if (!url || broken || deadLogos.has(url)) {
-    return <span className="row-logo blank" aria-hidden />;
-  }
-  return (
-    <img
-      className="row-logo"
-      src={url}
-      alt=""
-      loading="lazy"
-      decoding="async"
-      onError={() => {
-        deadLogos.add(url);
-        setBroken(true);
-      }}
-    />
-  );
-}
+import { Logo } from "./Logo";
 
 export interface ChannelRowProps {
   channel: ChannelDto;

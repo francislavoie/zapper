@@ -34,6 +34,19 @@
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.png"
-    ]
+    ],
+    "category": "Video",
+    "shortDescription": "A fast Xtream live-TV client",
+    "longDescription": "A live-TV client for Xtream Codes panels: instant channel switching, a full guide, catch-up, and a picture that keeps playing while you browse.",
+    "linux": {
+      "deb": {
+        "desktopTemplate": "../packaging/zapper.desktop.hbs",
+        "depends": [
+          "libmpv2 | libmpv1",
+          "libwebkit2gtk-4.1-0",
+          "libgtk-3-0"
+        ]
+      }
+    }
   }
 }

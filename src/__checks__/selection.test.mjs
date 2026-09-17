@@ -78,6 +78,7 @@ test("selection comes back only where it is the point", () => {
     ".app .settings-note",
     ".app .measured",
     ".app .watch-state",
+    ".app .crashed-why",
     ".app .watch-col.facts dd",
     ".app [data-selectable]",
   ];

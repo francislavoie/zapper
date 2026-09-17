@@ -338,6 +338,36 @@ pub enum Signal {
     },
 }
 
+/// A one-shot reading for the diagnostics panel.
+///
+/// Every field is optional on purpose: mpv drops most of these between
+/// files, and half of them never exist for a raw MPEG-TS multiplex. A
+/// missing reading is a dash on screen, not a failure.
+#[derive(Debug, Clone, Default)]
+pub struct Stats {
+    pub container: Option<String>,
+    pub video_codec: Option<String>,
+    pub audio_codec: Option<String>,
+    pub hwdec: Option<String>,
+    pub pixel_format: Option<String>,
+    pub primaries: Option<String>,
+    pub gamma: Option<String>,
+    pub video_bitrate: Option<f64>,
+    pub audio_bitrate: Option<f64>,
+    pub measured_fps: Option<f64>,
+    pub container_fps: Option<f64>,
+    pub audio_samplerate: Option<i64>,
+    pub audio_channels: Option<i64>,
+    pub cache_duration: Option<f64>,
+    pub cache_speed: Option<f64>,
+    pub demuxer_bytes: Option<i64>,
+    pub buffering: Option<bool>,
+    pub cache_buffering_percent: Option<f64>,
+    pub dropped_frames: Option<i64>,
+    pub decoder_dropped_frames: Option<i64>,
+    pub avsync: Option<f64>,
+}
+
 /// A snapshot of the properties the UI shows. Plain data, same reason.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Probe {
@@ -475,6 +505,62 @@ impl Player {
     }
 
     /// Everything the state feed needs, in one main-thread visit.
+    /// Everything the diagnostics panel shows, read in one pass.
+    ///
+    /// Separate from [`Player::probe`] because it is far more than the state
+    /// feed needs and is only read while the panel is open. Every field is
+    /// optional: mpv drops most of these between files, and a missing
+    /// reading is a dash in the interface rather than an error.
+    ///
+    /// **No stream URL, ever.** It carries the account's username and
+    /// password in its query string, and this panel exists to be screenshotted
+    /// and pasted into a bug report.
+    pub fn stats(&self) -> Stats {
+        Stats {
+            // Container and codecs.
+            container: self.get_string("file-format"),
+            video_codec: self.get_string("video-codec"),
+            audio_codec: self.get_string("audio-codec"),
+            hwdec: self.get_string("hwdec-current"),
+            pixel_format: self.get_string("video-params/pixelformat"),
+            // Colour, which is what an HDR stream on an SDR screen shows up in.
+            primaries: self.get_string("video-params/primaries"),
+            gamma: self.get_string("video-params/gamma"),
+            // Rates.
+            video_bitrate: self.get_f64("video-bitrate"),
+            audio_bitrate: self.get_f64("audio-bitrate"),
+            measured_fps: self.get_f64("estimated-vf-fps"),
+            container_fps: self.get_f64("container-fps"),
+            // Audio format, the thing that made the compressor stall.
+            audio_samplerate: self.get_i64("audio-params/samplerate"),
+            audio_channels: self.get_i64("audio-params/channel-count"),
+            // Health.
+            cache_duration: self.get_f64("demuxer-cache-duration"),
+            cache_speed: self.get_f64("cache-speed"),
+            demuxer_bytes: self.get_i64("demuxer-cache-state/total-bytes"),
+            buffering: self.get_bool("paused-for-cache"),
+            cache_buffering_percent: self.get_f64("cache-buffering-state"),
+            dropped_frames: self.get_i64("frame-drop-count"),
+            decoder_dropped_frames: self.get_i64("decoder-frame-drop-count"),
+            avsync: self.get_f64("avsync"),
+        }
+    }
+
+    /// Just the numbers the diagnostics graphs plot.
+    ///
+    /// `stats()` reads twenty-odd properties and most of them are static text
+    /// about codecs and colour; this runs on every heartbeat, so it reads the
+    /// four that move and nothing else.
+    pub fn health(&self) -> crate::ipc::health::Reading {
+        crate::ipc::health::Reading {
+            cache_duration: self.get_f64("demuxer-cache-duration"),
+            cache_speed: self.get_f64("cache-speed"),
+            dropped_total: self.get_i64("frame-drop-count").unwrap_or(0)
+                + self.get_i64("decoder-frame-drop-count").unwrap_or(0),
+            buffering: self.get_bool("paused-for-cache").unwrap_or(false),
+        }
+    }
+
     pub fn probe(&self) -> Probe {
         let time_pos = self.get_f64("time-pos");
         let (begin, end, reader) = match self.cache_window() {

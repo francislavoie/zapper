@@ -275,6 +275,8 @@ pub fn install(window: &tauri::WebviewWindow) -> Result<Overlay> {
                 overlay.add(&container);
                 overlay.add_overlay(&webview);
                 win.add(&overlay);
+                escape_hatch(&win);
+                survive_a_failed_interface(&webview, &win);
             }
             None => {
                 // Unknown hierarchy: keep the old nesting rather than tear the
@@ -382,6 +384,110 @@ fn tune_scrolling(webview: &webkit2gtk::WebView) {
         return;
     };
     settings.set_enable_smooth_scrolling(false);
+}
+
+/// A way out that does not depend on the interface existing.
+///
+/// The window is undecorated and draws its own title bar in the webview, so
+/// if the webview never loads there is no bar, no close button, and nothing
+/// to click: the only way out is the taskbar. This binds Ctrl+Q at the GTK
+/// level, below anything the page could be doing, so it works on a blank
+/// window.
+fn escape_hatch(win: &gtk::Window) {
+    win.connect_key_press_event(|w, ev| {
+        use gtk::gdk::keys::constants as key;
+        let ctrl = ev
+            .state()
+            .contains(gtk::gdk::ModifierType::CONTROL_MASK);
+        if ctrl && matches!(ev.keyval(), key::q | key::Q) {
+            w.close();
+            return glib::Propagation::Stop;
+        }
+        glib::Propagation::Proceed
+    });
+}
+
+/// Gives the user a way out when the interface fails to load.
+///
+/// The bar this app draws for itself lives in the page. If the page is not
+/// there — a development build with no dev server, a corrupt install — then
+/// neither is the bar, and an undecorated window with nothing in it cannot
+/// be moved, resized or closed.
+///
+/// `set_decorated(true)` is the obvious answer and is not enough: GTK uses
+/// client-side decorations on Wayland, so a window with no header bar
+/// widget gains no buttons from it. The window stays exactly as unclosable
+/// as it was. A header bar is attached instead, which is a real close
+/// button, and a dialog says what happened — an error page nobody can
+/// dismiss is only half an answer.
+fn survive_a_failed_interface(webview: &webkit2gtk::WebView, win: &gtk::Window) {
+    let window = win.clone();
+    // Once: a failed load can be retried by WebKit, and three stacked
+    // dialogs would be worse than the problem.
+    let told = std::cell::Cell::new(false);
+    webview.connect_load_failed(move |_, _event, uri, error| {
+        // The URI is ours — a file path or the dev server — and carries no
+        // credentials, unlike a stream URL.
+        tracing::error!("the interface failed to load from {uri}: {error}");
+        if told.replace(true) {
+            return false;
+        }
+        // Not in a harness. The verification binaries load the same frontend
+        // with no dev server behind it, so this fires every time they run —
+        // a modal dialog and a header bar over whatever they were showing,
+        // on somebody else's screen. They are not the app and nobody is
+        // going to click Quit on them; the log line above is the whole
+        // answer there.
+        if std::env::var_os("ZAPPER_HARNESS").is_some() {
+            return false;
+        }
+
+        // A real title bar, with a real close button in it.
+        let bar = gtk::HeaderBar::new();
+        bar.set_show_close_button(true);
+        bar.set_title(Some("zapper"));
+        bar.set_subtitle(Some("the interface could not be loaded"));
+        window.set_titlebar(Some(&bar));
+        window.set_decorated(true);
+        bar.show_all();
+
+        // And say so, because a blank window with a title bar is still a
+        // blank window.
+        let dialog = gtk::MessageDialog::new(
+            Some(&window),
+            gtk::DialogFlags::MODAL | gtk::DialogFlags::DESTROY_WITH_PARENT,
+            gtk::MessageType::Error,
+            gtk::ButtonsType::None,
+            "zapper could not load its interface.",
+        );
+        // Say which build this is, because the answer differs completely
+        // and the binary's own path is the only reliable way to tell. A
+        // release build carries its interface inside it and never reaches
+        // for a server; only a development build does.
+        let exe = std::env::current_exe()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| "this binary".to_owned());
+        let advice = if cfg!(debug_assertions) {
+            "This is a development build. It loads the interface from the \
+             Vite dev server, so `npm run app` has to be running — start it \
+             from the project directory and launch again."
+        } else {
+            "This is a release build, which carries its interface inside it \
+             and should never need a server. Seeing this means the build is \
+             damaged; rebuild it with `npx tauri build`."
+        };
+        dialog.set_secondary_text(Some(&format!("{error}\n\n{advice}\n\nRunning: {exe}")));
+        dialog.add_button("Quit", gtk::ResponseType::Close);
+        let closing = window.clone();
+        dialog.connect_response(move |d, _| {
+            d.close();
+            closing.close();
+        });
+        dialog.show_all();
+
+        // False: let WebKit draw its error page behind all this too.
+        false
+    });
 }
 
 /// Stops WebKit offering Back / Forward / Stop / Reload / Inspect Element.

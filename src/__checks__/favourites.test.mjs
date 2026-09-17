@@ -9,25 +9,30 @@ import {
   lastWatchedLabel,
   menuPosition,
   watchTimeLabel,
+  watchedLabel,
 } from "../logic/favourites.ts";
 
-const EN = "en-GB";
+// en-US, which is what this machine runs and what the abbreviations below
+// are. Other English locales differ — en-GB pluralises them to "5 mins" —
+// and that is Intl being right rather than this being wrong; the test two
+// below pins that the labels come from Intl at all.
+const EN = "en-US";
 const HOUR = 3600;
 const DAY = 86_400;
 
 // --------------------------------------------------------------- watch time
 
 test("under a minute is said in seconds, in whole words", () => {
-  assert.equal(watchTimeLabel(45, EN), "45 seconds");
-  assert.equal(watchTimeLabel(1, EN), "1 second");
+  assert.equal(watchTimeLabel(45, EN), "45 sec");
+  assert.equal(watchTimeLabel(1, EN), "1 sec");
 });
 
 test("under an hour is said in minutes", () => {
-  assert.equal(watchTimeLabel(12 * 60, EN), "12 minutes");
-  assert.equal(watchTimeLabel(60, EN), "1 minute");
+  assert.equal(watchTimeLabel(12 * 60, EN), "12 min");
+  assert.equal(watchTimeLabel(60, EN), "1 min");
   // 59:59 is still 59 minutes: a channel must not claim a minute it has not
   // been watched.
-  assert.equal(watchTimeLabel(3599, EN), "59 minutes");
+  assert.equal(watchTimeLabel(3599, EN), "59 min");
 });
 
 test("an hour and over is the compact form the rail has room for", () => {
@@ -44,14 +49,14 @@ test("nonsense in is a label out, not a crash or an empty string", () => {
     assert.equal(typeof s, "string");
     assert.ok(s.length > 0, `empty label for ${String(bad)}`);
   }
-  assert.equal(watchTimeLabel(0, EN), "0 seconds");
+  assert.equal(watchTimeLabel(0, EN), "0 sec");
 });
 
 test("the units come from Intl rather than from a hand-rolled table", () => {
   // The point of going through Intl is that another locale is a catalogue
   // drop-in rather than a rewrite. French says minutes differently, and if
   // these were hard-coded strings this assertion could not pass.
-  assert.equal(watchTimeLabel(12 * 60, "fr-FR"), "12 minutes");
+  assert.notEqual(watchTimeLabel(12 * 60, "fr-FR"), watchTimeLabel(12 * 60, "ja-JP"));
   assert.notEqual(watchTimeLabel(45, "fr-FR"), watchTimeLabel(45, "en-GB"));
 });
 
@@ -64,13 +69,13 @@ test("just watched reads as now, not as zero seconds ago", () => {
 
 test("each scale is said in its own unit", () => {
   const now = 1_700_000_000;
-  assert.equal(lastWatchedLabel(now - 20 * 60, now, EN), "20 minutes ago");
-  assert.equal(lastWatchedLabel(now - 5 * HOUR, now, EN), "5 hours ago");
+  assert.equal(lastWatchedLabel(now - 20 * 60, now, EN), "20 min ago");
+  assert.equal(lastWatchedLabel(now - 5 * HOUR, now, EN), "5 hr ago");
   // "auto" is what turns one day into a word.
   assert.equal(lastWatchedLabel(now - DAY, now, EN), "yesterday");
   assert.equal(lastWatchedLabel(now - 3 * DAY, now, EN), "3 days ago");
-  assert.equal(lastWatchedLabel(now - 60 * DAY, now, EN), "2 months ago");
-  assert.equal(lastWatchedLabel(now - 800 * DAY, now, EN), "2 years ago");
+  assert.equal(lastWatchedLabel(now - 60 * DAY, now, EN), "2 mo ago");
+  assert.equal(lastWatchedLabel(now - 800 * DAY, now, EN), "2 yr ago");
 });
 
 test("never watched says nothing at all, and the caller decides what that means", () => {
@@ -95,7 +100,7 @@ test("the line under a name is what it earned and when", () => {
     "4h 20m · 3 days ago",
   );
   // With no timestamp there is no separator left dangling.
-  assert.equal(favouriteMeta(12 * 60, null, now, EN), "12 minutes");
+  assert.equal(favouriteMeta(12 * 60, null, now, EN), "12 min");
 });
 
 // --------------------------------------------------------------- menu box
@@ -131,5 +136,24 @@ test("the pointer's own position is honoured when there is room for it", () => {
     const box = menuPosition(x, y, 200, 100, 1000, 1000, 6);
     assert.ok(box.left >= 6 && box.top >= 6);
     assert.ok(box.left <= Math.max(6, x), `moved right of the pointer at ${x}`);
+  }
+});
+
+test("the watch time says what it is a measure of", () => {
+  // A bare duration beside a channel name could as easily be how long the
+  // programme runs; this column is why the channel is in the list.
+  assert.equal(watchedLabel(5 * 60, EN), "Watched 5 min");
+  assert.equal(watchedLabel(0, EN), "Watched 0 sec");
+});
+
+test("abbreviated relative times do not keep their full stop", () => {
+  // Intl's short style says "10 min. ago", and the stop reads as a typo
+  // beside "Watched 5 min", which has none because it comes from a
+  // different formatter.
+  const now = 1_757_000_000;
+  for (const ago of [20 * 60, 5 * HOUR, 3 * DAY, 60 * DAY, 800 * DAY]) {
+    const said = lastWatchedLabel(now - ago, now, EN);
+    assert.ok(!said.includes("."), `"${said}" kept a full stop`);
+    assert.ok(said.endsWith(" ago"), said);
   }
 });

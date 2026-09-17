@@ -3,9 +3,57 @@ name = "zapper"
 version = "0.1.0"
 edition = "2021"
 publish = false
-# Four verification harnesses live alongside the app, so a bare `cargo run`
+# Verification harnesses live alongside the app, so a bare `cargo run`
 # (which is what `tauri dev` issues) cannot tell which to launch.
 default-run = "zapper"
+
+# The harnesses are not part of the product.
+#
+# `tauri build` bundles whatever binaries cargo produced, so without this the
+# .deb would install `seek_bench` into /usr/bin beside the app. They are
+# behind a feature that is off by default: `cargo build` for the app does not
+# build them, and tools/check_all.sh asks for them by name.
+[features]
+harness = []
+
+[[bin]]
+name = "zapper"
+path = "src/main.rs"
+
+[[bin]]
+name = "ipc_check"
+path = "src/bin/ipc_check.rs"
+required-features = ["harness"]
+
+[[bin]]
+name = "player_check"
+path = "src/bin/player_check.rs"
+required-features = ["harness"]
+
+[[bin]]
+name = "shot_check"
+path = "src/bin/shot_check.rs"
+required-features = ["harness"]
+
+[[bin]]
+name = "surface_check"
+path = "src/bin/surface_check.rs"
+required-features = ["harness"]
+
+[[bin]]
+name = "seek_bench"
+path = "src/bin/seek_bench.rs"
+required-features = ["harness"]
+
+[[bin]]
+name = "filter_bench"
+path = "src/bin/filter_bench.rs"
+required-features = ["harness"]
+
+[[bin]]
+name = "open_bench"
+path = "src/bin/open_bench.rs"
+required-features = ["harness"]
 
 [lib]
 name = "zapper_lib"

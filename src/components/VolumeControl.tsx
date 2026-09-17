@@ -1,10 +1,9 @@
-// Volume: the icon that mutes, and a real slider beside it.
+// Volume: the icon that mutes, and the slider beside it.
 //
-// The slider is drawn rather than borrowed. A native <input type=range> is a
-// light rectangle in several engines whatever `color-scheme` says, it cannot
-// paint the boost region differently from the normal one, and the thing it
-// most needs to express here is precisely that 0-100 and 100-200 are not the
-// same kind of range. See src/logic/volume.ts for the scale.
+// The slider is VolumeSlider, which the docked picture also uses — there in
+// a popover above its control row rather than inline. One drawing of one
+// control; see that file for why it is drawn rather than borrowed from the
+// platform.
 
 import { useEffect, useRef } from "react";
 import {
@@ -20,6 +19,7 @@ import {
   volumeLevel,
 } from "../logic/volume";
 import { Volume } from "./icons";
+import { VolumeSlider } from "./VolumeSlider";
 
 export interface VolumeControlProps {
   volume: number;
@@ -111,92 +111,7 @@ export function VolumeControl({
         <Volume className="i" level={volumeLevel(volume, muted)} />
       </button>
 
-      <div
-        className="vol"
-        ref={trackRef}
-        role="slider"
-        tabIndex={0}
-        aria-label="Volume"
-        aria-valuemin={0}
-        aria-valuemax={VOLUME_MAX}
-        aria-valuenow={Math.round(volume)}
-        aria-valuetext={label}
-        onPointerDown={(e) => {
-          if (e.button !== 0) return;
-          dragging.current = true;
-          // Capture, so a drag that leaves the control still moves the handle
-          // instead of stopping dead at the edge.
-          e.currentTarget.setPointerCapture(e.pointerId);
-          commitAt(e.clientX);
-        }}
-        onPointerMove={(e) => {
-          if (dragging.current) commitAt(e.clientX);
-        }}
-        onPointerUp={(e) => {
-          dragging.current = false;
-          e.currentTarget.releasePointerCapture(e.pointerId);
-        }}
-        onPointerCancel={() => {
-          dragging.current = false;
-        }}
-        onKeyDown={(e) => {
-          const step = e.shiftKey ? 1 : VOLUME_STEP;
-          switch (e.key) {
-            case "ArrowRight":
-            case "ArrowUp":
-              nudge(step);
-              break;
-            case "ArrowLeft":
-            case "ArrowDown":
-              nudge(-step);
-              break;
-            case "Home":
-              onVolume(0);
-              break;
-            case "End":
-              onVolume(VOLUME_MAX);
-              break;
-            case "PageUp":
-              nudge(VOLUME_STEP * 4);
-              break;
-            case "PageDown":
-              nudge(-VOLUME_STEP * 4);
-              break;
-            default:
-              return;
-          }
-          e.preventDefault();
-          // The window's own arrow keys seek the stream. A focused slider owns
-          // its arrows; React's listener is on the root, so the native event
-          // has to be stopped there or it carries on up to the window.
-          e.nativeEvent.stopPropagation();
-        }}
-      >
-        <div className="vol-track">
-          {/* The boost stretch is marked on the track itself, so it is visible
-              before the handle ever gets there. */}
-          <div className="vol-zone boost" style={{ left: pct(UNITY_FRACTION) }} />
-          <div className="vol-fill" style={{ width: pct(Math.min(position, UNITY_FRACTION)) }} />
-          {boosted ? (
-            <div
-              className="vol-fill over"
-              style={{
-                left: pct(UNITY_FRACTION),
-                width: pct(position - UNITY_FRACTION),
-              }}
-            />
-          ) : null}
-          <div className="vol-unity" style={{ left: pct(UNITY_FRACTION) }} />
-          <div className={`vol-handle ${boosted ? "over" : ""}`} style={{ left: pct(position) }} />
-        </div>
-      </div>
-
-      <span
-        className={`vol-readout ${boosted && !muted ? "over" : ""}`}
-        title={boosted ? `Boosted to ${Math.round(volume)}% (above ${VOLUME_UNITY}% is software gain)` : undefined}
-      >
-        {label}
-      </span>
+      <VolumeSlider volume={volume} muted={muted} onVolume={onVolume} onActivity={onActivity} />
     </div>
   );
 }

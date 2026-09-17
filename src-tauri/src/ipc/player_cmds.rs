@@ -12,7 +12,7 @@
 //! both sides read is a `Mutex<Machine>` here, which is ordinary `Send` data.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{LazyLock, Mutex, OnceLock};
+use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, Emitter};
@@ -102,6 +102,15 @@ struct Machine {
     /// deliberately rewinds - at that point being behind is the point - and
     /// set again by `seek_live`.
     following_live: bool,
+    /// Playback time genuinely lost to stalls since the last catch-up.
+    /// See [`lost_since`]: this, not the depth of the buffer, is what means
+    /// the viewer has fallen behind.
+    drift_secs: f64,
+    /// Where the playhead was last tick, to measure that against.
+    last_pos: Option<f64>,
+    /// When that reading was taken, so drift is measured against the wall
+    /// clock rather than against the heartbeat's nominal interval.
+    last_tick_at: Option<Instant>,
     /// When the last automatic catch-up ran, so chasing cannot thrash.
     last_live_nudge: Option<Instant>,
 }
@@ -113,6 +122,9 @@ impl Machine {
             opened_at: None,
             last_emitted: None,
             following_live: false,
+            drift_secs: 0.0,
+            last_pos: None,
+            last_tick_at: None,
             last_live_nudge: None,
         }
     }
@@ -121,6 +133,9 @@ impl Machine {
         self.dto.at_live_edge = true;
         self.following_live = true;
         self.last_live_nudge = None;
+        self.drift_secs = 0.0;
+        self.last_pos = None;
+        self.last_tick_at = None;
         self.dto.state = PlaybackState::Opening;
         self.dto.stream_id = Some(stream_id);
         self.dto.error = None;
@@ -321,8 +336,14 @@ fn ensure_ticker(app: &AppHandle) {
 fn tick(app: &AppHandle, p: &Player) {
     let signals = p.pump();
     let probe = p.probe();
+    // The diagnostics graphs are drawn from a record kept whether or not the
+    // panel is open, so that opening it shows the minute that has just
+    // happened rather than an empty box. Four property reads, on a tick that
+    // was going to run anyway.
+    let health = p.health();
     // Assigned inside the block below, where the state lock is held.
     let earned;
+    let loaded;
     let payload = {
         let mut m = STATE.lock().expect("player state mutex poisoned");
         for s in &signals {
@@ -346,20 +367,46 @@ fn tick(app: &AppHandle, p: &Player) {
         m.apply(&probe);
         m.check_deadline();
 
-        // Stay at the live edge unless the viewer chose otherwise.
+        // Catch up only after playback has genuinely lost time.
+        //
+        // Not by chasing `behind_live`, which is not what it sounds like: it
+        // is the distance to the end of the *readahead buffer*, not to
+        // anything happening now. A server sends a burst when a channel
+        // opens, so the buffer is immediately many seconds deep while the
+        // playhead is doing nothing wrong — measured against a server
+        // delivering at 4x, it crossed a six second threshold 3.1 seconds in
+        // and peaked past 20. A rule on that depth seeks, waits three
+        // seconds, and seeks again, for as long as the burst lasts: a
+        // stutter-jump-stutter at the start of every channel change.
+        //
+        // Lost time cannot be produced by a deep buffer. It only accumulates
+        // when the picture actually stops, which is the one case where
+        // catching up is what the viewer wants.
         if m.following_live && m.dto.state == PlaybackState::Playing {
-            let drifted = probe.behind_live > LIVE_FOLLOW_SLACK;
+            let elapsed = m
+                .last_tick_at
+                .map_or(TICK.as_secs_f64(), |t| t.elapsed().as_secs_f64());
+            // Clamped as a total, not per tick: see `lost_since`. Time made
+            // back has to be able to cancel time lost, or timer jitter alone
+            // reaches the threshold.
+            m.drift_secs =
+                (m.drift_secs + lost_since(m.last_pos, probe.time_pos, elapsed)).max(0.0);
             let settled = m
                 .last_live_nudge
                 .is_none_or(|t| t.elapsed() >= LIVE_NUDGE_INTERVAL);
-            if drifted && settled {
+            if m.drift_secs > MAX_DRIFT_SECS && settled && probe.behind_live > LIVE_EDGE_MARGIN {
                 m.last_live_nudge = Some(Instant::now());
+                m.drift_secs = 0.0;
                 let by = (probe.behind_live - LIVE_EDGE_MARGIN).max(0.0);
                 // Best-effort: failing to catch up is not a reason to fail a
                 // stream that is otherwise playing fine.
                 let _ = p.command("seek", &[&format!("{by:.3}"), "relative"]);
             }
+        } else {
+            m.drift_secs = 0.0;
         }
+        m.last_pos = probe.time_pos;
+        m.last_tick_at = Some(Instant::now());
 
         // Watch time, for auto-favourites. Only `Playing` counts: opening is
         // not watching, and neither is a paused stream sitting on a frame.
@@ -370,8 +417,16 @@ fn tick(app: &AppHandle, p: &Player) {
             activity::now_secs(),
         );
 
+        // Nothing loaded is not a reading of zero buffer, it is no reading:
+        // recording it would fill the graph with a flat line drawn while
+        // there was nothing to draw.
+        loaded = m.dto.stream_id.is_some();
+
         m.changed()
     };
+    if loaded {
+        crate::ipc::health::observe(health);
+    }
     if let Some(e) = earned {
         persist(e);
     }
@@ -411,20 +466,43 @@ fn fixture_url(stream_id: i64) -> Option<String> {
     }
 }
 
-static CLIENT: OnceLock<XtreamClient> = OnceLock::new();
+/// The process-wide panel client, cached but replaceable.
+///
+/// A `OnceLock` would be simpler, but the account is editable: saving new
+/// credentials has to take effect without a restart, and a lock that can
+/// only be written once cannot do that.
+static CLIENT: std::sync::RwLock<Option<&'static XtreamClient>> =
+    std::sync::RwLock::new(None);
 
-/// The process-wide panel client. Built once; a failure is not cached, so
-/// fixing the profile does not need a restart.
+/// Drops the cached client so the next call builds one from whatever is on
+/// file now. Called when the account changes.
+pub fn forget_panel() {
+    if let Ok(mut slot) = CLIENT.write() {
+        *slot = None;
+    }
+}
+
+/// The Xtream client. Built on demand; a failure is not cached, so fixing the
+/// account does not need a restart.
 ///
 /// Public so the verification harness can resolve a channel to play without
 /// a second copy of the credential loader - and without a stream URL ever
 /// reaching a command line, where it would be world-readable through `/proc`.
 pub fn panel() -> Result<&'static XtreamClient, String> {
-    if let Some(c) = CLIENT.get() {
-        return Ok(c);
+    if let Ok(slot) = CLIENT.read() {
+        if let Some(c) = *slot {
+            return Ok(c);
+        }
     }
-    let c = XtreamClient::new(credentials()?).map_err(|e| e.to_string())?;
-    Ok(CLIENT.get_or_init(|| c))
+    let built = XtreamClient::new(credentials()?).map_err(|e| e.to_string())?;
+    // Leaked on purpose: the client lives for the process, and the few bytes
+    // a replaced one costs are not worth threading a lifetime through every
+    // caller. An account can only be changed a handful of times by hand.
+    let leaked: &'static XtreamClient = Box::leak(Box::new(built));
+    if let Ok(mut slot) = CLIENT.write() {
+        *slot = Some(leaked);
+    }
+    Ok(leaked)
 }
 
 // ---------------------------------------------------------------------------
@@ -462,6 +540,8 @@ async fn open(app: &AppHandle, stream_id: i64, url: String) -> Result<(), String
     // The scrollback previews describe a buffer that is about to be closed.
     // Keeping them would put the previous channel's picture under the cursor.
     crate::surface::trickplay::clear();
+    // Same reasoning, for the same reason: the graphs describe one stream.
+    crate::ipc::health::clear();
     commit(app, |m| m.opening(stream_id));
     let r = on_player(app, move |p| {
         // `replace` closes the current demuxer before opening the next, which
@@ -526,13 +606,45 @@ pub async fn seek_relative(app: AppHandle, seconds: f64) -> Result<(), String> {
 /// silently rather than clamped.
 const LIVE_EDGE_MARGIN: f64 = 0.5;
 
-/// How far behind the edge playback may drift before it is pulled back.
+/// How much playback time may be lost before the viewer is carried back to
+/// the live edge.
 ///
-/// Generous on purpose. The panel bursts at roughly 2.2x realtime on connect,
-/// so the seekable end runs away for the first several seconds; chasing it
-/// tightly would seek repeatedly during exactly the period the picture is
-/// settling.
-const LIVE_FOLLOW_SLACK: f64 = 6.0;
+/// Ten seconds is a long stall — long enough that it was a real
+/// interruption and not a dropped frame, and short enough that a viewer who
+/// sat through it has not silently become a viewer of the past.
+const MAX_DRIFT_SECS: f64 = 10.0;
+
+/// How far playback fell behind the clock since the previous tick.
+///
+/// Positive when the picture lost time, negative when it made some back, and
+/// the sign matters: this is summed, and a running total that could only
+/// ever grow would ratchet. The heartbeat is a timer, so a tick is never
+/// exactly its nominal length and the difference lands here as a few
+/// milliseconds either way. Keeping only the losses would turn that jitter
+/// into ten seconds of "drift" every few minutes and carry the viewer to the
+/// live edge for no reason at all. The caller clamps the *total* at zero, so
+/// healthy playback hovers there instead of climbing.
+///
+/// Measured against the wall clock rather than the nominal interval, because
+/// a late tick is the timer's fault and not the stream's.
+///
+/// Zero when the position moved backwards or leapt forwards: those are
+/// seeks, and charging a seek as drift would have a rewind immediately drag
+/// the viewer back to live, the precise opposite of what they just asked
+/// for. The forward bound is generous because a tick can run long.
+fn lost_since(previous: Option<f64>, now: Option<f64>, elapsed: f64) -> f64 {
+    let (Some(before), Some(after)) = (previous, now) else {
+        return 0.0;
+    };
+    if !elapsed.is_finite() || elapsed <= 0.0 {
+        return 0.0;
+    }
+    let advanced = after - before;
+    if advanced < 0.0 || advanced > elapsed * 4.0 {
+        return 0.0;
+    }
+    elapsed - advanced
+}
 
 /// Below this, playback is considered to have reached live.
 const LIVE_ENTER: f64 = 3.0;
@@ -673,6 +785,48 @@ pub async fn thumbnail_at(
     .await
 }
 
+/// Everything the diagnostics panel shows: one reading, and the history.
+///
+/// Polled rather than pushed: it is far more than the state feed needs, and
+/// nothing should pay for it while the panel is closed. The history is the
+/// exception and is collected continuously — see `ipc::health` for why, and
+/// for how little it costs — but it still only crosses the boundary when
+/// somebody asks, which is what makes one call enough to draw the panel.
+#[tauri::command]
+pub async fn player_stats(app: AppHandle) -> Result<crate::ipc::types::StatsDto, String> {
+    on_player(&app, |p| {
+        let s = p.stats();
+        let probe = p.probe();
+        Ok(crate::ipc::types::StatsDto {
+            container: s.container,
+            video_codec: s.video_codec,
+            audio_codec: s.audio_codec,
+            hwdec: s.hwdec,
+            pixel_format: s.pixel_format,
+            primaries: s.primaries,
+            gamma: s.gamma,
+            video_bitrate: s.video_bitrate,
+            audio_bitrate: s.audio_bitrate,
+            measured_fps: s.measured_fps,
+            container_fps: s.container_fps,
+            audio_samplerate: s.audio_samplerate,
+            audio_channels: s.audio_channels,
+            cache_duration: s.cache_duration,
+            cache_speed: s.cache_speed,
+            demuxer_bytes: s.demuxer_bytes,
+            buffering: s.buffering,
+            cache_buffering_percent: s.cache_buffering_percent,
+            dropped_frames: s.dropped_frames,
+            decoder_dropped_frames: s.decoder_dropped_frames,
+            avsync: s.avsync,
+            behind_live: probe.behind_live,
+            buffered_back: probe.buffered_back,
+            history: crate::ipc::health::samples(),
+        })
+    })
+    .await
+}
+
 #[tauri::command]
 pub async fn player_state() -> Result<PlayerStateDto, String> {
     Ok(STATE
@@ -698,68 +852,70 @@ fn clamp_seek(seconds: f64, buffered_back: f64, behind_live: f64) -> f64 {
     }
 }
 
-/// The loudness every stream is normalised to, in LUFS.
+/// Peak ceiling for the limiter, as a linear amplitude. -1 dBFS.
 ///
-/// -14 is what YouTube, Spotify and Apple Music all normalise to, and this
-/// app sits on the same desktop as them: a target below that reads as "the
-/// compressor made it quiet" even when the filter is behaving perfectly.
-/// Broadcast practice is -23 LUFS (EBU R128) and is the wrong reference -
-/// the streams already arrive at broadcast levels, and lifting them to
-/// desktop levels is the entire point of the control.
-const LOUDNESS_TARGET_LUFS: f64 = -14.0;
+/// The headroom is deliberate: a lossy decoder reconstructs inter-sample
+/// peaks above the highest stored sample, so normalising to 0 clips on the
+/// way out.
+const LIMIT_AMPLITUDE: f64 = 0.891;
 
-/// Ceiling for the true peak, in dBFS. The headroom is deliberate: a lossy
-/// decoder reconstructs inter-sample peaks above the highest stored sample,
-/// so normalising to 0 would clip on the way out.
-const LOUDNESS_TRUE_PEAK_DB: f64 = -1.5;
+/// `speechnorm` expansion factor. How much gain a quiet passage may be
+/// given; 6.25 lifts broadcast levels to desktop levels without pumping.
+const NORM_EXPANSION: f64 = 6.25;
 
-/// Permitted loudness range, in LU. Wide enough that quiet dialogue and loud
-/// music keep their shape instead of being flattened onto one level.
-const LOUDNESS_RANGE_LU: f64 = 11.0;
+/// How fast the gain is allowed to rise between samples. Small, so the lift
+/// arrives over a moment rather than on a syllable.
+const NORM_RAISE: f64 = 0.0001;
 
 /// mpv's `af` value for the compressor toggle.
 ///
-/// **Not `acompressor`.** It was, carrying a widely shared
-/// `DynamicsCompressorNode` settings (threshold -50 dB, knee 40, ratio 12,
-/// attack 0, release 0.25), and that was wrong in a way worth recording so
-/// nobody restores it.
+/// **Not `acompressor`, and not `loudnorm`.** Both were tried and both were
+/// wrong, in ways worth recording so neither comes back.
 ///
-/// Those numbers describe a compressor sitting in front of a gain stage. On
-/// their own they only attenuate: material at -25 LUFS lands at
-/// `-50 + (-25 - -50) / 12`, about -48, and `acompressor` applies no makeup
-/// unless asked. Measured on the three fixtures, integrated LUFS:
-/// sport -25.4 -> -44.8, nwn1 -23.3 -> -54.9, motion1080p -6.7 -> -50.8.
-/// A fixed `makeup` cannot repair that, because how far each source falls
-/// depends on how far above the threshold it started, so any single value
-/// over-lifts one source while leaving another buried.
+/// `acompressor` was tried with a commonly shared set of web-audio
+/// `DynamicsCompressorNode` settings. Those describe a compressor in front
+/// of a gain stage; alone they only attenuate, and ffmpeg applies no makeup
+/// unless asked. It made everything about 20 dB quieter.
 ///
-/// `loudnorm` measures rather than assumes, so it converges sources that
-/// begin 19 dB apart:
+/// `loudnorm` fixed the loudness and broke the control. It only accepts
+/// 192 kHz, so inserting it made mpv reopen the audio device at 192 kHz and
+/// close it again on the way out — and the first time, that cost **3.8
+/// seconds of frozen picture**. Measured with `cargo run --bin filter_bench`:
 ///
 /// ```text
-///                 bypass          loudnorm I=-14
-///   sport720p60   -25.4 LUFS      -14.1 LUFS  (true peak -1.5 dBTP)
-///   nwn1          -23.3 LUFS      -14.1 LUFS  (true peak -1.5 dBTP)
-///   motion1080p    -6.7 LUFS      -14.0 LUFS  (true peak -4.9 dBTP)
+///                        1st toggle   later toggles
+///   loudnorm               3790 ms      186-243 ms
+///   dynaudnorm + limiter   1918 ms       21-132 ms
+///   speechnorm + limiter     33 ms          30 ms
 /// ```
 ///
-/// That convergence is the property worth having. `dynaudnorm` and
-/// `speechnorm` both lift the quiet sources to roughly -14 as well, but
-/// leave motion1080p at -8.2 and -7.3 - still 6 dB above the others - so the
-/// level jump between channels survives, which is the thing that actually
-/// makes IPTV audio unpleasant. They also finish at -0.2 dBTP, with no
-/// headroom for inter-sample peaks.
+/// Priming does not help: the cost is paid per playback session, not per
+/// process, so warming the filter at startup — over silence or over the
+/// stream — leaves the next channel to pay it again.
 ///
-/// Note motion1080p bypasses at +2.4 dBTP: untreated it is already clipping,
-/// so pulling it down is a repair rather than a regression.
+/// `speechnorm` gives up almost nothing for that. Integrated loudness over
+/// three test streams (sports, speech, and a synthetic one), against
+/// `loudnorm`'s:
 ///
-/// Latency is not a concern. A click transient through this filter comes out
-/// at the same timestamp it went in - the filter reports its delay and it is
-/// compensated - so lip sync holds and the toggle stays usable on a live
-/// stream.
+/// ```text
+///                  bypass    speechnorm      loudnorm
+///   sport720p60    -25.4     -13.9  -1.0     -14.1  -1.5 dBTP
+///   speech         -23.3     -13.9  -1.0     -14.1  -1.5
+///   motion1080p     -6.7      -7.3  -0.2     -14.0  -4.9
+/// ```
+///
+/// Identical on the two that look like real broadcast audio. They differ
+/// only on the synthetic one that is already hot, which `speechnorm` leaves
+/// alone rather than pulling down 7 dB — and which it still rescues from
+/// clipping, +2.4 to -0.2 dBTP. Leaving loud things loud is also the point:
+/// the control is there to lift quiet audio.
+///
+/// -14 LUFS, where both land, is what YouTube and Spotify normalise to, so
+/// this sits at the same level as everything else on the desktop.
 fn compressor_filter() -> String {
     format!(
-        "loudnorm=I={LOUDNESS_TARGET_LUFS}:TP={LOUDNESS_TRUE_PEAK_DB}:LRA={LOUDNESS_RANGE_LU}"
+        "speechnorm=e={NORM_EXPANSION}:r={NORM_RAISE}:l=1,\
+         alimiter=limit={LIMIT_AMPLITUDE}:level=disabled"
     )
 }
 
@@ -945,24 +1101,88 @@ mod tests {
     }
 
     #[test]
-    fn compressor_normalises_loudness_rather_than_compressing() {
-        // Pinned in full: a silent edit here changes how loud every channel
-        // plays, and the last time these numbers drifted the audio dropped
-        // 19 dB with nothing in the logs to say so.
+    fn a_deep_buffer_is_not_drift() {
+        // A server bursts when a channel opens, so the readahead is instantly
+        // many seconds deep while playback is perfectly healthy — and a rule
+        // that read that depth as "the viewer has fallen behind" would seek,
+        // over and over, through the first seconds of every channel. Nothing
+        // about buffer depth reaches this function; only the playhead against
+        // the clock does.
+        assert_eq!(lost_since(Some(10.0), Some(10.25), 0.25), 0.0);
+    }
+
+    #[test]
+    fn ordinary_timer_jitter_cannot_ratchet_into_a_catch_up() {
+        // A tick is never exactly its nominal length, so each one lands a
+        // few milliseconds either side. Summed with the losses kept and the
+        // gains thrown away, that alone reached ten seconds in a few
+        // minutes and yanked a healthy stream to the live edge.
+        let mut total: f64 = 0.0;
+        let mut pos = 10.0;
+        for i in 0..4000 {
+            // Alternating slightly short and slightly long ticks.
+            let elapsed = if i % 2 == 0 { 0.26 } else { 0.24 };
+            pos += 0.25;
+            total = (total + lost_since(Some(pos - 0.25), Some(pos), elapsed)).max(0.0);
+        }
+        // Over a thousand seconds of playback the total stays negligible,
+        // and nowhere near the threshold.
+        assert!(total < 1.0, "jitter accumulated to {total}");
+        assert!(total < MAX_DRIFT_SECS);
+    }
+
+    #[test]
+    fn a_stall_is_charged_as_drift() {
+        let tick = 0.25;
+        // Frozen: the whole tick was lost.
+        assert_eq!(lost_since(Some(10.0), Some(10.0), tick), 0.25);
+        // Crawling: most of it was.
+        let lost = lost_since(Some(10.0), Some(10.05), tick);
+        assert!((lost - 0.20).abs() < 1e-9, "{lost}");
+        // And a tick that ran long is the timer's fault, not the stream's:
+        // playback advanced the full wall-clock interval, so nothing is owed.
+        assert!(lost_since(Some(10.0), Some(10.40), 0.40).abs() < 1e-9);
+        // Forty ticks of frozen picture is the ten seconds that triggers a
+        // catch-up, which is the intended order of magnitude.
+        assert!((MAX_DRIFT_SECS / 0.25 - 40.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn seeks_are_not_charged_as_drift() {
+        let tick = 0.25;
+        // A rewind. Charging this would drag the viewer straight back to
+        // live — the opposite of what they just asked for.
+        assert_eq!(lost_since(Some(60.0), Some(55.0), tick), 0.0);
+        // A jump forward, including the catch-up seek itself.
+        assert_eq!(lost_since(Some(10.0), Some(30.0), tick), 0.0);
+        // Nothing to compare against yet, at the first tick of a stream.
+        assert_eq!(lost_since(None, Some(10.0), tick), 0.0);
+        assert_eq!(lost_since(Some(10.0), None, tick), 0.0);
+    }
+
+    #[test]
+    fn compressor_lifts_quiet_audio_and_catches_the_peaks() {
+        // Pinned in full. A silent edit here changes how loud every channel
+        // plays: once it dropped the audio 19 dB, and once it froze the
+        // picture for 3.8 seconds on the first toggle. Neither said anything
+        // in the logs.
         assert_eq!(
             compressor_filter(),
-            "loudnorm=I=-14:TP=-1.5:LRA=11"
+            "speechnorm=e=6.25:r=0.0001:l=1,alimiter=limit=0.891:level=disabled"
         );
     }
 
     #[test]
-    fn the_loudness_target_matches_streaming_practice() {
-        // -14 LUFS is YouTube's and Spotify's target. Broadcast's -23 is the
-        // level the streams arrive at, not the level they should play at.
-        assert_eq!(LOUDNESS_TARGET_LUFS, -14.0);
-        // Headroom for the inter-sample peaks a lossy decoder reconstructs.
-        assert_eq!(LOUDNESS_TRUE_PEAK_DB, -1.5);
-        assert_eq!(LOUDNESS_RANGE_LU, 11.0);
+    fn the_limiter_leaves_room_for_inter_sample_peaks() {
+        // -1 dBFS. A lossy decoder reconstructs peaks above the highest
+        // stored sample, so a ceiling of 1.0 clips on the way out.
+        assert!(LIMIT_AMPLITUDE < 1.0);
+        assert!(LIMIT_AMPLITUDE > 0.8);
+        // Enough lift to carry broadcast levels to desktop levels. Zero or
+        // one would make the control do nothing at all.
+        assert!(NORM_EXPANSION > 1.0);
+        // Gain has to arrive over a moment, not on a syllable.
+        assert!(NORM_RAISE > 0.0 && NORM_RAISE < 0.01);
     }
 
     #[test]

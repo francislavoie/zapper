@@ -18,9 +18,9 @@ import {
 
 test("the sides seek and the middle goes fullscreen", () => {
   assert.equal(zoneAtFraction(0), "back");
-  assert.equal(zoneAtFraction(0.29), "back");
+  assert.equal(zoneAtFraction(0.14), "back");
   assert.equal(zoneAtFraction(0.5), "middle");
-  assert.equal(zoneAtFraction(0.71), "forward");
+  assert.equal(zoneAtFraction(0.86), "forward");
   assert.equal(zoneAtFraction(1), "forward");
 });
 
@@ -36,9 +36,9 @@ test("the middle is the majority of the width", () => {
 
 test("a pointer is placed against the box it was in, not the window", () => {
   // The video is not at the window's origin in browse or stacked layouts.
-  assert.equal(zoneAt(940, 900, 400), "back");
+  assert.equal(zoneAt(920, 900, 400), "back");
   assert.equal(zoneAt(1100, 900, 400), "middle");
-  assert.equal(zoneAt(1280, 900, 400), "forward");
+  assert.equal(zoneAt(1290, 900, 400), "forward");
 });
 
 test("a degenerate box is never read as a seek", () => {

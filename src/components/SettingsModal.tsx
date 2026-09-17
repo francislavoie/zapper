@@ -21,9 +21,11 @@ import {
 import { MAX_GUIDE_HOURS, MIN_GUIDE_HOURS } from "../logic/guide";
 import { VOLUME_MAX } from "../logic/volume";
 import { run, useApp, useDispatch } from "../store";
+import { AccountPane } from "./AccountPane";
 import type { SubtitleBackdrop } from "../types";
 
 const SECTIONS = [
+  "Account",
   "Playback",
   "Audio",
   "Subtitles",
@@ -53,7 +55,7 @@ const BACKDROPS: { id: SubtitleBackdrop; label: string; note: string }[] = [
 export function SettingsModal() {
   const { player, sync } = useApp();
   const dispatch = useDispatch();
-  const [section, setSection] = useState<Section>("Playback");
+  const [section, setSection] = useState<Section>("Account");
   const s = useSettings(true);
   const close = () => dispatch({ type: "settings", open: false });
 
@@ -90,6 +92,8 @@ export function SettingsModal() {
               onRetry={s.reload}
             />
           ) : null}
+
+          {section === "Account" ? <AccountPane /> : null}
 
           {section === "Playback" ? (
             <>

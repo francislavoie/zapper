@@ -7,6 +7,7 @@
 
 import { useEffect, useLayoutEffect, useRef } from "react";
 import { backend, isMock, subscribePlayer, subscribeSync } from "./backend";
+import { loadCategories } from "./actions";
 import { errorMessage } from "./logic/async";
 import { useGlobalKeys } from "./hooks/useGlobalKeys";
 import { useSettings } from "./hooks/useSettings";
@@ -17,6 +18,7 @@ import { useCanStack } from "./hooks/useCanStack";
 import { useFullscreen } from "./hooks/useFullscreen";
 import { loadSession, saveSession, watchForExit } from "./session";
 import { applyVideoWidth, saveVideoWidth } from "./videoSize";
+import { applyRailWidth, saveRailWidth } from "./railWidth";
 import { saveStacked } from "./stacked";
 import { AboutModal } from "./components/AboutModal";
 import { Rail } from "./components/Rail";
@@ -29,6 +31,9 @@ import { Toolbar } from "./components/Toolbar";
 import { ZoomBadge } from "./components/ZoomBadge";
 import { WatchBand } from "./components/WatchBand";
 import { Toasts } from "./components/Toasts";
+import { Boundary } from "./components/Crashed";
+import { StatsPanel } from "./components/StatsPanel";
+import { VideoMenu } from "./components/VideoMenu";
 
 export function App() {
   const state = useApp();
@@ -51,6 +56,27 @@ export function App() {
   // video rect is measured from the stage, so that is all it takes to make
   // the picture fill the screen.
   const fullscreen = useFullscreen();
+
+  // Leaving fullscreen goes back where it was entered from.
+  //
+  // Only when it was entered from somewhere else: going fullscreen from the
+  // docked picture switches to the player on the way, because that is what
+  // makes the picture fill the screen, and dropping the viewer there on the
+  // way out would be a one-way door. Fullscreen entered from the player
+  // itself leaves them in the player, which is where they already were.
+  //
+  // Keyed on the transition rather than on the value: fullscreen is false
+  // for a moment before the window reports otherwise, and acting on that
+  // would undo the change as it was being made.
+  const wasFullscreen = useRef(false);
+  const cameFrom = state.fullscreenFrom;
+  useEffect(() => {
+    if (wasFullscreen.current && !fullscreen && cameFrom) {
+      dispatch({ type: "mode", mode: cameFrom });
+      dispatch({ type: "fullscreenFrom", mode: null });
+    }
+    wasFullscreen.current = fullscreen;
+  }, [fullscreen, cameFrom, dispatch]);
 
   useGlobalKeys(state, dispatch);
 
@@ -130,13 +156,31 @@ export function App() {
     applyVideoWidth(state.videoWidthRem);
   }, [state.videoWidthRem]);
 
+  useLayoutEffect(() => {
+    applyRailWidth(state.railWidthRem);
+  }, [state.railWidthRem]);
+
   useEffect(() => {
     saveVideoWidth(state.videoWidthRem);
   }, [state.videoWidthRem]);
 
+  useEffect(() => {
+    saveRailWidth(state.railWidthRem);
+  }, [state.railWidthRem]);
+
   // Read once at boot rather than when the modal opens: the guide needs
   // guideHours whether or not anyone has been to the settings pane.
   useSettings(true);
+
+  // The catalogue, loaded by the app rather than by the rail that shows it.
+  // The favourites name each channel's category from the same list, and a
+  // hidden <Activity> subtree does not run effects — so while the
+  // Favourites tab was the one on screen, nothing fetched the categories it
+  // needed and every favourite lost its category line.
+  const categoriesStatus = state.categories.status;
+  useEffect(() => {
+    if (categoriesStatus === "idle") void loadCategories(dispatch);
+  }, [categoriesStatus, dispatch]);
 
   // Only browse has a slot to dock into. The guide covers the stage with an
   // opaque grid, so the video goes back to filling the stage underneath it —
@@ -233,9 +277,17 @@ export function App() {
 
       {/* The window's own title bar. It owns the top of the app, and the stage
           below it owns everything else — including where the video goes. */}
+      {/* Outside every boundary on purpose. This is the window's title bar
+          as well as the app's: if it stops rendering, so does the way to
+          close, move or resize the window. It has to survive whatever the
+          content does. */}
       {fullscreen ? null : <Toolbar />}
 
       <div className="stage" ref={stageRef}>
+        {/* Everything below the toolbar. If a pane throws, the window is
+            still a window: the bar above this renders regardless, so it can
+            still be moved, resized and closed. */}
+        <Boundary what="This view">
         {browsing ? (
           <div className="browse">
             {/* First in the DOM as well as on screen: the band owns the top of
@@ -245,6 +297,18 @@ export function App() {
             <Rail />
             <ChannelList />
           </div>
+        ) : null}
+
+        {/* Over the picture in every mode, which is where a right-click on
+            the stream is answered and where the diagnostics belong. */}
+        {state.videoMenu ? (
+          <VideoMenu
+            at={state.videoMenu}
+            onClose={() => dispatch({ type: "videoMenu", at: null })}
+          />
+        ) : null}
+        {state.statsOpen ? (
+          <StatsPanel onClose={() => dispatch({ type: "stats", open: false })} />
         ) : null}
 
         {state.mode === "guide" ? (
@@ -276,11 +340,18 @@ export function App() {
             </div>
           </div>
         ) : null}
+        </Boundary>
       </div>
 
-      {state.paletteOpen ? <CommandPalette /> : null}
-      {state.settingsOpen ? <SettingsModal /> : null}
-      {state.aboutOpen ? <AboutModal /> : null}
+      {/* Each of these is its own boundary: a modal that throws must not
+          take the view behind it with it. */}
+      <Boundary what="The command palette">
+        {state.paletteOpen ? <CommandPalette /> : null}
+      </Boundary>
+      <Boundary what="Settings">
+        {state.settingsOpen ? <SettingsModal /> : null}
+      </Boundary>
+      <Boundary what="About">{state.aboutOpen ? <AboutModal /> : null}</Boundary>
 
       <ZoomBadge />
       <Toasts />

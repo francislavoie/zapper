@@ -13,7 +13,7 @@
 export const VOLUME_MAX = 200;
 /** 100%: no software gain, the loudest the stream is without help. */
 export const VOLUME_UNITY = 100;
-export const VOLUME_STEP = 4;
+export const VOLUME_STEP = 5;
 
 /** How much of the slider's length the 0-100 range occupies. The remaining
  *  fraction carries 100-200, so a boost decibel costs more travel than a
@@ -59,6 +59,29 @@ export function positionOfVolume(
 /** The volume a point on the track means. Integer, because volume is reported
  *  and displayed as one and a slider that sets 43.7188% would make the readout
  *  disagree with the handle. */
+/** How close a pointer has to land to 100% to mean 100%.
+ *
+ *  Unity is the value people come back to, and it is a single point on a
+ *  track where every other position is as good as its neighbour — so
+ *  without this, returning to "normal" is a pixel-hunt that usually lands
+ *  on 99 or 101.
+ *
+ *  In volume units rather than pixels, because that is what the arithmetic
+ *  here speaks and it is what a test can pin. The translation: 0-100 spans
+ *  70% of the track, so eight units is about eleven pixels either side on
+ *  the player bar's slider and six on the docked picture's shorter one.
+ *  Both are targets you can hit without aiming, which four — three pixels
+ *  on the short one — was not.
+ *
+ *  The cost is that 92 to 108 cannot be *dragged* to, only wheeled or
+ *  typed. Nobody wants 96 rather than 100 badly enough to mind, and the
+ *  wheel still reaches it.
+ *
+ *  Only the pointer snaps. The wheel and the arrow keys step by a known
+ *  amount from where they are, and a step that silently became a different
+ *  step would be worse than a pixel-hunt. */
+export const UNITY_SNAP = 8;
+
 export function volumeAtPosition(
   position: number,
   max = VOLUME_MAX,
@@ -66,11 +89,12 @@ export function volumeAtPosition(
 ): number {
   const f = split(max, unityFraction);
   const p = clamp01(position);
-  if (f >= 1 || p <= f) return clampTo((p / f) * VOLUME_UNITY, max);
-  return clampTo(
-    VOLUME_UNITY + ((p - f) / (1 - f)) * (max - VOLUME_UNITY),
-    max,
-  );
+  const raw =
+    f >= 1 || p <= f
+      ? (p / f) * VOLUME_UNITY
+      : VOLUME_UNITY + ((p - f) / (1 - f)) * (max - VOLUME_UNITY);
+  if (Math.abs(raw - VOLUME_UNITY) <= UNITY_SNAP) return clampTo(VOLUME_UNITY, max);
+  return clampTo(raw, max);
 }
 
 /** Above unity is software gain, and the control says so rather than leaving

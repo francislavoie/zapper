@@ -14,8 +14,15 @@
 // moving or resizing the picture is one edit and the rect follows by
 // measurement.
 
-import { useRef, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+  type RefObject,
+} from "react";
 import { playChannel } from "../actions";
+import { volumeAfterWheel } from "../logic/volume";
 import { backend } from "../backend";
 import { useClock } from "../hooks/useClock";
 import { useNowNext } from "../hooks/useNowNext";
@@ -34,6 +41,7 @@ import {
 } from "../logic/videoSize";
 import { run, useApp, useDispatch } from "../store";
 import { ResizeHandle } from "./icons";
+import { MiniControls } from "./MiniControls";
 import type { ChannelDto, ProgrammeDto } from "../types";
 
 export interface WatchBandProps {
@@ -56,6 +64,31 @@ export function WatchBand({ videoRef }: WatchBandProps) {
   const resume = () => {
     if (nowChannel) void playChannel(dispatch, nowChannel);
   };
+
+  // Scroll over the docked picture is volume, exactly as it is over the
+  // full-size one. Attached by hand rather than with onWheel, because React
+  // registers wheel at the root as passive and a passive listener cannot
+  // preventDefault — without which the page scrolls underneath as well.
+  const [volumeNudge, setVolumeNudge] = useState(0);
+  const playerState = useRef(player);
+  playerState.current = player;
+  useEffect(() => {
+    const el = videoRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      // Ctrl+wheel is application zoom; leave it to the window.
+      if (e.ctrlKey || e.metaKey) return;
+      const p = playerState.current;
+      if (p.state === "stopped") return;
+      e.preventDefault();
+      const next = volumeAfterWheel(p.volume, e.deltaY);
+      setVolumeNudge((n) => n + 1);
+      void run(dispatch, "volume", backend.setVolume(next));
+      if (p.muted) void run(dispatch, "mute", backend.setMuted(false));
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [dispatch, videoRef]);
 
   // Resizing the picture. The slot is pinned right, so dragging its left
   // edge outwards makes it bigger.
@@ -182,12 +215,21 @@ export function WatchBand({ videoRef }: WatchBandProps) {
           if (live) toWatch();
           else if (ready) resume();
         }}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          dispatch({ type: "videoMenu", at: { x: e.clientX, y: e.clientY } });
+        }}
       >
         {live ? null : (
           <span className="watch-video-empty">
             {ready ? "click to resume" : "no picture"}
           </span>
         )}
+
+        {/* Only while something is playing: there is nothing to transport
+            otherwise, and the restored-channel slot is one big click target
+            that these would fight with. */}
+        {live ? <MiniControls volumeNudge={volumeNudge} /> : null}
 
       </div>
     </section>
