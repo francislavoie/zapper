@@ -106,6 +106,7 @@ mod tests {
             tone_map_hdr: false,
             guide_hours: 6,
             sync_interval_hours: 24,
+            language: "fr-CA".into(),
             subtitle: SubtitleStyleDto {
                 font: "Inter".into(),
                 size: 52,

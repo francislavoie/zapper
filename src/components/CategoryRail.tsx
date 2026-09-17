@@ -47,13 +47,8 @@ export function CategoryRail() {
             }
           }}
         />
-        <button
-          className="ctl ghost"
-          title="Settings"
-          onClick={() => dispatch({ type: "settings", open: true })}
-        >
-          ⚙
-        </button>
+        {/* Settings moved to the toolbar's menu; the gear that was here made
+            the rail's head a second, competing command surface. */}
       </div>
 
       <div className="scroller">

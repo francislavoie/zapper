@@ -3,9 +3,11 @@
 
 import type { Dispatch } from "react";
 import { backend } from "./backend";
+import { toggleFullscreen } from "./fullscreen";
 import { catchupMinutes } from "./logic/guide";
+import type { ActionId } from "./logic/palette";
 import { run, type Action, type Mode } from "./store";
-import type { ChannelDto, ProgrammeDto } from "./types";
+import type { ChannelDto, PlayerStateDto, ProgrammeDto } from "./types";
 
 export async function playChannel(
   dispatch: Dispatch<Action>,
@@ -24,6 +26,44 @@ export async function playChannel(
   // A failed open should not strand the user staring at nothing: put them
   // back where they came from, with the toast explaining why.
   if (!ok) dispatch({ type: "mode", mode: back });
+}
+
+// ------------------------------------------------------------------ actions
+
+/** What an action needs beyond the dispatcher: only the player, and only
+ *  because "toggle compressor" has to read the current value to flip it. */
+export interface ActionContext {
+  dispatch: Dispatch<Action>;
+  player: PlayerStateDto;
+}
+
+/** One behaviour per action id. `Record<ActionId, …>` makes the compiler
+ *  reject both halves of the drift: an action the palette offers that nothing
+ *  performs, and a behaviour nothing can reach. The command palette and the
+ *  toolbar's hamburger both come through here, so the same entry cannot mean
+ *  two different things depending on where it was clicked. */
+const HANDLERS: Record<ActionId, (ctx: ActionContext) => void> = {
+  browse: ({ dispatch }) => dispatch({ type: "mode", mode: "browse" }),
+  guide: ({ dispatch }) => dispatch({ type: "mode", mode: "guide" }),
+  compressor: ({ dispatch, player }) =>
+    void run(dispatch, "compressor", backend.setCompressor(!player.compressor)),
+  live: ({ dispatch }) => void run(dispatch, "seek to live", backend.seekLive()),
+  pause: ({ dispatch }) => void run(dispatch, "pause", backend.togglePause()),
+  stop: ({ dispatch }) => {
+    void run(dispatch, "stop", backend.stop());
+    dispatch({ type: "mode", mode: "browse" });
+  },
+  fullscreen: ({ dispatch }) =>
+    void toggleFullscreen().catch((e: unknown) =>
+      dispatch({ type: "toast", text: `fullscreen: ${String(e)}` }),
+    ),
+  sync: ({ dispatch }) => void run(dispatch, "sync", backend.syncNow()),
+  settings: ({ dispatch }) => dispatch({ type: "settings", open: true }),
+  about: ({ dispatch }) => dispatch({ type: "about", open: true }),
+};
+
+export function runAction(id: ActionId, ctx: ActionContext): void {
+  HANDLERS[id](ctx);
 }
 
 /** A programme that has already aired, on a channel with an archive. The

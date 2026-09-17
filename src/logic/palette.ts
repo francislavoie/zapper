@@ -7,10 +7,34 @@
 
 import type { ChannelDto } from "../types";
 
+/** Where an action sits when the list is drawn as a menu rather than filtered
+ *  as a palette. The palette ignores this; the toolbar's hamburger rules a
+ *  line between groups. */
+export type ActionGroup = "view" | "player" | "data" | "app";
+
+/** Every action the app has, named once. `runAction` in src/actions.ts takes a
+ *  `Record<ActionId, …>`, so `tsc` fails the build if an action here has no
+ *  behaviour, or a behaviour exists for an action nobody can reach. */
+export const ACTION_IDS = [
+  "browse",
+  "guide",
+  "compressor",
+  "live",
+  "pause",
+  "stop",
+  "fullscreen",
+  "sync",
+  "settings",
+  "about",
+] as const;
+
+export type ActionId = (typeof ACTION_IDS)[number];
+
 export interface PaletteAction {
-  id: string;
+  id: ActionId;
   label: string;
   hint?: string;
+  group: ActionGroup;
   /** Actions that need something playing are hidden when nothing is. */
   needsPlayer?: boolean;
 }
@@ -19,16 +43,55 @@ export type PaletteItem =
   | { kind: "action"; action: PaletteAction }
   | { kind: "channel"; channel: ChannelDto };
 
+/** The one list. The command palette filters it; the toolbar's hamburger menu
+ *  groups it. Adding an action here puts it in both, and `runAction` in
+ *  src/actions.ts is required by a check to handle every id, so the surfaces
+ *  cannot drift apart. */
 export const ACTIONS: PaletteAction[] = [
-  { id: "compressor", label: "Toggle compressor", hint: "audio", needsPlayer: true },
-  { id: "live", label: "Jump to live edge", hint: "L", needsPlayer: true },
-  { id: "pause", label: "Play / pause", hint: "Space", needsPlayer: true },
-  { id: "stop", label: "Stop playback", hint: "", needsPlayer: true },
-  { id: "fullscreen", label: "Toggle fullscreen", hint: "F", needsPlayer: true },
-  { id: "guide", label: "Open the guide", hint: "G" },
-  { id: "sync", label: "Refresh data from the panel", hint: "sync" },
-  { id: "settings", label: "Open settings", hint: "⚙" },
+  { id: "browse", label: "Browse channels", hint: "Esc", group: "view" },
+  { id: "guide", label: "Open the guide", hint: "G", group: "view" },
+  {
+    id: "compressor",
+    label: "Toggle compressor",
+    hint: "audio",
+    needsPlayer: true,
+    group: "player",
+  },
+  { id: "live", label: "Jump to live edge", hint: "L", needsPlayer: true, group: "player" },
+  { id: "pause", label: "Play / pause", hint: "Space", needsPlayer: true, group: "player" },
+  { id: "stop", label: "Stop playback", hint: "", needsPlayer: true, group: "player" },
+  {
+    id: "fullscreen",
+    label: "Toggle fullscreen",
+    hint: "F",
+    needsPlayer: true,
+    group: "player",
+  },
+  { id: "sync", label: "Refresh data from the panel", hint: "sync", group: "data" },
+  { id: "settings", label: "Open settings", hint: "⚙", group: "app" },
+  { id: "about", label: "About zapper", hint: "", group: "app" },
 ];
+
+/** The order the menu draws groups in, so a new group cannot land in an
+ *  arbitrary place depending on where its first action happened to be
+ *  declared. */
+export const GROUP_ORDER: ActionGroup[] = ["view", "player", "data", "app"];
+
+/** The palette's own action list, cut into the menu's groups, empty groups
+ *  dropped. The menu is therefore a rearrangement of the palette and never a
+ *  second list: it cannot hold an action the palette lacks, nor miss one it
+ *  has. */
+export function actionGroups(actions: PaletteAction[]): PaletteAction[][] {
+  return GROUP_ORDER.map((g) => actions.filter((a) => a.group === g)).filter(
+    (g) => g.length > 0,
+  );
+}
+
+/** The menu's items flattened back into one list, which is the order the
+ *  keyboard walks them in. */
+export function flatGroups(groups: PaletteAction[][]): PaletteAction[] {
+  return groups.flat();
+}
 
 export function availableActions(playing: boolean): PaletteAction[] {
   return ACTIONS.filter((a) => !a.needsPlayer || playing);

@@ -21,6 +21,8 @@ export const DEFAULT_SUBTITLE: SubtitleStyleDto = {
 };
 
 export const DEFAULT_SETTINGS: SettingsDto = {
+  // "auto" follows the system. Only English ships today.
+  language: "auto",
   rewindMinutes: 5,
   hardwareDecode: true,
   toneMapHdr: true,
@@ -67,6 +69,9 @@ export function clampSubtitle(s: SubtitleStyleDto): SubtitleStyleDto {
  *  config should not reach mpv unchecked. */
 export function clampSettings(s: SettingsDto): SettingsDto {
   return {
+    // Not clamped to a known list: an unknown tag falls back at lookup time,
+    // which keeps a hand-edited config from being silently rewritten.
+    language: s.language || "auto",
     rewindMinutes: round(s.rewindMinutes, REWIND_MIN, REWIND_MAX),
     hardwareDecode: !!s.hardwareDecode,
     toneMapHdr: !!s.toneMapHdr,

@@ -188,6 +188,12 @@ pub struct SettingsDto {
     pub guide_hours: u32,
     /// How often the background refresh runs.
     pub sync_interval_hours: u32,
+    /// BCP-47 tag, or `"auto"` to follow the system.
+    ///
+    /// Only English ships today. The field exists so that adding a locale is
+    /// dropping in a catalogue rather than retrofitting every string in the
+    /// application, which is the expensive way to do this.
+    pub language: String,
     pub subtitle: SubtitleStyleDto,
 }
 
@@ -199,6 +205,7 @@ impl Default for SettingsDto {
             tone_map_hdr: true,
             guide_hours: 3,
             sync_interval_hours: 6,
+            language: "auto".to_owned(),
             subtitle: SubtitleStyleDto::default(),
         }
     }

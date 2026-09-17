@@ -105,13 +105,31 @@ export function auditOverVideo(rect: VideoRect | undefined): Offender[] {
   const right = left + rect.w * window.innerWidth;
   const bottom = top + rect.h * window.innerHeight;
 
+  // The rect is a round trip through normalised coordinates, so its edges come
+  // back a few parts in 10^14 away from the pixels they were measured from —
+  // enough for an element that merely *abuts* the video, like the pane
+  // directly below it, to look like it overlaps by 0.00000000000003px. The
+  // tolerance is far below anything that could hide a real offender: covering
+  // the picture by a millionth of a pixel is not one of this app's failure
+  // modes, and covering it by a whole one still is.
+  const EPS = 1e-6;
+
   const out: Offender[] = [];
   for (const el of Array.from(document.querySelectorAll("*"))) {
     if (el.classList.contains("mock-video")) continue;
     const p = painting(el);
     if (!p) continue;
     const b = p.box;
-    if (!(b.left < right && b.right > left && b.top < bottom && b.bottom > top)) continue;
+    if (
+      !(
+        b.left < right - EPS &&
+        b.right > left + EPS &&
+        b.top < bottom - EPS &&
+        b.bottom > top + EPS
+      )
+    ) {
+      continue;
+    }
     if (paintsAnything(p.cs.backgroundColor) || p.cs.backgroundImage !== "none") {
       out.push(asOffender(el, p.cs.backgroundColor, b));
     }

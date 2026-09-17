@@ -410,6 +410,7 @@ let bufferTimer: number | undefined;
  *  the contract's defaults on purpose: if the UI ever ignored what the backend
  *  returned and painted its own defaults, these values would show it. */
 let storedSettings: SettingsDto = {
+  language: "auto",
   rewindMinutes: 8,
   hardwareDecode: true,
   toneMapHdr: false,
@@ -619,6 +620,49 @@ export const mockApi = {
       hardwareDecode: next.hardwareDecode,
       toneMapHdr: next.toneMapHdr,
     };
+  },
+};
+
+// ------------------------------------------------------------------ window
+
+/** The undecorated window's own controls. The real ones are Tauri calls that
+ *  reject outright in a plain browser, which would make the toolbar — the one
+ *  piece of chrome that is always on screen — the one piece that cannot be
+ *  driven without Tauri. So they are faked, and every call is recorded on
+ *  `globalThis.__windowCalls` so a driver can prove the button did something
+ *  rather than only that it was clickable.
+ *
+ *  `toggleMaximise` really does resize something: the mock marks `<html>` so
+ *  the page can be seen in both states, and `isMaximised` answers from the
+ *  same flag the button set. */
+let maximised = false;
+
+function recordWindowCall(name: string) {
+  const g = globalThis as Record<string, unknown>;
+  const log = (g.__windowCalls as string[]) ?? [];
+  log.push(name);
+  g.__windowCalls = log;
+}
+
+export const mockWindow = {
+  startDragging: async () => {
+    recordWindowCall("startDragging");
+  },
+  minimise: async () => {
+    recordWindowCall("minimise");
+  },
+  toggleMaximise: async () => {
+    recordWindowCall("toggleMaximise");
+    maximised = !maximised;
+    document.documentElement.dataset.mockMaximised = maximised ? "1" : "0";
+    // A real maximise resizes the window, and that resize is how the rest of
+    // the app finds out. Faking the state without the event would leave the
+    // button's own icon stale, which is the bug this state exists to avoid.
+    window.dispatchEvent(new Event("resize"));
+  },
+  isMaximised: async () => maximised,
+  close: async () => {
+    recordWindowCall("close");
   },
 };
 

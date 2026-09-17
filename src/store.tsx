@@ -47,6 +47,11 @@ export interface State {
   query: string;
   paletteOpen: boolean;
   settingsOpen: boolean;
+  /** The toolbar's hamburger. Here rather than inside the component because
+   *  Escape has to unwind it in the same single-press order as everything
+   *  else, and that ordering lives in one place. */
+  menuOpen: boolean;
+  aboutOpen: boolean;
   sync: SyncStatusDto;
   player: PlayerStateDto;
   /** Optimistic: set the instant a row is clicked so the row highlights before
@@ -96,6 +101,8 @@ export const initialState: State = {
   query: "",
   paletteOpen: false,
   settingsOpen: false,
+  menuOpen: false,
+  aboutOpen: false,
   sync: initialSync,
   player: initialPlayer,
   pendingStreamId: null,
@@ -114,6 +121,8 @@ export type Action =
   | { type: "query"; text: string }
   | { type: "palette"; open: boolean }
   | { type: "settings"; open: boolean }
+  | { type: "menu"; open: boolean }
+  | { type: "about"; open: boolean }
   | { type: "mode"; mode: Mode }
   | { type: "sync"; value: SyncStatusDto }
   | { type: "player"; value: PlayerStateDto }
@@ -143,9 +152,21 @@ export function reducer(state: State, action: Action): State {
     case "palette":
       return { ...state, paletteOpen: action.open };
     case "settings":
-      return { ...state, settingsOpen: action.open };
+      return {
+        ...state,
+        settingsOpen: action.open,
+        menuOpen: action.open ? false : state.menuOpen,
+      };
+    case "menu":
+      return { ...state, menuOpen: action.open };
+    case "about":
+      // Opening a dialog from the menu closes the menu: leaving it hanging
+      // over its own result is how you end up with two things to dismiss.
+      return { ...state, aboutOpen: action.open, menuOpen: false };
     case "mode":
-      return { ...state, mode: action.mode };
+      // Any view change closes the menu, whoever asked for it — the menu is
+      // one of the two places a view change comes from.
+      return { ...state, mode: action.mode, menuOpen: false };
     case "sync":
       return { ...state, sync: action.value };
     case "player":

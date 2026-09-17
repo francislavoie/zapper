@@ -12,13 +12,14 @@ import { useGlobalKeys } from "./hooks/useGlobalKeys";
 import { useSettings } from "./hooks/useSettings";
 import { useVideoRect } from "./hooks/useVideoRect";
 import { useApp, useDispatch } from "./store";
+import { AboutModal } from "./components/AboutModal";
 import { CategoryRail } from "./components/CategoryRail";
 import { ChannelList } from "./components/ChannelList";
 import { CommandPalette } from "./components/CommandPalette";
 import { GuideGrid } from "./components/GuideGrid";
 import { PlayerChrome } from "./components/PlayerChrome";
 import { SettingsModal } from "./components/SettingsModal";
-import { SyncStrip } from "./components/SyncStrip";
+import { Toolbar } from "./components/Toolbar";
 import { WatchBand } from "./components/WatchBand";
 import { Toasts } from "./components/Toasts";
 
@@ -26,6 +27,7 @@ export function App() {
   const state = useApp();
   const dispatch = useDispatch();
   const dockRef = useRef<HTMLDivElement | null>(null);
+  const stageRef = useRef<HTMLDivElement | null>(null);
   const planeRef = useRef<HTMLDivElement | null>(null);
   const browsing = state.mode === "browse";
 
@@ -35,11 +37,17 @@ export function App() {
   // guideHours whether or not anyone has been to the settings pane.
   useSettings(true);
 
-  // Only browse has a slot to dock into. The guide covers the window with an
-  // opaque grid, so the video goes back to full-window underneath it — mpv
-  // draws below the webview, and covered is covered.
+  // Only browse has a slot to dock into. The guide covers the stage with an
+  // opaque grid, so the video goes back to filling the stage underneath it —
+  // mpv draws below the webview, and covered is covered.
+  //
+  // Undocked is the stage, not the window: the toolbar is opaque chrome across
+  // the top, and video drawn behind it would simply be missing. The stage is
+  // measured rather than the toolbar's height subtracted by hand, so the bar
+  // can change height without a second place needing to hear about it.
   useVideoRect({
     dockRef,
+    stageRef,
     docked: browsing,
     paintRef: isMock ? planeRef : undefined,
     onError: (m) => dispatch({ type: "toast", text: `video placement: ${m}` }),
@@ -84,27 +92,32 @@ export function App() {
           here would sit on top of the video plane and hide it. */}
       {isMock ? <div className="mock-video" ref={planeRef} /> : null}
 
-      <SyncStrip />
+      {/* The window's own title bar. It owns the top of the app, and the stage
+          below it owns everything else — including where the video goes. */}
+      <Toolbar />
 
-      {browsing ? (
-        <div className="browse">
-          {/* First in the DOM as well as on screen: the band owns the top of
-              the window, and the list below it scrolls under a picture that
-              never moves. */}
-          <WatchBand videoRef={dockRef} />
-          <CategoryRail />
-          <ChannelList />
-        </div>
-      ) : null}
+      <div className="stage" ref={stageRef}>
+        {browsing ? (
+          <div className="browse">
+            {/* First in the DOM as well as on screen: the band owns the top of
+                the stage, and the list below it scrolls under a picture that
+                never moves. */}
+            <WatchBand videoRef={dockRef} />
+            <CategoryRail />
+            <ChannelList />
+          </div>
+        ) : null}
 
-      {state.mode === "guide" ? <GuideGrid /> : null}
+        {state.mode === "guide" ? <GuideGrid /> : null}
 
-      {/* Chrome belongs to watch mode. Browsing shows the docked picture and
-          the metadata beside it, not a full set of transport controls. */}
-      {state.mode === "watch" ? <PlayerChrome /> : null}
+        {/* Chrome belongs to watch mode. Browsing shows the docked picture and
+            the metadata beside it, not a full set of transport controls. */}
+        {state.mode === "watch" ? <PlayerChrome /> : null}
+      </div>
 
       {state.paletteOpen ? <CommandPalette /> : null}
       {state.settingsOpen ? <SettingsModal /> : null}
+      {state.aboutOpen ? <AboutModal /> : null}
 
       <Toasts />
     </div>

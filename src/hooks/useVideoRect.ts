@@ -21,13 +21,24 @@ const ASPECT = 16 / 9;
 export interface VideoRectOptions {
   /** The transparent hole the video should fill while docked. */
   dockRef: RefObject<HTMLElement | null>;
+  /** Everything below the toolbar: where the video goes when it is not docked
+   *  into a corner. Without it, undocked means the whole window — but the app
+   *  draws its own opaque title bar, and video behind that bar is video
+   *  nobody sees. Measured, never arithmetic on a hard-coded bar height. */
+  stageRef?: RefObject<HTMLElement | null>;
   docked: boolean;
   /** Mock-only stand-in painted where video would be, moved without React. */
   paintRef?: RefObject<HTMLElement | null>;
   onError?: (message: string) => void;
 }
 
-export function useVideoRect({ dockRef, docked, paintRef, onError }: VideoRectOptions) {
+export function useVideoRect({
+  dockRef,
+  stageRef,
+  docked,
+  paintRef,
+  onError,
+}: VideoRectOptions) {
   const current = useRef<VideoRect>(FULL);
   const from = useRef<VideoRect>(FULL);
   const to = useRef<VideoRect>(FULL);
@@ -41,16 +52,28 @@ export function useVideoRect({ dockRef, docked, paintRef, onError }: VideoRectOp
   errorSink.current = onError;
 
   useEffect(() => {
-    const measure = (): VideoRect => {
-      const el = dockRef.current;
-      if (!docked || !el) return FULL;
+    const boxOf = (el: HTMLElement | null) => {
+      if (!el) return null;
       const b = el.getBoundingClientRect();
-      if (b.width <= 0 || b.height <= 0) return FULL;
-      const fitted = fitAspect(
-        { left: b.left, top: b.top, width: b.width, height: b.height },
-        ASPECT,
-      );
-      return normalisedRect(fitted, window.innerWidth, window.innerHeight);
+      if (b.width <= 0 || b.height <= 0) return null;
+      return { left: b.left, top: b.top, width: b.width, height: b.height };
+    };
+
+    /** Undocked: the whole stage, unfitted — mpv letterboxes inside whatever
+     *  it is given, and a 16:9 fit here would leave bars the app had drawn
+     *  rather than bars the player drew. Docked: the slot, fitted, because the
+     *  transparent hole has to be the shape of the picture that will land in
+     *  it. */
+    const measure = (): VideoRect => {
+      const stage = boxOf(stageRef?.current ?? null);
+      if (!docked) {
+        return stage ? normalisedRect(stage, window.innerWidth, window.innerHeight) : FULL;
+      }
+      const dock = boxOf(dockRef.current);
+      if (!dock) {
+        return stage ? normalisedRect(stage, window.innerWidth, window.innerHeight) : FULL;
+      }
+      return normalisedRect(fitAspect(dock, ASPECT), window.innerWidth, window.innerHeight);
     };
 
     const paint = (r: VideoRect) => {
@@ -120,7 +143,7 @@ export function useVideoRect({ dockRef, docked, paintRef, onError }: VideoRectOp
       if (raf.current !== undefined) cancelAnimationFrame(raf.current);
       raf.current = undefined;
     };
-  }, [docked, dockRef, paintRef]);
+  }, [docked, dockRef, stageRef, paintRef]);
 
   return current;
 }

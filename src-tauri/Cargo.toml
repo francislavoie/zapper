@@ -3,6 +3,9 @@ name = "zapper"
 version = "0.1.0"
 edition = "2021"
 publish = false
+# Four verification harnesses live alongside the app, so a bare `cargo run`
+# (which is what `tauri dev` issues) cannot tell which to launch.
+default-run = "zapper"
 
 [lib]
 name = "zapper_lib"

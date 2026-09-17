@@ -82,6 +82,13 @@ fn dev_hooks(app: &tauri::AppHandle) {
         return;
     };
 
+    // Anything driven by these hooks runs unattended, so kill the audio path
+    // outright before a stream can open. `ao=null` cannot be undone by a later
+    // volume or mute change, which muting can.
+    if let Some(Err(e)) = surface::mpv::with_player(|p| p.set_property("ao", "null")) {
+        tracing::warn!("could not silence playback for an unattended run: {e}");
+    }
+
     if let Ok(id) = std::env::var("ZAPPER_AUTOPLAY") {
         if let Ok(stream_id) = id.parse::<i64>() {
             let handle = app.clone();

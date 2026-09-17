@@ -17,6 +17,13 @@
   --good: #59d08a;
   --row-h: 26px;
   --rail-w: 260px;
+  /* The title bar this app draws for itself. Mirrored by TOOLBAR_HEIGHT in
+     src/logic/toolbar.ts, and the two are checked against each other by
+     measuring the live bar rather than by trusting the comment. */
+  --toolbar-h: 38px;
+  /* The window is undecorated: its outer few pixels belong to the resize
+     grab, so nothing clickable may start inside this ring. */
+  --edge-inset: 6px;
   /* The docked picture. One number moves it; the height and the band follow,
      and the rect handed to mpv is measured from the slot. */
   --video-w: 356px;
@@ -67,6 +74,45 @@ input {
      opaque, which would hide mpv completely. `.app` is a descendant of body,
      so the widgets go dark and the canvas is left alone. */
   color-scheme: dark;
+
+  /* This is an application, not a document. Dragging across a channel row, a
+     badge or the toolbar's status line should do nothing at all — a blue
+     selection smeared across the UI is the single clearest tell that a desktop
+     app is really a web page, and in a list, where click-and-drag is a natural
+     gesture, it happens constantly. Selection is switched off here and turned
+     back on only where it is the point. */
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* The exceptions, and they are deliberately few:
+     - anything typed into, which must select or it cannot be edited;
+     - anything worth copying out — an error somebody will paste back to us,
+       and the measured line, which is the one piece of ground truth this app
+       has about a stream.
+   Anything else that earns selection gets `data-selectable`, so the reason is
+   attached to the element rather than buried in a growing list here. */
+.app input,
+.app textarea,
+.app [contenteditable],
+.app .toast,
+.app .pane-error,
+.app .settings-note,
+.app .measured,
+.app .watch-state,
+.app .watch-col.facts dd,
+.app [data-selectable] {
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: auto;
+}
+
+/* Channel logos are real <img> elements, so a drag on one would otherwise
+   peel off a ghost image and offer it to the desktop as a drop. */
+img {
+  -webkit-user-drag: none;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 /* Native controls, styled rather than trusted: a UA range track or checkbox
@@ -166,67 +212,257 @@ select option {
   pointer-events: none;
 }
 
-/* ------------------------------------------------------------------ sync */
+/* --------------------------------------------------------------- toolbar */
 
-.sync-strip {
+/* The window has no decorations, so this is the title bar. It is opaque
+   chrome, which is allowed — it is never over the video, because the video
+   goes inside `.stage`, which starts where this ends.
+
+   The padding ring is load-bearing, not taste: an undecorated window is
+   resized by grabbing its outer few pixels, and a button flush against the
+   top or the side would swallow that grab. Every control sits inside the
+   padding; the ring itself has no handlers at all. */
+.toolbar {
   position: absolute;
   top: 0;
   left: 0;
   right: 0;
-  z-index: 40;
-  pointer-events: none;
-}
-
-/* Browsing puts the picture in the top right corner, and the sweep line is a
-   painted 2px bar: stop it short of the video rather than draw across it. */
-.app[data-mode="browse"] .sync-strip {
-  right: var(--video-w);
-}
-
-.sync-bar {
-  height: 2px;
-  background: linear-gradient(90deg, transparent, var(--accent), transparent);
-  background-size: 40% 100%;
-  background-repeat: no-repeat;
-  animation: sweep 1.4s linear infinite;
-}
-
-.sync-strip.bad .sync-bar {
-  background: var(--bad);
-  background-size: 100% 100%;
-  animation: none;
-}
-
-@keyframes sweep {
-  from {
-    background-position: -40% 0;
-  }
-  to {
-    background-position: 140% 0;
-  }
-}
-
-.sync-text {
+  height: var(--toolbar-h);
+  z-index: 50;
   display: flex;
-  gap: 8px;
-  align-items: baseline;
-  padding: 3px 10px;
-  font-size: 11px;
-  color: var(--dim);
+  align-items: stretch;
+  gap: 6px;
+  padding: var(--edge-inset) var(--edge-inset) 0;
   background: var(--bg-2);
-  width: fit-content;
-  border-radius: 0 0 6px 0;
-  pointer-events: auto;
+  border-bottom: 1px solid var(--line);
 }
 
-.sync-phase {
-  color: var(--accent);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+.tb-lead,
+.tb-tail {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+  /* Above the centred name, so the status line is never painted over by it
+     when the two meet on a narrow window. */
+  z-index: 1;
 }
 
-.sync-strip.bad .sync-phase {
+/* The lead carries the status line as well as the hamburger, so it is the one
+   part of the bar allowed to give ground when the window is narrow. */
+.tb-lead {
+  flex: 0 1 auto;
+  min-width: 0;
+  gap: 8px;
+}
+
+/* What the menu is positioned against, and what counts as "inside" it for an
+   outside click: the button and the panel, not the whole left-hand end. */
+.tb-menu-anchor {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+/* Centred on the window rather than on the space between the lead and the
+   tail: those two are different widths and always will be, so centring
+   between them would put the name slightly off-centre and move it every time
+   the status line changed length.
+
+   It takes no pointer events, so the drag strip underneath gets the press —
+   grabbing the window by its own name is the obvious thing to try. */
+.tb-title {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  top: var(--edge-inset);
+  height: calc(var(--toolbar-h) - var(--edge-inset));
+  display: flex;
+  align-items: center;
+  pointer-events: none;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+}
+
+/* Everything between the hamburger and the window buttons drags the window.
+   It is a wide target on purpose: this is the only way to move the window. */
+.tb-drag {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  /* A drag that starts on text should drag, not select the text. */
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
+}
+
+.tb-btn {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 26px;
+  border-radius: 5px;
+  color: var(--dim);
+}
+
+.tb-btn:hover {
+  background: var(--bg-3);
+  color: var(--text);
+}
+
+.tb-btn.on {
+  background: var(--accent-dim);
+  color: var(--text);
+}
+
+.tb-btn.danger:hover {
+  background: #5a1f24;
+  color: #ffd7d7;
+}
+
+.tb-glyph {
+  font-size: 12px;
+  line-height: 1;
+}
+
+.burger {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  width: 14px;
+  height: 10px;
+}
+
+.burger i {
+  display: block;
+  height: 2px;
+  border-radius: 1px;
+  background: currentColor;
+}
+
+/* ---------------------------------------------------- toolbar: the status */
+
+.tb-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--dimmer);
+}
+
+.tb-status.busy {
+  color: var(--text);
+}
+
+.tb-status.bad {
   color: var(--bad);
+}
+
+.tb-status-text,
+.tb-status-detail {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tb-status-detail {
+  color: var(--dimmer);
+}
+
+.tb-status-detail::before {
+  content: "· ";
+}
+
+.tb-spinner {
+  flex: 0 0 auto;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 2px solid var(--accent-dim);
+  border-top-color: var(--accent);
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ------------------------------------------------------ toolbar: the menu */
+
+.tb-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 55;
+  min-width: 260px;
+  padding: 4px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.62);
+}
+
+.tb-menu-group + .tb-menu-group {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--line);
+}
+
+.tb-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 6px 10px;
+  border-radius: 5px;
+  text-align: left;
+}
+
+.tb-menu-item:hover,
+.tb-menu-item:focus-visible {
+  background: var(--accent-dim);
+  outline: none;
+}
+
+.tb-menu-label {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tb-menu-hint {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--dimmer);
+}
+
+.tb-menu-foot {
+  padding: 6px 10px 3px;
+  font-size: 11px;
+  color: var(--dimmer);
+  border-top: 1px solid var(--line);
+  margin-top: 4px;
+}
+
+/* ----------------------------------------------------------------- stage */
+
+/* Everything that is not the title bar. The video's rect is measured from
+   here, so the bar's height reaches mpv by measurement and never by a second
+   copy of the number. */
+.stage {
+  position: absolute;
+  inset: var(--toolbar-h) 0 0 0;
+  background: transparent;
 }
 
 .link {
@@ -1286,6 +1522,61 @@ button.prog:hover {
   padding: 14px;
   color: var(--dimmer);
   font-size: 12px;
+}
+
+/* ----------------------------------------------------------------- about */
+
+.about {
+  width: min(420px, 86vw);
+  padding: 20px 22px 16px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.6);
+}
+
+.about h2 {
+  margin: 0;
+  font-size: 20px;
+  letter-spacing: 0.02em;
+}
+
+.about-tag {
+  margin: 4px 0 14px;
+  color: var(--dim);
+  font-size: 12px;
+}
+
+.about-facts {
+  margin: 0 0 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.about-facts > div {
+  display: flex;
+  gap: 10px;
+}
+
+.about-facts dt {
+  flex: 0 0 90px;
+  color: var(--dimmer);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 10px;
+  padding-top: 2px;
+}
+
+.about-facts dd {
+  margin: 0;
+  color: var(--text);
+}
+
+.about-actions {
+  display: flex;
+  justify-content: flex-end;
 }
 
 .settings {

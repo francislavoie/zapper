@@ -23,8 +23,14 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
       }
 
       if (e.key === "Escape") {
-        // One press, one dismissal, in the order things were stacked up.
-        if (state.settingsOpen) {
+        // One press, one dismissal, in the order things were stacked up. The
+        // toolbar's menu is the most recent thing anyone opened whenever it is
+        // open — it cannot be opened from behind a modal — so it unwinds first.
+        if (state.menuOpen) {
+          dispatch({ type: "menu", open: false });
+        } else if (state.aboutOpen) {
+          dispatch({ type: "about", open: false });
+        } else if (state.settingsOpen) {
           dispatch({ type: "settings", open: false });
         } else if (state.paletteOpen) {
           dispatch({ type: "palette", open: false });
@@ -122,5 +128,7 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
     state.query,
     state.settings.guideHours,
     state.settingsOpen,
+    state.menuOpen,
+    state.aboutOpen,
   ]);
 }

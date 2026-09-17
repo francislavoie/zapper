@@ -2,9 +2,7 @@
 // locally, and channels from the same nucleo index that serves `/`.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { playChannel } from "../actions";
-import { backend } from "../backend";
-import { toggleFullscreen } from "../fullscreen";
+import { playChannel, runAction } from "../actions";
 import { useSearch } from "../hooks/useSearch";
 import {
   availableActions,
@@ -14,7 +12,7 @@ import {
   paletteItems,
   type PaletteItem,
 } from "../logic/palette";
-import { run, useApp, useDispatch } from "../store";
+import { useApp, useDispatch } from "../store";
 
 const PALETTE_CHANNEL_LIMIT = 50;
 
@@ -55,41 +53,11 @@ export function CommandPalette() {
         void playChannel(dispatch, item.channel);
         return;
       }
-      switch (item.action.id) {
-        case "compressor":
-          void run(
-            dispatch,
-            "compressor",
-            backend.setCompressor(!state.player.compressor),
-          );
-          break;
-        case "live":
-          void run(dispatch, "seek to live", backend.seekLive());
-          break;
-        case "pause":
-          void run(dispatch, "pause", backend.togglePause());
-          break;
-        case "stop":
-          void run(dispatch, "stop", backend.stop());
-          dispatch({ type: "mode", mode: "browse" });
-          break;
-        case "fullscreen":
-          void toggleFullscreen().catch((e: unknown) =>
-            dispatch({ type: "toast", text: `fullscreen: ${String(e)}` }),
-          );
-          break;
-        case "sync":
-          void run(dispatch, "sync", backend.syncNow());
-          break;
-        case "guide":
-          dispatch({ type: "mode", mode: "guide" });
-          break;
-        case "settings":
-          dispatch({ type: "settings", open: true });
-          break;
-      }
+      // Shared with the toolbar's hamburger, which draws this same list: one
+      // behaviour per action, wherever it was picked from.
+      runAction(item.action.id, { dispatch, player: state.player });
     },
-    [close, dispatch, state.player.compressor],
+    [close, dispatch, state.player],
   );
 
   return (

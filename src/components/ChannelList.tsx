@@ -117,13 +117,6 @@ export function ChannelList() {
           value={state.query}
           onChange={(e) => dispatch({ type: "query", text: e.target.value })}
         />
-        <button
-          className="ctl ghost"
-          title="Guide (G)"
-          onClick={() => dispatch({ type: "mode", mode: "guide" })}
-        >
-          Guide
-        </button>
       </div>
       <ListHead searching={searching} total={source.total} loading={source.loading} />
 

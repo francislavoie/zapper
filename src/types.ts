@@ -116,6 +116,10 @@ export interface SettingsDto {
   toneMapHdr: boolean;
   guideHours: number;
   syncIntervalHours: number;
+  /** BCP-47 tag, or `"auto"` to follow the system. Only English ships today;
+   *  the field exists so adding a locale is dropping in a catalogue rather
+   *  than retrofitting every string. */
+  language: string;
   subtitle: SubtitleStyleDto;
 }
 

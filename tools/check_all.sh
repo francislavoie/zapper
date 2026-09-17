@@ -7,15 +7,23 @@
 # ~/.local/share/zapper). Video comes from a local fixture
 # (tools/make_fixtures.sh, served by tools/fake_stream.py), never a provider.
 #
-#   tools/check_all.sh            # everything
-#   tools/check_all.sh --fast     # skip anything that opens a window
+#   tools/check_all.sh            # tests, lint, build, and the local mirror
+#   tools/check_all.sh --windowed # also the GL and playback harnesses
+#
+# The windowed harnesses open real windows and play video, which interrupts
+# whoever is at the machine. They are opt-in for that reason: run them when
+# surface, mpv or rect behaviour changed, not on every edit.
 
 set -uo pipefail
 cd "$(dirname "$0")/.."
 export PATH="$HOME/.local/bin:$PATH"
 
-FAST=0
-[[ "${1:-}" == "--fast" ]] && FAST=1
+WINDOWED=0
+case "${1:-}" in
+  --windowed|--full) WINDOWED=1 ;;
+  --fast|"") ;;
+  *) echo "usage: check_all.sh [--windowed]" >&2; exit 2 ;;
+esac
 
 PASS=0; FAIL=0
 step() {
@@ -80,12 +88,14 @@ step "frontend build"       front_build
 step "frontend checks"      front_checks
 step "catalogue over the local mirror" ipc_check
 
-if [[ $FAST -eq 0 ]]; then
+if [[ $WINDOWED -eq 1 ]]; then
   (cd src-tauri && cargo build -q --bins 2>&1 | tail -2)
   step "fixture server"     start_fixtures
   step "surface: GL + decode"  run_windowed surface_check 40
   step "player: transport"     run_windowed player_check 70
 fi
 
-printf '\n\033[1m%d passed, %d failed\033[0m\n' "$PASS" "$FAIL"
+printf '\n\033[1m%d passed, %d failed\033[0m' "$PASS" "$FAIL"
+[[ $WINDOWED -eq 0 ]] && printf '  \033[2m(--windowed also runs the GL and playback harnesses)\033[0m'
+printf '\n' 
 [[ $FAIL -eq 0 ]]
