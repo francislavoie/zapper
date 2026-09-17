@@ -2,7 +2,7 @@
 // right. Left of the seam a seek reopens the stream from the server; right of
 // it, it is instant. All the arithmetic is in logic/scrubber.ts.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { backend } from "../backend";
 import { clock, hhmm } from "../logic/format";
 import {
@@ -10,9 +10,12 @@ import {
   catchupRequest,
   geometry,
   headPixel,
+  hintPixel,
+  localPixel,
   seekCost,
   timeAtPixel,
 } from "../logic/scrubber";
+import { useThumbnail } from "../hooks/useThumbnail";
 import { run, useDispatch } from "../store";
 import type { ChannelDto, PlayerStateDto } from "../types";
 
@@ -25,7 +28,9 @@ export interface ScrubberProps {
 export function Scrubber({ player, channel, onPin }: ScrubberProps) {
   const dispatch = useDispatch();
   const trackRef = useRef<HTMLDivElement | null>(null);
+  const hintRef = useRef<HTMLDivElement | null>(null);
   const [width, setWidth] = useState(0);
+  const [hintWidth, setHintWidth] = useState(0);
   const [hoverPx, setHoverPx] = useState<number | null>(null);
   const now = useNowSeconds();
 
@@ -51,10 +56,29 @@ export function Scrubber({ player, channel, onPin }: ScrubberProps) {
   const hoverTime = hoverPx === null ? null : timeAtPixel(g, hoverPx);
   const hoverCost = hoverTime === null ? null : seekCost(g, hoverTime);
 
+  // Only the buffer has previews. Left of the seam is the server's archive,
+  // which has never been on this screen and so was never photographed; the
+  // hint there is the time alone, which is what it always was.
+  const preview = useThumbnail(
+    hoverTime !== null && hoverCost === "instant" ? behindLiveAt(g, hoverTime) : null,
+  );
+
+  // Measured rather than estimated: the text is a time, a duration and a
+  // word, and it changes width as the pointer moves. Before paint, so the
+  // tooltip is never seen at the unclamped position first.
+  useLayoutEffect(() => {
+    const el = hintRef.current;
+    setHintWidth(el ? el.getBoundingClientRect().width / scaleOf(el) : 0);
+  }, [hoverTime, hoverCost, width]);
+
+  // Layout pixels, which is what the geometry is in. See `localPixel`: the
+  // rect and the event are in visual pixels and `clientWidth` is not, and
+  // under CSS zoom those are different numbers.
   const pixelOf = (e: { clientX: number }) => {
     const el = trackRef.current;
     if (!el) return 0;
-    return e.clientX - el.getBoundingClientRect().left;
+    const box = el.getBoundingClientRect();
+    return localPixel(e.clientX, box.left, box.width, el.clientWidth);
   };
 
   const seekTo = (target: number) => {
@@ -100,9 +124,23 @@ export function Scrubber({ player, channel, onPin }: ScrubberProps) {
         </div>
 
         {hoverTime !== null ? (
-          <div className="scrub-hint" style={{ left: hoverPx ?? 0 }}>
-            {hhmm(hoverTime)} · {clock(Math.max(0, now - hoverTime))} back ·{" "}
-            {hoverCost === "reconnect" ? "reconnects" : "instant"}
+          <div
+            className="scrub-hint"
+            ref={hintRef}
+            style={{ left: hintPixel(hoverPx ?? 0, hintWidth, width) }}
+          >
+            {/* The nearest captured frame, which is within a couple of
+                seconds of the cursor rather than exactly under it — the
+                backend samples, it does not keep every frame. The caption
+                stays the cursor's own time, because that is where a click
+                actually goes. */}
+            {preview ? (
+              <img className="scrub-thumb" src={preview.dataUrl} alt="" draggable={false} />
+            ) : null}
+            <span>
+              {hhmm(hoverTime)} · {clock(Math.max(0, now - hoverTime))} back ·{" "}
+              {hoverCost === "reconnect" ? "reconnects" : "instant"}
+            </span>
           </div>
         ) : null}
       </div>
@@ -126,6 +164,14 @@ export function Scrubber({ player, channel, onPin }: ScrubberProps) {
       </div>
     </div>
   );
+}
+
+/** How many visual pixels this element draws per layout pixel. One under
+ *  page zoom, the zoom factor under CSS zoom, and the thing that has to be
+ *  divided out before a measured width can be compared with `clientWidth`. */
+function scaleOf(el: HTMLElement): number {
+  const box = el.getBoundingClientRect();
+  return el.offsetWidth > 0 && box.width > 0 ? box.width / el.offsetWidth : 1;
 }
 
 /** Unix seconds, ticking. The live edge moves whether or not React does. */

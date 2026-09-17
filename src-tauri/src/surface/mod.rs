@@ -4,6 +4,7 @@ pub mod capture;
 pub mod gl;
 pub mod mpv;
 pub mod overlay;
+pub mod trickplay;
 
 use serde::{Deserialize, Serialize};
 

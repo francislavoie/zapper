@@ -552,6 +552,15 @@ export const mockApi = {
     return c.rows.slice(start + offset, start + Math.min(len, offset + limit));
   },
 
+  channelsByIds: async (ids: number[]) => {
+    await delay(20);
+    if (ids.length === 0) return [];
+    const want = new Set(ids);
+    // Ids that no longer exist are simply absent, same as the backend: a
+    // remembered channel can vanish between sessions.
+    return getCatalog().rows.filter((r) => !r.isSeparator && want.has(r.streamId));
+  },
+
   search: async (query: string, limit: number) => {
     await delay(60);
     const q = query.trim().toLowerCase();
@@ -685,6 +694,34 @@ export const mockApi = {
   },
 
   playerState: async () => playerEmitter.last,
+
+  // A synthetic frame, drawn rather than decoded, so the scrubber's preview
+  // can be seen and driven without mpv. Same shape as the real answer: it
+  // snaps to a four-second grid and refuses anything outside the buffer,
+  // because those are the two things the interface has to cope with.
+  thumbnailAt: async (behindLive: number) => {
+    const p = playerEmitter.last;
+    if (!Number.isFinite(behindLive) || behindLive < 0) return null;
+    if (behindLive > p.bufferedBack) return null;
+    const snapped = Math.round(behindLive / 4) * 4;
+    const c = document.createElement("canvas");
+    c.width = 160;
+    c.height = 90;
+    const g = c.getContext("2d");
+    if (!g) return null;
+    // Something that visibly changes with the timestamp, so a preview stuck
+    // on one frame is obvious rather than plausible.
+    const hue = (snapped * 11) % 360;
+    g.fillStyle = `hsl(${hue} 55% 28%)`;
+    g.fillRect(0, 0, 160, 90);
+    g.fillStyle = `hsl(${(hue + 40) % 360} 60% 46%)`;
+    g.fillRect(0, 60, 160, 30);
+    g.fillStyle = "#fff";
+    g.font = "bold 20px system-ui, sans-serif";
+    g.textAlign = "center";
+    g.fillText(`-${snapped}s`, 80, 40);
+    return { dataUrl: c.toDataURL("image/png"), behindLive: snapped };
+  },
 
   settings: async () => {
     await delay(80);

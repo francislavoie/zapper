@@ -55,6 +55,26 @@ pub async fn channels(
     .map_err(|e| e.to_string())
 }
 
+/// Specific channels, by stream id, with their now-playing attached.
+///
+/// Exists for restoring a remembered channel at startup: the id survives a
+/// restart but nothing else does, and paging the whole catalogue to find one
+/// row would be absurd. Ids that no longer exist are simply absent from the
+/// answer rather than an error — a channel can vanish between sessions, and
+/// that is a thing to notice quietly rather than fail on.
+#[tauri::command]
+pub async fn channels_by_ids(ids: Vec<i64>) -> Result<Vec<ChannelDto>, String> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    db::with_db(|conn| {
+        let mut rows = store::channels_by_ids(conn, &ids)?;
+        attach_now_playing(conn, &mut rows)?;
+        Ok(rows)
+    })
+    .map_err(|e| e.to_string())
+}
+
 /// Fuzzy match over all channels. Separators are never returned.
 #[tauri::command]
 pub async fn search(query: String, limit: u32) -> Result<Vec<ChannelDto>, String> {

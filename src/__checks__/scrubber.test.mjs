@@ -10,6 +10,8 @@ import {
   catchupRequest,
   geometry,
   headPixel,
+  hintPixel,
+  localPixel,
   pixelAtTime,
   seekCost,
   timeAtPixel,
@@ -178,4 +180,41 @@ test("off the live edge the playhead is plotted, because that movement is real",
   );
   // A nonsense negative reads as live rather than off the right edge.
   assert.equal(headPixel(g, { atLiveEdge: false, behindLive: -5 }), W);
+});
+
+test("a pointer is converted out of visual pixels into layout pixels", () => {
+  // Page zoom: the rect and clientWidth agree, so nothing is corrected.
+  assert.equal(localPixel(500, 100, 800, 800), 400);
+  // CSS zoom at 1.5: the element measures 1200 visual over 800 layout, so a
+  // pointer 600 visual pixels along is 400 layout pixels along. Feeding the
+  // uncorrected 600 into geometry built on 800 was the bug — the error grows
+  // with distance, so the far end of the bar was wrong by hundreds of pixels
+  // and a click there seeked somewhere else entirely.
+  assert.equal(localPixel(700, 100, 1200, 800), 400);
+  // Before layout there is nothing to scale by, and the raw offset is the
+  // only honest answer.
+  assert.equal(localPixel(500, 100, 0, 800), 400);
+  assert.equal(localPixel(500, 100, 800, 0), 400);
+});
+
+test("the hover tooltip is kept inside the bar", () => {
+  // Centred on the pointer where there is room for it.
+  assert.equal(hintPixel(400, 200, 800), 400);
+  // Within half its width of an end it stops sliding, so the cursor walks
+  // along it instead of dragging it off the screen.
+  assert.equal(hintPixel(10, 200, 800), 100);
+  assert.equal(hintPixel(790, 200, 800), 700);
+  // Exactly at the limit it is untouched.
+  assert.equal(hintPixel(100, 200, 800), 100);
+  assert.equal(hintPixel(700, 200, 800), 700);
+});
+
+test("a tooltip too wide for the bar spreads its overhang evenly", () => {
+  // It cannot be placed without overhang, so it is centred rather than
+  // pushed entirely off one side.
+  assert.equal(hintPixel(0, 900, 800), 400);
+  assert.equal(hintPixel(800, 900, 800), 400);
+  // Nothing measured yet: leave it where it was asked for.
+  assert.equal(hintPixel(123, 0, 800), 123);
+  assert.equal(hintPixel(123, 200, 0), 123);
 });

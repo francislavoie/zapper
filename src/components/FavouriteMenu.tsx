@@ -10,6 +10,7 @@
 // order while it is open.
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { documentScale } from "../zoom";
 import { menuPosition } from "../logic/favourites";
 import type { FavouriteMenu as FavouriteMenuState } from "../store";
 
@@ -29,9 +30,21 @@ export function FavouriteMenu({ menu, onForget, onClose }: FavouriteMenuProps) {
     const el = ref.current;
     if (!el) return;
     const r = el.getBoundingClientRect();
-    setBox(
-      menuPosition(menu.x, menu.y, r.width, r.height, window.innerWidth, window.innerHeight),
+    // All of this is measured in visual pixels — the pointer, the menu's own
+    // box, the window. The answer is written back as a CSS length, which is
+    // not the same unit under CSS zoom, so it is converted once here. Without
+    // it the menu lands at pointer × zoom: right at the top-left corner and
+    // further out the further across the window you click.
+    const scale = documentScale();
+    const placed = menuPosition(
+      menu.x,
+      menu.y,
+      r.width,
+      r.height,
+      window.innerWidth,
+      window.innerHeight,
     );
+    setBox({ left: placed.left / scale, top: placed.top / scale });
   }, [menu.x, menu.y, menu.streamId]);
 
   useEffect(() => {

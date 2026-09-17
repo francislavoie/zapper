@@ -7,6 +7,7 @@ import { useEffect } from "react";
 import { backend } from "../backend";
 import { focusSearch, typingInto } from "../focus";
 import { toggleFullscreen } from "../fullscreen";
+import { refreshFullscreen } from "./useFullscreen";
 import { clampHours } from "../logic/guide";
 import { run } from "../store";
 import type { State } from "../store";
@@ -92,9 +93,11 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
       // Fullscreen is a window property whether or not anything is playing.
       if (e.key === "f" || e.key === "F") {
         e.preventDefault();
-        void toggleFullscreen().catch((err: unknown) =>
-          dispatch({ type: "toast", text: `fullscreen: ${String(err)}` }),
-        );
+        void toggleFullscreen()
+          .then(refreshFullscreen)
+          .catch((err: unknown) =>
+            dispatch({ type: "toast", text: `fullscreen: ${String(err)}` }),
+          );
         return;
       }
 

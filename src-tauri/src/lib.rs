@@ -16,6 +16,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             ipc::catalog_cmds::categories,
             ipc::catalog_cmds::channels,
+            ipc::catalog_cmds::channels_by_ids,
             ipc::catalog_cmds::search,
             ipc::catalog_cmds::guide,
             ipc::catalog_cmds::sync_status,
@@ -30,6 +31,7 @@ pub fn run() {
             ipc::player_cmds::stop,
             ipc::player_cmds::toggle_pause,
             ipc::player_cmds::seek_relative,
+            ipc::player_cmds::thumbnail_at,
             ipc::player_cmds::seek_live,
             ipc::player_cmds::set_volume,
             ipc::player_cmds::set_muted,

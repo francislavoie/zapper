@@ -94,3 +94,23 @@ export function applyZoom(zoom: number): void {
     })
     .finally(reveal);
 }
+
+/** How many visual pixels the document draws per CSS pixel.
+ *
+ *  Pointer coordinates (`clientX`, `getBoundingClientRect`, `innerWidth`) are
+ *  all in visual pixels. A CSS length written back into the page is not: under
+ *  CSS zoom it is multiplied by the zoom on the way to the screen. Position
+ *  something at a measured `clientX` and it lands at `clientX × zoom`, so the
+ *  error is zero at the origin and grows across the window — which is why it
+ *  reads as "the position is scaled too" rather than as a constant offset.
+ *
+ *  `clientWidth` on the root reports the viewport and does not move with CSS
+ *  zoom, but `offsetWidth` is the laid-out width and does, so their ratio is
+ *  the factor. Under WebKit's page zoom nothing diverges and this is 1, so
+ *  dividing by it is free and callers need not know which zoom is in play. */
+export function documentScale(): number {
+  if (typeof document === "undefined") return 1;
+  const root = document.documentElement;
+  const width = root.getBoundingClientRect().width;
+  return root.offsetWidth > 0 && width > 0 ? width / root.offsetWidth : 1;
+}

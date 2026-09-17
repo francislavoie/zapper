@@ -107,7 +107,7 @@ export function GuideGrid() {
 
   const onPlay = useCallback(
     (channel: ChannelDto, p: ProgrammeDto) =>
-      void playChannel(dispatch, { ...channel, nowPlaying: p }, "guide"),
+      void playChannel(dispatch, { ...channel, nowPlaying: p }),
     [dispatch],
   );
   const onCatchup = useCallback(

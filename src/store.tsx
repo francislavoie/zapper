@@ -24,6 +24,9 @@ import { DEFAULT_SETTINGS, clampSettings } from "./logic/settings";
 import { clampZoom, nextZoom, type ZoomCommand } from "./logic/zoom";
 import { loadZoom } from "./zoom";
 import { loadStacked } from "./stacked";
+import { loadSession } from "./session";
+import { loadVideoWidth } from "./videoSize";
+import { clampVideoWidth } from "./logic/videoSize";
 
 export const ALL_CATEGORIES = "*all*";
 
@@ -97,6 +100,10 @@ export interface State {
    *  here rather than inside a component because the video rect depends on it
    *  — every layout box moves when it changes, and mpv has to be told. */
   zoom: number;
+  /** How wide the docked picture is, in rem. Local like zoom, and here
+   *  rather than in a component because resizing it moves the slot the video
+   *  rect is measured from, so mpv has to be told. */
+  videoWidthRem: number;
   /** Whether watching should put the picture across the top with the guide
    *  underneath, rather than giving the whole window to video.
    *
@@ -136,9 +143,12 @@ export const initialPlayer: PlayerStateDto = {
 export const initialState: State = {
   mode: "browse",
   categories: idle(),
-  categoryId: ALL_CATEGORIES,
+  // Where you were last time. Read before the first render, so the rail and
+  // the list draw the right thing once rather than flicking from "All" to the
+  // remembered category after a round trip.
+  categoryId: loadSession().categoryId ?? ALL_CATEGORIES,
   categoryFilter: "",
-  railTab: "categories",
+  railTab: loadSession().railTab,
   favouriteMenu: null,
   query: "",
   paletteOpen: false,
@@ -156,6 +166,7 @@ export const initialState: State = {
   // Read before the first render so the app opens at the size it was left at,
   // rather than at 100% for a frame.
   zoom: loadZoom(),
+  videoWidthRem: loadVideoWidth(),
   stacked: loadStacked(),
   toasts: [],
 };
@@ -176,6 +187,8 @@ export type Action =
   | { type: "sync"; value: SyncStatusDto }
   | { type: "player"; value: PlayerStateDto }
   | { type: "opening"; channel: ChannelDto }
+  /** The channel from last time, restored but deliberately not started. */
+  | { type: "ready"; channel: ChannelDto }
   | { type: "guideShift"; hours: number }
   | { type: "guideNow" }
   | { type: "settingsStatus"; value: Async<null> }
@@ -183,6 +196,7 @@ export type Action =
   | { type: "settingsSaveError"; message: string | null }
   | { type: "zoom"; value: number }
   | { type: "zoomStep"; command: ZoomCommand }
+  | { type: "videoWidth"; rem: number }
   | { type: "toast"; text: string; kind?: "error" | "info" }
   | { type: "dismissToast"; id: number };
 
@@ -262,12 +276,27 @@ export function reducer(state: State, action: Action): State {
       // zoom and dispatching the result would read the same stale value twice
       // and move once — React has not re-rendered in between.
       return { ...state, zoom: nextZoom(state.zoom, action.command) };
+    case "ready":
+      // Only while nothing has claimed the band. Restoring is a round trip
+      // through the catalogue and the user can start something while it is
+      // in flight; replacing their choice with a memory of the last session
+      // would be worse than not restoring at all.
+      if (state.nowChannel !== null || state.player.state !== "stopped") return state;
+      // Metadata only. No pendingStreamId, because nothing is opening, and no
+      // mode change, because restoring where you were must not decide what
+      // you are doing now.
+      return { ...state, nowChannel: action.channel };
+    case "videoWidth":
+      return { ...state, videoWidthRem: clampVideoWidth(action.rem) };
     case "opening":
+      // Deliberately no mode change. Starting a channel is not a decision to
+      // stop looking at whatever you were looking at, and the docked picture
+      // exists precisely so it does not have to be. Callers that do mean
+      // "and take over the window" say so.
       return {
         ...state,
         pendingStreamId: action.channel.streamId,
         nowChannel: action.channel,
-        mode: "watch",
       };
     case "toast":
       return {

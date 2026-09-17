@@ -127,3 +127,13 @@ export function menuPosition(
     top: Math.max(margin, Math.min(y, maxTop)),
   };
 }
+
+/** How many favourites the rail asks for.
+ *
+ *  More than fills the rail at any zoom, and short enough that the backend's
+ *  join and the ranking behind it stay trivial.
+ *
+ *  Here rather than in the component because a module that exports a
+ *  component and a constant cannot be hot-reloaded — see
+ *  src/__checks__/fast-refresh.test.mjs. */
+export const FAVOURITE_LIMIT = 40;

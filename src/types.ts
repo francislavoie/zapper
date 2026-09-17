@@ -156,3 +156,12 @@ export const EVENTS = {
   syncStatus: "zapper://sync-status",
   playerState: "zapper://player-state",
 } as const;
+
+/** A scrollback preview: what the picture looked like at a point in the
+ *  buffer. `behindLive` is the moment it was actually taken, which is not
+ *  quite the moment that was asked for — the frames are sampled every few
+ *  seconds, and the interface says which one it is showing. */
+export interface ThumbnailDto {
+  dataUrl: string;
+  behindLive: number;
+}

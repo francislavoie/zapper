@@ -14,7 +14,8 @@
 // moving or resizing the picture is one edit and the rect follows by
 // measurement.
 
-import type { RefObject } from "react";
+import { useRef, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
+import { playChannel } from "../actions";
 import { backend } from "../backend";
 import { useClock } from "../hooks/useClock";
 import { useNowNext } from "../hooks/useNowNext";
@@ -26,7 +27,13 @@ import {
   playerBadge,
   programmeProgress,
 } from "../logic/format";
+import {
+  VIDEO_WIDTH_DEFAULT,
+  isDefaultVideoWidth,
+  widthAfterDrag,
+} from "../logic/videoSize";
 import { run, useApp, useDispatch } from "../store";
+import { ResizeHandle } from "./icons";
 import type { ChannelDto, ProgrammeDto } from "../types";
 
 export interface WatchBandProps {
@@ -35,13 +42,53 @@ export interface WatchBandProps {
 }
 
 export function WatchBand({ videoRef }: WatchBandProps) {
-  const { nowChannel, player } = useApp();
+  const { nowChannel, player, videoWidthRem } = useApp();
   const dispatch = useDispatch();
   const now = useClock();
   const { now: onNow, next } = useNowNext(nowChannel, now);
 
   const live = player.state !== "stopped";
   const toWatch = () => dispatch({ type: "mode", mode: "watch" });
+  // Restored from last time but deliberately not started. See App.tsx: a
+  // provider may allow only one connection, and spending it at startup is a
+  // guess about what this launch is for.
+  const ready = !live && nowChannel !== null;
+  const resume = () => {
+    if (nowChannel) void playChannel(dispatch, nowChannel);
+  };
+
+  // Resizing the picture. The slot is pinned right, so dragging its left
+  // edge outwards makes it bigger.
+  //
+  // `pxPerRem` is measured from the slot rather than assumed to be 16: under
+  // CSS zoom a rem and a client pixel are different sizes, and taking both
+  // from the same box is what makes the drag track the pointer under either
+  // zoom mechanism without knowing which is in use.
+  const drag = useRef<{ x: number; rem: number; pxPerRem: number } | null>(null);
+
+  const onGripDown = (e: ReactPointerEvent<HTMLElement>) => {
+    const slot = videoRef.current;
+    if (!slot) return;
+    const rect = slot.getBoundingClientRect();
+    if (!(rect.width > 0) || !(videoWidthRem > 0)) return;
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    drag.current = { x: e.clientX, rem: videoWidthRem, pxPerRem: rect.width / videoWidthRem };
+  };
+
+  const onGripMove = (e: ReactPointerEvent<HTMLElement>) => {
+    const d = drag.current;
+    if (!d) return;
+    dispatch({ type: "videoWidth", rem: widthAfterDrag(d.rem, e.clientX - d.x, d.pxPerRem) });
+  };
+
+  const endGrip = (e: ReactPointerEvent<HTMLElement>) => {
+    if (!drag.current) return;
+    drag.current = null;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+  };
 
   return (
     <section className="watch-band" aria-label="Now watching">
@@ -57,26 +104,91 @@ export function WatchBand({ videoRef }: WatchBandProps) {
               void run(dispatch, "stop", backend.stop());
             }}
           />
+        ) : ready && nowChannel ? (
+          <Ready
+            channel={nowChannel}
+            onNow={onNow}
+            onPlay={() => void playChannel(dispatch, nowChannel)}
+          />
         ) : (
           <Idle />
         )}
       </div>
 
+      {/* Beside the picture, not over it. Inside the slot it would be a
+          control drawn on top of the video — and the video is
+          the one surface in this app that nothing may be drawn on, because
+          mpv is underneath and anything here is a hole punched in it.
+
+          A separator rather than a button: it sets a value along an axis,
+          which is what a separator with aria-valuenow is for. */}
+      <span
+        className="watch-grip"
+        role="separator"
+        aria-label="Picture size"
+        aria-orientation="vertical"
+        aria-valuenow={Math.round(videoWidthRem * 4) / 4}
+        tabIndex={0}
+        title={
+          isDefaultVideoWidth(videoWidthRem)
+            ? "Drag to resize the picture"
+            : "Drag to resize · double-click to reset"
+        }
+        onPointerDown={onGripDown}
+        onPointerMove={onGripMove}
+        onPointerUp={endGrip}
+        onPointerCancel={endGrip}
+        onDoubleClick={() => dispatch({ type: "videoWidth", rem: VIDEO_WIDTH_DEFAULT })}
+        onKeyDown={(e) => {
+          // The same axis as the drag: left is bigger, because the slot
+          // grows leftwards from a fixed right edge.
+          const step = e.shiftKey ? 4 : 1;
+          if (e.key === "ArrowLeft") {
+            e.preventDefault();
+            dispatch({ type: "videoWidth", rem: videoWidthRem + step });
+          } else if (e.key === "ArrowRight") {
+            e.preventDefault();
+            dispatch({ type: "videoWidth", rem: videoWidthRem - step });
+          } else if (e.key === "Home") {
+            e.preventDefault();
+            dispatch({ type: "videoWidth", rem: VIDEO_WIDTH_DEFAULT });
+          }
+        }}
+      >
+        <ResizeHandle className="i" />
+      </span>
+
       {/* Transparent by construction. Clickable all the same — a transparent
           element still takes clicks, and clicking the picture is how you get
           back to it full screen. */}
       <div
-        className={`watch-video ${live ? "live" : ""}`}
+        className={`watch-video ${live ? "live" : ""} ${ready ? "ready" : ""}`}
         ref={videoRef}
-        role={live ? "button" : undefined}
-        tabIndex={live ? 0 : undefined}
-        title={live ? "Back to full screen" : undefined}
-        onClick={() => live && toWatch()}
+        role={live || ready ? "button" : undefined}
+        tabIndex={live || ready ? 0 : undefined}
+        title={
+          live ? "Back to full screen" : ready ? "Click to start this channel" : undefined
+        }
+        // The slot looks like the picture, so it has to behave like it: while
+        // something is playing it goes full screen, and while a channel is
+        // merely restored it starts it. Doing nothing was the worst of the
+        // three — it said "ready" and then ignored the click.
+        onClick={() => {
+          if (live) toWatch();
+          else if (ready) resume();
+        }}
         onKeyDown={(e) => {
-          if (e.key === "Enter" && live) toWatch();
+          if (e.key !== "Enter") return;
+          if (live) toWatch();
+          else if (ready) resume();
         }}
       >
-        {live ? null : <span className="watch-video-empty">no picture</span>}
+        {live ? null : (
+          <span className="watch-video-empty">
+            {ready ? "click to resume" : "no picture"}
+          </span>
+        )}
+
       </div>
     </section>
   );
@@ -103,6 +215,43 @@ function Idle() {
           <b>Ctrl+P</b> everything else
         </li>
       </ul>
+    </div>
+  );
+}
+
+/** Where you left off: the channel is restored, the picture is not.
+ *
+ *  It says "Resume" rather than starting by itself on purpose. Opening a
+ *  stream may cost the only connection the provider allows, and an app that starts
+ *  playing the moment it is launched is an app that makes noise when you
+ *  opened it to look something up. */
+function Ready({
+  channel,
+  onNow,
+  onPlay,
+}: {
+  channel: ChannelDto;
+  onNow: ProgrammeDto | null;
+  onPlay: () => void;
+}) {
+  return (
+    <div className="watch-col identity">
+      <p className="watch-state">Where you left off</p>
+      <h2 title={channel.name}>{channel.cleanName}</h2>
+      <div className="watch-sub">
+        {channel.num != null ? <span className="watch-num">#{channel.num}</span> : null}
+        {onNow ? <span className="watch-now">{onNow.title}</span> : null}
+        {channel.hasArchive ? (
+          <span className="badge archive" title={`${channel.archiveDays ?? "?"}-day catchup`}>
+            ⏱ {channel.archiveDays ?? "?"}d catchup
+          </span>
+        ) : null}
+      </div>
+      <div className="watch-actions">
+        <button className="ctl" onClick={onPlay}>
+          Resume
+        </button>
+      </div>
     </div>
   );
 }

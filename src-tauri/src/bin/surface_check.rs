@@ -23,6 +23,23 @@ fn main() {
     std::process::exit(2);
 }
 
+/// Where the harness parks the picture partway through.
+///
+/// Top-right, which is where the interface docks it while browsing. The
+/// window behind this harness loads the real frontend, but the harness is
+/// not driving it: it talks to the surface and the player directly, and the
+/// IPC commands the interface would use are not even registered here. So the
+/// app on screen is inert scenery, showing "nothing playing" while a stream
+/// plays over it. Matching its corner at least stops the two contradicting
+/// each other while somebody is watching the test run.
+#[cfg(target_os = "linux")]
+const DOCKED: zapper_lib::surface::VideoRect = zapper_lib::surface::VideoRect {
+    x: 0.6,
+    y: 0.05,
+    w: 0.38,
+    h: 0.32,
+};
+
 #[cfg(target_os = "linux")]
 fn main() {
     use gtk::prelude::GLAreaExt;
@@ -79,17 +96,12 @@ fn main() {
                 gtk::glib::ControlFlow::Continue
             });
 
-            // End to end: dock the video into the bottom-right quarter
-            // partway through, so the verdict can prove the rect actually moved
-            // the GL surface rather than only passing its unit tests.
+            // Docking end to end: dock the video partway through, so the
+            // verdict can prove the rect actually moved the GL surface rather
+            // than only passing its unit tests.
             let dock = ov.clone();
             gtk::glib::timeout_add_seconds_local_once(seconds / 2, move || {
-                dock.set_video_rect(zapper_lib::surface::VideoRect {
-                    x: 0.6,
-                    y: 0.6,
-                    w: 0.4,
-                    h: 0.4,
-                });
+                dock.set_video_rect(DOCKED);
             });
 
             gtk::glib::timeout_add_seconds_local(seconds, move || match verdict(&ov, &player) {
@@ -165,6 +177,65 @@ fn verdict(
         ));
     }
 
+    // The surface must never pin the window's minimum size.
+    //
+    // Otherwise the app becomes unresizable. Sizing the surface with
+    // `set_size_request` asks GTK for a *minimum*, and a minimum on a widget
+    // inside the toplevel is a minimum on the toplevel: going fullscreen
+    // would ask for a surface the size of the display, so the window could
+    // never again be made smaller than the display. It latches, because a
+    // window that cannot shrink goes on measuring full-screen and asking for
+    // a full-screen surface.
+    //
+    // Asking for the whole window is the case that triggers it, so that is
+    // what is asked for here.
+    ov.set_video_rect(zapper_lib::surface::VideoRect::full());
+    let (req_w, req_h) = ov.gl_area.size_request();
+    if req_w > 0 || req_h > 0 {
+        return Err(anyhow!(
+            "the GL surface has a size request of {req_w}x{req_h}; that is a minimum, and it              propagates to the toplevel, which is what stopped the window being resized"
+        ));
+    }
+    let (min_w, _) = ov.overlay.preferred_width();
+    let (min_h, _) = ov.overlay.preferred_height();
+    if min_w >= ow || min_h >= oh {
+        return Err(anyhow!(
+            "a full-window video rect made the overlay demand at least {min_w}x{min_h} inside              an allocation of {ow}x{oh}; the window would be stuck at that size"
+        ));
+    }
+
+    // Scrollback thumbnails come off the same framebuffer. Every failure in
+    // that path is silent - a missing blit entry point, an incomplete
+    // offscreen framebuffer, a readback that returns nothing - and all of
+    // them look exactly like "the user never hovered the scrubber". The only
+    // way to tell is to count what was actually captured.
+    let thumbs = zapper_lib::surface::trickplay::count();
+    if thumbs == 0 {
+        return Err(anyhow!(
+            "no scrollback thumbnails after {renders} frames; the downscale blit or the \
+             readback is failing silently"
+        ));
+    }
+    // And they have to be findable, not merely stored: `nearest_png` is what
+    // the command calls, and an empty PNG would still count above.
+    let probe = player.probe();
+    let png = probe
+        .time_pos
+        .and_then(zapper_lib::surface::trickplay::nearest_png)
+        .map(|(_, bytes)| bytes.len())
+        .unwrap_or(0);
+    if png < 100 {
+        return Err(anyhow!(
+            "{thumbs} thumbnails captured but the one at the playhead encoded to {png} bytes"
+        ));
+    }
+
+    // Put back what the probe borrowed. Nothing is asserted after this, but
+    // the harness stays on screen until the process exits and a window that
+    // ends showing full-screen video over a browsing interface is a window
+    // that looks like the bug this check exists to catch.
+    ov.set_video_rect(DOCKED);
+
     // glGetString needs a *current* context, and nothing is current on a
     // plain timeout tick outside the render signal.
     ov.gl_area.make_current();
@@ -172,6 +243,8 @@ fn verdict(
         .ok_or_else(|| anyhow!("glGetString returned null; no live GL context"))?;
     Ok(format!(
         "{renders} renders ({drawn} painted by mpv), video {w}x{h}, peak sample {peak}, \
-         docked GLArea {aw}x{ah} in overlay {ow}x{oh}, GL renderer {renderer}"
+         docked GLArea {aw}x{ah} in overlay {ow}x{oh}, window minimum {min_w}x{min_h} with a \
+         full-window rect, {thumbs} scrollback thumbnails ({png}-byte PNG), GL renderer \
+         {renderer}"
     ))
 }

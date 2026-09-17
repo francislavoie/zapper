@@ -15,14 +15,10 @@ import { playChannel } from "../actions";
 import { backend } from "../backend";
 import { useClock } from "../hooks/useClock";
 import { errorMessage, failed, loading, ready, type Async } from "../logic/async";
-import { favouriteMeta } from "../logic/favourites";
+import { FAVOURITE_LIMIT, favouriteMeta } from "../logic/favourites";
 import { run, useApp, useDispatch } from "../store";
 import type { FavouriteDto } from "../types";
 import { FavouriteMenu } from "./FavouriteMenu";
-
-/** More than fills the rail at any zoom, and short enough that the backend's
- *  join and the ranking behind it stay trivial. */
-export const FAVOURITE_LIMIT = 40;
 
 export function FavouritesRail() {
   const { player, pendingStreamId, favouriteMenu } = useApp();
@@ -31,8 +27,12 @@ export function FavouritesRail() {
   // "3 days ago" has to stop being true eventually; a coarse tick is plenty.
   const now = useClock(60_000);
 
+  // A refresh does not blank the pane. There is only ever one thing this can
+  // say — the same list, very slightly reordered — so replacing it with
+  // "Loading favourites…" throws away a good answer to show a worse one. It
+  // only says that when it has nothing at all, which is the first load.
   const load = useCallback(async () => {
-    setList(loading());
+    setList((prev) => (prev.status === "ready" ? prev : loading()));
     try {
       setList(ready(await backend.favourites(FAVOURITE_LIMIT)));
     } catch (e) {

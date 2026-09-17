@@ -37,6 +37,8 @@ export interface ChannelRowProps {
   selected: boolean;
   pending: boolean;
   onPlay: (c: ChannelDto) => void;
+  /** Double-click: start it if it is not already going, and take the window. */
+  onOpenFull: (c: ChannelDto) => void;
 }
 
 export const ChannelRow = memo(function ChannelRow({
@@ -45,6 +47,7 @@ export const ChannelRow = memo(function ChannelRow({
   selected,
   pending,
   onPlay,
+  onOpenFull,
 }: ChannelRowProps) {
   const style = { top, height: ROW_HEIGHT };
 
@@ -65,6 +68,7 @@ export const ChannelRow = memo(function ChannelRow({
       className={`row ${selected ? "sel" : ""} ${pending ? "pending" : ""}`}
       style={style}
       onClick={() => onPlay(channel)}
+      onDoubleClick={() => onOpenFull(channel)}
       title={channel.name}
     >
       <Logo url={channel.logoUrl} />

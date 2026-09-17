@@ -58,9 +58,10 @@ const HEAD_DEPTH = 3.9;
 function SkipArrow({
   back,
   seconds,
+  showSeconds,
   className,
   title,
-}: IconProps & { back: boolean; seconds: number }) {
+}: IconProps & { back: boolean; seconds: number; showSeconds: boolean }) {
   const topY = CY - R;
   // The arc must ARRIVE at the head, not leave from it: the line enters the
   // flat base and the point continues beyond. Drawing it the other way round
@@ -78,29 +79,42 @@ function SkipArrow({
       {title ? <title>{title}</title> : null}
       <path d={d} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
       <path d={head} fill="currentColor" />
-      <text
-        x={CX}
-        y={CY + 2.9}
-        textAnchor="middle"
-        fontSize="8"
-        fontWeight="600"
-        letterSpacing="-0.3"
-        fill="currentColor"
-        // Part of the icon, not copyable text.
-        style={{ userSelect: "none" }}
-      >
-        {seconds}s
-      </text>
+      {showSeconds ? (
+        <text
+          x={CX}
+          y={CY + 2.9}
+          textAnchor="middle"
+          fontSize="8"
+          fontWeight="600"
+          letterSpacing="-0.3"
+          fill="currentColor"
+          // Part of the icon, not copyable text.
+          style={{ userSelect: "none" }}
+        >
+          {seconds}s
+        </text>
+      ) : null}
     </svg>
   );
 }
 
-export function SkipBack({ seconds = 5, ...p }: IconProps & { seconds?: number }) {
-  return <SkipArrow back seconds={seconds} {...p} />;
+/** `showSeconds` is off where something beside the icon already says the
+ *  number — the feedback bubble writes "5 seconds" under it, and the same
+ *  figure twice in one badge reads as a mistake. */
+export function SkipBack({
+  seconds = 5,
+  showSeconds = true,
+  ...p
+}: IconProps & { seconds?: number; showSeconds?: boolean }) {
+  return <SkipArrow back seconds={seconds} showSeconds={showSeconds} {...p} />;
 }
 
-export function SkipForward({ seconds = 5, ...p }: IconProps & { seconds?: number }) {
-  return <SkipArrow back={false} seconds={seconds} {...p} />;
+export function SkipForward({
+  seconds = 5,
+  showSeconds = true,
+  ...p
+}: IconProps & { seconds?: number; showSeconds?: boolean }) {
+  return <SkipArrow back={false} seconds={seconds} showSeconds={showSeconds} {...p} />;
 }
 
 export function Play({ className, title }: IconProps) {
@@ -225,6 +239,32 @@ export function Back({ className, title }: IconProps) {
       {title ? <title>{title}</title> : null}
       <path d="M14.5 6 L8.5 12 L14.5 18" fill="none" stroke="currentColor"
             strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+/** The mini player's resize grip: a chevron against a bar, `<|`, pointing
+ *  the way the picture grows. Drawn rather than typed so it keeps its weight
+ *  next to the rest of the chrome at any zoom. */
+export function ResizeHandle({ className, title }: IconProps) {
+  return (
+    <svg className={className} viewBox="0 0 12 24" aria-hidden={!title} focusable="false">
+      {title ? <title>{title}</title> : null}
+      <path
+        d="M7 8.5 L3.5 12 L7 15.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M9.5 6.5 L9.5 17.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+      />
     </svg>
   );
 }

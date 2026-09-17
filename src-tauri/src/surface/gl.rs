@@ -16,6 +16,14 @@ pub const COLOR_BUFFER_BIT: u32 = 0x0000_4000;
 /// the render signal, so anything drawing into framebuffer 0 there paints
 /// somewhere GTK never composites.
 pub const DRAW_FRAMEBUFFER_BINDING: u32 = 0x8CA6;
+pub const READ_FRAMEBUFFER_BINDING: u32 = 0x8CAA;
+pub const READ_FRAMEBUFFER: u32 = 0x8CA8;
+pub const DRAW_FRAMEBUFFER: u32 = 0x8CA9;
+pub const RENDERBUFFER: u32 = 0x8D41;
+pub const COLOR_ATTACHMENT0: u32 = 0x8CE0;
+pub const RGBA8: u32 = 0x8058;
+pub const LINEAR: u32 = 0x2601;
+pub const FRAMEBUFFER_COMPLETE: u32 = 0x8CD5;
 pub const FRAMEBUFFER: u32 = 0x8D40;
 pub const RGBA: u32 = 0x1908;
 pub const UNSIGNED_BYTE: u32 = 0x1401;
@@ -189,4 +197,92 @@ mod tests {
             );
         }
     }
+}
+
+// --------------------------------------------------------------- downscaling
+//
+// Scrollback thumbnails are taken by blitting the frame that was just drawn
+// into a small offscreen buffer and reading *that* back, rather than reading
+// back the surface and shrinking it on the CPU. The difference is the whole
+// reason the feature is affordable: a fullscreen 2560x1440 readback moves
+// 14MB across the bus and stalls the pipeline waiting for the GPU, where a
+// 160x90 one moves 57KB. The scaling is done by the hardware on the way.
+
+/// # Safety
+/// Requires a current GL context.
+pub unsafe fn gen_framebuffer() -> u32 {
+    let mut id = 0u32;
+    if let Some(f) = sym::<extern "C" fn(i32, *mut u32)>(b"glGenFramebuffers\0") {
+        f(1, &mut id);
+    }
+    id
+}
+
+/// # Safety
+/// Requires a current GL context.
+pub unsafe fn gen_renderbuffer() -> u32 {
+    let mut id = 0u32;
+    if let Some(f) = sym::<extern "C" fn(i32, *mut u32)>(b"glGenRenderbuffers\0") {
+        f(1, &mut id);
+    }
+    id
+}
+
+/// # Safety
+/// Requires a current GL context; `rb` must name a live renderbuffer or 0.
+pub unsafe fn bind_renderbuffer(rb: u32) {
+    if let Some(f) = sym::<extern "C" fn(u32, u32)>(b"glBindRenderbuffer\0") {
+        f(RENDERBUFFER, rb);
+    }
+}
+
+/// # Safety
+/// Requires a current GL context and a bound renderbuffer.
+pub unsafe fn renderbuffer_storage(format: u32, w: i32, h: i32) {
+    if let Some(f) = sym::<extern "C" fn(u32, u32, i32, i32)>(b"glRenderbufferStorage\0") {
+        f(RENDERBUFFER, format, w, h);
+    }
+}
+
+/// # Safety
+/// Requires a current GL context and a bound framebuffer on `target`.
+pub unsafe fn framebuffer_renderbuffer(target: u32, rb: u32) {
+    if let Some(f) = sym::<extern "C" fn(u32, u32, u32, u32)>(b"glFramebufferRenderbuffer\0") {
+        f(target, COLOR_ATTACHMENT0, RENDERBUFFER, rb);
+    }
+}
+
+/// # Safety
+/// Requires a current GL context and a bound framebuffer on `target`.
+pub unsafe fn check_framebuffer_status(target: u32) -> u32 {
+    sym::<extern "C" fn(u32) -> u32>(b"glCheckFramebufferStatus\0").map_or(0, |f| f(target))
+}
+
+/// Scales the bound read framebuffer into the bound draw framebuffer.
+///
+/// Returns false when the entry point is missing, which is the honest answer
+/// on a driver too old for framebuffer blits - the caller then does without
+/// thumbnails rather than reading back a full-size surface every few seconds.
+///
+/// # Safety
+/// Requires a current GL context and complete framebuffers bound to both
+/// `READ_FRAMEBUFFER` and `DRAW_FRAMEBUFFER`.
+#[allow(clippy::too_many_arguments)]
+pub unsafe fn blit_framebuffer(
+    sx0: i32,
+    sy0: i32,
+    sx1: i32,
+    sy1: i32,
+    dx0: i32,
+    dy0: i32,
+    dx1: i32,
+    dy1: i32,
+) -> bool {
+    let Some(f) = sym::<
+        extern "C" fn(i32, i32, i32, i32, i32, i32, i32, i32, u32, u32),
+    >(b"glBlitFramebuffer\0") else {
+        return false;
+    };
+    f(sx0, sy0, sx1, sy1, dx0, dy0, dx1, dy1, COLOR_BUFFER_BIT, LINEAR);
+    true
 }

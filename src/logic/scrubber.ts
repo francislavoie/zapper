@@ -114,6 +114,49 @@ export function headPixel(
   return pixelAtTime(g, g.live - Math.max(0, player.behindLive));
 }
 
+/** Converts a pointer's client x into the same pixels the geometry uses.
+ *
+ *  `getBoundingClientRect` and `MouseEvent.clientX` report *visual* pixels,
+ *  while `clientWidth` — which is what the geometry is built from, because it
+ *  is what the element is laid out in — reports *layout* pixels. CSS zoom
+ *  makes those two different numbers, and mixing them is a bug that grows
+ *  with distance along the bar: the hover readout named the wrong time, the
+ *  tooltip drifted away from the cursor, and a click seeked somewhere other
+ *  than where it landed. Under WebKit's page zoom the two agree and the ratio
+ *  is 1, so this costs nothing there and does not need to know which
+ *  mechanism is in use.
+ *
+ *  `boxWidth` is the rect's width and `layoutWidth` the element's
+ *  `clientWidth`. A zero either way means nothing has been laid out yet, and
+ *  the honest answer is the offset uncorrected. */
+export function localPixel(
+  clientX: number,
+  boxLeft: number,
+  boxWidth: number,
+  layoutWidth: number,
+): number {
+  const offset = clientX - boxLeft;
+  if (!(boxWidth > 0) || !(layoutWidth > 0)) return offset;
+  return offset * (layoutWidth / boxWidth);
+}
+
+/** Keeps the hover tooltip inside the bar.
+ *
+ *  It is centred on the pointer, so within half its own width of either end
+ *  half of it is off the edge of the window — which at the left end is where
+ *  the oldest archive is, and exactly where somebody scrubbing a long way
+ *  back will be looking. Clamping moves the box without moving the pointer,
+ *  so it stops sliding and the cursor walks along it instead.
+ *
+ *  A tooltip wider than the bar cannot be placed without overhang; centring
+ *  it spreads the overhang evenly rather than pushing it all off one side. */
+export function hintPixel(px: number, hintWidth: number, trackWidth: number): number {
+  if (!(hintWidth > 0) || !(trackWidth > 0)) return px;
+  if (hintWidth >= trackWidth) return trackWidth / 2;
+  const half = hintWidth / 2;
+  return Math.min(trackWidth - half, Math.max(half, px));
+}
+
 export type Zone = "archive" | "buffer";
 
 export function zoneAtPixel(g: Geometry, px: number): Zone {

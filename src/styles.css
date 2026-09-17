@@ -900,12 +900,28 @@ select option {
   overflow-x: hidden;
 }
 
+/* Absolutely placed inside .rail-spacer by the windowing, so the height has
+   to be exact rather than whatever the text happens to make it: the offsets
+   are index * ROW_HEIGHT. */
+.rail-spacer {
+  position: relative;
+}
+
 .rail-item {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 1.625rem;
+  box-sizing: border-box;
+  /* Same containment as a channel row: the box is fully described by the
+     rules above, so the browser need not consider anything inside it when
+     laying out or painting the rest of the rail. */
+  contain: content;
   display: flex;
   align-items: center;
   gap: 0.5rem;
   width: 100%;
-  padding: 0.25rem 0.625rem;
+  padding: 0 0.625rem;
   text-align: left;
   color: var(--dim);
   border-left: 0.125rem solid transparent;
@@ -1401,46 +1417,61 @@ button.prog:hover {
 
 /* The root takes pointer events so that moving, scrolling and hovering over
    the video are all noticed — it is transparent, so nothing is hidden. Only
-   the faded controls stop accepting clicks. */
+   the faded controls stop accepting clicks.
+
+   The fade is on the two bars rather than on the root, so that the feedback
+   bubbles can live inside the root and still be seen while the controls are
+   hidden. Opacity on an ancestor takes its whole subtree with it, and a
+   bubble that only appears when the controls do would be answering a gesture
+   with the wrong thing. */
 .chrome {
   position: absolute;
   inset: 0;
   z-index: 20;
   background: transparent;
+}
+
+.chrome-top,
+.chrome-bottom {
   opacity: 1;
   transition: opacity 220ms ease;
 }
 
-.chrome.faded {
-  opacity: 0;
-}
-
 .chrome.faded .chrome-top,
 .chrome.faded .chrome-bottom {
+  opacity: 0;
   pointer-events: none;
 }
 
-/* A gradient is painted over video, so it must stay translucent — it dims the
-   picture rather than replacing it. */
+/* No scrim. These were full-width gradients running a long way into the
+   picture, and what they dimmed was mostly picture: the top and bottom edges
+   of the frame were permanently darker than the middle, whether or not
+   anything was written over them. Each bar is now a panel that hugs its own
+   contents, inset from the edges so the frame stays clean, and carries its
+   own translucent background — legible over anything, and only where there is
+   something to read. */
 .chrome-bottom {
   position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  padding: 2.5rem 1rem 0.875rem;
-  background: linear-gradient(to top, rgba(6, 8, 11, 0.85), rgba(6, 8, 11, 0));
+  left: 0.75rem;
+  right: 0.75rem;
+  bottom: 0.75rem;
+  padding: 0.5rem 0.75rem 0.625rem;
+  border-radius: 0.75rem;
+  background: rgba(6, 8, 11, 0.72);
+  backdrop-filter: blur(0.75rem);
+  border: 1px solid rgba(255, 255, 255, 0.07);
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
 }
 
+/* The top row is not a panel: its three pieces sit apart, so each carries its
+   own box and the space between them stays picture. */
 .chrome-top {
   position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  padding: 0.75rem 1rem 2rem;
-  background: linear-gradient(to bottom, rgba(6, 8, 11, 0.8), rgba(6, 8, 11, 0));
+  top: 0.75rem;
+  left: 0.75rem;
+  right: 0.75rem;
   display: flex;
   align-items: flex-start;
   gap: 0.75rem;
@@ -1463,9 +1494,17 @@ button.prog:hover {
   height: 1rem;
 }
 
+/* Hugs the name rather than spanning the width: a full-width box would put a
+   dark band across the top of the picture again, which is the thing being
+   removed. */
 .chrome-title {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-width: 0;
+  padding: 0.375rem 0.625rem;
+  border-radius: 0.5rem;
+  background: rgba(6, 8, 11, 0.72);
+  backdrop-filter: blur(0.75rem);
+  border: 1px solid rgba(255, 255, 255, 0.07);
 }
 
 .chrome-title h2 {
@@ -1489,14 +1528,18 @@ button.prog:hover {
    row that already has to wrap at high zoom. */
 .measured {
   flex: 0 0 auto;
+  /* The title does not grow to fill the bar, so this is what holds the
+     readout against the right-hand edge. */
+  margin-left: auto;
   align-self: flex-start;
   font-size: 0.6875rem;
   color: var(--dim);
   font-variant-numeric: tabular-nums;
-  background: rgba(6, 8, 11, 0.6);
-  border: 1px solid var(--line);
-  border-radius: 0.3125rem;
-  padding: 0.25rem 0.5rem;
+  background: rgba(6, 8, 11, 0.72);
+  backdrop-filter: blur(0.75rem);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 0.5rem;
+  padding: 0.375rem 0.5rem;
   opacity: 0;
   transition: opacity 160ms ease;
 }
@@ -1828,20 +1871,33 @@ button.prog:hover {
 
 /* Deliberately not dimmed: a translucent sheet over the whole window would
    sit on top of the video plane. */
+/* Fixed rather than absolute, and sized in percentages rather than `vh`.
+   Viewport units are not what they look like here: CSS zoom resolves `100vh`
+   against the viewport and then scales the result, so at 150% a `76vh` dialog
+   is 114% of the screen and hangs off the bottom. Measured at a 700px
+   viewport: a fixed `inset: 0` box is 700, `height: 100%` inside it is 700,
+   and `100vh` is 1050.
+
+   So the backdrop is the one box that knows how big the screen is, and
+   everything in it is a percentage of that. The padding is in rem on purpose
+   — it is a margin around a dialog and should grow with the rest of the
+   interface. `border-box` is what makes `max-height: 100%` on a child mean
+   "the screen, less that margin". */
 .modal-backdrop {
-  position: absolute;
+  position: fixed;
   inset: 0;
   z-index: 60;
   background: transparent;
   display: flex;
   justify-content: center;
   align-items: flex-start;
-  padding-top: 9vh;
+  padding: 2.5rem 1rem;
+  box-sizing: border-box;
 }
 
 .palette {
-  width: min(45rem, 86vw);
-  max-height: 66vh;
+  width: min(45rem, 100%);
+  max-height: 100%;
   display: flex;
   flex-direction: column;
   background: var(--bg-2);
@@ -1909,7 +1965,7 @@ button.prog:hover {
 /* ----------------------------------------------------------------- about */
 
 .about {
-  width: min(26.25rem, 86vw);
+  width: min(26.25rem, 100%);
   padding: 1.25rem 1.375rem 1rem;
   background: var(--bg-2);
   border: 1px solid var(--line);
@@ -1962,8 +2018,12 @@ button.prog:hover {
 }
 
 .settings {
-  width: min(51.25rem, 90vw);
-  height: min(35rem, 76vh);
+  width: min(51.25rem, 100%);
+  /* The height it wants, capped at the screen. Both panes below already
+     scroll, so a window too short for the dialog shortens the dialog rather
+     than pushing its foot off the bottom. */
+  height: 35rem;
+  max-height: 100%;
   display: grid;
   grid-template-columns: 11.25rem minmax(0, 1fr);
   background: var(--bg-2);
@@ -2175,4 +2235,219 @@ button.prog:hover {
 
 .zoom-hint {
   color: var(--dimmer);
+}
+
+/* ------------------------------------------- gesture feedback bubbles */
+
+/* Answers to the gestures over the picture: a wheel notch changing the
+   volume, a double-click seeking. Neither has a control on screen at the
+   moment it happens — the bar may well be faded — so the bubble is the only
+   thing that says what the app just did.
+
+   The layer sits inside .chrome but outside the two bars, which is why the
+   fade moved off the root: these have to be visible while the controls are
+   not. Nothing here takes pointer events; a bubble that swallowed the second
+   click of a double-click would break the gesture that raised it. */
+.vfb-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 25;
+  pointer-events: none;
+}
+
+.vfb {
+  position: absolute;
+  top: 50%;
+  /* `left` is set inline, as a percentage of the picture: centre for volume,
+     and the centre of its own zone for a seek, so the bubble teaches where
+     the zones are rather than just appearing under the pointer. */
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  width: 6rem;
+  height: 6rem;
+  border-radius: 50%;
+  background: rgba(6, 8, 11, 0.66);
+  backdrop-filter: blur(0.5rem);
+  color: #fff;
+  animation: vfb-pop 900ms cubic-bezier(0.2, 0.7, 0.3, 1) forwards;
+}
+
+.vfb .i {
+  width: 1.75rem;
+  height: 1.75rem;
+}
+
+.vfb-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.vfb-label {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  /* Chrome text, and chrome text is not for selecting. */
+  user-select: none;
+}
+
+/* Up fast, hold, then away. The hold is what makes a run of wheel notches
+   readable: each notch restarts the animation, so the number stays up for as
+   long as the scrolling continues and clears shortly after it stops. */
+@keyframes vfb-pop {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.72);
+  }
+  12% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  70% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(1.08);
+  }
+}
+
+/* The bubble still has to appear and still has to go away — it is the only
+   feedback these gestures have — so this drops the scaling, not the fade. */
+@media (prefers-reduced-motion: reduce) {
+  .vfb {
+    animation: vfb-fade 900ms linear forwards;
+  }
+
+  @keyframes vfb-fade {
+    0%,
+    70% {
+      opacity: 1;
+    }
+    100% {
+      opacity: 0;
+    }
+  }
+}
+
+/* Fullscreen is the picture, not the app at a larger size. The toolbar is
+   this app's own title bar, and a fullscreen video does not have one, so it
+   is not rendered and the stage takes the whole window. The video rect is
+   measured from the stage, so nothing else has to know. */
+.app.fullscreen .stage {
+  inset: 0;
+}
+
+/* While a tab switch is pending. With both panes mounted the switch is
+   normally instantaneous and this never shows; it exists for the case where
+   the incoming pane has real work to do, so the rail reads as busy rather
+   than as frozen. */
+.rail.switching {
+  opacity: 0.85;
+}
+
+/* The scrollback preview. The hint was a single line of text; with an image
+   it becomes a small card, so it stacks and stops being nowrap-only. */
+.scrub-hint {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.scrub-thumb {
+  display: block;
+  width: 10rem;
+  height: 5.625rem;
+  border-radius: 0.25rem;
+  background: #000;
+  /* The picture is a scaled-down frame and is meant to look like one; without
+     this the browser sharpens it into something that reads as an artefact. */
+  image-rendering: auto;
+  /* Chrome, and chrome is not dragged out of the window. */
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+/* The programme name beside a restored channel. Dimmer than the channel: the
+   channel is what a click acts on, the programme is only context. */
+.watch-now {
+  color: var(--dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 28ch;
+}
+
+/* Guide mode keeps the picture docked. Same two rows as the browse grid, so
+   the slot is in the same place and the video does not move when you switch
+   between them. */
+.guide-stage {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: grid;
+  grid-template-rows: var(--video-h) minmax(0, 1fr);
+}
+
+/* The grid fills the row below the band rather than the whole stage, which
+   is what stops it painting over the picture. */
+.guide-stage .guide {
+  position: relative;
+  inset: auto;
+  z-index: auto;
+  min-height: 0;
+}
+
+/* The handle for resizing the picture: its own column beside the slot, never
+   over it. The slot is a hole through to mpv, so a control drawn inside it is
+   a control drawn on the video.
+
+   Always visible, because an adjustment nobody can see is an adjustment
+   nobody makes — it is a chevron against a bar, pointing the way the picture
+   grows. */
+.watch-grip {
+  flex: 0 0 auto;
+  align-self: stretch;
+  width: 0.875rem;
+  /* Opaque, and this is not cosmetic. mpv draws underneath the webview, so
+     anything in this app that does not paint is a hole through to the video —
+     the picture's own slot is the only one there is meant to be. Left
+     transparent, this column was a slit with video running through it. */
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--dimmer);
+  cursor: ew-resize;
+  touch-action: none;
+  user-select: none;
+  transition: color 140ms ease;
+}
+
+.watch-grip .i {
+  width: 0.75rem;
+  height: 1.5rem;
+}
+
+.watch-grip:hover {
+  color: var(--text);
+}
+
+.watch-grip:focus-visible {
+  color: var(--text);
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* A restored channel that has not been started. The slot is the picture's
+   place, so it takes the click that starts it. */
+.watch-video.ready {
+  cursor: pointer;
 }

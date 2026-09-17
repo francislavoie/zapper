@@ -15,7 +15,7 @@
         "title": "zapper",
         "width": 1400,
         "height": 860,
-        "transparent": true,
+        "transparent": false,
         "decorations": false,
         "resizable": true,
         "minWidth": 900,

@@ -254,3 +254,21 @@ pub mod events {
     pub const SYNC_STATUS: &str = "zapper://sync-status";
     pub const PLAYER_STATE: &str = "zapper://player-state";
 }
+
+/// A scrollback preview: what the picture looked like at a point in the
+/// buffer, for the scrubber to show under the cursor.
+///
+/// Carries the moment it was actually taken rather than the moment that was
+/// asked for. They differ by up to a couple of seconds — the thumbnails are
+/// sampled, not continuous — and the interface says which it is showing
+/// instead of implying a precision that is not there.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThumbnailDto {
+    /// A `data:image/png;base64,...` URL. Inlined rather than served: it is a
+    /// few kilobytes, it is discarded as soon as the pointer moves on, and a
+    /// URL would need something to serve it from.
+    pub data_url: String,
+    /// Seconds behind the live edge of the frame this actually is.
+    pub behind_live: f64,
+}

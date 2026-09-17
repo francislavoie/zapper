@@ -143,7 +143,19 @@ fn video_origin(ov: &Overlay) -> (i32, i32) {
 /// A minimal PNG writer, so verification needs no image dependency.
 fn write_png(path: &PathBuf, w: u32, h: u32, rgba: &[u8]) -> Result<()> {
     use std::io::Write;
+    let png = png_bytes(w, h, rgba);
+    let mut f =
+        std::fs::File::create(path).with_context(|| format!("creating {}", path.display()))?;
+    f.write_all(&png).context("writing the capture")?;
+    Ok(())
+}
 
+/// A PNG in memory, as RGBA rows top-down.
+///
+/// Split out from [`write_png`] because the scrollback thumbnails need the
+/// bytes rather than a file: they live in memory for as long as the buffer
+/// they describe, and most of them are never looked at.
+pub(crate) fn png_bytes(w: u32, h: u32, rgba: &[u8]) -> Vec<u8> {
     let mut raw = Vec::with_capacity((w as usize * 4 + 1) * h as usize);
     for y in 0..h as usize {
         raw.push(0); // filter: none
@@ -168,11 +180,7 @@ fn write_png(path: &PathBuf, w: u32, h: u32, rgba: &[u8]) -> Result<()> {
     chunk(b"IHDR", &ihdr, &mut png);
     chunk(b"IDAT", &deflate_stored(&raw), &mut png);
     chunk(b"IEND", &[], &mut png);
-
-    let mut f = std::fs::File::create(path)
-        .with_context(|| format!("creating {}", path.display()))?;
-    f.write_all(&png).context("writing the capture")?;
-    Ok(())
+    png
 }
 
 /// zlib with stored (uncompressed) blocks: larger on disk, but avoids pulling

@@ -459,6 +459,9 @@ pub async fn play_catchup(
 /// Shared by live and catchup: state first, then the one connection.
 async fn open(app: &AppHandle, stream_id: i64, url: String) -> Result<(), String> {
     ensure_ticker(app);
+    // The scrollback previews describe a buffer that is about to be closed.
+    // Keeping them would put the previous channel's picture under the cursor.
+    crate::surface::trickplay::clear();
     commit(app, |m| m.opening(stream_id));
     let r = on_player(app, move |p| {
         // `replace` closes the current demuxer before opening the next, which
@@ -474,6 +477,7 @@ async fn open(app: &AppHandle, stream_id: i64, url: String) -> Result<(), String
 
 #[tauri::command]
 pub async fn stop(app: AppHandle) -> Result<(), String> {
+    crate::surface::trickplay::clear();
     let r = on_player(&app, |p| p.command("stop", &[]).map_err(|e| e.to_string())).await;
     commit(&app, |m| m.stopped());
     r
@@ -626,6 +630,47 @@ pub async fn set_compressor(app: AppHandle, enabled: bool) -> Result<(), String>
 #[tauri::command]
 pub async fn set_video_rect(app: AppHandle, rect: VideoRect) -> Result<(), String> {
     on_overlay(&app, move |o| o.set_video_rect(rect)).await
+}
+
+/// The scrollback preview nearest a point in the buffer.
+///
+/// `behind_live` is the same number the scrubber speaks in everywhere else,
+/// so the interface does not have to know that the thumbnails are keyed by
+/// stream time. `None` is an ordinary answer: nothing has been captured near
+/// that moment yet, or the archive was asked about, which is left of the
+/// buffer and was never on this screen to be photographed.
+#[tauri::command]
+pub async fn thumbnail_at(
+    app: AppHandle,
+    behind_live: f64,
+) -> Result<Option<crate::ipc::types::ThumbnailDto>, String> {
+    if !behind_live.is_finite() || behind_live < 0.0 {
+        return Ok(None);
+    }
+    on_player(&app, move |p| {
+        let probe = p.probe();
+        // The seekable end is the live edge in stream time, and it is what
+        // the thumbnails were stamped against. Falling back to the playhead
+        // plus its own lag covers the moments before mpv reports a window.
+        let Some(edge) = probe
+            .live_edge
+            .or_else(|| probe.time_pos.map(|t| t + probe.behind_live))
+        else {
+            return Ok(None);
+        };
+        Ok(
+            crate::surface::trickplay::nearest_png(edge - behind_live).map(|(at, png)| {
+                crate::ipc::types::ThumbnailDto {
+                    data_url: format!(
+                        "data:image/png;base64,{}",
+                        crate::surface::trickplay::base64(&png)
+                    ),
+                    behind_live: (edge - at).max(0.0),
+                }
+            }),
+        )
+    })
+    .await
 }
 
 #[tauri::command]

@@ -1,0 +1,81 @@
+// What the app was doing last time, as pure parsing.
+//
+// Where you were is not a setting. It is not synced, it does not belong to
+// the account, and two machines signed into the same account should each come
+// back to their own place — the same reasoning as zoom and the stacked
+// layout. So it is local storage, and the side-effecting half lives in
+// src/session.ts.
+//
+// Everything here is defensive about what it reads back. The value can be
+// hand-edited, can come from an older build with a different shape, and can
+// be truncated by a browser reclaiming space. A restored position that is
+// nonsense should put the app at the top of the list, never leave it blank
+// or throw on the way up.
+//
+// Checked in src/__checks__/session.test.mjs.
+
+export const SESSION_STORAGE_KEY = "zapper.session";
+
+export interface Session {
+  /** ALL_CATEGORIES for the pseudo-entry, else a CategoryDto.id. */
+  categoryId: string | null;
+  railTab: "categories" | "favourites";
+  /** Pixels, in layout units — the same units the lists scroll in. */
+  railScrollTop: number;
+  channelScrollTop: number;
+  /** The channel to have ready, not to play. */
+  lastStreamId: number | null;
+  /** Whether the loudness compressor was left on. A taste about how loud
+   *  things should be, which does not change between launches — leaving it
+   *  off every time means turning it on every time. */
+  compressor: boolean;
+}
+
+export const EMPTY_SESSION: Session = {
+  categoryId: null,
+  railTab: "categories",
+  railScrollTop: 0,
+  channelScrollTop: 0,
+  lastStreamId: null,
+  compressor: false,
+};
+
+const scroll = (v: unknown): number =>
+  typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : 0;
+
+export function parseSession(raw: string | null): Session {
+  if (raw === null || raw === "") return { ...EMPTY_SESSION };
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    // Truncated or hand-mangled. Starting fresh is the only safe reading.
+    return { ...EMPTY_SESSION };
+  }
+  if (typeof value !== "object" || value === null) return { ...EMPTY_SESSION };
+  const v = value as Record<string, unknown>;
+  return {
+    // A category that no longer exists is caught when the rail loads, not
+    // here: this cannot know the catalogue.
+    categoryId: typeof v.categoryId === "string" && v.categoryId !== "" ? v.categoryId : null,
+    railTab: v.railTab === "favourites" ? "favourites" : "categories",
+    railScrollTop: scroll(v.railScrollTop),
+    channelScrollTop: scroll(v.channelScrollTop),
+    lastStreamId:
+      typeof v.lastStreamId === "number" && Number.isInteger(v.lastStreamId)
+        ? v.lastStreamId
+        : null,
+    compressor: v.compressor === true,
+  };
+}
+
+export function serialiseSession(s: Session): string {
+  return JSON.stringify({
+    categoryId: s.categoryId,
+    railTab: s.railTab,
+    railScrollTop: scroll(s.railScrollTop),
+    channelScrollTop: scroll(s.channelScrollTop),
+    lastStreamId: s.lastStreamId,
+    compressor: s.compressor,
+  });
+}

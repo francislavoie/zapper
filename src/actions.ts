@@ -9,12 +9,26 @@ import type { ActionId } from "./logic/palette";
 import { run, type Action, type Mode } from "./store";
 import type { ChannelDto, PlayerStateDto, ProgrammeDto } from "./types";
 
+export interface PlayOptions {
+  /** Take over the window as well as starting the stream. Off by default:
+   *  starting a channel is not a decision to stop looking at the list. */
+  full?: boolean;
+  /** Where a failed open should leave the user, when `full` took them
+   *  somewhere. Whichever view they clicked from, not an arbitrary one. */
+  back?: Mode;
+}
+
+/** Starts a channel.
+ *
+ *  Does not change what you are looking at. Throwing the window into the
+ *  player on every pick would make the docked picture and "browsing never
+ *  stops the stream" pointless — the one thing you could not do would be to
+ *  start something and carry on looking. Full screen is a separate intent: a
+ *  double-click, the picture itself, or `full: true`. */
 export async function playChannel(
   dispatch: Dispatch<Action>,
   ch: ChannelDto,
-  /** Where a failed open should leave the user: whichever view they clicked
-   *  from, not an arbitrary one. */
-  back: Mode = "browse",
+  opts: PlayOptions = {},
 ) {
   // Separators are inert by construction; nothing should be able to open one.
   if (ch.isSeparator) return;
@@ -22,10 +36,11 @@ export async function playChannel(
   // Metadata paints immediately — name, logo, programme — while the stream
   // opens, which is the whole trick for perceived latency.
   dispatch({ type: "opening", channel: ch });
+  if (opts.full) dispatch({ type: "mode", mode: "watch" });
   const ok = await run(dispatch, `play ${ch.cleanName}`, backend.play(ch.streamId));
-  // A failed open should not strand the user staring at nothing: put them
-  // back where they came from, with the toast explaining why.
-  if (!ok) dispatch({ type: "mode", mode: back });
+  // A failed open should not strand the user in a player with nothing in it.
+  // Only worth undoing if this call is what put them there.
+  if (!ok && opts.full) dispatch({ type: "mode", mode: opts.back ?? "browse" });
 }
 
 // ------------------------------------------------------------------ actions

@@ -105,6 +105,7 @@ test("ordinary chrome is not on the allowlist, by class or by ancestor", () => {
     "fav-meta",
     "ctx-head",
     "chrome-back",
+    "vfb-label",
     "row-name",
     "row-num",
     "row-now",

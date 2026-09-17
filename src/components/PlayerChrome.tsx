@@ -26,7 +26,8 @@ import { backend } from "../backend";
 import { toggleFullscreen } from "../fullscreen";
 import { clock, liveState, measuredLine } from "../logic/format";
 import { atScreenEdge, initialFade, nextFade, type FadeEvent } from "../logic/fade";
-import { volumeAfterWheel } from "../logic/volume";
+import { volumeAfterWheel, volumeLevel } from "../logic/volume";
+import { zoneAt, zoneIsAvailable, zoneSeek } from "../logic/gestures";
 import { run, useApp, useDispatch } from "../store";
 import {
   Back,
@@ -43,7 +44,9 @@ import {
   Stop,
 } from "./icons";
 import { useCanStack } from "../hooks/useCanStack";
+import { refreshFullscreen, useFullscreen } from "../hooks/useFullscreen";
 import { Scrubber } from "./Scrubber";
+import { VideoFeedback, type Feedback } from "./VideoFeedback";
 import { VolumeControl } from "./VolumeControl";
 
 /** What the two skip controls move by, and what their icons say. One number,
@@ -57,7 +60,7 @@ export function PlayerChrome() {
   // control is absent rather than present and cramped.
   const room = useCanStack(zoom);
   const [fade, setFade] = useState(() => initialFade(performance.now()));
-  const [fullscreen, setFullscreen] = useState(false);
+  const fullscreen = useFullscreen();
 
   const on = useCallback(
     (e: FadeEvent) => setFade((s) => nextFade(s, e, performance.now())),
@@ -71,14 +74,20 @@ export function PlayerChrome() {
     return () => window.clearInterval(t);
   }, [on]);
 
-  useEffect(() => {
-    const sync = () => setFullscreen(document.fullscreenElement !== null);
-    document.addEventListener("fullscreenchange", sync);
-    return () => document.removeEventListener("fullscreenchange", sync);
-  }, []);
-
   const volumeRef = useRef(player.volume);
   volumeRef.current = player.volume;
+
+  // The gestures over the picture change things nothing on screen is showing,
+  // so each one raises a bubble. The counter is what makes a repeat visible:
+  // an identical gesture produces an identical description, and without a
+  // changing id React would reuse the element and the animation would not
+  // replay.
+  const [feedback, setFeedback] = useState<Feedback | null>(null);
+  const feedbackId = useRef(0);
+  const flash = useCallback((f: Omit<Feedback, "id">) => {
+    feedbackId.current += 1;
+    setFeedback({ ...f, id: feedbackId.current });
+  }, []);
 
   const playing = player.state === "playing";
   const measured = measuredLine(player);
@@ -117,9 +126,43 @@ export function PlayerChrome() {
         const next = volumeAfterWheel(volumeRef.current, e.deltaY);
         volumeRef.current = next;
         on({ type: "activity" });
+        flash({
+          kind: "volume",
+          label: `${next}%`,
+          level: volumeLevel(next, player.muted),
+        });
         void run(dispatch, "volume", backend.setVolume(next));
       }}
+      onDoubleClick={(e) => {
+        // Only over the picture. A double-click that lands on the control bar
+        // belongs to the control it hit, and seeking as well would be a second
+        // thing the viewer did not ask for.
+        if ((e.target as HTMLElement).closest(".chrome-top, .chrome-bottom")) return;
+
+        const box = e.currentTarget.getBoundingClientRect();
+        const zone = zoneAt(e.clientX, box.left, box.width);
+
+        if (zone === "middle") {
+          void toggleFullscreen()
+            .then(refreshFullscreen)
+            .catch((err: unknown) =>
+              dispatch({ type: "toast", text: `fullscreen: ${String(err)}` }),
+            );
+          return;
+        }
+
+        // Forward at the live edge has nowhere to go. Saying nothing is
+        // better than a bubble promising five seconds that do not exist.
+        if (!zoneIsAvailable(zone, player.atLiveEdge)) return;
+
+        const by = zoneSeek(zone, SKIP_SECONDS);
+        if (by === null) return;
+        on({ type: "activity" });
+        flash({ kind: zone, label: `${SKIP_SECONDS} seconds`, seconds: SKIP_SECONDS });
+        void run(dispatch, "seek", backend.seekRelative(by));
+      }}
     >
+      <VideoFeedback feedback={feedback} />
       <div className="chrome-top">
         {/* Top-left, where the way out of a full-screen thing lives on every
             device anybody owns. It leaves the player without stopping the
@@ -296,9 +339,11 @@ export function PlayerChrome() {
             title={fullscreen ? "Leave fullscreen (F)" : "Fullscreen (F)"}
             aria-label={fullscreen ? "Leave fullscreen" : "Fullscreen"}
             onClick={() =>
-              void toggleFullscreen().catch((e: unknown) =>
-                dispatch({ type: "toast", text: `fullscreen: ${String(e)}` }),
-              )
+              void toggleFullscreen()
+                .then(refreshFullscreen)
+                .catch((e: unknown) =>
+                  dispatch({ type: "toast", text: `fullscreen: ${String(e)}` }),
+                )
             }
           >
             {fullscreen ? <ExitFullscreen className="i" /> : <Fullscreen className="i" />}

@@ -5,7 +5,7 @@
 // Nothing here may paint an opaque pixel over the video region. The page
 // background stays transparent; only chrome surfaces get colour.
 
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import { backend, isMock, subscribePlayer, subscribeSync } from "./backend";
 import { errorMessage } from "./logic/async";
 import { useGlobalKeys } from "./hooks/useGlobalKeys";
@@ -14,6 +14,9 @@ import { useVideoRect } from "./hooks/useVideoRect";
 import { useZoom } from "./hooks/useZoom";
 import { useApp, useDispatch } from "./store";
 import { useCanStack } from "./hooks/useCanStack";
+import { useFullscreen } from "./hooks/useFullscreen";
+import { loadSession, saveSession, watchForExit } from "./session";
+import { applyVideoWidth, saveVideoWidth } from "./videoSize";
 import { saveStacked } from "./stacked";
 import { AboutModal } from "./components/AboutModal";
 import { Rail } from "./components/Rail";
@@ -42,6 +45,13 @@ export function App() {
   const room = useCanStack(state.zoom);
   const stacked = state.mode === "watch" && state.stacked && room;
 
+  // Fullscreen means the picture, not the app with a bigger window around it.
+  // The toolbar is the app's own title bar and there is no title bar in a
+  // fullscreen video, so it goes, and the stage takes the whole window. The
+  // video rect is measured from the stage, so that is all it takes to make
+  // the picture fill the screen.
+  const fullscreen = useFullscreen();
+
   useGlobalKeys(state, dispatch);
 
   // Remembered per machine, like zoom, and written here rather than in the
@@ -50,9 +60,79 @@ export function App() {
     saveStacked(state.stacked);
   }, [state.stacked]);
 
+  // Where you were. Same reasoning and the same place as the two above: not a
+  // setting, not synced, and a property of this machine rather than of the
+  // account.
+  useEffect(() => {
+    saveSession({ categoryId: state.categoryId, railTab: state.railTab });
+  }, [state.categoryId, state.railTab]);
+
+  // Closing mid-scroll must still remember where you were; writes are
+  // otherwise coalesced and the last one would be lost.
+  useEffect(watchForExit, []);
+
+  // The channel from last time, restored as metadata and nothing else.
+  //
+  // Deliberately not played. Many providers allow a single connection, and
+  // opening a live stream at startup would spend it — and the bandwidth —
+  // on a guess about what this launch is for. Browsing is at least as likely
+  // as watching. So the band comes back showing the channel, its programme
+  // and its picture slot, and one click starts it.
+  //
+  // Runs once. A later channel change is not a restore, and re-running this
+  // would fight the player for `nowChannel`.
+  const restored = useRef(false);
+  useEffect(() => {
+    if (restored.current) return;
+    restored.current = true;
+    const id = loadSession().lastStreamId;
+    if (id === null) return;
+    void backend
+      .channelsByIds([id])
+      .then((rows) => {
+        // The reducer decides whether this is still wanted: the user may
+        // have started something while the lookup was in flight.
+        const channel = rows[0];
+        if (channel) dispatch({ type: "ready", channel });
+      })
+      .catch(() => {
+        // A channel that has gone, or a mirror not yet built. Starting on
+        // "Nothing playing" is the correct fallback and needs no apology.
+      });
+  }, [dispatch]);
+
+  // What to have ready next time.
+  useEffect(() => {
+    if (state.nowChannel) saveSession({ lastStreamId: state.nowChannel.streamId });
+  }, [state.nowChannel]);
+
+  /** Whether the remembered compressor setting has been dealt with.
+   *
+   *  This gate is the whole difficulty. The player starts out reporting the
+   *  compressor off, because nothing has asked the backend yet, and a plain
+   *  "save whatever it currently is" effect would fire on mount and write
+   *  that `false` over the remembered `true` before anything had a chance to
+   *  restore it. So nothing is saved until the restore has happened. */
+  const audioRestored = useRef(false);
+
+  useEffect(() => {
+    if (!audioRestored.current) return;
+    saveSession({ compressor: state.player.compressor });
+  }, [state.player.compressor]);
+
   // Ctrl +/-/0 and Ctrl+wheel. Applied before paint, which matters below: the
   // video rect is measured from boxes this has already resized.
   useZoom(state.zoom, dispatch);
+
+  // Before paint for the same reason: this writes the custom property the
+  // slot is sized from, and the rect is measured from the slot afterwards.
+  useLayoutEffect(() => {
+    applyVideoWidth(state.videoWidthRem);
+  }, [state.videoWidthRem]);
+
+  useEffect(() => {
+    saveVideoWidth(state.videoWidthRem);
+  }, [state.videoWidthRem]);
 
   // Read once at boot rather than when the modal opens: the guide needs
   // guideHours whether or not anyone has been to the settings pane.
@@ -72,12 +152,24 @@ export function App() {
     // Stacked docks too: the picture goes in a slot across the top, and the
     // rect is measured from that slot exactly as it is from the browse dock.
     // No special case reaches mpv — this is a layout change, nothing more.
-    docked: browsing || stacked,
+    // The guide docks as well. Undocked, the video would fill the stage
+    // *underneath* an opaque grid — drawn, paid for, and invisible — so the
+    // guide leaves the same hole the browse band does.
+    docked: browsing || stacked || state.mode === "guide",
     // Zoom moves every box on screen, and the video is not a box — mpv draws
     // it beneath the webview from coordinates this app measures and sends. So
     // a zoom change has to re-measure and re-send, or the picture stays at the
     // old layout's position and detaches from its slot.
     zoom: state.zoom,
+    // Resizing the picture moves the slot it is measured from. Listed for
+    // the same reason as `zoom`: it is not used in the arithmetic, but every
+    // box it measures moves when it changes.
+    videoWidthRem: state.videoWidthRem,
+    // A fullscreen change resizes the stage, and that change is animated —
+    // in both directions. Without it the way in animated (the mode often
+    // changed too) and the way out snapped, which reads as a glitch rather
+    // than as a different animation.
+    fullscreen,
     paintRef: isMock ? planeRef : undefined,
     onError: (m) => dispatch({ type: "toast", text: `video placement: ${m}` }),
   });
@@ -104,8 +196,26 @@ export function App() {
       });
     backend
       .playerState()
-      .then((p) => live && dispatch({ type: "player", value: p }))
+      .then((p) => {
+        if (!live) return;
+        dispatch({ type: "player", value: p });
+        // Applied here rather than on a timer because this is the first
+        // moment the backend has answered, which is the first moment it is
+        // known to be able to take the call. mpv's `af` is a global
+        // property, not a per-file one, so setting it once now keeps it on
+        // across every channel change afterwards.
+        audioRestored.current = true;
+        if (loadSession().compressor && !p.compressor) {
+          void backend.setCompressor(true).catch(() => {
+            // The preference is a nicety; failing to restore it is not worth
+            // a toast on boot.
+          });
+        }
+      })
       .catch((e) => {
+        // Still open the gate: the preference cannot be restored, but the
+        // user's later toggles must still be remembered.
+        audioRestored.current = true;
         if (import.meta.env.DEV) console.warn("player_state:", errorMessage(e));
       });
 
@@ -116,14 +226,14 @@ export function App() {
   }, [dispatch]);
 
   return (
-    <div className="app" data-mode={state.mode}>
+    <div className={`app ${fullscreen ? "fullscreen" : ""}`} data-mode={state.mode}>
       {/* Mock only. In Tauri this never renders, because a painted rectangle
           here would sit on top of the video plane and hide it. */}
       {isMock ? <div className="mock-video" ref={planeRef} /> : null}
 
       {/* The window's own title bar. It owns the top of the app, and the stage
           below it owns everything else — including where the video goes. */}
-      <Toolbar />
+      {fullscreen ? null : <Toolbar />}
 
       <div className="stage" ref={stageRef}>
         {browsing ? (
@@ -137,7 +247,15 @@ export function App() {
           </div>
         ) : null}
 
-        {state.mode === "guide" ? <GuideGrid /> : null}
+        {state.mode === "guide" ? (
+          <div className="guide-stage">
+            {/* The same band as browse, for the same reason: mpv draws
+                beneath the webview, so the only way to see the picture is to
+                leave a hole where it is. */}
+            <WatchBand videoRef={dockRef} />
+            <GuideGrid />
+          </div>
+        ) : null}
 
         {/* Chrome belongs to watch mode. Browsing shows the docked picture and
             the metadata beside it, not a full set of transport controls. */}

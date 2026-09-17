@@ -32,6 +32,10 @@ thread_local! {
 pub struct Overlay {
     pub overlay: gtk::Overlay,
     pub gl_area: gtk::GLArea,
+    /// Where the surface goes, normalised. Read back by the overlay's
+    /// `get-child-position` handler, which is the only thing that positions
+    /// the GL surface - see [`Overlay::set_video_rect`].
+    placed: Rc<Cell<crate::surface::VideoRect>>,
     renders: Rc<Cell<u32>>,
     mpv_draws: Rc<Cell<u32>>,
     peak: Rc<Cell<u8>>,
@@ -63,18 +67,22 @@ impl Overlay {
     }
 
     /// Positions the GL surface. Called on browse/fullscreen transitions.
+    ///
+    /// Records the rect and asks for a re-layout; the overlay's
+    /// `get-child-position` handler turns it into an allocation. It is done
+    /// that way round, rather than with a size request, because a size
+    /// request is a *minimum* and GTK propagates it: the surface is inside
+    /// the toplevel, so asking for a surface the size of the screen would ask
+    /// for a window that could never again be smaller than the screen.
+    ///
+    /// And it would latch. Going fullscreen would set the minimum to the whole
+    /// display; leaving fullscreen could not shrink the window past that
+    /// minimum, so the stage would never measure smaller, so the next rect
+    /// would be full-screen again: a window stuck at the size of the monitor,
+    /// refusing to be resized, with nothing in the logs.
     pub fn set_video_rect(&self, rect: crate::surface::VideoRect) {
-        let (win_w, win_h) = (
-            self.overlay.allocated_width(),
-            self.overlay.allocated_height(),
-        );
-        let (x, y, w, h) = rect.to_pixels(win_w, win_h);
-        self.gl_area.set_halign(gtk::Align::Start);
-        self.gl_area.set_valign(gtk::Align::Start);
-        self.gl_area.set_margin_start(x);
-        self.gl_area.set_margin_top(y);
-        self.gl_area.set_size_request(w, h);
-        self.gl_area.queue_resize();
+        self.placed.set(rect);
+        self.overlay.queue_resize();
     }
 }
 
@@ -125,9 +133,17 @@ pub fn install(window: &tauri::WebviewWindow) -> Result<Overlay> {
 
     window.with_webview(|platform| {
         let webview = platform.inner();
+        // The *webview* is transparent; the window is not, and does not need
+        // to be. This alpha is what lets the GL surface show through the page
+        // — compositing inside the window, which has nothing to do with how
+        // the window meets the desktop. Asking for a transparent toplevel as
+        // well only bought an RGBA visual for the compositor to blend against
+        // the wallpaper on every frame, for a window that is opaque from edge
+        // to edge.
         webview.set_background_color(&gdk::RGBA::new(0.0, 0.0, 0.0, 0.0));
 
         suppress_browser_menu(&webview);
+        tune_scrolling(&webview);
 
         let Some(parent) = webview.parent() else {
             tracing::error!("webview has no parent container; cannot install overlay");
@@ -139,8 +155,10 @@ pub fn install(window: &tauri::WebviewWindow) -> Result<Overlay> {
         };
 
         let gl_area = gtk::GLArea::new();
-        gl_area.set_hexpand(true);
-        gl_area.set_vexpand(true);
+        // No expand or align flags: this is an overlay child whose allocation
+        // is supplied outright by `get-child-position` below, and a flag that
+        // looks like it positions the surface but does not would be worse
+        // than none at all.
         gl_area.set_has_alpha(false);
 
         let renders = Rc::new(Cell::new(0u32));
@@ -167,6 +185,25 @@ pub fn install(window: &tauri::WebviewWindow) -> Result<Overlay> {
             }
             if painted {
                 drawn.set(drawn.get() + 1);
+                // A copy of the frame that was just drawn, for the scrubber.
+                // Nothing is decoded for this: it is already on the GPU, and
+                // it was about to be discarded. The gate is checked first so
+                // that the ordinary frame costs one comparison and does not
+                // read mpv's clock sixty times a second.
+                if crate::surface::trickplay::is_due() {
+                    if let Some(Some(at)) =
+                        crate::surface::mpv::with_player(|p| p.get_f64("playback-time"))
+                    {
+                        let scale = area.scale_factor();
+                        unsafe {
+                            crate::surface::trickplay::capture(
+                                area.allocated_width() * scale,
+                                area.allocated_height() * scale,
+                                at,
+                            );
+                        }
+                    }
+                }
                 // Twice a second, look at what actually landed in the
                 // framebuffer. Cheap, and the only thing that can tell a
                 // working surface from a black one.
@@ -184,7 +221,33 @@ pub fn install(window: &tauri::WebviewWindow) -> Result<Overlay> {
 
         let overlay = gtk::Overlay::new();
         container.remove(&webview);
-        overlay.add(&gl_area);
+
+        // The GL surface is an *overlay* child, never the overlay's main
+        // child. The main child is what GTK asks for a minimum size, and the
+        // surface has to be free to be any size at all without that reaching
+        // the window. Added first, so it is the bottom-most overlay child and
+        // the webview still floats above it.
+        let placed = Rc::new(Cell::new(crate::surface::VideoRect::full()));
+        overlay.add_overlay(&gl_area);
+        // It is underneath the webview, which covers the window, so it would
+        // never see an event anyway - but saying so is free and means input
+        // can never be explained by this widget.
+        overlay.set_overlay_pass_through(&gl_area, true);
+
+        let positioned = gl_area.clone();
+        let wanted = placed.clone();
+        overlay.connect_get_child_position(move |overlay, widget| {
+            // Only the GL surface is placed by hand. Returning None for
+            // everything else leaves tao's box and the webview to the
+            // overlay's own layout, which already fills them to the window.
+            if widget != positioned.upcast_ref::<gtk::Widget>() {
+                return None;
+            }
+            let (x, y, w, h) = wanted
+                .get()
+                .to_pixels(overlay.allocated_width(), overlay.allocated_height());
+            Some(gdk::Rectangle::new(x, y, w, h))
+        });
 
         // The overlay must become a *direct* child of the toplevel window, not
         // simply be dropped into tao's box. tauri-runtime-wry's
@@ -203,7 +266,13 @@ pub fn install(window: &tauri::WebviewWindow) -> Result<Overlay> {
         match window_parent {
             Some(win) => {
                 win.remove(&container);
-                overlay.add_overlay(&container);
+                // Tao's box is the main child now that the GL surface is not.
+                // It is empty - the webview has just been taken out of it - so
+                // it asks for nothing, which is exactly what the toplevel's
+                // minimum size should be built from. It is kept rather than
+                // discarded because tauri's menu API still needs somewhere to
+                // put a menu bar.
+                overlay.add(&container);
                 overlay.add_overlay(&webview);
                 win.add(&overlay);
             }
@@ -218,6 +287,8 @@ pub fn install(window: &tauri::WebviewWindow) -> Result<Overlay> {
                 container.add(&overlay);
             }
         }
+        paint_window_black();
+
         overlay.show_all();
 
         // tauri's resize handler unwraps this exact chain on every button press
@@ -233,6 +304,7 @@ pub fn install(window: &tauri::WebviewWindow) -> Result<Overlay> {
                 Ok(Overlay {
                     overlay,
                     gl_area,
+                    placed,
                     renders,
                     mpv_draws,
                     peak,
@@ -251,6 +323,65 @@ pub fn install(window: &tauri::WebviewWindow) -> Result<Overlay> {
         .with(|b| b.borrow_mut().take())
         .ok_or_else(|| anyhow!("with_webview did not run; not a GTK platform?"))?
         .map_err(|e| anyhow!(e))
+}
+
+/// Paints the toplevel black, because the theme's colour is not black.
+///
+/// Everything in this stack is transparent by design: the page has no
+/// background so that mpv shows through it, and the window is created
+/// transparent. What is left underneath is GTK's own window background, which
+/// takes its colour from the user's theme — white, on a light one.
+///
+/// That shows wherever the GL surface does not reach, which is exactly the
+/// moments it is most visible: the instant before the first frame, and while
+/// the window is growing into fullscreen and the surface has not yet been
+/// told its new rect. It reads as a white box the picture grows into.
+///
+/// Applied to the screen rather than the widget: GTK3 draws the toplevel's
+/// background from its style context, and a provider on the screen reaches it
+/// without having to find the right widget in a tree this file has already
+/// rearranged.
+fn paint_window_black() {
+    let Some(screen) = gdk::Screen::default() else {
+        tracing::warn!("no GDK screen; the window keeps the theme's background colour");
+        return;
+    };
+    let css = gtk::CssProvider::new();
+    // `window` is the toplevel and `.background` is the style class GTK puts
+    // on it. Both, because a theme may style either.
+    if let Err(e) = css.load_from_data(b"window, window.background { background-color: #000; }") {
+        tracing::warn!("could not parse the window background stylesheet: {e}");
+        return;
+    }
+    gtk::StyleContext::add_provider_for_screen(
+        &screen,
+        &css,
+        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+    );
+}
+
+/// Turns off WebKit's own scroll animation.
+///
+/// `enable-smooth-scrolling` defaults on, and it makes WebKit animate every
+/// discrete wheel tick over several frames rather than moving and stopping.
+/// In a list that is the difference between scrolling and dragging: the
+/// content keeps gliding after the wheel has stopped, which reads as lag
+/// however fast the frames are.
+///
+/// It applies to *discrete* wheel events. A touchpad sends continuous scroll
+/// deltas that the compositor handles, and those are unaffected, so this
+/// buys a mouse wheel its native step without costing a touchpad its
+/// kinetics.
+fn tune_scrolling(webview: &webkit2gtk::WebView) {
+    use webkit2gtk::{SettingsExt, WebViewExt};
+
+    // Fully qualified: GtkWidget has a `settings()` of its own, and the one
+    // wanted here is WebKit's.
+    let Some(settings) = WebViewExt::settings(webview) else {
+        tracing::warn!("no WebKit settings; wheel scrolling keeps its animation");
+        return;
+    };
+    settings.set_enable_smooth_scrolling(false);
 }
 
 /// Stops WebKit offering Back / Forward / Stop / Reload / Inspect Element.

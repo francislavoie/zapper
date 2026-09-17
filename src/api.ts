@@ -16,6 +16,7 @@ import {
   type FavouriteDto,
   type GuideRowDto,
   type SyncStatusDto,
+  type ThumbnailDto,
   type VideoRect,
 } from "./types";
 
@@ -24,6 +25,8 @@ export const api = {
 
   channels: (categoryId: string | null, offset: number, limit: number) =>
     invoke<ChannelDto[]>("channels", { categoryId, offset, limit }),
+
+  channelsByIds: (ids: number[]) => invoke<ChannelDto[]>("channels_by_ids", { ids }),
 
   search: (query: string, limit: number) =>
     invoke<ChannelDto[]>("search", { query, limit }),
@@ -47,6 +50,8 @@ export const api = {
     invoke<void>("set_compressor", { enabled }),
   setVideoRect: (rect: VideoRect) => invoke<void>("set_video_rect", { rect }),
   playerState: () => invoke<PlayerStateDto>("player_state"),
+  thumbnailAt: (behindLive: number) =>
+    invoke<ThumbnailDto | null>("thumbnail_at", { behindLive }),
 
   settings: () => invoke<SettingsDto>("settings"),
   setSettings: (settings: SettingsDto) => invoke<void>("set_settings", { settings }),
