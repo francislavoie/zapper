@@ -26,7 +26,11 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
         // One press, one dismissal, in the order things were stacked up. The
         // toolbar's menu is the most recent thing anyone opened whenever it is
         // open — it cannot be opened from behind a modal — so it unwinds first.
-        if (state.menuOpen) {
+        if (state.favouriteMenu) {
+          // A context menu is always the most recent thing on screen: it
+          // cannot be opened from behind anything.
+          dispatch({ type: "favouriteMenu", menu: null });
+        } else if (state.menuOpen) {
           dispatch({ type: "menu", open: false });
         } else if (state.aboutOpen) {
           dispatch({ type: "about", open: false });
@@ -130,5 +134,6 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
     state.settingsOpen,
     state.menuOpen,
     state.aboutOpen,
+    state.favouriteMenu,
   ]);
 }

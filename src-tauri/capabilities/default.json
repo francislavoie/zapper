@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Permissions the main window needs. The window is undecorated and draws its own bar, so dragging, the window buttons and fullscreen all go through these rather than the system frame.",
+  "description": "Permissions the main window needs. The window is undecorated and draws its own bar, so dragging, the window buttons and fullscreen go through these rather than the system frame; zoom uses the webview's own page zoom.",
   "windows": [
     "main"
   ],
@@ -13,6 +13,7 @@
     "core:window:allow-is-maximized",
     "core:window:allow-close",
     "core:window:allow-set-fullscreen",
-    "core:window:allow-is-fullscreen"
+    "core:window:allow-is-fullscreen",
+    "core:webview:allow-set-webview-zoom"
   ]
 }

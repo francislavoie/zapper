@@ -4,19 +4,58 @@
 //
 // Click does not pause. That is a VOD idiom and it misfires constantly on
 // live TV, where the click you meant for the window lands on the stream.
+//
+// The order of the bottom row is the user's, and it is not arbitrary:
+//
+//   play/pause · stop · volume + slider · compressor ·· skip back ·
+//   skip forward · live · buffered ··· stack ··· browse … fullscreen
+//
+// Play and stop lead, because they are the two things anybody reaches for
+// without looking, and both sit left of the volume control. Volume and the
+// compressor are the audio pair; a gap separates them from transport, so the
+// hand does not confuse the two groups. The stacked-layout chevron is in the
+// middle of the bar. Fullscreen is last, always, because a control that moves
+// is a control you have to look for.
+//
+// The measured line is not in this row: it is an overlay in the top-right
+// corner of the picture, where it was, and where it does not take a control's
+// worth of width from a row that already wraps at high zoom.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { backend } from "../backend";
 import { toggleFullscreen } from "../fullscreen";
-import { clock, liveOffset, measuredLine } from "../logic/format";
+import { clock, liveState, measuredLine } from "../logic/format";
 import { atScreenEdge, initialFade, nextFade, type FadeEvent } from "../logic/fade";
 import { volumeAfterWheel } from "../logic/volume";
 import { run, useApp, useDispatch } from "../store";
+import {
+  Back,
+  ChevronDown,
+  ChevronUp,
+  CompressorOff,
+  CompressorOn,
+  ExitFullscreen,
+  Fullscreen,
+  Pause,
+  Play,
+  SkipBack,
+  SkipForward,
+  Stop,
+} from "./icons";
+import { useCanStack } from "../hooks/useCanStack";
 import { Scrubber } from "./Scrubber";
+import { VolumeControl } from "./VolumeControl";
+
+/** What the two skip controls move by, and what their icons say. One number,
+ *  so the arrow can never claim a different jump from the one it makes. */
+const SKIP_SECONDS = 5;
 
 export function PlayerChrome() {
-  const { player, nowChannel } = useApp();
+  const { player, nowChannel, stacked, zoom } = useApp();
   const dispatch = useDispatch();
+  // Offered only when the window can actually take the layout. Below that the
+  // control is absent rather than present and cramped.
+  const room = useCanStack(zoom);
   const [fade, setFade] = useState(() => initialFade(performance.now()));
   const [fullscreen, setFullscreen] = useState(false);
 
@@ -43,6 +82,19 @@ export function PlayerChrome() {
 
   const playing = player.state === "playing";
   const measured = measuredLine(player);
+  // The backend decides what counts as live, with hysteresis. The interface
+  // must not second-guess it from behindLive, which sawtooths by seconds
+  // during ordinary playback — that is precisely the flicker.
+  const live = liveState(player.atLiveEdge, player.behindLive);
+
+  /** One place decides what setting a volume means. Reaching for the slider
+   *  while muted means "let me hear this", so it unmutes rather than moving a
+   *  handle that changes nothing audible. */
+  const setVolume = (next: number) => {
+    volumeRef.current = next;
+    void run(dispatch, "volume", backend.setVolume(next));
+    if (player.muted) void run(dispatch, "mute", backend.setMuted(false));
+  };
 
   return (
     <div
@@ -58,6 +110,9 @@ export function PlayerChrome() {
       }}
       onPointerLeave={() => on({ type: "leave" })}
       onWheel={(e) => {
+        // Ctrl+wheel is application zoom, handled on the window. A zoom is not
+        // a volume change, and doing both would be two surprises at once.
+        if (e.ctrlKey || e.metaKey) return;
         // Scroll over the video is volume, and it goes above 100 on purpose.
         const next = volumeAfterWheel(volumeRef.current, e.deltaY);
         volumeRef.current = next;
@@ -66,6 +121,19 @@ export function PlayerChrome() {
       }}
     >
       <div className="chrome-top">
+        {/* Top-left, where the way out of a full-screen thing lives on every
+            device anybody owns. It leaves the player without stopping the
+            stream — the same thing Escape does. */}
+        <button
+          className="ctl chrome-back"
+          title="Back to browsing (Escape)"
+          aria-label="Back to browsing"
+          onClick={() => dispatch({ type: "mode", mode: "browse" })}
+        >
+          <Back className="i" />
+          BACK
+        </button>
+
         <div className="chrome-title">
           <h2>{nowChannel?.cleanName ?? "Nothing playing"}</h2>
           <p>
@@ -76,13 +144,43 @@ export function PlayerChrome() {
                 : (nowChannel?.nowPlaying?.title ?? "no guide data")}
           </p>
         </div>
-        {/* The honest numbers. The channel name is not evidence of anything. */}
+
+        {/* The honest numbers, in the corner of the picture. The channel name
+            is not evidence of anything — "HARBOUR SPORTS ONE 4K" is 720p. */}
         <div className={`measured ${measured ? "" : "show"}`}>
           {measured || "resolution unknown"}
         </div>
       </div>
 
       <div className="chrome-bottom">
+        {/* Centred on the bar, in a slot of its own. It was between two
+            springs in the control row, which is only the middle of the bar
+            while that row fits on one line — and the windows this control
+            appears in are exactly the narrow ones where it wraps. A row of its
+            own is the middle of the bar at every width.
+
+            Only when the window can take the layout: taller than wide, with
+            half again the picture's height to spare. In anything else the
+            result would be a letterbox over three rows of guide, so the
+            control is not there at all. */}
+        {room ? (
+          <div className="chrome-stack-row">
+            <button
+              className={`ctl icon stack-toggle ${stacked ? "on" : ""}`}
+              title={
+                stacked
+                  ? "Give the whole window back to the picture"
+                  : "Put the picture across the top, with the guide below"
+              }
+              aria-label={stacked ? "Full-window video" : "Video above the guide"}
+              aria-pressed={stacked}
+              onClick={() => dispatch({ type: "stacked", on: !stacked })}
+            >
+              {stacked ? <ChevronUp className="i" /> : <ChevronDown className="i" />}
+            </button>
+          </div>
+        ) : null}
+
         <Scrubber
           player={player}
           channel={nowChannel}
@@ -95,34 +193,88 @@ export function PlayerChrome() {
           onPointerLeave={() => on({ type: "pin", pinned: false })}
         >
           <button
-            className="ctl"
+            className="ctl icon"
+            title={playing ? "Pause (Space)" : "Play (Space)"}
+            aria-label={playing ? "Pause" : "Play"}
             onClick={() => void run(dispatch, "pause", backend.togglePause())}
           >
-            {playing ? "❚❚" : "▶"}
-          </button>
-          <button
-            className="ctl"
-            title="Back 5 seconds"
-            onClick={() => void run(dispatch, "seek", backend.seekRelative(-5))}
-          >
-            ‹ 5s
-          </button>
-          <button
-            className="ctl"
-            title="Forward 5 seconds"
-            onClick={() => void run(dispatch, "seek", backend.seekRelative(5))}
-          >
-            5s ›
-          </button>
-          <button
-            className={`ctl ${player.behindLive < 1 ? "on" : ""}`}
-            title="Jump to the live edge (L)"
-            onClick={() => void run(dispatch, "live", backend.seekLive())}
-          >
-            ⇥
+            {playing ? <Pause className="i" /> : <Play className="i" />}
           </button>
 
-          <span className="time">{liveOffset(player.behindLive)}</span>
+          {/* A plain square, beside play, left of the volume: the user's
+              order. Stopping leaves the player, because a stopped player is
+              not a thing to sit looking at. */}
+          <button
+            className="ctl icon"
+            title="Stop"
+            aria-label="Stop"
+            onClick={() => {
+              void run(dispatch, "stop", backend.stop());
+              dispatch({ type: "mode", mode: "browse" });
+            }}
+          >
+            <Stop className="i" />
+          </button>
+
+          <VolumeControl
+            volume={player.volume}
+            muted={player.muted}
+            onVolume={setVolume}
+            onToggleMute={() => void run(dispatch, "mute", backend.setMuted(!player.muted))}
+            onActivity={() => on({ type: "activity" })}
+          />
+
+          <button
+            className={`ctl icon ${player.compressor ? "on" : ""}`}
+            title="Dynamic range compressor"
+            aria-label="Dynamic range compressor"
+            aria-pressed={player.compressor}
+            onClick={() =>
+              void run(dispatch, "compressor", backend.setCompressor(!player.compressor))
+            }
+          >
+            {player.compressor ? (
+              <CompressorOn className="i" />
+            ) : (
+              <CompressorOff className="i" />
+            )}
+          </button>
+
+          {/* A gap: audio on one side of it, transport on
+              the other. */}
+          <span className="ctl-gap" />
+
+          <button
+            className="ctl icon"
+            title={`Back ${SKIP_SECONDS} seconds (Left)`}
+            aria-label={`Back ${SKIP_SECONDS} seconds`}
+            onClick={() => void run(dispatch, "seek", backend.seekRelative(-SKIP_SECONDS))}
+          >
+            <SkipBack className="i" seconds={SKIP_SECONDS} />
+          </button>
+          <button
+            className="ctl icon"
+            title={`Forward ${SKIP_SECONDS} seconds (Right)`}
+            aria-label={`Forward ${SKIP_SECONDS} seconds`}
+            onClick={() => void run(dispatch, "seek", backend.seekRelative(SKIP_SECONDS))}
+          >
+            <SkipForward className="i" seconds={SKIP_SECONDS} />
+          </button>
+
+          {/* One control, not a lamp beside a button: the word is the button,
+              and the dot is its state. At the live edge there is nowhere to
+              jump to, so it stops being clickable rather than lying. */}
+          <button
+            className={`ctl live ${live.live ? "at-edge" : ""}`}
+            title={live.canJump ? `${live.label} — click to jump to live (L)` : live.label}
+            aria-label={live.label}
+            disabled={!live.canJump}
+            onClick={() => void run(dispatch, "live", backend.seekLive())}
+          >
+            <span className="live-dot" aria-hidden="true" />
+            Live
+          </button>
+
           <span className="time" title="Buffered scrollback">
             {clock(player.bufferedBack)}
           </span>
@@ -130,46 +282,26 @@ export function PlayerChrome() {
           <span className="spring" />
 
           <button
-            className={`ctl ${player.compressor ? "on" : ""}`}
-            title="Dynamic range compressor"
-            onClick={() =>
-              void run(dispatch, "compressor", backend.setCompressor(!player.compressor))
-            }
-          >
-            COMP
-          </button>
-          <button
-            className={`ctl ${player.muted ? "on" : ""}`}
-            onClick={() => void run(dispatch, "mute", backend.setMuted(!player.muted))}
-          >
-            {player.muted ? "muted" : `${player.volume}%`}
-          </button>
-          <button
-            className="ctl"
-            title="Fullscreen (F)"
-            onClick={() =>
-              void toggleFullscreen().catch((e: unknown) =>
-                dispatch({ type: "toast", text: `fullscreen: ${String(e)}` }),
-              )
-            }
-          >
-            ⛶
-          </button>
-          <button
             className="ctl"
             title="Browse without stopping playback (Escape)"
             onClick={() => dispatch({ type: "mode", mode: "browse" })}
           >
             Browse
           </button>
+
+          {/* Last, always — and still last after the row wraps, which is what
+              `rightmost` is for. */}
           <button
-            className="ctl ghost"
-            onClick={() => {
-              void run(dispatch, "stop", backend.stop());
-              dispatch({ type: "mode", mode: "browse" });
-            }}
+            className="ctl icon rightmost"
+            title={fullscreen ? "Leave fullscreen (F)" : "Fullscreen (F)"}
+            aria-label={fullscreen ? "Leave fullscreen" : "Fullscreen"}
+            onClick={() =>
+              void toggleFullscreen().catch((e: unknown) =>
+                dispatch({ type: "toast", text: `fullscreen: ${String(e)}` }),
+              )
+            }
           >
-            Stop
+            {fullscreen ? <ExitFullscreen className="i" /> : <Fullscreen className="i" />}
           </button>
         </div>
       </div>

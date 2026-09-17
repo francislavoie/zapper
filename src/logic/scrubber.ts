@@ -89,6 +89,31 @@ export function pixelAtTime(g: Geometry, t: number): number {
   return g.seamPx + ((time - g.bufferStart) / span) * bufferWidth;
 }
 
+/** Where to draw the playhead.
+ *
+ *  While live it is pinned to the right edge rather than plotted from
+ *  `behindLive`, because two things move underneath it and neither means the
+ *  viewer went anywhere. `behindLive` is measured against the end of mpv's
+ *  seekable window, which advances in chunks, so it sawtooths by a couple of
+ *  seconds throughout ordinary playback. And the buffer zone rescales every
+ *  time scrollback grows — the span it covers is `bufferStart..live`, so the
+ *  same instant lands on a different pixel as the buffer deepens. Plotted,
+ *  the head twitches and drifts while nothing is actually happening.
+ *
+ *  `atLiveEdge` carries the hysteresis and is the contract's answer to "is
+ *  this live", so the pin engages and releases exactly when the Live
+ *  indicator does. The two cannot disagree.
+ *
+ *  Off the edge the head is plotted normally: there the movement is real,
+ *  and a rewound viewer does drift left as live runs away from them. */
+export function headPixel(
+  g: Geometry,
+  player: { atLiveEdge: boolean; behindLive: number },
+): number {
+  if (player.atLiveEdge) return g.width;
+  return pixelAtTime(g, g.live - Math.max(0, player.behindLive));
+}
+
 export type Zone = "archive" | "buffer";
 
 export function zoneAtPixel(g: Geometry, px: number): Zone {

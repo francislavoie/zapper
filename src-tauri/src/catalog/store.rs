@@ -8,7 +8,9 @@ use anyhow::Result;
 use rusqlite::{Connection, Row};
 use std::collections::HashMap;
 
-use crate::ipc::types::{CategoryDto, ChannelDto, GuideRowDto, ProgrammeDto, QualityDto};
+use crate::ipc::types::{
+    CategoryDto, ChannelDto, FavouriteDto, GuideRowDto, ProgrammeDto, QualityDto,
+};
 
 /// The channel columns every listing selects, in the order
 /// [`channel_from_row`] expects. Kept in one place so the two callers cannot
@@ -293,6 +295,78 @@ pub fn guide_rows(conn: &Connection, ids: &[i64], from: i64, to: i64) -> Result<
         }
     }
     Ok(ids.iter().filter_map(|id| by_id.remove(id)).collect())
+}
+
+// ------------------------------------------------------------------ activity
+
+/// Every channel with watch time against it, unordered.
+///
+/// Unordered on purpose: the ranking is recency-weighted and belongs in
+/// [`crate::catalog::activity`], where it can be tested without a database.
+/// This is only the join — and the place where the two rules that must never
+/// be broken are enforced, because a favourite is something you *watched*:
+/// separators are not playable and soft-deleted channels are not there any
+/// more, so neither may appear however much time is against its id.
+///
+/// The activity row itself survives a sync by design (see
+/// [`crate::catalog::sync`]), so a channel that comes back from a soft delete
+/// brings its history with it.
+pub fn watched(conn: &Connection) -> Result<Vec<FavouriteDto>> {
+    let sql = format!(
+        "SELECT {CHANNEL_COLUMNS}, a.watch_seconds, a.last_watched, a.open_count
+         FROM activity a
+         JOIN channels ch ON ch.stream_id = a.stream_id
+         LEFT JOIN quality q ON q.stream_id = ch.stream_id
+         WHERE ch.deleted_at IS NULL
+           AND ch.is_separator = 0
+           AND a.watch_seconds > 0"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map([], |row| {
+        Ok(FavouriteDto {
+            channel: channel_from_row(row)?,
+            watch_seconds: row.get(17)?,
+            last_watched: row.get(18)?,
+            open_count: row.get(19)?,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// Adds watch time to a channel's running total.
+///
+/// An upsert rather than a read-modify-write: the player writes this from its
+/// heartbeat and must not lose a flush to a race. `last_watched` takes the
+/// later of the two values, so a stale write — or a clock that went backwards
+/// — cannot make a channel look older than it is.
+pub fn record_activity(
+    conn: &Connection,
+    stream_id: i64,
+    seconds: i64,
+    open: bool,
+    at: i64,
+) -> Result<()> {
+    conn.execute(
+        "INSERT INTO activity (stream_id, watch_seconds, last_watched, open_count)
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(stream_id) DO UPDATE SET
+             watch_seconds = activity.watch_seconds + excluded.watch_seconds,
+             last_watched  = MAX(COALESCE(activity.last_watched, 0), excluded.last_watched),
+             open_count    = activity.open_count + excluded.open_count",
+        rusqlite::params![stream_id, seconds.max(0), at, i64::from(open)],
+    )?;
+    Ok(())
+}
+
+/// Forgets one channel's history entirely.
+///
+/// Deletes rather than zeroing: a row of zeroes is indistinguishable from a
+/// channel opened for the first time a moment ago, and would have to be
+/// filtered everywhere instead of here. Forgetting something that was never
+/// watched is not an error.
+pub fn forget_activity(conn: &Connection, stream_id: i64) -> Result<()> {
+    conn.execute("DELETE FROM activity WHERE stream_id = ?1", [stream_id])?;
+    Ok(())
 }
 
 /// `(stream_id, name)` for the fuzzy index. The cleaned name is preferred:
@@ -609,6 +683,85 @@ mod tests {
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].stream_id, 1);
         assert!(guide_rows(&c, &[], 0, 1000).unwrap().is_empty());
+    }
+
+    #[test]
+    fn watched_carries_the_channel_and_its_totals() {
+        let c = open_in_memory().unwrap();
+        chan(&c, 1, "NWN One", Some("1"), Some(1));
+        record_activity(&c, 1, 600, true, 1_000).unwrap();
+        record_activity(&c, 1, 300, false, 2_000).unwrap();
+
+        let got = watched(&c).unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].channel.name, "NWN One");
+        // Accumulated, not replaced.
+        assert_eq!(got[0].watch_seconds, 900);
+        assert_eq!(got[0].last_watched, Some(2_000));
+        // Counted once, because only one of the two writes was an open.
+        assert_eq!(got[0].open_count, 1);
+    }
+
+    #[test]
+    fn record_activity_never_moves_last_watched_backwards() {
+        let c = open_in_memory().unwrap();
+        chan(&c, 1, "A", Some("1"), Some(1));
+        record_activity(&c, 1, 60, true, 5_000).unwrap();
+        // A clock that jumped back, or a write that arrived late.
+        record_activity(&c, 1, 60, false, 1_000).unwrap();
+        let got = watched(&c).unwrap();
+        assert_eq!(got[0].last_watched, Some(5_000));
+        assert_eq!(got[0].watch_seconds, 120);
+    }
+
+    #[test]
+    fn watched_never_returns_a_separator_or_a_deleted_channel() {
+        let c = open_in_memory().unwrap();
+        chan(&c, 1, "Alive", Some("1"), Some(1));
+        chan(&c, 2, "Gone", Some("1"), Some(2));
+        separator(&c, 3, "###### HEADER ######", Some("1"));
+        soft_delete(&c, 2);
+        // Time against all three, which is exactly the case the filter is for:
+        // the row outlives the channel by design.
+        for id in [1, 2, 3] {
+            record_activity(&c, id, 3600, true, 1_000).unwrap();
+        }
+
+        let ids: Vec<i64> = watched(&c)
+            .unwrap()
+            .iter()
+            .map(|f| f.channel.stream_id)
+            .collect();
+        assert_eq!(ids, [1]);
+    }
+
+    #[test]
+    fn watched_ignores_a_row_with_no_time_on_it() {
+        let c = open_in_memory().unwrap();
+        chan(&c, 1, "A", Some("1"), Some(1));
+        record_activity(&c, 1, 0, false, 1_000).unwrap();
+        assert!(watched(&c).unwrap().is_empty());
+    }
+
+    #[test]
+    fn forget_activity_removes_the_history_and_nothing_else() {
+        let c = open_in_memory().unwrap();
+        chan(&c, 1, "Left playing by accident", Some("1"), Some(1));
+        chan(&c, 2, "Real favourite", Some("1"), Some(2));
+        record_activity(&c, 1, 40_000, true, 1_000).unwrap();
+        record_activity(&c, 2, 600, true, 1_000).unwrap();
+
+        forget_activity(&c, 1).unwrap();
+        let ids: Vec<i64> = watched(&c)
+            .unwrap()
+            .iter()
+            .map(|f| f.channel.stream_id)
+            .collect();
+        assert_eq!(ids, [2]);
+        // The channel itself is untouched; only its history is gone.
+        assert_eq!(channels_by_ids(&c, &[1]).unwrap().len(), 1);
+        // And forgetting something unknown is a no-op, not a failure.
+        forget_activity(&c, 9999).unwrap();
     }
 
     #[test]

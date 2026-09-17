@@ -9,6 +9,7 @@ import {
   behindLiveAt,
   catchupRequest,
   geometry,
+  headPixel,
   pixelAtTime,
   seekCost,
   timeAtPixel,
@@ -152,4 +153,29 @@ test("a seven-day archive is seven days wide", () => {
   const g = geometry({ width: W, hasArchive: true, archiveDays: 7, bufferedBack: 240, now: NOW });
   near(timeAtPixel(g, 0), NOW - 7 * DAY);
   near(timeAtPixel(g, g.seamPx), NOW - 240);
+});
+
+test("the playhead pins to the right edge while live", () => {
+  // The two things that could move it, moving. behindLive sawtooths because
+  // it is measured against a seekable window that advances in chunks, and the
+  // buffer zone rescales as scrollback deepens.
+  const deep = geometry({ width: W, hasArchive: false, archiveDays: null, bufferedBack: 240, now: NOW });
+  const shallow = geometry({ width: W, hasArchive: false, archiveDays: null, bufferedBack: 12, now: NOW });
+  for (const behindLive of [0, 0.4, 1.7, 3.2]) {
+    assert.equal(headPixel(deep, { atLiveEdge: true, behindLive }), W);
+    assert.equal(headPixel(shallow, { atLiveEdge: true, behindLive }), W);
+  }
+});
+
+test("off the live edge the playhead is plotted, because that movement is real", () => {
+  const g = geometry({ width: W, hasArchive: false, archiveDays: null, bufferedBack: 240, now: NOW });
+  // Half the buffer back is half way along the bar.
+  near(headPixel(g, { atLiveEdge: false, behindLive: 120 }), W / 2);
+  // Further back is further left, which is the whole point of not pinning.
+  assert.ok(
+    headPixel(g, { atLiveEdge: false, behindLive: 200 }) <
+      headPixel(g, { atLiveEdge: false, behindLive: 100 }),
+  );
+  // A nonsense negative reads as live rather than off the right edge.
+  assert.equal(headPixel(g, { atLiveEdge: false, behindLive: -5 }), W);
 });

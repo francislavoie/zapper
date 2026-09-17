@@ -71,6 +71,11 @@ export interface PlayerStateDto {
   bufferedBack: number;
   /** Seconds behind the live edge; 0 when live. */
   behindLive: number;
+  /** Whether playback counts as live. Not `behindLive === 0`: that value
+   *  sawtooths by a couple of seconds during normal playback as the demuxer
+   *  reads, so a tight threshold flickers. This carries hysteresis and is the
+   *  only thing the interface should use to decide. */
+  atLiveEdge: boolean;
   volume: number;
   muted: boolean;
   compressor: boolean;
@@ -132,6 +137,19 @@ export interface GuideRowDto {
   hasArchive: boolean;
   archiveDays: number | null;
   programmes: ProgrammeDto[];
+}
+
+/** A channel the viewer keeps coming back to. Earned from what is actually
+ *  watched, not chosen — there is no "add to favourites" anywhere. Ordering is
+ *  weighted by recency, so a channel binged months ago does not outrank one
+ *  watched all week. */
+export interface FavouriteDto {
+  channel: ChannelDto;
+  /** Total seconds watched, all time. */
+  watchSeconds: number;
+  /** Unix seconds. */
+  lastWatched: number | null;
+  openCount: number;
 }
 
 export const EVENTS = {

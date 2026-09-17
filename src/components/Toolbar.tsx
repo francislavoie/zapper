@@ -39,6 +39,7 @@ import { maximiseLabel, statusLine } from "../logic/toolbar";
 import { useApp, useDispatch } from "../store";
 import { windowControls } from "../window";
 import { useMaximised } from "../hooks/useMaximised";
+import { Bolt } from "./icons";
 
 export function Toolbar() {
   const state = useApp();
@@ -98,7 +99,12 @@ export function Toolbar() {
       {/* Centred on the window, not on what is left between the status and the
           buttons, so it holds still while the status line changes length. It
           takes no clicks: the drag strip is underneath it. */}
+      {/* The mark is the launcher's own path, so the two cannot drift. It sits
+          inside the title, which takes no pointer events, so pressing it drags
+          the window exactly as pressing the name does — a hole in the drag
+          region here would be a dead spot in the middle of the title bar. */}
       <div className="tb-title" aria-hidden>
+        <Bolt className="tb-bolt" />
         zapper
       </div>
 

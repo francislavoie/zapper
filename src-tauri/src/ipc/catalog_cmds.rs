@@ -7,9 +7,9 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::catalog::settings as settings_store;
-use crate::catalog::{db, index, status, store, sync_engine};
+use crate::catalog::{activity, db, index, status, store, sync_engine};
 use crate::ipc::types::{
-    CategoryDto, ChannelDto, GuideRowDto, ProgrammeDto, SettingsDto, SyncStatusDto,
+    CategoryDto, ChannelDto, FavouriteDto, GuideRowDto, ProgrammeDto, SettingsDto, SyncStatusDto,
 };
 
 fn now() -> i64 {
@@ -256,6 +256,122 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn favourites_rank_by_recency_weighted_watch_time() {
+        seed(6000, "cmd-favourites");
+        let t = now();
+        db::with_db(|c| {
+            // Alpha: a long binge two months ago. Beta: an hour this week.
+            store::record_activity(c, 6001, 20 * 3600, true, t - 56 * 86_400)?;
+            store::record_activity(c, 6002, 2 * 3600, true, t - 86_400)?;
+            Ok(())
+        })
+        .unwrap();
+
+        // A generous limit deliberately: the process shares one in-memory
+        // database and tests run in parallel, so this assertion is about the
+        // order of *these* two rows, not about the whole table.
+        let top = favourites(500).await.unwrap();
+        let mine: Vec<i64> = top
+            .iter()
+            .map(|f| f.channel.stream_id)
+            .filter(|id| (6000..7000).contains(id))
+            .collect();
+        assert_eq!(mine, [6002, 6001], "March must not outrank this week");
+        let beta = top.iter().find(|f| f.channel.stream_id == 6002).unwrap();
+        assert_eq!(beta.watch_seconds, 2 * 3600);
+        assert_eq!(beta.open_count, 1);
+        assert_eq!(beta.channel.clean_name, "Beta");
+    }
+
+    #[tokio::test]
+    async fn favourites_is_empty_rather_than_failing_before_anything_is_watched() {
+        db::install_test_db();
+        // Nothing has ever been watched on *this* channel, and the command
+        // must not be the thing that says so with an error.
+        seed(7000, "cmd-favourites-empty");
+        let top = favourites(50).await.unwrap();
+        assert!(!top.iter().any(|f| (7000..8000).contains(&f.channel.stream_id)));
+    }
+
+    #[tokio::test]
+    async fn favourites_never_offers_a_separator_or_a_deleted_channel() {
+        seed(8000, "cmd-favourites-hidden");
+        let t = now();
+        db::with_db(|c| {
+            c.execute(
+                "INSERT INTO channels (stream_id, category_id, name, clean_name, is_separator)
+                 VALUES (8003, 'cmd-favourites-hidden', '###### X ######', 'X', 1)",
+                [],
+            )?;
+            c.execute(
+                "UPDATE channels SET deleted_at = 1 WHERE stream_id = 8002",
+                [],
+            )?;
+            for id in [8001i64, 8002, 8003] {
+                store::record_activity(c, id, 4 * 3600, true, t - 60)?;
+            }
+            Ok(())
+        })
+        .unwrap();
+
+        let ids: Vec<i64> = favourites(50)
+            .await
+            .unwrap()
+            .iter()
+            .map(|f| f.channel.stream_id)
+            .filter(|id| (8000..9000).contains(id))
+            .collect();
+        assert_eq!(ids, [8001]);
+    }
+
+    #[tokio::test]
+    async fn favourites_carry_what_is_on_air() {
+        seed(9000, "cmd-favourites-epg");
+        let t = now();
+        db::with_db(|c| {
+            c.execute(
+                "INSERT INTO epg (channel_ref, start, stop, title, description)
+                 VALUES ('epg-9001', ?1, ?2, 'On now', NULL)",
+                rusqlite::params![t - 60, t + 60],
+            )?;
+            store::record_activity(c, 9001, 3600, true, t - 60)?;
+            Ok(())
+        })
+        .unwrap();
+
+        let top = favourites(50).await.unwrap();
+        let mine = top.iter().find(|f| f.channel.stream_id == 9001).unwrap();
+        assert_eq!(
+            mine.channel.now_playing.as_ref().map(|p| p.title.as_str()),
+            Some("On now")
+        );
+    }
+
+    #[tokio::test]
+    async fn forget_activity_drops_one_channel_and_leaves_the_rest() {
+        seed(11000, "cmd-forget");
+        let t = now();
+        db::with_db(|c| {
+            store::record_activity(c, 11001, 40 * 3600, true, t - 60)?;
+            store::record_activity(c, 11002, 3600, true, t - 60)?;
+            Ok(())
+        })
+        .unwrap();
+
+        forget_activity(11001).await.unwrap();
+        let ids: Vec<i64> = favourites(50)
+            .await
+            .unwrap()
+            .iter()
+            .map(|f| f.channel.stream_id)
+            .filter(|id| (11000..12000).contains(id))
+            .collect();
+        assert_eq!(ids, [11002]);
+        // Twice is fine: forgetting what is already forgotten is not an error.
+        forget_activity(11001).await.unwrap();
+    }
+
+    #[tokio::test]
     async fn sync_status_answers_without_a_network() {
         db::install_test_db();
         let s = sync_status().await.unwrap();
@@ -292,4 +408,38 @@ pub async fn guide_rows(
     to: i64,
 ) -> Result<Vec<GuideRowDto>, String> {
     db::with_db(|conn| store::guide_rows(conn, &stream_ids, from, to)).map_err(|e| e.to_string())
+}
+
+/// Channels ordered by how much they are actually watched, most first.
+///
+/// Nobody adds anything to this list: it is accumulated by the player as it
+/// runs (see [`crate::catalog::activity`]) and ordered by watch time decayed
+/// against how long ago the channel was last watched, so a fortnight's
+/// absence halves a channel's standing. An empty result is the ordinary
+/// first-run answer, not a failure.
+#[tauri::command]
+pub async fn favourites(limit: u32) -> Result<Vec<FavouriteDto>, String> {
+    let at = now();
+    db::with_db(|conn| {
+        let mut top = activity::rank(store::watched(conn)?, at, limit as usize);
+        // Cheap here in a way it would not be for a listing: this is a
+        // screenful at most, and it is the same channel row the rest of the
+        // app draws, so it should not be the one place that claims nothing is
+        // on air.
+        let mut channels: Vec<ChannelDto> =
+            top.iter().map(|f| f.channel.clone()).collect();
+        attach_now_playing(conn, &mut channels)?;
+        for (f, ch) in top.iter_mut().zip(channels) {
+            f.channel = ch;
+        }
+        Ok(top)
+    })
+    .map_err(|e| e.to_string())
+}
+
+/// Forgets one channel's history, for when something was left playing by
+/// accident and has crowded out the real list.
+#[tauri::command]
+pub async fn forget_activity(stream_id: i64) -> Result<(), String> {
+    db::with_db(|conn| store::forget_activity(conn, stream_id)).map_err(|e| e.to_string())
 }

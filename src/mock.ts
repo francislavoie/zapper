@@ -11,6 +11,7 @@ import { auditLightSurfaces, auditOverVideo } from "./audit";
 import type {
   CategoryDto,
   ChannelDto,
+  FavouriteDto,
   GuideRowDto,
   PlayerStateDto,
   ProgrammeDto,
@@ -359,6 +360,89 @@ function separatorRow(streamId: number, name: string, categoryId: string): Chann
 let catalog: MockCatalog | null = null;
 const getCatalog = (): MockCatalog => (catalog ??= buildCatalog());
 
+// ------------------------------------------------------------- favourites
+
+/** `?favourites=empty` starts with nothing, which is the ordinary first-run
+ *  state and the one the pane has to say something sensible about. It is a
+ *  query flag rather than a fixture toggle because it is the *default* in
+ *  real life and the interesting case to look at. */
+const EMPTY_FAVOURITES =
+  typeof location !== "undefined" && /(^|[?&])favourites=empty(&|$)/.test(location.search);
+
+/** The activity table, as the backend would have accumulated it: watch time
+ *  against a stream id, and when it was last watched.
+ *
+ *  Deliberately not "the top N channels in order" — the backend ranks by watch
+ *  time decayed against recency, and the mock has to be able to get that
+ *  ordering wrong if the frontend ever starts sorting for itself. A binge
+ *  months ago, a habit this week, and a documentary on once. */
+interface MockActivity {
+  watchSeconds: number;
+  /** Seconds before now. */
+  ago: number;
+  openCount: number;
+}
+
+let activity = new Map<number, MockActivity>();
+let activitySeeded = false;
+
+function seedActivity(rows: ChannelDto[]) {
+  activitySeeded = true;
+  activity = new Map();
+  if (EMPTY_FAVOURITES) return;
+  const DAY = 86_400;
+  const plan: MockActivity[] = [
+    // Watched all week: modest hours, yesterday. Should lead.
+    { watchSeconds: 9 * 3600 + 14 * 60, ago: 2 * 3600, openCount: 41 },
+    // A weekend binge two months ago: far more hours, long decayed.
+    { watchSeconds: 46 * 3600, ago: 58 * DAY, openCount: 12 },
+    { watchSeconds: 4 * 3600 + 20 * 60, ago: 3 * DAY, openCount: 22 },
+    { watchSeconds: 72 * 60, ago: 9 * DAY, openCount: 6 },
+    { watchSeconds: 51 * 60, ago: 26 * 3600, openCount: 3 },
+    { watchSeconds: 12 * 60, ago: 40 * 60, openCount: 2 },
+    { watchSeconds: 47, ago: 5 * DAY, openCount: 1 },
+  ];
+  const playable = rows.filter((r) => !r.isSeparator);
+  plan.forEach((a, i) => {
+    // Spread across the catalogue rather than taking the first seven rows, so
+    // the favourites are not simply the top of the channel list.
+    const row = playable[Math.floor((i * 6131 + 733) % playable.length)];
+    if (row) activity.set(row.streamId, a);
+  });
+}
+
+function favouriteRows(limit: number): FavouriteDto[] {
+  const c = getCatalog();
+  if (!activitySeeded) seedActivity(c.rows);
+  const now = Math.floor(Date.now() / 1000);
+  const HALF_LIFE = 14 * 86_400;
+  const byId = new Map(c.rows.map((r) => [r.streamId, r]));
+
+  const scored: Array<{ score: number; f: FavouriteDto }> = [];
+  for (const [streamId, a] of activity) {
+    const channel = byId.get(streamId);
+    // The same two exclusions the backend applies: a separator is not
+    // playable and a deleted channel is not there.
+    if (!channel || channel.isSeparator) continue;
+    const lastWatched = now - a.ago;
+    // Mirrors catalog::activity::score, so the mock cannot show an order the
+    // backend would never produce.
+    const score = a.watchSeconds * Math.pow(0.5, a.ago / HALF_LIFE);
+    if (score <= 0) continue;
+    scored.push({
+      score,
+      f: {
+        channel,
+        watchSeconds: a.watchSeconds,
+        lastWatched,
+        openCount: a.openCount,
+      },
+    });
+  }
+  scored.sort((x, y) => y.score - x.score || x.f.channel.streamId - y.f.channel.streamId);
+  return scored.slice(0, limit).map((s) => s.f);
+}
+
 // ----------------------------------------------------------------- the fake
 
 const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -390,6 +474,7 @@ const playerEmitter = new Emitter<PlayerStateDto>({
   codec: null,
   bufferedBack: 0,
   behindLive: 0,
+  atLiveEdge: true,
   volume: 100,
   muted: false,
   compressor: false,
@@ -575,12 +660,19 @@ export const mockApi = {
 
   seekRelative: async (seconds: number) => {
     const p = playerEmitter.last;
+    const behindLive = Math.max(
+      0,
+      Math.min(p.bufferedBack, p.behindLive - seconds),
+    );
+    // Same hysteresis thresholds the backend uses, so the mock cannot make the
+    // indicator look steadier than the real thing.
     patchPlayer({
-      behindLive: Math.max(0, Math.min(p.bufferedBack, p.behindLive - seconds)),
+      behindLive,
+      atLiveEdge: p.atLiveEdge ? behindLive <= 8 : behindLive <= 3,
     });
   },
 
-  seekLive: async () => patchPlayer({ behindLive: 0 }),
+  seekLive: async () => patchPlayer({ behindLive: 0, atLiveEdge: true }),
 
   setVolume: async (volume: number) => patchPlayer({ volume }),
   setMuted: async (muted: boolean) => patchPlayer({ muted }),
@@ -611,6 +703,23 @@ export const mockApi = {
     await delay(20);
     storedSettings = { ...storedSettings, subtitle: structuredClone(style) };
     (globalThis as Record<string, unknown>).__mockSubtitleStyle = storedSettings.subtitle;
+  },
+
+  favourites: async (limit: number) => {
+    await delay(40);
+    return favouriteRows(limit);
+  },
+
+  forgetActivity: async (streamId: number) => {
+    await delay(20);
+    if (!activitySeeded) seedActivity(getCatalog().rows);
+    activity.delete(streamId);
+    // Exposed so a driver can prove the row went because the backend was told
+    // to forget it, not because the list re-rendered.
+    (globalThis as Record<string, unknown>).__forgotten = [
+      ...(((globalThis as Record<string, unknown>).__forgotten as number[]) ?? []),
+      streamId,
+    ];
   },
 
   applyPlaybackSettings: async (next: SettingsDto) => {

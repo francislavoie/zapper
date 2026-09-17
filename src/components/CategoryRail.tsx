@@ -31,8 +31,10 @@ export function CategoryRail() {
       ? categories.data.reduce((n, c) => n + c.channelCount, 0)
       : sync.channelsTotal;
 
+  // The `.rail` column itself, and the tab bar above this, belong to Rail:
+  // this component is one of the two lists that can be in it.
   return (
-    <aside className="rail">
+    <>
       <div className="pane-head">
         <input
           className="field"
@@ -93,7 +95,7 @@ export function CategoryRail() {
           </button>
         ))}
       </div>
-    </aside>
+    </>
   );
 }
 

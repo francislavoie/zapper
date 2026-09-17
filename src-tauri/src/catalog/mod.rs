@@ -3,6 +3,7 @@
 //! Startup reads only from here, never the network; sync refreshes in the
 //! background and the UI updates as each task lands.
 
+pub mod activity;
 pub mod credentials;
 pub mod db;
 pub mod epg;

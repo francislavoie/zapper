@@ -27,6 +27,12 @@ export interface VideoRectOptions {
    *  nobody sees. Measured, never arithmetic on a hard-coded bar height. */
   stageRef?: RefObject<HTMLElement | null>;
   docked: boolean;
+  /** Application zoom. Not used in the arithmetic — every box here is
+   *  measured, never computed — but every box *moves* when it changes, so the
+   *  hook has to re-measure and re-send. Without this the picture stays where
+   *  the old layout put it and detaches from its slot, which looks like a
+   *  video bug and is a zoom bug. */
+  zoom?: number;
   /** Mock-only stand-in painted where video would be, moved without React. */
   paintRef?: RefObject<HTMLElement | null>;
   onError?: (message: string) => void;
@@ -36,6 +42,7 @@ export function useVideoRect({
   dockRef,
   stageRef,
   docked,
+  zoom,
   paintRef,
   onError,
 }: VideoRectOptions) {
@@ -47,6 +54,9 @@ export function useVideoRect({
   const raf = useRef<number | undefined>(undefined);
   /** Rust has been told where the video goes at least once. */
   const primed = useRef(false);
+  /** What `docked` was last time round, so a re-run can tell a mode change
+   *  from a re-layout. */
+  const wasDocked = useRef(docked);
   const complained = useRef(false);
   const errorSink = useRef(onError);
   errorSink.current = onError;
@@ -123,11 +133,17 @@ export function useVideoRect({
       // to be told where the video goes before anything opens.
       primed.current = true;
       send(measure());
-    } else {
+    } else if (wasDocked.current !== docked) {
       // A mode change animates; a resize must not — the window is already
       // moving and a 240ms lag would smear the video behind its hole.
       animateTo(measure(), DOCK_MS);
+    } else {
+      // Same mode, different layout: a zoom change. Everything on screen
+      // resized instantly, so the picture has to as well — an animation here
+      // would be 240ms of the video hanging outside its slot.
+      animateTo(measure(), 0);
     }
+    wasDocked.current = docked;
 
     const snap = () => animateTo(measure(), 0);
     window.addEventListener("resize", snap);
@@ -143,7 +159,9 @@ export function useVideoRect({
       if (raf.current !== undefined) cancelAnimationFrame(raf.current);
       raf.current = undefined;
     };
-  }, [docked, dockRef, stageRef, paintRef]);
+    // `zoom` is in the dependency list precisely because it is not used above:
+    // it changes every measurement this effect takes.
+  }, [docked, zoom, dockRef, stageRef, paintRef]);
 
   return current;
 }

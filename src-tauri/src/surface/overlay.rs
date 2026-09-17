@@ -127,6 +127,8 @@ pub fn install(window: &tauri::WebviewWindow) -> Result<Overlay> {
         let webview = platform.inner();
         webview.set_background_color(&gdk::RGBA::new(0.0, 0.0, 0.0, 0.0));
 
+        suppress_browser_menu(&webview);
+
         let Some(parent) = webview.parent() else {
             tracing::error!("webview has no parent container; cannot install overlay");
             return;
@@ -249,4 +251,37 @@ pub fn install(window: &tauri::WebviewWindow) -> Result<Overlay> {
         .with(|b| b.borrow_mut().take())
         .ok_or_else(|| anyhow!("with_webview did not run; not a GTK platform?"))?
         .map_err(|e| anyhow!(e))
+}
+
+/// Stops WebKit offering Back / Forward / Stop / Reload / Inspect Element.
+///
+/// Those are a browser's menu, and this is not a browser: none of them mean
+/// anything here, and "Reload" would throw away the running player. The one
+/// case worth keeping is editing, where Cut / Copy / Paste are genuinely
+/// useful, so a right-click in a text field gets a menu trimmed to exactly
+/// those and nothing else.
+///
+/// This lives at the GTK level rather than as a `contextmenu` handler in the
+/// page because a missed listener is a leaked browser menu, and the failure is
+/// invisible until somebody right-clicks the one element nobody covered.
+fn suppress_browser_menu(webview: &webkit2gtk::WebView) {
+    use webkit2gtk::{ContextMenuAction, ContextMenuExt, ContextMenuItem, HitTestResultExt};
+
+    webview.connect_context_menu(|_, menu, _, hit| {
+        if !hit.context_is_editable() {
+            // true = handled, show nothing. Real per-element menus belong here
+            // later, built from the hit test.
+            return true;
+        }
+        menu.remove_all();
+        for action in [
+            ContextMenuAction::Cut,
+            ContextMenuAction::Copy,
+            ContextMenuAction::Paste,
+            ContextMenuAction::SelectAll,
+        ] {
+            menu.append(&ContextMenuItem::from_stock_action(action));
+        }
+        false
+    });
 }

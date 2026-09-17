@@ -13,6 +13,7 @@ import {
   type ProgrammeDto,
   type SettingsDto,
   type SubtitleStyleDto,
+  type FavouriteDto,
   type GuideRowDto,
   type SyncStatusDto,
   type VideoRect,
@@ -55,6 +56,10 @@ export const api = {
     invoke<void>("apply_playback_settings", { settings }),
   guideRows: (streamIds: number[], from: number, to: number) =>
     invoke<GuideRowDto[]>("guide_rows", { streamIds, from, to }),
+
+  favourites: (limit: number) => invoke<FavouriteDto[]>("favourites", { limit }),
+  forgetActivity: (streamId: number) =>
+    invoke<void>("forget_activity", { streamId }),
 };
 
 export const onSyncStatus = (f: (s: SyncStatusDto) => void): Promise<UnlistenFn> =>

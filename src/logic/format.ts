@@ -63,6 +63,41 @@ export function liveOffset(behindLive: number): string {
   return behindLive < 1 ? "LIVE" : `-${clock(behindLive)}`;
 }
 
+/** The gap, said the way a person would: seconds under a minute, clock time
+ *  past it. */
+export function behindGap(behindLive: number): string {
+  const s = Math.max(0, Math.round(behindLive));
+  return s < 60 ? `${s}s` : clock(s);
+}
+
+export interface LiveState {
+  /** Red dot, or grey. */
+  live: boolean;
+  /** What the control says out loud: its title and its accessible name.
+   *  Colour alone is not a message — a red dot and a grey one are the same dot
+   *  to plenty of people. */
+  label: string;
+  /** Whether there is anywhere to jump to. At the edge there is not, and the
+   *  control goes inert rather than pretending otherwise. */
+  canJump: boolean;
+}
+
+/** What the live indicator shows.
+ *
+ *  `atLiveEdge` comes from the backend and is the only input to liveness.
+ *  `behindLive` is measured against the end of mpv's seekable window, which
+ *  advances in chunks as the demuxer reads, so it sawtooths by a couple of
+ *  seconds during perfectly ordinary playback: any threshold taken here would
+ *  sit inside that sawtooth and flip the indicator on every tick. The backend
+ *  applies hysteresis — 3s to become live, 8s to stop being live — and the gap
+ *  between those two numbers is the whole reason the dot holds still.
+ *
+ *  So `behindLive` is displayed, never thresholded. */
+export function liveState(atLiveEdge: boolean, behindLive: number): LiveState {
+  if (atLiveEdge) return { live: true, label: "Live", canJump: false };
+  return { live: false, label: `Behind live by ${behindGap(behindLive)}`, canJump: true };
+}
+
 /** Wall-clock HH:MM for a unix-seconds instant, in the local zone. */
 export function hhmm(unixSeconds: number): string {
   const d = new Date(unixSeconds * 1000);

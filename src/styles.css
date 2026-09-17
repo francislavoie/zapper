@@ -4,6 +4,20 @@
    surfaces only — never to html, body, #root, .app, or .watch-video. */
 
 :root {
+  /* Application zoom. Every length below is in rem, so this one number scales
+     type, padding, rows, the rail, the title bar and the docked video slot
+     together — set by src/zoom.ts, persisted per machine in local storage, and
+     deliberately not part of SettingsDto.
+
+     A transform was the other option and is the wrong one: it would blur text
+     and, worse, leave the layout boxes where they were, while the rect handed
+     to mpv is measured from those boxes. Changing real sizes means the picture
+     follows the slot instead of drifting out of it.
+
+     The exception is a 1px border, which stays 1px at every zoom: a hairline
+     is a hairline, and scaling it to 0.7px only makes it grey. */
+  --zoom: 1;
+
   --bg: #0d0f12;
   --bg-2: #14171c;
   --bg-3: #1b1f26;
@@ -15,18 +29,20 @@
   --accent-dim: #24384f;
   --bad: #ff6b6b;
   --good: #59d08a;
-  --row-h: 26px;
-  --rail-w: 260px;
-  /* The title bar this app draws for itself. Mirrored by TOOLBAR_HEIGHT in
-     src/logic/toolbar.ts, and the two are checked against each other by
-     measuring the live bar rather than by trusting the comment. */
-  --toolbar-h: 38px;
+  --row-h: 1.625rem;
+  --rail-w: 16.25rem;
+  /* The title bar this app draws for itself, at 100% zoom. Mirrored by
+     TOOLBAR_HEIGHT in src/logic/toolbar.ts, and the two are checked against
+     each other by measuring the live bar rather than by trusting the comment —
+     a measurement that has to be taken at 100%, since the bar scales with
+     everything else. */
+  --toolbar-h: 2.375rem;
   /* The window is undecorated: its outer few pixels belong to the resize
      grab, so nothing clickable may start inside this ring. */
-  --edge-inset: 6px;
+  --edge-inset: 0.375rem;
   /* The docked picture. One number moves it; the height and the band follow,
      and the rect handed to mpv is measured from the slot. */
-  --video-w: 356px;
+  --video-w: 22.25rem;
   --video-h: calc(var(--video-w) * 9 / 16);
 }
 
@@ -38,8 +54,18 @@ body,
   background: transparent;
 }
 
+/* 16px is the base every rem in this file was written against, so 100% is
+   exactly the design size. Zoom is deliberately NOT applied here: scaling the
+   root font only moves what is expressed in rem, and the channel list and
+   guide position rows from fixed pixel constants because virtualisation needs
+   them. Page zoom scales the CSS pixel itself, so it reaches those too — see
+   applyZoom in src/zoom.ts. */
+html {
+  font-size: 16px;
+}
+
 body {
-  font: 13px/1.35 system-ui, -apple-system, "Segoe UI", sans-serif;
+  font: 0.8125rem/1.35 system-ui, -apple-system, "Segoe UI", sans-serif;
   color: var(--text);
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
@@ -120,21 +146,21 @@ img {
 input[type="range"] {
   -webkit-appearance: none;
   appearance: none;
-  height: 18px;
+  height: 1.125rem;
   background: transparent;
   cursor: pointer;
 }
 
 input[type="range"]::-webkit-slider-runnable-track {
-  height: 4px;
-  border-radius: 2px;
+  height: 0.25rem;
+  border-radius: 0.125rem;
   background: var(--bg-3);
   border: 1px solid var(--line);
 }
 
 input[type="range"]::-moz-range-track {
-  height: 4px;
-  border-radius: 2px;
+  height: 0.25rem;
+  border-radius: 0.125rem;
   background: var(--bg-3);
   border: 1px solid var(--line);
 }
@@ -142,17 +168,17 @@ input[type="range"]::-moz-range-track {
 input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
-  margin-top: -6px;
-  width: 14px;
-  height: 14px;
+  margin-top: -0.375rem;
+  width: 0.875rem;
+  height: 0.875rem;
   border-radius: 50%;
   background: var(--accent);
   border: 1px solid var(--bg);
 }
 
 input[type="range"]::-moz-range-thumb {
-  width: 14px;
-  height: 14px;
+  width: 0.875rem;
+  height: 0.875rem;
   border: 1px solid var(--bg);
   border-radius: 50%;
   background: var(--accent);
@@ -167,8 +193,8 @@ select {
   color: var(--text);
   background: var(--bg-3);
   border: 1px solid var(--line);
-  border-radius: 5px;
-  padding: 4px 8px;
+  border-radius: 0.3125rem;
+  padding: 0.25rem 0.5rem;
 }
 
 select option {
@@ -205,8 +231,8 @@ select option {
   background: #c0269b;
   background-image: repeating-linear-gradient(
     45deg,
-    rgba(255, 255, 255, 0.06) 0 22px,
-    rgba(0, 0, 0, 0.06) 22px 44px
+    rgba(255, 255, 255, 0.06) 0 1.375rem,
+    rgba(0, 0, 0, 0.06) 1.375rem 2.75rem
   );
   z-index: 0;
   pointer-events: none;
@@ -231,7 +257,7 @@ select option {
   z-index: 50;
   display: flex;
   align-items: stretch;
-  gap: 6px;
+  gap: 0.375rem;
   padding: var(--edge-inset) var(--edge-inset) 0;
   background: var(--bg-2);
   border-bottom: 1px solid var(--line);
@@ -242,7 +268,7 @@ select option {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 0.125rem;
   flex: 0 0 auto;
   /* Above the centred name, so the status line is never painted over by it
      when the two meet on a narrow window. */
@@ -254,7 +280,7 @@ select option {
 .tb-lead {
   flex: 0 1 auto;
   min-width: 0;
-  gap: 8px;
+  gap: 0.5rem;
 }
 
 /* What the menu is positioned against, and what counts as "inside" it for an
@@ -273,6 +299,17 @@ select option {
 
    It takes no pointer events, so the drag strip underneath gets the press —
    grabbing the window by its own name is the obvious thing to try. */
+/* The app mark, left of the name. Inside .tb-title, which takes no pointer
+   events, so pressing it drags the window like the name does rather than
+   punching a dead spot in the middle of the drag strip. */
+.tb-bolt {
+  display: block;
+  width: 0.6875rem;
+  height: 1rem;
+  margin-right: 0.375rem;
+  color: var(--accent);
+}
+
 .tb-title {
   position: absolute;
   left: 50%;
@@ -282,7 +319,7 @@ select option {
   display: flex;
   align-items: center;
   pointer-events: none;
-  font-size: 12px;
+  font-size: 0.75rem;
   letter-spacing: 0.08em;
   color: var(--dim);
 }
@@ -305,9 +342,9 @@ select option {
 .tb-btn {
   display: grid;
   place-items: center;
-  width: 30px;
-  height: 26px;
-  border-radius: 5px;
+  width: 1.875rem;
+  height: 1.625rem;
+  border-radius: 0.3125rem;
   color: var(--dim);
 }
 
@@ -327,7 +364,7 @@ select option {
 }
 
 .tb-glyph {
-  font-size: 12px;
+  font-size: 0.75rem;
   line-height: 1;
 }
 
@@ -335,13 +372,13 @@ select option {
   display: flex;
   flex-direction: column;
   justify-content: space-between;
-  width: 14px;
-  height: 10px;
+  width: 0.875rem;
+  height: 0.625rem;
 }
 
 .burger i {
   display: block;
-  height: 2px;
+  height: 0.125rem;
   border-radius: 1px;
   background: currentColor;
 }
@@ -351,9 +388,9 @@ select option {
 .tb-status {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 0.5rem;
   min-width: 0;
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--dimmer);
 }
 
@@ -382,10 +419,10 @@ select option {
 
 .tb-spinner {
   flex: 0 0 auto;
-  width: 11px;
-  height: 11px;
+  width: 0.6875rem;
+  height: 0.6875rem;
   border-radius: 50%;
-  border: 2px solid var(--accent-dim);
+  border: 0.125rem solid var(--accent-dim);
   border-top-color: var(--accent);
   animation: spin 0.8s linear infinite;
 }
@@ -400,30 +437,30 @@ select option {
 
 .tb-menu {
   position: absolute;
-  top: calc(100% + 6px);
+  top: calc(100% + 0.375rem);
   left: 0;
   z-index: 55;
-  min-width: 260px;
-  padding: 4px;
+  min-width: 16.25rem;
+  padding: 0.25rem;
   background: var(--bg-2);
   border: 1px solid var(--line);
-  border-radius: 8px;
-  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.62);
+  border-radius: 0.5rem;
+  box-shadow: 0 1.125rem 2.75rem rgba(0, 0, 0, 0.62);
 }
 
 .tb-menu-group + .tb-menu-group {
-  margin-top: 4px;
-  padding-top: 4px;
+  margin-top: 0.25rem;
+  padding-top: 0.25rem;
   border-top: 1px solid var(--line);
 }
 
 .tb-menu-item {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 0.75rem;
   width: 100%;
-  padding: 6px 10px;
-  border-radius: 5px;
+  padding: 0.375rem 0.625rem;
+  border-radius: 0.3125rem;
   text-align: left;
 }
 
@@ -442,16 +479,16 @@ select option {
 
 .tb-menu-hint {
   flex: 0 0 auto;
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--dimmer);
 }
 
 .tb-menu-foot {
-  padding: 6px 10px 3px;
-  font-size: 11px;
+  padding: 0.375rem 0.625rem 0.1875rem;
+  font-size: 0.6875rem;
   color: var(--dimmer);
   border-top: 1px solid var(--line);
-  margin-top: 4px;
+  margin-top: 0.25rem;
 }
 
 /* ----------------------------------------------------------------- stage */
@@ -530,7 +567,7 @@ select option {
 }
 
 .watch-video-empty {
-  font-size: 11px;
+  font-size: 0.6875rem;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--dimmer);
@@ -544,15 +581,15 @@ select option {
   border-bottom: 1px solid var(--line);
   border-right: 1px solid var(--line);
   display: flex;
-  gap: 18px;
-  padding: 12px 16px;
+  gap: 1.125rem;
+  padding: 0.75rem 1rem;
 }
 
 .watch-col {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 0.375rem;
 }
 
 .watch-col.identity {
@@ -561,21 +598,21 @@ select option {
 
 .watch-col.epg {
   flex: 1 1 42%;
-  gap: 10px;
+  gap: 0.625rem;
 }
 
 .watch-col.facts {
   /* Wide enough for "1920×1080 · 59.94 fps · hevc" without an ellipsis: the
      measured line is the one number in this app that must never be truncated,
      because the channel name already lies about it. */
-  flex: 0 1 300px;
+  flex: 0 1 18.75rem;
   margin: 0;
-  gap: 3px;
+  gap: 0.1875rem;
 }
 
 .watch-col.identity h2 {
   margin: 0;
-  font-size: 15px;
+  font-size: 0.9375rem;
   font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -586,18 +623,18 @@ select option {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  gap: 0.375rem;
 }
 
 .watch-num {
   font-variant-numeric: tabular-nums;
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--dimmer);
 }
 
 .watch-state {
   margin: 0;
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--dim);
 }
 
@@ -606,8 +643,8 @@ select option {
 }
 
 .watch-prog {
-  border-left: 2px solid var(--accent-dim);
-  padding-left: 8px;
+  border-left: 0.125rem solid var(--accent-dim);
+  padding-left: 0.5rem;
   min-width: 0;
 }
 
@@ -615,15 +652,15 @@ select option {
 .watch-prog.none {
   border-left-color: var(--line);
   color: var(--dimmer);
-  font-size: 12px;
+  font-size: 0.75rem;
   font-style: italic;
 }
 
 .watch-prog-head {
   display: flex;
-  gap: 8px;
+  gap: 0.5rem;
   align-items: baseline;
-  font-size: 10px;
+  font-size: 0.625rem;
   letter-spacing: 0.12em;
   color: var(--dimmer);
 }
@@ -637,7 +674,7 @@ select option {
 }
 
 .watch-title {
-  font-size: 13px;
+  font-size: 0.8125rem;
   margin-top: 1px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -645,8 +682,8 @@ select option {
 }
 
 .watch-progress {
-  height: 2px;
-  margin-top: 6px;
+  height: 0.125rem;
+  margin-top: 0.375rem;
   background: var(--bg-3);
   border-radius: 1px;
   overflow: hidden;
@@ -659,8 +696,8 @@ select option {
 }
 
 .watch-desc {
-  margin: 6px 0 0;
-  font-size: 11px;
+  margin: 0.375rem 0 0;
+  font-size: 0.6875rem;
   color: var(--dim);
   display: -webkit-box;
   -webkit-box-orient: vertical;
@@ -671,59 +708,59 @@ select option {
 
 .watch-col.facts > div {
   display: flex;
-  gap: 8px;
+  gap: 0.5rem;
   align-items: baseline;
 }
 
 .watch-col.facts dt {
   flex: 0 0 auto;
-  width: 88px;
-  font-size: 11px;
+  width: 5.5rem;
+  font-size: 0.6875rem;
   color: var(--dimmer);
 }
 
 .watch-col.facts dd {
   margin: 0;
   min-width: 0;
-  font-size: 12px;
+  font-size: 0.75rem;
   font-variant-numeric: tabular-nums;
   color: var(--text);
 }
 
 .watch-actions {
   display: flex;
-  gap: 8px;
+  gap: 0.5rem;
   margin-top: auto;
 }
 
 .watch-idle {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 0.25rem;
   min-width: 0;
 }
 
 .watch-idle h2 {
   margin: 0;
-  font-size: 14px;
+  font-size: 0.875rem;
   font-weight: 600;
   color: var(--dim);
 }
 
 .watch-idle p {
   margin: 0;
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--dim);
   max-width: 60ch;
 }
 
 .watch-hints {
-  margin: 8px 0 0;
+  margin: 0.5rem 0 0;
   padding: 0;
   list-style: none;
   display: flex;
-  gap: 18px;
-  font-size: 12px;
+  gap: 1.125rem;
+  font-size: 0.75rem;
   color: var(--dimmer);
 }
 
@@ -733,11 +770,111 @@ select option {
 
 /* ------------------------------------------------------------------ rail */
 
+/* Two lists, one column. The bar is the only thing above both of them, so it
+   carries the border and the lists start flush underneath it. */
+.rail-tabs {
+  display: flex;
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-2);
+}
+
+.rail-tab {
+  flex: 1 1 0;
+  padding: 0.375rem 0.5rem;
+  text-align: center;
+  font-size: 0.6875rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--dimmer);
+  border-bottom: 0.125rem solid transparent;
+}
+
+.rail-tab:hover {
+  color: var(--text);
+}
+
+.rail-tab.sel {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+  background: var(--bg-3);
+}
+
+/* ------------------------------------------------------------ favourites */
+
+/* Nothing in this pane adds anything: the list is earned from what gets
+   watched. Two lines per row, because the second one is the justification for
+   the first being where it is. */
+.fav-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.0625rem;
+  width: 100%;
+  padding: 0.3125rem 0.625rem;
+  text-align: left;
+  color: var(--dim);
+  border-left: 0.125rem solid transparent;
+}
+
+.fav-item:hover {
+  background: var(--bg-2);
+  color: var(--text);
+}
+
+.fav-item.sel {
+  background: var(--accent-dim);
+  color: var(--text);
+  border-left-color: var(--accent);
+}
+
+.fav-item.pending {
+  border-left-color: var(--dim);
+}
+
+.fav-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fav-meta {
+  font-size: 0.6875rem;
+  color: var(--dimmer);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------------------------------------------------------- context menu */
+
+/* The app's own, because WebKit's is suppressed at the GTK level: a
+   right-click in this application produces nothing unless something draws it.
+   Positioned by the component, in window coordinates. */
+.ctx-menu {
+  position: fixed;
+  z-index: 60;
+  min-width: 13.75rem;
+  padding: 0.25rem;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  box-shadow: 0 1.125rem 2.75rem rgba(0, 0, 0, 0.62);
+}
+
+.ctx-head {
+  padding: 0.25rem 0.625rem 0.375rem;
+  font-size: 0.6875rem;
+  color: var(--dimmer);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .pane-head {
-  padding: 8px;
+  padding: 0.5rem;
   border-bottom: 1px solid var(--line);
   display: flex;
-  gap: 6px;
+  gap: 0.375rem;
   align-items: center;
   flex: 0 0 auto;
 }
@@ -747,8 +884,8 @@ select option {
   min-width: 0;
   background: var(--bg-3);
   border: 1px solid var(--line);
-  border-radius: 5px;
-  padding: 5px 8px;
+  border-radius: 0.3125rem;
+  padding: 0.3125rem 0.5rem;
   outline: none;
 }
 
@@ -766,12 +903,12 @@ select option {
 .rail-item {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 0.5rem;
   width: 100%;
-  padding: 4px 10px;
+  padding: 0.25rem 0.625rem;
   text-align: left;
   color: var(--dim);
-  border-left: 2px solid transparent;
+  border-left: 0.125rem solid transparent;
 }
 
 .rail-item:hover {
@@ -795,7 +932,7 @@ select option {
 .rail-count {
   flex: 0 0 auto;
   font-variant-numeric: tabular-nums;
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--dimmer);
 }
 
@@ -803,10 +940,10 @@ select option {
 
 .list-meta {
   display: flex;
-  gap: 10px;
+  gap: 0.625rem;
   align-items: baseline;
-  padding: 4px 10px;
-  font-size: 11px;
+  padding: 0.25rem 0.625rem;
+  font-size: 0.6875rem;
   color: var(--dimmer);
   border-bottom: 1px solid var(--line);
   flex: 0 0 auto;
@@ -833,8 +970,8 @@ select option {
   height: var(--row-h);
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 0 10px;
+  gap: 0.5rem;
+  padding: 0 0.625rem;
   text-align: left;
   /* Layout and paint containment, but not size: the row's height comes from
      the variable and its width from left/right, and size containment on top
@@ -856,10 +993,10 @@ select option {
 
 .row-logo {
   flex: 0 0 auto;
-  width: 22px;
-  height: 16px;
+  width: 1.375rem;
+  height: 1rem;
   object-fit: contain;
-  border-radius: 2px;
+  border-radius: 0.125rem;
   background: var(--bg-3);
 }
 
@@ -869,10 +1006,10 @@ select option {
 
 .row-num {
   flex: 0 0 auto;
-  width: 46px;
+  width: 2.875rem;
   text-align: right;
   font-variant-numeric: tabular-nums;
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--dimmer);
 }
 
@@ -890,7 +1027,7 @@ select option {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--dim);
 }
 
@@ -903,10 +1040,10 @@ select option {
 
 .badge {
   flex: 0 0 auto;
-  font-size: 10px;
+  font-size: 0.625rem;
   letter-spacing: 0.04em;
-  padding: 1px 5px;
-  border-radius: 3px;
+  padding: 1px 0.3125rem;
+  border-radius: 0.1875rem;
   border: 1px solid var(--line);
   color: var(--dim);
   background: var(--bg-3);
@@ -925,13 +1062,13 @@ select option {
 .row.sep {
   background: var(--bg-3);
   color: var(--dim);
-  font-size: 10px;
+  font-size: 0.625rem;
   letter-spacing: 0.14em;
   text-transform: uppercase;
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
   cursor: default;
-  padding: 0 10px;
+  padding: 0 0.625rem;
 }
 
 .sticky-head {
@@ -942,10 +1079,10 @@ select option {
   height: var(--row-h);
   display: flex;
   align-items: center;
-  padding: 0 10px;
+  padding: 0 0.625rem;
   background: var(--bg-3);
   border-bottom: 1px solid var(--line);
-  font-size: 10px;
+  font-size: 0.625rem;
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--dim);
@@ -954,19 +1091,19 @@ select option {
 }
 
 .pane-error {
-  padding: 12px;
+  padding: 0.75rem;
   color: var(--bad);
-  font-size: 12px;
+  font-size: 0.75rem;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 0.375rem;
   align-items: flex-start;
 }
 
 .pane-note {
-  padding: 12px;
+  padding: 0.75rem;
   color: var(--dimmer);
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 
 /* ----------------------------------------------------------------- guide */
@@ -980,14 +1117,14 @@ select option {
   display: flex;
   flex-direction: column;
   background: var(--bg);
-  --guide-gutter: 210px;
+  --guide-gutter: 13.125rem;
 }
 
 .guide-head {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 12px;
+  gap: 0.625rem;
+  padding: 0.5rem 0.75rem;
   border-bottom: 1px solid var(--line);
   background: var(--bg-2);
   flex: 0 0 auto;
@@ -995,7 +1132,7 @@ select option {
 
 .guide-head h2 {
   margin: 0;
-  font-size: 14px;
+  font-size: 0.875rem;
   font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1004,7 +1141,7 @@ select option {
 }
 
 .guide-window {
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--dim);
   font-variant-numeric: tabular-nums;
 }
@@ -1024,13 +1161,13 @@ select option {
   top: 0;
   z-index: 3;
   display: flex;
-  height: 26px;
+  height: 1.625rem;
   background: var(--bg-3);
   border-bottom: 1px solid var(--line);
 }
 
 .axis-corner {
-  font-size: 10px;
+  font-size: 0.625rem;
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--dimmer);
@@ -1044,9 +1181,9 @@ select option {
   bottom: 0;
   display: flex;
   align-items: center;
-  padding-left: 6px;
+  padding-left: 0.375rem;
   border-left: 1px solid var(--line);
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-variant-numeric: tabular-nums;
   color: var(--dim);
   pointer-events: none;
@@ -1061,7 +1198,7 @@ select option {
   position: absolute;
   left: 0;
   right: 0;
-  height: 34px;
+  height: 2.125rem;
   display: flex;
   border-bottom: 1px solid var(--bg-3);
   contain: content;
@@ -1074,7 +1211,7 @@ select option {
 .guide-row.sep {
   background: var(--bg-3);
   color: var(--dim);
-  font-size: 10px;
+  font-size: 0.625rem;
   letter-spacing: 0.14em;
   text-transform: uppercase;
   align-items: center;
@@ -1085,17 +1222,17 @@ select option {
   width: var(--guide-gutter);
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 0 10px;
+  gap: 0.5rem;
+  padding: 0 0.625rem;
   border-right: 1px solid var(--line);
   overflow: hidden;
 }
 
 .guide-num {
   flex: 0 0 auto;
-  width: 42px;
+  width: 2.625rem;
   text-align: right;
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-variant-numeric: tabular-nums;
   color: var(--dimmer);
 }
@@ -1105,12 +1242,12 @@ select option {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 
 .guide-arch {
   flex: 0 0 auto;
-  font-size: 10px;
+  font-size: 0.625rem;
   color: var(--good);
 }
 
@@ -1124,17 +1261,17 @@ select option {
 /* A programme. Absolutely placed from the arithmetic in logic/guide.ts. */
 .prog {
   position: absolute;
-  top: 3px;
-  bottom: 3px;
+  top: 0.1875rem;
+  bottom: 0.1875rem;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 0 8px;
-  border-radius: 4px;
+  gap: 0.5rem;
+  padding: 0 0.5rem;
+  border-radius: 0.25rem;
   border: 1px solid var(--line);
   background: var(--bg-2);
   color: var(--text);
-  font-size: 12px;
+  font-size: 0.75rem;
   text-align: left;
   overflow: hidden;
   white-space: nowrap;
@@ -1147,7 +1284,7 @@ select option {
 
 .prog-time {
   margin-left: auto;
-  font-size: 10px;
+  font-size: 0.625rem;
   font-variant-numeric: tabular-nums;
   color: var(--dimmer);
 }
@@ -1203,7 +1340,7 @@ button.prog:hover {
   background: transparent;
   color: var(--dimmer);
   font-style: italic;
-  font-size: 11px;
+  font-size: 0.6875rem;
   justify-content: center;
 }
 
@@ -1219,12 +1356,45 @@ button.prog:hover {
   position: absolute;
   top: 0;
   bottom: 0;
-  width: 2px;
+  width: 0.125rem;
   margin-left: -1px;
   background: var(--bad);
   opacity: 0.9;
   z-index: 2;
   pointer-events: none;
+}
+
+/* --------------------------------------------------------------- stacked */
+
+/* Picture across the top at full width, guide underneath. Offered only when
+   the window is taller than wide with half again the picture's height to
+   spare — see logic/stack.ts, which is where that rule lives.
+
+   The top row is an empty transparent box on purpose: the video is not a DOM
+   element, and this is the slot whose measured rectangle is handed to mpv.
+   Anything painted here would be a hole in the picture. */
+.stacked {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  background: transparent;
+}
+
+.stacked-video {
+  position: relative;
+  width: 100%;
+  /* The shape of the picture, so the slot and what lands in it agree without
+     anybody computing a height in JavaScript. */
+  aspect-ratio: 16 / 9;
+  background: transparent;
+}
+
+/* The guide's own rule positions it against this box rather than the stage. */
+.stacked-guide {
+  position: relative;
+  min-height: 0;
 }
 
 /* ---------------------------------------------------------------- chrome */
@@ -1257,11 +1427,11 @@ button.prog:hover {
   left: 0;
   right: 0;
   bottom: 0;
-  padding: 40px 16px 14px;
+  padding: 2.5rem 1rem 0.875rem;
   background: linear-gradient(to top, rgba(6, 8, 11, 0.85), rgba(6, 8, 11, 0));
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 0.5rem;
 }
 
 .chrome-top {
@@ -1269,11 +1439,28 @@ button.prog:hover {
   top: 0;
   left: 0;
   right: 0;
-  padding: 12px 16px 32px;
+  padding: 0.75rem 1rem 2rem;
   background: linear-gradient(to bottom, rgba(6, 8, 11, 0.8), rgba(6, 8, 11, 0));
   display: flex;
   align-items: flex-start;
-  gap: 12px;
+  gap: 0.75rem;
+}
+
+/* Top-left of the picture, where the way out of a full-screen thing lives on
+   every device anybody owns. */
+.chrome-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex: 0 0 auto;
+  align-self: flex-start;
+  padding-left: 0.375rem;
+  letter-spacing: 0.08em;
+}
+
+.chrome-back .i {
+  width: 1rem;
+  height: 1rem;
 }
 
 .chrome-title {
@@ -1283,7 +1470,7 @@ button.prog:hover {
 
 .chrome-title h2 {
   margin: 0;
-  font-size: 16px;
+  font-size: 1rem;
   font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1291,20 +1478,25 @@ button.prog:hover {
 }
 
 .chrome-title p {
-  margin: 2px 0 0;
-  font-size: 12px;
+  margin: 0.125rem 0 0;
+  font-size: 0.75rem;
   color: var(--dim);
 }
 
-/* The honest numbers, revealed on hover — channel names lie about these. */
+/* The honest numbers, revealed on hover — channel names lie about these. It
+   is an overlay in the top-right corner of the picture, not a control in the
+   row: it is a readout, and it was taking a control's worth of width from a
+   row that already has to wrap at high zoom. */
 .measured {
-  font-size: 11px;
+  flex: 0 0 auto;
+  align-self: flex-start;
+  font-size: 0.6875rem;
   color: var(--dim);
   font-variant-numeric: tabular-nums;
   background: rgba(6, 8, 11, 0.6);
   border: 1px solid var(--line);
-  border-radius: 5px;
-  padding: 4px 8px;
+  border-radius: 0.3125rem;
+  padding: 0.25rem 0.5rem;
   opacity: 0;
   transition: opacity 160ms ease;
 }
@@ -1314,19 +1506,49 @@ button.prog:hover {
   opacity: 1;
 }
 
+/* The stacked-layout chevron, centred on the bar at every width. It has a row
+   to itself so that it cannot be pushed off centre by a control row that
+   wraps — and the windows it appears in are the narrow ones, where that row
+   does wrap. */
+.chrome-stack-row {
+  display: flex;
+  justify-content: center;
+}
+
+/* Wrapping is the degradation of last resort, and it is chosen on purpose.
+   At 200% zoom in a small window the row runs out of width; the alternatives
+   were squashing the controls until the icons touch their own edges, or
+   letting the row overflow, which pushes the right-most control — fullscreen,
+   which must always be right-most — off the screen entirely. A
+   second line keeps every control its own size and keeps all of them
+   reachable. */
 .ctl-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+/* No control gives up its size to make room for another. */
+.ctl,
+.volume {
+  flex: 0 0 auto;
+}
+
+/* Right-most means right-most on whatever line it lands on. The spring already
+   does this while everything fits on one; this keeps it true after a wrap,
+   where the last control would otherwise start a new line on the left. */
+.ctl.rightmost {
+  margin-left: auto;
 }
 
 .ctl {
-  padding: 4px 9px;
-  border-radius: 5px;
+  padding: 0.25rem 0.5625rem;
+  border-radius: 0.3125rem;
   border: 1px solid transparent;
   color: var(--text);
   background: rgba(20, 23, 28, 0.72);
-  font-size: 12px;
+  font-size: 0.75rem;
   white-space: nowrap;
 }
 
@@ -1350,10 +1572,170 @@ button.prog:hover {
 
 .time {
   font-variant-numeric: tabular-nums;
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--dim);
-  min-width: 54px;
+  min-width: 3.375rem;
   text-align: center;
+}
+
+/* A control whose whole content is an icon is square and centred, so a row of
+   them lines up on their centres rather than on their glyph widths. */
+.ctl.icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
+}
+
+.ctl .i {
+  display: block;
+  width: 1.125rem;
+  height: 1.125rem;
+}
+
+.ctl:disabled {
+  cursor: default;
+}
+
+/* The break between the audio controls and transport. Fixed, not a spring:
+   springs push things to the edges, and these two groups belong together at
+   the left with a gap you can aim between. */
+.ctl-gap {
+  flex: 0 0 auto;
+  width: 1.25rem;
+}
+
+/* ---------------------------------------------------------------- volume */
+
+.volume {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.vol {
+  width: 7.5rem;
+  height: 1.25rem;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  /* The handle is dragged, so the browser must not claim the gesture as a
+     scroll or a pan first. */
+  touch-action: none;
+}
+
+.vol-track {
+  position: relative;
+  width: 100%;
+  height: 0.375rem;
+  border-radius: 0.1875rem;
+  background: rgba(20, 23, 28, 0.85);
+  border: 1px solid var(--line);
+}
+
+/* Above 100% is software gain, so the last stretch of the track is hatched:
+   the region is visible before the handle ever reaches it, and crossing into
+   it is something you can see you have done. */
+.vol-zone.boost {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  border-radius: 0 0.1875rem 0.1875rem 0;
+  background: repeating-linear-gradient(
+    -45deg,
+    rgba(255, 107, 107, 0.26) 0 0.1875rem,
+    rgba(255, 107, 107, 0.08) 0.1875rem 0.375rem
+  );
+}
+
+.vol-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  border-radius: 0.1875rem 0 0 0.1875rem;
+  background: var(--accent);
+}
+
+.vol-fill.over {
+  border-radius: 0;
+  background: var(--bad);
+}
+
+/* Where 100% is. A slider that can exceed unity needs unity marked, or the
+   number is the only way to find your way back to it. */
+.vol-unity {
+  position: absolute;
+  top: -0.125rem;
+  bottom: -0.125rem;
+  width: 1px;
+  background: var(--dim);
+}
+
+.vol-handle {
+  position: absolute;
+  top: 50%;
+  width: 0.75rem;
+  height: 0.75rem;
+  margin-left: -0.375rem;
+  transform: translateY(-50%);
+  border-radius: 50%;
+  background: var(--accent);
+  border: 1px solid var(--bg);
+}
+
+.vol-handle.over {
+  background: var(--bad);
+}
+
+/* Muted is not zero: the slider keeps the value it will come back to, drawn
+   in a colour that says it is not doing anything right now. */
+.volume.muted .vol-fill,
+.volume.muted .vol-fill.over,
+.volume.muted .vol-handle {
+  background: var(--dimmer);
+}
+
+.vol-readout {
+  font-variant-numeric: tabular-nums;
+  font-size: 0.6875rem;
+  color: var(--dim);
+  min-width: 2.625rem;
+}
+
+.vol-readout.over {
+  color: var(--bad);
+}
+
+/* ------------------------------------------------------------------ live */
+
+/* One control: a dot that reports, and a word that acts. */
+.ctl.live {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.live-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--dimmer);
+}
+
+.ctl.live.at-edge .live-dot {
+  background: var(--bad);
+}
+
+/* At the live edge there is nowhere to jump to. It stops responding to the
+   pointer rather than pretending, and the dot carries the state. */
+.ctl.live.at-edge,
+.ctl.live.at-edge:hover {
+  background: transparent;
+  color: var(--dim);
 }
 
 /* ------------------------------------------------------------- scrubber */
@@ -1361,12 +1743,12 @@ button.prog:hover {
 .scrub {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 0.125rem;
 }
 
 .scrubber {
   position: relative;
-  height: 22px;
+  height: 1.375rem;
   display: flex;
   align-items: center;
   cursor: pointer;
@@ -1376,8 +1758,8 @@ button.prog:hover {
 .track {
   position: relative;
   width: 100%;
-  height: 6px;
-  border-radius: 3px;
+  height: 0.375rem;
+  border-radius: 0.1875rem;
   overflow: hidden;
   background: rgba(255, 255, 255, 0.14);
 }
@@ -1402,9 +1784,9 @@ button.prog:hover {
 
 .seam {
   position: absolute;
-  top: -3px;
-  bottom: -3px;
-  width: 2px;
+  top: -0.1875rem;
+  bottom: -0.1875rem;
+  width: 0.125rem;
   background: var(--text);
   opacity: 0.85;
 }
@@ -1412,9 +1794,9 @@ button.prog:hover {
 .playhead {
   position: absolute;
   top: 50%;
-  width: 11px;
-  height: 11px;
-  margin-left: -5.5px;
+  width: 0.6875rem;
+  height: 0.6875rem;
+  margin-left: -0.34375rem;
   border-radius: 50%;
   background: #fff;
   transform: translateY(-50%);
@@ -1424,7 +1806,7 @@ button.prog:hover {
 .scrub-labels {
   display: flex;
   justify-content: space-between;
-  font-size: 10px;
+  font-size: 0.625rem;
   color: var(--dimmer);
   letter-spacing: 0.05em;
 }
@@ -1435,9 +1817,9 @@ button.prog:hover {
   transform: translateX(-50%);
   background: rgba(6, 8, 11, 0.92);
   border: 1px solid var(--line);
-  border-radius: 4px;
-  padding: 2px 6px;
-  font-size: 11px;
+  border-radius: 0.25rem;
+  padding: 0.125rem 0.375rem;
+  font-size: 0.6875rem;
   white-space: nowrap;
   pointer-events: none;
 }
@@ -1458,24 +1840,24 @@ button.prog:hover {
 }
 
 .palette {
-  width: min(720px, 86vw);
+  width: min(45rem, 86vw);
   max-height: 66vh;
   display: flex;
   flex-direction: column;
   background: var(--bg-2);
   border: 1px solid var(--line);
-  border-radius: 10px;
-  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.6);
+  border-radius: 0.625rem;
+  box-shadow: 0 1.125rem 3.75rem rgba(0, 0, 0, 0.6);
   overflow: hidden;
 }
 
 .palette-input {
-  padding: 12px 14px;
+  padding: 0.75rem 0.875rem;
   background: transparent;
   border: 0;
   border-bottom: 1px solid var(--line);
   outline: none;
-  font-size: 15px;
+  font-size: 0.9375rem;
 }
 
 .palette-list {
@@ -1485,10 +1867,10 @@ button.prog:hover {
 
 .palette-item {
   display: flex;
-  gap: 10px;
+  gap: 0.625rem;
   align-items: center;
   width: 100%;
-  padding: 6px 14px;
+  padding: 0.375rem 0.875rem;
   text-align: left;
 }
 
@@ -1498,8 +1880,8 @@ button.prog:hover {
 
 .palette-kind {
   flex: 0 0 auto;
-  width: 62px;
-  font-size: 10px;
+  width: 3.875rem;
+  font-size: 0.625rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--dimmer);
@@ -1514,59 +1896,59 @@ button.prog:hover {
 
 .palette-hint {
   flex: 0 0 auto;
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--dimmer);
 }
 
 .palette-empty {
-  padding: 14px;
+  padding: 0.875rem;
   color: var(--dimmer);
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 
 /* ----------------------------------------------------------------- about */
 
 .about {
-  width: min(420px, 86vw);
-  padding: 20px 22px 16px;
+  width: min(26.25rem, 86vw);
+  padding: 1.25rem 1.375rem 1rem;
   background: var(--bg-2);
   border: 1px solid var(--line);
-  border-radius: 10px;
-  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.6);
+  border-radius: 0.625rem;
+  box-shadow: 0 1.125rem 3.75rem rgba(0, 0, 0, 0.6);
 }
 
 .about h2 {
   margin: 0;
-  font-size: 20px;
+  font-size: 1.25rem;
   letter-spacing: 0.02em;
 }
 
 .about-tag {
-  margin: 4px 0 14px;
+  margin: 0.25rem 0 0.875rem;
   color: var(--dim);
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 
 .about-facts {
-  margin: 0 0 16px;
+  margin: 0 0 1rem;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  font-size: 12px;
+  gap: 0.375rem;
+  font-size: 0.75rem;
 }
 
 .about-facts > div {
   display: flex;
-  gap: 10px;
+  gap: 0.625rem;
 }
 
 .about-facts dt {
-  flex: 0 0 90px;
+  flex: 0 0 5.625rem;
   color: var(--dimmer);
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  font-size: 10px;
-  padding-top: 2px;
+  font-size: 0.625rem;
+  padding-top: 0.125rem;
 }
 
 .about-facts dd {
@@ -1580,20 +1962,20 @@ button.prog:hover {
 }
 
 .settings {
-  width: min(820px, 90vw);
-  height: min(560px, 76vh);
+  width: min(51.25rem, 90vw);
+  height: min(35rem, 76vh);
   display: grid;
-  grid-template-columns: 180px minmax(0, 1fr);
+  grid-template-columns: 11.25rem minmax(0, 1fr);
   background: var(--bg-2);
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: 0.625rem;
   overflow: hidden;
-  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.6);
+  box-shadow: 0 1.125rem 3.75rem rgba(0, 0, 0, 0.6);
 }
 
 .settings-side {
   border-right: 1px solid var(--line);
-  padding: 10px 0;
+  padding: 0.625rem 0;
   overflow-y: auto;
 }
 
@@ -1601,7 +1983,7 @@ button.prog:hover {
   display: block;
   width: 100%;
   text-align: left;
-  padding: 6px 14px;
+  padding: 0.375rem 0.875rem;
   color: var(--dim);
 }
 
@@ -1611,32 +1993,32 @@ button.prog:hover {
 }
 
 .settings-body {
-  padding: 16px 18px;
+  padding: 1rem 1.125rem;
   overflow-y: auto;
 }
 
 .settings-body h3 {
-  margin: 0 0 10px;
-  font-size: 14px;
+  margin: 0 0 0.625rem;
+  font-size: 0.875rem;
 }
 
 .settings-body p {
   color: var(--dim);
-  font-size: 12px;
+  font-size: 0.75rem;
   max-width: 52ch;
 }
 
 .row-field {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 6px 0;
+  gap: 0.625rem;
+  padding: 0.375rem 0;
   border-bottom: 1px solid var(--line);
 }
 
 .row-field label {
   flex: 1 1 auto;
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 
 .row-field.wrap {
@@ -1644,20 +2026,20 @@ button.prog:hover {
 }
 
 .row-field input[type="range"] {
-  flex: 0 0 200px;
+  flex: 0 0 12.5rem;
 }
 
 .settings-note {
   display: flex;
   align-items: baseline;
-  gap: 8px;
-  margin-bottom: 10px;
-  padding: 6px 9px;
-  border-radius: 6px;
+  gap: 0.5rem;
+  margin-bottom: 0.625rem;
+  padding: 0.375rem 0.5625rem;
+  border-radius: 0.375rem;
   border: 1px solid var(--line);
   background: var(--bg-3);
   color: var(--dim);
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 
 .settings-note.bad {
@@ -1668,29 +2050,29 @@ button.prog:hover {
 .choices {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 0.375rem;
 }
 
 .swatches {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 0.375rem;
 }
 
 .swatch {
-  width: 22px;
-  height: 22px;
-  border-radius: 4px;
+  width: 1.375rem;
+  height: 1.375rem;
+  border-radius: 0.25rem;
   border: 1px solid var(--line);
 }
 
 .swatch.sel {
-  outline: 2px solid var(--accent);
+  outline: 0.125rem solid var(--accent);
   outline-offset: 1px;
 }
 
 .field.hex {
-  width: 88px;
+  width: 5.5rem;
   font-variant-numeric: tabular-nums;
   flex: 0 0 auto;
 }
@@ -1700,10 +2082,10 @@ button.prog:hover {
 .sub-preview {
   position: relative;
   aspect-ratio: 16 / 9;
-  max-height: 240px;
-  margin-bottom: 14px;
+  max-height: 15rem;
+  margin-bottom: 0.875rem;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: 0.5rem;
   overflow: hidden;
   display: flex;
   align-items: flex-end;
@@ -1717,21 +2099,21 @@ button.prog:hover {
     radial-gradient(120% 80% at 30% 20%, #2b3550 0%, #141a26 55%, #0b0e14 100%),
     repeating-linear-gradient(
       100deg,
-      rgba(255, 255, 255, 0.03) 0 18px,
-      rgba(0, 0, 0, 0.03) 18px 36px
+      rgba(255, 255, 255, 0.03) 0 1.125rem,
+      rgba(0, 0, 0, 0.03) 1.125rem 2.25rem
     );
 }
 
 .sub-line {
   position: relative;
   width: 100%;
-  padding: 8px 10px 12px;
+  padding: 0.5rem 0.625rem 0.75rem;
   text-align: center;
 }
 
 .sub-line span {
   display: inline-block;
-  border-radius: 3px;
+  border-radius: 0.1875rem;
 }
 
 
@@ -1739,21 +2121,21 @@ button.prog:hover {
 
 .toasts {
   position: absolute;
-  right: 14px;
-  bottom: 14px;
+  right: 0.875rem;
+  bottom: 0.875rem;
   z-index: 80;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 0.375rem;
   align-items: flex-end;
 }
 
 .toast {
-  max-width: 460px;
+  max-width: 28.75rem;
   text-align: left;
-  padding: 7px 11px;
-  border-radius: 6px;
-  font-size: 12px;
+  padding: 0.4375rem 0.6875rem;
+  border-radius: 0.375rem;
+  font-size: 0.75rem;
   background: var(--bg-2);
   border: 1px solid var(--line);
   color: var(--text);
@@ -1762,4 +2144,35 @@ button.prog:hover {
 .toast.error {
   border-color: #45262a;
   color: #ffc9c9;
+}
+
+/* ------------------------------------------------------------ zoom badge */
+
+/* Says the new size for a moment and offers the way back. Bottom centre: in
+   browse mode that is over the channel list, never over the docked picture,
+   which nothing may paint on. */
+.zoom-badge {
+  position: absolute;
+  left: 50%;
+  bottom: 1.5rem;
+  transform: translateX(-50%);
+  z-index: 85;
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  padding: 0.375rem 0.75rem;
+  border-radius: 0.5rem;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  font-size: 0.75rem;
+  color: var(--text);
+}
+
+.zoom-level {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.zoom-hint {
+  color: var(--dimmer);
 }

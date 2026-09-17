@@ -21,8 +21,28 @@ import type {
 } from "./types";
 import { errorMessage, idle, type Async } from "./logic/async";
 import { DEFAULT_SETTINGS, clampSettings } from "./logic/settings";
+import { clampZoom, nextZoom, type ZoomCommand } from "./logic/zoom";
+import { loadZoom } from "./zoom";
+import { loadStacked } from "./stacked";
 
 export const ALL_CATEGORIES = "*all*";
+
+/** The two halves of the rail. Categories is what the app opens on;
+ *  favourites is the list nobody edits — it is earned from what gets
+ *  watched, so there is no "add to favourites" anywhere. */
+export type RailTab = "categories" | "favourites";
+
+/** An open context menu over one favourite, and where the pointer was.
+ *
+ *  In the store rather than inside the component because Escape has to unwind
+ *  it in the same single-press order as everything else, and that ordering
+ *  lives in one place — see useGlobalKeys. */
+export interface FavouriteMenu {
+  streamId: number;
+  name: string;
+  x: number;
+  y: number;
+}
 
 /** Browse shows the rail and the list with the picture in the watch panel;
  *  watch gives the whole window to video and only paints chrome; guide is the
@@ -41,6 +61,9 @@ export interface State {
   /** ALL_CATEGORIES for the pseudo-entry, else a CategoryDto.id. */
   categoryId: string;
   categoryFilter: string;
+  /** Which half of the rail is showing. */
+  railTab: RailTab;
+  favouriteMenu: FavouriteMenu | null;
   /** The text in the channel-search box. Empty means "browse the category".
    *  The results themselves are not stored: they belong to whichever pane
    *  asked for them, so the list and the palette cannot fight over one slot. */
@@ -68,6 +91,22 @@ export interface State {
   settings: SettingsDto;
   settingsStatus: Async<null>;
   settingsSaveError: string | null;
+  /** How big the interface is drawn, 1 being the design size. Not part of
+   *  SettingsDto on purpose: that contract is Rust-side and synced, and how
+   *  large this screen wants its type is a property of this machine. It is
+   *  here rather than inside a component because the video rect depends on it
+   *  — every layout box moves when it changes, and mpv has to be told. */
+  zoom: number;
+  /** Whether watching should put the picture across the top with the guide
+   *  underneath, rather than giving the whole window to video.
+   *
+   *  A preference, not a mode: it only takes effect while watching, and only
+   *  when the window has the room for it (see logic/stack.ts). A window that
+   *  is too small falls back to the ordinary player and comes back to this
+   *  layout when it grows again, which is why the flag survives rather than
+   *  being cleared. Remembered per machine, like zoom, for the same reason:
+   *  a portrait monitor and a laptop want different answers. */
+  stacked: boolean;
   toasts: Toast[];
 }
 
@@ -87,6 +126,7 @@ export const initialPlayer: PlayerStateDto = {
   codec: null,
   bufferedBack: 0,
   behindLive: 0,
+  atLiveEdge: true,
   volume: 100,
   muted: false,
   compressor: false,
@@ -98,6 +138,8 @@ export const initialState: State = {
   categories: idle(),
   categoryId: ALL_CATEGORIES,
   categoryFilter: "",
+  railTab: "categories",
+  favouriteMenu: null,
   query: "",
   paletteOpen: false,
   settingsOpen: false,
@@ -111,6 +153,10 @@ export const initialState: State = {
   settings: DEFAULT_SETTINGS,
   settingsStatus: idle(),
   settingsSaveError: null,
+  // Read before the first render so the app opens at the size it was left at,
+  // rather than at 100% for a frame.
+  zoom: loadZoom(),
+  stacked: loadStacked(),
   toasts: [],
 };
 
@@ -118,6 +164,9 @@ export type Action =
   | { type: "categories"; value: Async<CategoryDto[]> }
   | { type: "selectCategory"; id: string }
   | { type: "categoryFilter"; text: string }
+  | { type: "railTab"; tab: RailTab }
+  | { type: "favouriteMenu"; menu: FavouriteMenu | null }
+  | { type: "stacked"; on: boolean }
   | { type: "query"; text: string }
   | { type: "palette"; open: boolean }
   | { type: "settings"; open: boolean }
@@ -132,6 +181,8 @@ export type Action =
   | { type: "settingsStatus"; value: Async<null> }
   | { type: "settingsValue"; value: SettingsDto }
   | { type: "settingsSaveError"; message: string | null }
+  | { type: "zoom"; value: number }
+  | { type: "zoomStep"; command: ZoomCommand }
   | { type: "toast"; text: string; kind?: "error" | "info" }
   | { type: "dismissToast"; id: number };
 
@@ -147,6 +198,17 @@ export function reducer(state: State, action: Action): State {
       return { ...state, categoryId: action.id, query: "" };
     case "categoryFilter":
       return { ...state, categoryFilter: action.text };
+    case "railTab":
+      // A menu belongs to the list it was opened over; changing the list
+      // leaves it pointing at a row that is no longer there.
+      return { ...state, railTab: action.tab, favouriteMenu: null };
+    case "favouriteMenu":
+      return { ...state, favouriteMenu: action.menu };
+    case "stacked":
+      // Written to local storage by App, the same way zoom is: a reducer that
+      // touched storage would do it twice under StrictMode and could not be
+      // tested without one.
+      return { ...state, stacked: action.on };
     case "query":
       return { ...state, query: action.text };
     case "palette":
@@ -166,7 +228,7 @@ export function reducer(state: State, action: Action): State {
     case "mode":
       // Any view change closes the menu, whoever asked for it — the menu is
       // one of the two places a view change comes from.
-      return { ...state, mode: action.mode, menuOpen: false };
+      return { ...state, mode: action.mode, menuOpen: false, favouriteMenu: null };
     case "sync":
       return { ...state, sync: action.value };
     case "player":
@@ -192,6 +254,14 @@ export function reducer(state: State, action: Action): State {
       return { ...state, settings: clampSettings(action.value) };
     case "settingsSaveError":
       return { ...state, settingsSaveError: action.message };
+    case "zoom":
+      return { ...state, zoom: clampZoom(action.value) };
+    case "zoomStep":
+      // The step is computed here rather than by the caller, so that two
+      // keystrokes in one tick are two stops. A caller reading the current
+      // zoom and dispatching the result would read the same stale value twice
+      // and move once — React has not re-rendered in between.
+      return { ...state, zoom: nextZoom(state.zoom, action.command) };
     case "opening":
       return {
         ...state,

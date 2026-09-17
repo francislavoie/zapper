@@ -101,6 +101,14 @@ pub struct PlayerStateDto {
     pub buffered_back: f64,
     /// Seconds behind the live edge; 0.0 when live.
     pub behind_live: f64,
+    /// Whether playback counts as live.
+    ///
+    /// Not `behind_live == 0`: the value is measured against the end of mpv's
+    /// seekable window, which advances in chunks as the demuxer reads, so it
+    /// sawtooths by a couple of seconds throughout perfectly normal live
+    /// playback. Any tight threshold flickers. This carries hysteresis, and is
+    /// the only thing the interface should use to decide.
+    pub at_live_edge: bool,
     pub volume: f64,
     pub muted: bool,
     pub compressor: bool,
@@ -118,6 +126,7 @@ impl Default for PlayerStateDto {
             codec: None,
             buffered_back: 0.0,
             behind_live: 0.0,
+            at_live_edge: true,
             volume: 100.0,
             muted: false,
             compressor: false,
@@ -221,6 +230,23 @@ pub struct GuideRowDto {
     pub has_archive: bool,
     pub archive_days: Option<u32>,
     pub programmes: Vec<ProgrammeDto>,
+}
+
+/// A channel the viewer keeps coming back to.
+///
+/// Earned rather than chosen: favourites are kept automatically from what
+/// actually gets watched, so there is no "add to favourites" anywhere. The
+/// score behind the ordering is weighted by recency, so a channel binged in
+/// March does not outrank one watched all week.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FavouriteDto {
+    pub channel: ChannelDto,
+    /// Total seconds watched, all time.
+    pub watch_seconds: i64,
+    /// Unix seconds.
+    pub last_watched: Option<i64>,
+    pub open_count: i64,
 }
 
 /// Event names. Emitted by Rust, subscribed by React.

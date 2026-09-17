@@ -60,6 +60,20 @@ impl Player {
             init.set_property("demuxer-max-back-bytes", 512i64 * 1024 * 1024)?;
             init.set_property("demuxer-max-bytes", 256i64 * 1024 * 1024)?;
             init.set_property("hwdec", "auto-safe".to_owned())?;
+            // Exact seeks, and the reason is measured rather than stylistic.
+            //
+            // mpv's default seeks to the nearest preceding keyframe, and on a
+            // broadcast MPEG-TS those are seconds apart. Benchmarked against
+            // the loop server (`cargo run --bin seek_bench`), a -5s request
+            // under the default actually moved -7.8s, -6.9s and -6.9s, and
+            // twice landed on 0.00 - the very start of the buffer, roughly 19
+            // seconds behind live, which then has to refill. That is what
+            // "rewind feels slow" was: not the seek, the place it landed.
+            //
+            // Exact seeking lands on -5.00 every time and costs 83ms against
+            // the default's 35ms. Both are far below anything a viewer can
+            // perceive, and the accuracy is the whole point of a skip button.
+            init.set_property("hr-seek", "yes".to_owned())?;
             // HDR on an SDR panel must be tone-mapped, not washed out.
             init.set_property("tone-mapping", "auto".to_owned())?;
             init.set_property("target-colorspace-hint", "yes".to_owned())?;

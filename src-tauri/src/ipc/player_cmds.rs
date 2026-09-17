@@ -17,6 +17,8 @@ use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, Emitter};
 
+use crate::catalog::activity::{self, Accumulator};
+use crate::catalog::store;
 use crate::ipc::types::{events, PlaybackState, PlayerStateDto};
 use crate::surface::mpv::{self, Player, Probe, Signal};
 use crate::surface::VideoRect;
@@ -116,6 +118,7 @@ impl Machine {
     }
 
     fn opening(&mut self, stream_id: i64) {
+        self.dto.at_live_edge = true;
         self.following_live = true;
         self.last_live_nudge = None;
         self.dto.state = PlaybackState::Opening;
@@ -163,6 +166,7 @@ impl Machine {
     }
 
     fn stopped(&mut self) {
+        self.dto.at_live_edge = true;
         self.following_live = false;
         self.dto.state = PlaybackState::Stopped;
         self.dto.stream_id = None;
@@ -175,6 +179,7 @@ impl Machine {
     /// mpv ended the file on its own. Before a first frame that is a failure,
     /// not a tidy stop.
     fn ended(&mut self) {
+        self.dto.at_live_edge = true;
         self.following_live = false;
         match self.dto.state {
             PlaybackState::Opening => self.failed("the stream ended before a frame arrived"),
@@ -203,6 +208,10 @@ impl Machine {
                 self.dto.codec = p.codec.clone();
             }
             self.dto.behind_live = round_tenth(p.behind_live);
+            self.dto.at_live_edge = live_edge_with_hysteresis(
+                self.dto.at_live_edge,
+                self.dto.behind_live,
+            );
             self.dto.buffered_back = round_tenth(p.buffered_back);
             self.set_paused(p.paused);
         }
@@ -245,6 +254,32 @@ fn round_tenth(v: f64) -> f64 {
 
 static STATE: LazyLock<Mutex<Machine>> = LazyLock::new(|| Mutex::new(Machine::new()));
 
+/// Watch time earned by whatever is on, for auto-favourites.
+///
+/// Driven from the heartbeat below, which is the only place that knows the
+/// difference between a stream that is playing and one that is merely open.
+/// The policy — what counts, and when it is worth a write — is
+/// [`crate::catalog::activity::Accumulator`], and is pure.
+static WATCHED: LazyLock<Mutex<Accumulator>> = LazyLock::new(|| Mutex::new(Accumulator::new()));
+
+/// Writes earned watch time, off the GTK main thread.
+///
+/// Never inline: this runs from the heartbeat, and the shared connection can
+/// be held by a catalogue read for as long as that read takes. Blocking the
+/// main thread on it would stall the frame the compositor is waiting for. A
+/// failure is logged and dropped — losing thirty seconds of bookkeeping is not
+/// worth interrupting playback over.
+fn persist(earned: activity::Earned) {
+    tauri::async_runtime::spawn_blocking(move || {
+        let r = crate::catalog::db::with_db(|c| {
+            store::record_activity(c, earned.stream_id, earned.seconds, earned.open, earned.at)
+        });
+        if let Err(e) = r {
+            tracing::warn!("could not record watch time: {e}");
+        }
+    });
+}
+
 /// Mutates the state and emits `PLAYER_STATE` if anything visible changed.
 fn commit(app: &AppHandle, f: impl FnOnce(&mut Machine)) {
     let payload = {
@@ -286,6 +321,8 @@ fn ensure_ticker(app: &AppHandle) {
 fn tick(app: &AppHandle, p: &Player) {
     let signals = p.pump();
     let probe = p.probe();
+    // Assigned inside the block below, where the state lock is held.
+    let earned;
     let payload = {
         let mut m = STATE.lock().expect("player state mutex poisoned");
         for s in &signals {
@@ -324,8 +361,20 @@ fn tick(app: &AppHandle, p: &Player) {
             }
         }
 
+        // Watch time, for auto-favourites. Only `Playing` counts: opening is
+        // not watching, and neither is a paused stream sitting on a frame.
+        earned = WATCHED.lock().expect("activity mutex poisoned").observe(
+            m.dto.stream_id,
+            m.dto.state == PlaybackState::Playing,
+            TICK.as_secs_f64(),
+            activity::now_secs(),
+        );
+
         m.changed()
     };
+    if let Some(e) = earned {
+        persist(e);
+    }
     if let Some(payload) = payload {
         let _ = app.emit(events::PLAYER_STATE, payload);
     }
@@ -481,6 +530,28 @@ const LIVE_EDGE_MARGIN: f64 = 0.5;
 /// settling.
 const LIVE_FOLLOW_SLACK: f64 = 6.0;
 
+/// Below this, playback is considered to have reached live.
+const LIVE_ENTER: f64 = 3.0;
+/// Above this, it is considered to have fallen behind.
+///
+/// The gap between the two is the point. `behind_live` is measured against the
+/// end of mpv's seekable window, which advances in chunks as the demuxer
+/// reads, so it sawtooths by a couple of seconds while playback is perfectly
+/// live. A single threshold makes the indicator flicker between "live" and a
+/// few seconds behind; two thresholds mean it only changes when something
+/// actually changed.
+const LIVE_EXIT: f64 = 8.0;
+
+/// Deliberately takes the previous answer: without it there is no hysteresis,
+/// only a threshold.
+fn live_edge_with_hysteresis(was_live: bool, behind: f64) -> bool {
+    if was_live {
+        behind <= LIVE_EXIT
+    } else {
+        behind <= LIVE_ENTER
+    }
+}
+
 /// Minimum gap between automatic catch-ups, so a stream that cannot keep up
 /// is not seeked on every tick.
 const LIVE_NUDGE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3);
@@ -533,8 +604,9 @@ pub async fn set_muted(app: AppHandle, muted: bool) -> Result<(), String> {
     Ok(())
 }
 
-/// Widely shared Web Audio parameters: threshold -50, knee 40, ratio 12, attack 0,
-/// release 0.25.
+/// Toggles loudness normalisation. Named "compressor" because that is what
+/// the control is usually called in players, but see [`compressor_filter`]
+/// for why it is not a classic compressor.
 #[tauri::command]
 pub async fn set_compressor(app: AppHandle, enabled: bool) -> Result<(), String> {
     let filter = if enabled {
@@ -581,38 +653,69 @@ fn clamp_seek(seconds: f64, buffered_back: f64, behind_live: f64) -> f64 {
     }
 }
 
-// A widely shared compressor, as authored for the Web Audio
-// `DynamicsCompressorNode`. Kept in its original units so the numbers can be
-// checked against the source they came from; `compressor_filter` converts.
-const COMP_THRESHOLD_DB: f64 = -50.0;
-const COMP_KNEE_DB: f64 = 40.0;
-const COMP_RATIO: f64 = 12.0;
-const COMP_ATTACK_S: f64 = 0.0;
-const COMP_RELEASE_S: f64 = 0.25;
-
-/// mpv's `af` value for the compressor.
+/// The loudness every stream is normalised to, in LUFS.
 ///
-/// ffmpeg's `acompressor` does not take Web Audio's units. Threshold is a
-/// linear amplitude, not dB; attack and release are milliseconds, not
-/// seconds; and knee is a linear width factor bounded to 1..8, so the published 40 dB
-/// knee (a factor of 10) is clamped to the widest ffmpeg will accept - about
-/// 36 dB, the closest reachable curve. Every bound below is from
-/// `ffmpeg -h filter=acompressor`; exceeding one makes the filter fail to
-/// load, which mpv reports as a bare property error.
-fn compressor_filter() -> String {
-    let threshold = db_to_amplitude(COMP_THRESHOLD_DB).clamp(0.000_976_563, 1.0);
-    let knee = db_to_amplitude(COMP_KNEE_DB / 2.0).clamp(1.0, 8.0);
-    let ratio = COMP_RATIO.clamp(1.0, 20.0);
-    let attack = (COMP_ATTACK_S * 1000.0).clamp(0.01, 2000.0);
-    let release = (COMP_RELEASE_S * 1000.0).clamp(0.01, 9000.0);
-    format!(
-        "acompressor=threshold={threshold:.6}:knee={knee:.3}:ratio={ratio}:\
-         attack={attack}:release={release}"
-    )
-}
+/// -14 is what YouTube, Spotify and Apple Music all normalise to, and this
+/// app sits on the same desktop as them: a target below that reads as "the
+/// compressor made it quiet" even when the filter is behaving perfectly.
+/// Broadcast practice is -23 LUFS (EBU R128) and is the wrong reference -
+/// the streams already arrive at broadcast levels, and lifting them to
+/// desktop levels is the entire point of the control.
+const LOUDNESS_TARGET_LUFS: f64 = -14.0;
 
-fn db_to_amplitude(db: f64) -> f64 {
-    10f64.powf(db / 20.0)
+/// Ceiling for the true peak, in dBFS. The headroom is deliberate: a lossy
+/// decoder reconstructs inter-sample peaks above the highest stored sample,
+/// so normalising to 0 would clip on the way out.
+const LOUDNESS_TRUE_PEAK_DB: f64 = -1.5;
+
+/// Permitted loudness range, in LU. Wide enough that quiet dialogue and loud
+/// music keep their shape instead of being flattened onto one level.
+const LOUDNESS_RANGE_LU: f64 = 11.0;
+
+/// mpv's `af` value for the compressor toggle.
+///
+/// **Not `acompressor`.** It was, carrying a widely shared
+/// `DynamicsCompressorNode` settings (threshold -50 dB, knee 40, ratio 12,
+/// attack 0, release 0.25), and that was wrong in a way worth recording so
+/// nobody restores it.
+///
+/// Those numbers describe a compressor sitting in front of a gain stage. On
+/// their own they only attenuate: material at -25 LUFS lands at
+/// `-50 + (-25 - -50) / 12`, about -48, and `acompressor` applies no makeup
+/// unless asked. Measured on the three fixtures, integrated LUFS:
+/// sport -25.4 -> -44.8, nwn1 -23.3 -> -54.9, motion1080p -6.7 -> -50.8.
+/// A fixed `makeup` cannot repair that, because how far each source falls
+/// depends on how far above the threshold it started, so any single value
+/// over-lifts one source while leaving another buried.
+///
+/// `loudnorm` measures rather than assumes, so it converges sources that
+/// begin 19 dB apart:
+///
+/// ```text
+///                 bypass          loudnorm I=-14
+///   sport720p60   -25.4 LUFS      -14.1 LUFS  (true peak -1.5 dBTP)
+///   nwn1          -23.3 LUFS      -14.1 LUFS  (true peak -1.5 dBTP)
+///   motion1080p    -6.7 LUFS      -14.0 LUFS  (true peak -4.9 dBTP)
+/// ```
+///
+/// That convergence is the property worth having. `dynaudnorm` and
+/// `speechnorm` both lift the quiet sources to roughly -14 as well, but
+/// leave motion1080p at -8.2 and -7.3 - still 6 dB above the others - so the
+/// level jump between channels survives, which is the thing that actually
+/// makes IPTV audio unpleasant. They also finish at -0.2 dBTP, with no
+/// headroom for inter-sample peaks.
+///
+/// Note motion1080p bypasses at +2.4 dBTP: untreated it is already clipping,
+/// so pulling it down is a repair rather than a regression.
+///
+/// Latency is not a concern. A click transient through this filter comes out
+/// at the same timestamp it went in - the filter reports its delay and it is
+/// compensated - so lip sync holds and the toggle stays usable on a live
+/// stream.
+fn compressor_filter() -> String {
+    format!(
+        "loudnorm=I={LOUDNESS_TARGET_LUFS}:TP={LOUDNESS_TRUE_PEAK_DB}:LRA={LOUDNESS_RANGE_LU}"
+    )
 }
 
 /// Formats Unix seconds as the server's `YYYY-MM-DD:HH-MM`, `offset` seconds
@@ -797,28 +900,24 @@ mod tests {
     }
 
     #[test]
-    fn compressor_uses_webaudio_values_in_ffmpegs_units() {
-        // -50 dB is 0.003162 linear; 0.25 s is 250 ms; attack 0 is below
-        // ffmpeg's 0.01 ms floor; a 40 dB knee is a factor of 10, above
-        // ffmpeg's ceiling of 8.
+    fn compressor_normalises_loudness_rather_than_compressing() {
+        // Pinned in full: a silent edit here changes how loud every channel
+        // plays, and the last time these numbers drifted the audio dropped
+        // 19 dB with nothing in the logs to say so.
         assert_eq!(
             compressor_filter(),
-            "acompressor=threshold=0.003162:knee=8.000:ratio=12:attack=0.01:release=250"
+            "loudnorm=I=-14:TP=-1.5:LRA=11"
         );
     }
 
     #[test]
-    fn the_webaudio_constants_are_the_published_ones() {
-        assert_eq!(
-            (
-                COMP_THRESHOLD_DB,
-                COMP_KNEE_DB,
-                COMP_RATIO,
-                COMP_ATTACK_S,
-                COMP_RELEASE_S
-            ),
-            (-50.0, 40.0, 12.0, 0.0, 0.25)
-        );
+    fn the_loudness_target_matches_streaming_practice() {
+        // -14 LUFS is YouTube's and Spotify's target. Broadcast's -23 is the
+        // level the streams arrive at, not the level they should play at.
+        assert_eq!(LOUDNESS_TARGET_LUFS, -14.0);
+        // Headroom for the inter-sample peaks a lossy decoder reconstructs.
+        assert_eq!(LOUDNESS_TRUE_PEAK_DB, -1.5);
+        assert_eq!(LOUDNESS_RANGE_LU, 11.0);
     }
 
     #[test]
@@ -1054,6 +1153,30 @@ mod tests {
         // means for it.
         assert_eq!(prop(&off, "tone-mapping"), "clip");
     }
+
+    #[test]
+    fn the_live_indicator_does_not_flicker_on_the_sawtooth() {
+        // behind_live oscillating in the 0-4s band is what normal live
+        // playback looks like; the answer must not change through it.
+        let mut live = true;
+        for behind in [0.0, 3.4, 0.2, 4.0, 1.1, 3.9, 0.0] {
+            live = live_edge_with_hysteresis(live, behind);
+            assert!(live, "went non-live at {behind}s, which is still live");
+        }
+    }
+
+    #[test]
+    fn a_real_rewind_leaves_the_live_edge_and_stays_left() {
+        let mut live = true;
+        live = live_edge_with_hysteresis(live, 12.0);
+        assert!(!live, "12s behind is not live");
+        // Coming back must clear the tighter entry threshold, not merely dip
+        // under the exit one, or it would flap around 8s.
+        live = live_edge_with_hysteresis(live, 6.0);
+        assert!(!live, "6s is under the exit threshold but over the entry one");
+        live = live_edge_with_hysteresis(live, 1.0);
+        assert!(live, "1s behind is live again");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1279,4 +1402,6 @@ pub fn apply_saved_settings(app: &tauri::AppHandle) {
     }) {
         tracing::warn!("could not reach the GTK main thread to apply saved settings: {e}");
     }
+
+
 }

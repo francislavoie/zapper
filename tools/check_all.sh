@@ -38,7 +38,10 @@ rust_clippy() { (cd src-tauri && cargo clippy --lib --bins -q -- -D warnings 2>&
 front_build() { . "$HOME/.nvm/nvm.sh" && nvm use >/dev/null 2>&1 && npm run build 2>&1 | tail -2; }
 front_checks(){
   . "$HOME/.nvm/nvm.sh" && nvm use >/dev/null 2>&1
-  local out; out=$(node --test src/__checks__/ 2>&1); local rc=$?
+  # Globbed rather than handed the directory: `node --test <dir>` needs a
+  # recent Node, and on an older one it is read as a module path and fails
+  # with MODULE_NOT_FOUND - which looks like a broken suite, not a wrong Node.
+  local out; out=$(node --test src/__checks__/*.test.mjs 2>&1); local rc=$?
   # Report on node's exit code, not on matching its summary: the prefix is a
   # unicode marker that has changed between Node versions, and grepping for it
   # turned a passing suite into a failure.

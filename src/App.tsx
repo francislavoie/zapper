@@ -11,15 +11,19 @@ import { errorMessage } from "./logic/async";
 import { useGlobalKeys } from "./hooks/useGlobalKeys";
 import { useSettings } from "./hooks/useSettings";
 import { useVideoRect } from "./hooks/useVideoRect";
+import { useZoom } from "./hooks/useZoom";
 import { useApp, useDispatch } from "./store";
+import { useCanStack } from "./hooks/useCanStack";
+import { saveStacked } from "./stacked";
 import { AboutModal } from "./components/AboutModal";
-import { CategoryRail } from "./components/CategoryRail";
+import { Rail } from "./components/Rail";
 import { ChannelList } from "./components/ChannelList";
 import { CommandPalette } from "./components/CommandPalette";
 import { GuideGrid } from "./components/GuideGrid";
 import { PlayerChrome } from "./components/PlayerChrome";
 import { SettingsModal } from "./components/SettingsModal";
 import { Toolbar } from "./components/Toolbar";
+import { ZoomBadge } from "./components/ZoomBadge";
 import { WatchBand } from "./components/WatchBand";
 import { Toasts } from "./components/Toasts";
 
@@ -31,7 +35,24 @@ export function App() {
   const planeRef = useRef<HTMLDivElement | null>(null);
   const browsing = state.mode === "browse";
 
+  // The stacked layout is a preference, not a mode: it applies while watching,
+  // and only when the window has the room. Too small a window falls back to
+  // the ordinary player and returns here when it grows, so the preference is
+  // never silently thrown away.
+  const room = useCanStack(state.zoom);
+  const stacked = state.mode === "watch" && state.stacked && room;
+
   useGlobalKeys(state, dispatch);
+
+  // Remembered per machine, like zoom, and written here rather than in the
+  // reducer so the reducer stays pure.
+  useEffect(() => {
+    saveStacked(state.stacked);
+  }, [state.stacked]);
+
+  // Ctrl +/-/0 and Ctrl+wheel. Applied before paint, which matters below: the
+  // video rect is measured from boxes this has already resized.
+  useZoom(state.zoom, dispatch);
 
   // Read once at boot rather than when the modal opens: the guide needs
   // guideHours whether or not anyone has been to the settings pane.
@@ -48,7 +69,15 @@ export function App() {
   useVideoRect({
     dockRef,
     stageRef,
-    docked: browsing,
+    // Stacked docks too: the picture goes in a slot across the top, and the
+    // rect is measured from that slot exactly as it is from the browse dock.
+    // No special case reaches mpv — this is a layout change, nothing more.
+    docked: browsing || stacked,
+    // Zoom moves every box on screen, and the video is not a box — mpv draws
+    // it beneath the webview from coordinates this app measures and sends. So
+    // a zoom change has to re-measure and re-send, or the picture stays at the
+    // old layout's position and detaches from its slot.
+    zoom: state.zoom,
     paintRef: isMock ? planeRef : undefined,
     onError: (m) => dispatch({ type: "toast", text: `video placement: ${m}` }),
   });
@@ -103,7 +132,7 @@ export function App() {
                 the stage, and the list below it scrolls under a picture that
                 never moves. */}
             <WatchBand videoRef={dockRef} />
-            <CategoryRail />
+            <Rail />
             <ChannelList />
           </div>
         ) : null}
@@ -112,13 +141,30 @@ export function App() {
 
         {/* Chrome belongs to watch mode. Browsing shows the docked picture and
             the metadata beside it, not a full set of transport controls. */}
-        {state.mode === "watch" ? <PlayerChrome /> : null}
+        {state.mode === "watch" && !stacked ? <PlayerChrome /> : null}
+
+        {/* Stacked: the picture across the top at full width, the guide
+            underneath it. The slot is an empty transparent box — the video is
+            not in the DOM, it is drawn beneath the webview where this box
+            says — and the controls sit over it, as they do in the ordinary
+            player. */}
+        {stacked ? (
+          <div className="stacked">
+            <div className="stacked-video" ref={dockRef}>
+              <PlayerChrome />
+            </div>
+            <div className="stacked-guide">
+              <GuideGrid />
+            </div>
+          </div>
+        ) : null}
       </div>
 
       {state.paletteOpen ? <CommandPalette /> : null}
       {state.settingsOpen ? <SettingsModal /> : null}
       {state.aboutOpen ? <AboutModal /> : null}
 
+      <ZoomBadge />
       <Toasts />
     </div>
   );

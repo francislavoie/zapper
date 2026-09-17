@@ -9,7 +9,7 @@ import {
   behindLiveAt,
   catchupRequest,
   geometry,
-  pixelAtTime,
+  headPixel,
   seekCost,
   timeAtPixel,
 } from "../logic/scrubber";
@@ -47,7 +47,7 @@ export function Scrubber({ player, channel, onPin }: ScrubberProps) {
     now,
   });
 
-  const headPx = pixelAtTime(g, now - player.behindLive);
+  const headPx = headPixel(g, player);
   const hoverTime = hoverPx === null ? null : timeAtPixel(g, hoverPx);
   const hoverCost = hoverTime === null ? null : seekCost(g, hoverTime);
 
