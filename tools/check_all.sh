@@ -121,6 +121,7 @@ step "rust unit tests"      rust_tests
 step "rust clippy"          rust_clippy
 step "frontend build"       front_build
 step "frontend checks"      front_checks
+step "release scripts"      scripts/test-scripts.sh
 step "catalogue over the local mirror" ipc_check
 
 if [[ $WINDOWED -eq 1 ]]; then

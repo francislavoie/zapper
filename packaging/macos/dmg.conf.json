@@ -1,0 +1,8 @@
+{
+  "bundle": {
+    "targets": ["app", "dmg"],
+    "resources": {
+      "../packaging/install-kind-dmg": "install-kind"
+    }
+  }
+}

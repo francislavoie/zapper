@@ -1,0 +1,78 @@
+# The checks that need no window, no account and no network beyond the package mirrors, on
+# pushes to main and on pull requests: Rust's unit tests and clippy, the frontend's type check
+# and build, its node checks, and the release scripts' tests. tools/check_all.sh runs the same
+# locally, plus the harnesses that need a real display and mpv. Releases are release.yml.
+# Actions are pinned by commit, as in release.yml.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions: {}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: Tests, lint and build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The Linux build dependencies (README.md): WebKitGTK 4.1 and GTK 3 for Tauri 2, libmpv for
+      # playback, libepoxy for the GL surface. jq and dpkg-dev: the release scripts' tests.
+      - name: System packages
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libmpv-dev libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev librsvg2-dev libxdo-dev libayatana-appindicator3-dev \
+            libepoxy-dev pkg-config jq dpkg-dev desktop-file-utils
+
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        with:
+          toolchain: stable
+          components: clippy
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: src-tauri
+          key: ci
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      # package.json wants Node 26 (.nvmrc).
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - run: npm ci
+
+      - name: Rust unit tests
+        working-directory: src-tauri
+        run: cargo test --lib -q
+
+      - name: Clippy
+        working-directory: src-tauri
+        run: cargo clippy --lib --bins -q -- -D warnings
+
+      - name: Frontend build
+        run: npm run build
+
+      - name: Frontend checks
+        run: node --test src/__checks__/*.test.mjs
+
+      - name: Release scripts
+        run: scripts/test-scripts.sh

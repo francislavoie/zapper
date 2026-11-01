@@ -6,7 +6,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { backend } from "../backend";
-import { useSettings } from "../hooks/useSettings";
+import { useSettings, type SettingsControl } from "../hooks/useSettings";
 import { clampVolume } from "../logic/format";
 import {
   REWIND_MAX,
@@ -20,6 +20,8 @@ import {
 } from "../logic/settings";
 import { MAX_GUIDE_HOURS, MIN_GUIDE_HOURS } from "../logic/guide";
 import { VOLUME_MAX } from "../logic/volume";
+import { kindLabel, statusLine as updateStatusLine } from "../logic/updates";
+import { checkForUpdates } from "../actions";
 import { run, useApp, useDispatch } from "../store";
 import { AccountPane } from "./AccountPane";
 import type { SubtitleBackdrop } from "../types";
@@ -31,6 +33,7 @@ const SECTIONS = [
   "Subtitles",
   "Guide",
   "Data",
+  "Updates",
   "Keyboard",
   "About",
 ] as const;
@@ -84,7 +87,10 @@ export function SettingsModal() {
 
           {/* One line, at the top of every pane that writes settings, saying
               what state the settings themselves are in. */}
-          {section === "Playback" || section === "Subtitles" || section === "Guide" ? (
+          {section === "Playback" ||
+          section === "Subtitles" ||
+          section === "Guide" ||
+          section === "Updates" ? (
             <Status
               status={s.status}
               saveError={s.saveError}
@@ -383,6 +389,8 @@ export function SettingsModal() {
             </>
           ) : null}
 
+          {section === "Updates" ? <UpdatesPane s={s} /> : null}
+
           {section === "Keyboard" ? (
             <ul>
               <li>
@@ -415,6 +423,57 @@ export function SettingsModal() {
         </div>
       </div>
     </div>
+  );
+}
+
+/** The automatic check, and the way to ask now. The setting is an ordinary
+ *  one, saved like the rest; the check itself is the update dialog's, so
+ *  "Check now" opens it over this pane rather than answering in a line here
+ *  that would then need its own download and install buttons. */
+function UpdatesPane({ s }: { s: SettingsControl }) {
+  const { update } = useApp();
+  const dispatch = useDispatch();
+  const configured = update.state.state !== "notConfigured";
+
+  return (
+    <>
+      <div className={`settings-note ${update.state.state === "failed" ? "bad" : ""}`}>
+        {updateStatusLine(update)}
+      </div>
+      <div className="row-field">
+        <label htmlFor="set-autoupdate">Check for updates automatically</label>
+        <button
+          id="set-autoupdate"
+          className={`ctl ${s.settings.checkForUpdates ? "on" : ""}`}
+          aria-pressed={s.settings.checkForUpdates}
+          onClick={() => s.patch({ checkForUpdates: !s.settings.checkForUpdates })}
+        >
+          {s.settings.checkForUpdates ? "on" : "off"}
+        </button>
+      </div>
+      <div className="row-field">
+        <label>
+          Installed: {update.current || "unknown"} · {kindLabel(update.kind)}
+        </label>
+        <button
+          className="ctl"
+          disabled={!configured}
+          onClick={() => {
+            dispatch({ type: "updateDialog", open: true });
+            void checkForUpdates(dispatch);
+          }}
+        >
+          Check now
+        </button>
+      </div>
+      <p>
+        A minute after zapper starts, and once a day while it runs, it asks
+        GitHub for its list of releases. Nothing about you, your panel or what
+        you watch is sent — only zapper’s version, in the request’s user agent.
+        An update is downloaded only when you choose to install it, and only
+        installed if it matches the checksum published with the release.
+      </p>
+    </>
   );
 }
 

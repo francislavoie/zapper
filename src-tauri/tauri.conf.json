@@ -28,7 +28,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": "deb",
+    "targets": ["deb", "rpm"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -45,7 +45,21 @@
           "libmpv2 | libmpv1",
           "libwebkit2gtk-4.1-0",
           "libgtk-3-0"
-        ]
+        ],
+        "files": {
+          "/usr/lib/zapper/install-kind": "../packaging/install-kind-deb"
+        }
+      },
+      "rpm": {
+        "desktopTemplate": "../packaging/zapper.desktop.hbs",
+        "depends": [
+          "libmpv.so.2()(64bit)",
+          "libwebkit2gtk-4.1.so.0()(64bit)",
+          "libgtk-3.so.0()(64bit)"
+        ],
+        "files": {
+          "/usr/lib/zapper/install-kind": "../packaging/install-kind-rpm"
+        }
       }
     }
   }

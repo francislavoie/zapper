@@ -29,6 +29,7 @@ export const DEFAULT_SETTINGS: SettingsDto = {
   guideHours: 3,
   syncIntervalHours: 6,
   subtitle: DEFAULT_SUBTITLE,
+  checkForUpdates: true,
 };
 
 export const REWIND_MIN = 1;
@@ -78,6 +79,9 @@ export function clampSettings(s: SettingsDto): SettingsDto {
     guideHours: round(s.guideHours, 1, 6),
     syncIntervalHours: round(s.syncIntervalHours, SYNC_MIN, SYNC_MAX),
     subtitle: clampSubtitle(s.subtitle),
+    // Only an explicit `false` turns it off: a config from before the setting
+    // existed has no value, and that must read as the default, on.
+    checkForUpdates: s.checkForUpdates !== false,
   };
 }
 

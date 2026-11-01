@@ -19,6 +19,10 @@ import type {
   SettingsDto,
   SubtitleStyleDto,
   SyncStatusDto,
+  InstallKind,
+  InstallOutcomeDto,
+  UpdateReleaseDto,
+  UpdateStatusDto,
   VideoRect,
 } from "./types";
 
@@ -522,7 +526,54 @@ let storedSettings: SettingsDto = {
     outlineSize: 2,
     shadowOffset: 0,
   },
+  checkForUpdates: true,
 };
+
+// ----------------------------------------------------------------- updates
+
+/** `?updates=` picks what the fake GitHub says, so every state of the
+ *  update dialog can be looked at without a release:
+ *
+ *    available     a .deb install with 0.2.0 waiting (the default)
+ *    source        a build from source: only the release page is offered
+ *    manual        the install "fails" and hands back the command to run
+ *    current       nothing newer
+ *    unconfigured  the placeholder repository: no check ever happens
+ *    offline       every check fails */
+const UPDATES_MODE =
+  (typeof location !== "undefined" &&
+    new URLSearchParams(location.search).get("updates")) ||
+  "available";
+
+const MOCK_RELEASE: UpdateReleaseDto = {
+  version: "0.2.0",
+  name: "zapper 0.2.0",
+  notes:
+    "### Added\n- Check for updates, and install them from inside the app.\n\n### Fixed\n- The guide no longer jumps when a programme ends.",
+  url: "https://github.com/OWNER/zapper/releases/tag/v0.2.0",
+  prerelease: false,
+  publishedAt: "2026-10-30T12:00:00Z",
+  asset:
+    UPDATES_MODE === "source"
+      ? null
+      : { name: "zapper_0.2.0_amd64.deb", size: 9_400_000 },
+};
+
+const updateEmitter = new Emitter<UpdateStatusDto>({
+  current: "0.1.0",
+  kind: (UPDATES_MODE === "source" ? "none" : "deb") as InstallKind,
+  lastChecked: null,
+  state: UPDATES_MODE === "unconfigured" ? { state: "notConfigured" } : { state: "idle" },
+});
+
+let updateTimer: number | undefined;
+
+function setUpdate(p: Partial<UpdateStatusDto>) {
+  updateEmitter.emit({ ...updateEmitter.last, ...p });
+  // Exposed so a driver can assert on what the backend thinks, not only on
+  // what the dialog drew.
+  (globalThis as Record<string, unknown>).__mockUpdate = updateEmitter.last;
+}
 
 function patchPlayer(p: Partial<PlayerStateDto>) {
   playerEmitter.emit({ ...playerEmitter.last, ...p });
@@ -857,6 +908,106 @@ export const mockApi = {
       toneMapHdr: next.toneMapHdr,
     };
   },
+
+  updateStatus: async (): Promise<UpdateStatusDto> => {
+    await delay(20);
+    return updateEmitter.last;
+  },
+
+  updateCheck: async (): Promise<UpdateStatusDto> => {
+    const s = updateEmitter.last.state.state;
+    if (s === "notConfigured") return updateEmitter.last;
+    if (["downloading", "ready", "installing", "installed"].includes(s)) {
+      return updateEmitter.last;
+    }
+    const before = updateEmitter.last.state;
+    // As the backend does: an update already on offer stays on screen while
+    // it is checked again; only a check with nothing to show says Checking.
+    if (!("release" in before && before.release)) setUpdate({ state: { state: "checking" } });
+    await delay(600);
+    if (UPDATES_MODE === "offline") {
+      setUpdate({ state: before });
+      throw "GitHub answered HTTP 503";
+    }
+    setUpdate({
+      lastChecked: Math.floor(Date.now() / 1000),
+      state:
+        UPDATES_MODE === "current"
+          ? { state: "upToDate" }
+          : { state: "available", release: MOCK_RELEASE },
+    });
+    return updateEmitter.last;
+  },
+
+  updateDownload: async (): Promise<UpdateStatusDto> => {
+    const s = updateEmitter.last.state;
+    if (s.state !== "available" && !(s.state === "failed" && s.release)) {
+      throw "There's no update to download";
+    }
+    const asset = MOCK_RELEASE.asset;
+    if (!asset) {
+      throw "This copy of zapper has no package to download: get the update from its release page";
+    }
+    let received = 0;
+    setUpdate({ state: { state: "downloading", release: MOCK_RELEASE, received, total: asset.size } });
+    window.clearInterval(updateTimer);
+    updateTimer = window.setInterval(() => {
+      received = Math.min(asset.size, received + asset.size / 12);
+      if (updateEmitter.last.state.state !== "downloading") {
+        window.clearInterval(updateTimer);
+        return;
+      }
+      if (received >= asset.size) {
+        window.clearInterval(updateTimer);
+        setUpdate({ state: { state: "ready", release: MOCK_RELEASE } });
+      } else {
+        setUpdate({
+          state: { state: "downloading", release: MOCK_RELEASE, received, total: asset.size },
+        });
+      }
+    }, 150);
+    return updateEmitter.last;
+  },
+
+  updateCancel: async (): Promise<UpdateStatusDto> => {
+    window.clearInterval(updateTimer);
+    if (updateEmitter.last.state.state === "downloading") {
+      setUpdate({ state: { state: "available", release: MOCK_RELEASE } });
+    }
+    return updateEmitter.last;
+  },
+
+  updateInstall: async (): Promise<InstallOutcomeDto> => {
+    if (updateEmitter.last.state.state !== "ready") throw "There's no verified update to install";
+    setUpdate({ state: { state: "installing", release: MOCK_RELEASE } });
+    await delay(900);
+    if (UPDATES_MODE === "manual") {
+      setUpdate({ state: { state: "ready", release: MOCK_RELEASE } });
+      return {
+        outcome: "manual",
+        command: "sudo apt install /home/demo/.cache/zapper/updates/zapper_0.2.0_amd64.deb",
+        reason:
+          "zapper couldn't get permission to install it: the password prompt was cancelled, or there's no polkit agent to ask.",
+        output: null,
+      };
+    }
+    setUpdate({ state: { state: "installed", release: MOCK_RELEASE } });
+    return { outcome: "installed" };
+  },
+
+  updateRestart: async () => {
+    if (updateEmitter.last.state.state !== "installed") throw "No update has been installed";
+    // A browser tab cannot restart itself into a new version; recording the
+    // request is the honest stand-in.
+    (globalThis as Record<string, unknown>).__mockRestarted = true;
+  },
+
+  updateOpenPage: async () => {
+    if (updateEmitter.last.state.state === "notConfigured") {
+      throw "Updates aren't configured for this build, so there's no release page to open.";
+    }
+    (globalThis as Record<string, unknown>).__mockOpenedPage = MOCK_RELEASE.url;
+  },
 };
 
 // ------------------------------------------------------------------ window
@@ -932,6 +1083,9 @@ export const onMockSyncStatus = (f: (s: SyncStatusDto) => void) =>
 
 export const onMockPlayerState = (f: (s: PlayerStateDto) => void) =>
   Promise.resolve(playerEmitter.on(f));
+
+export const onMockUpdate = (f: (s: UpdateStatusDto) => void) =>
+  Promise.resolve(updateEmitter.on(f));
 
 /** Cheap subsequence match, standing in for nucleo. Ranking is not modelled;
  *  the real matcher lives in Rust and the UI must not reimplement it. */

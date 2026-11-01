@@ -2961,3 +2961,110 @@ button.prog:hover {
 .resize-sw { bottom: 0; left: 0; cursor: nesw-resize; }
 .resize-nw { top: 0; left: 0; cursor: nwse-resize; }
 .resize-se { bottom: 0; right: 0; cursor: nwse-resize; }
+
+/* --------------------------------------------------------------- updates */
+
+/* The title bar's badge: only there while an update waits, and small enough
+   to sit beside the status line without pushing the title. Not a pill of
+   colour: the accent outline says "something to look at" without shouting
+   over a channel someone is watching. */
+.tb-update {
+  flex: 0 0 auto;
+  margin-left: 0.5rem;
+  padding: 0.0625rem 0.5rem;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  font-size: 0.6875rem;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.tb-update:hover {
+  background: var(--accent-dim);
+}
+
+.tb-update.bad {
+  border-color: var(--bad);
+  color: var(--bad);
+}
+
+/* The dialog borrows About's frame; it is wider because release notes are
+   prose. */
+.about.update {
+  width: min(32.5rem, 100%);
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+}
+
+.about-tag.bad {
+  color: #ffc9c9;
+}
+
+.about-tag .tb-spinner {
+  display: inline-block;
+  margin-right: 0.375rem;
+  vertical-align: -0.0625rem;
+}
+
+.update-progress {
+  height: 0.375rem;
+  margin: 0 0 0.875rem;
+  border-radius: 999px;
+  background: var(--bg-3);
+  overflow: hidden;
+}
+
+.update-progress > div {
+  height: 100%;
+  background: var(--accent);
+  transition: width 120ms linear;
+}
+
+/* Markdown shown as written: a renderer is not worth shipping for a few
+   lines, and "### Fixed" reads fine as it is. Scrolls on its own so a long
+   changelog never pushes the buttons off the dialog. */
+.update-notes {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 14rem;
+  overflow-y: auto;
+  margin: 0 0 0.875rem;
+  padding: 0.5rem 0.625rem;
+  border: 1px solid var(--line);
+  border-radius: 0.375rem;
+  background: var(--bg-3);
+  color: var(--dim);
+  font: inherit;
+  font-size: 0.75rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.update-reason {
+  margin: 0 0 0.375rem;
+}
+
+.update-command {
+  display: inline-block;
+  max-width: 100%;
+  padding: 0.125rem 0.375rem;
+  border-radius: 0.25rem;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 0.6875rem;
+  overflow-wrap: anywhere;
+}
+
+.update-output {
+  max-height: 8rem;
+  overflow: auto;
+  margin: 0.5rem 0 0;
+  font-size: 0.625rem;
+  white-space: pre-wrap;
+}
+
+.update-actions {
+  gap: 0.5rem;
+}

@@ -25,6 +25,7 @@ export const ACTION_IDS = [
   "fullscreen",
   "sync",
   "settings",
+  "updates",
   "about",
 ] as const;
 
@@ -69,6 +70,8 @@ export const ACTIONS: PaletteAction[] = [
   },
   { id: "sync", label: "Refresh data from the panel", hint: "sync", group: "data" },
   { id: "settings", label: "Open settings", hint: "⚙", group: "app" },
+  // "upgrade" and "version" are what people type looking for this one.
+  { id: "updates", label: "Check for updates", hint: "upgrade · version", group: "app" },
   { id: "about", label: "About zapper", hint: "", group: "app" },
 ];
 

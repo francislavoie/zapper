@@ -6,9 +6,9 @@
 //
 //   left    the hamburger, which holds every action the command palette holds,
 //           because it is literally the palette's own list regrouped, and
-//           beside it the one line saying what the backend is doing — sync had
-//           a floating strip over the top-left of the window before this,
-//           which is exactly what it was covering;
+//           beside it the one line saying what the backend is doing — here
+//           rather than in a strip floating over the window's content — and,
+//           only when there is one, the badge for an update waiting;
 //   centre  the app's name, centred on the window rather than on the space
 //           left over, so it does not drift as the status line grows;
 //   right   the window buttons.
@@ -36,6 +36,7 @@ import {
   type PaletteAction,
 } from "../logic/palette";
 import { maximiseLabel, statusLine } from "../logic/toolbar";
+import { badgeLabel, showsBadge } from "../logic/updates";
 import { useApp, useDispatch } from "../store";
 import { windowControls } from "../window";
 import { useMaximised } from "../hooks/useMaximised";
@@ -94,6 +95,19 @@ export function Toolbar() {
           {...status}
           onRetry={() => runAction("sync", { dispatch, player: state.player })}
         />
+
+        {/* Only while there is an update to act on; otherwise nothing at
+            all, so an up-to-date app has a title bar like any other. */}
+        {showsBadge(state.update.state) ? (
+          <button
+            className={`tb-update ${state.update.state.state === "failed" ? "bad" : ""}`}
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={() => dispatch({ type: "updateDialog", open: true })}
+            title="Updates"
+          >
+            {badgeLabel(state.update.state)}
+          </button>
+        ) : null}
       </div>
 
       {/* Centred on the window, not on what is left between the status and the

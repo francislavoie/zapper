@@ -18,6 +18,7 @@ import type {
   PlayerStateDto,
   SettingsDto,
   SyncStatusDto,
+  UpdateStatusDto,
 } from "./types";
 import { errorMessage, idle, type Async } from "./logic/async";
 import { DEFAULT_SETTINGS, clampSettings } from "./logic/settings";
@@ -88,6 +89,10 @@ export interface State {
    *  else, and that ordering lives in one place. */
   menuOpen: boolean;
   aboutOpen: boolean;
+  /** The updater, as the backend last pushed it. Here rather than in the
+   *  dialog because the toolbar's badge and the settings pane read it too. */
+  update: UpdateStatusDto;
+  updateOpen: boolean;
   sync: SyncStatusDto;
   player: PlayerStateDto;
   /** Optimistic: set the instant a row is clicked so the row highlights before
@@ -156,6 +161,14 @@ export const initialPlayer: PlayerStateDto = {
   error: null,
 };
 
+/** Until the backend answers: nothing known, nothing to show. */
+export const initialUpdate: UpdateStatusDto = {
+  current: "",
+  kind: "none",
+  lastChecked: null,
+  state: { state: "idle" },
+};
+
 export const initialState: State = {
   mode: "browse",
   categories: idle(),
@@ -174,6 +187,8 @@ export const initialState: State = {
   settingsOpen: false,
   menuOpen: false,
   aboutOpen: false,
+  update: initialUpdate,
+  updateOpen: false,
   sync: initialSync,
   player: initialPlayer,
   pendingStreamId: null,
@@ -207,6 +222,8 @@ export type Action =
   | { type: "settings"; open: boolean }
   | { type: "menu"; open: boolean }
   | { type: "about"; open: boolean }
+  | { type: "update"; value: UpdateStatusDto }
+  | { type: "updateDialog"; open: boolean }
   | { type: "mode"; mode: Mode }
   | { type: "sync"; value: SyncStatusDto }
   | { type: "player"; value: PlayerStateDto }
@@ -275,6 +292,11 @@ export function reducer(state: State, action: Action): State {
       // Opening a dialog from the menu closes the menu: leaving it hanging
       // over its own result is how you end up with two things to dismiss.
       return { ...state, aboutOpen: action.open, menuOpen: false };
+    case "update":
+      return { ...state, update: action.value };
+    case "updateDialog":
+      // Same rule as About: chosen from the menu, so the menu goes.
+      return { ...state, updateOpen: action.open, menuOpen: false };
     case "mode":
       // Any view change closes the menu, whoever asked for it — the menu is
       // one of the two places a view change comes from.

@@ -75,8 +75,25 @@ const HANDLERS: Record<ActionId, (ctx: ActionContext) => void> = {
     ),
   sync: ({ dispatch }) => void run(dispatch, "sync", backend.syncNow()),
   settings: ({ dispatch }) => dispatch({ type: "settings", open: true }),
+  updates: ({ dispatch }) => {
+    dispatch({ type: "updateDialog", open: true });
+    void checkForUpdates(dispatch);
+  },
   about: ({ dispatch }) => dispatch({ type: "about", open: true }),
 };
+
+/** Asks GitHub now, whatever the automatic-check setting says: asking is
+ *  consent. The answer arrives through the update subscription as well as
+ *  here; a failure is a toast, because a failed check changes no state for
+ *  the dialog to show. A build that is not configured answers at once
+ *  without asking anything, which the dialog then says. */
+export async function checkForUpdates(dispatch: Dispatch<Action>): Promise<void> {
+  try {
+    dispatch({ type: "update", value: await backend.updateCheck() });
+  } catch (e) {
+    dispatch({ type: "toast", text: `Check for updates: ${errorMessage(e)}` });
+  }
+}
 
 export function runAction(id: ActionId, ctx: ActionContext): void {
   HANDLERS[id](ctx);

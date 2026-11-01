@@ -2,7 +2,8 @@
 //!
 //! Module boundaries are fixed here deliberately: `surface` owns everything
 //! that knows GTK exists, `xtream` owns the wire protocol, `catalog` owns
-//! persistence, and `ipc` is the only thing that talks to the frontend.
+//! persistence, `updates` owns zapper's own releases (checking, downloading,
+//! installing), and `ipc` is the only thing that talks to the frontend.
 //! Nothing else may reach across those lines.
 
 /// Names the process so the compositor can identify the window.
@@ -28,6 +29,7 @@ fn set_app_id() {}
 pub mod catalog;
 pub mod ipc;
 pub mod surface;
+pub mod updates;
 pub mod window_state;
 pub mod xtream;
 
@@ -81,6 +83,13 @@ pub fn run() {
             ipc::player_cmds::player_stats,
             ipc::player_cmds::set_subtitle_style,
             ipc::player_cmds::apply_playback_settings,
+            ipc::update_cmds::update_status,
+            ipc::update_cmds::update_check,
+            ipc::update_cmds::update_download,
+            ipc::update_cmds::update_cancel,
+            ipc::update_cmds::update_install,
+            ipc::update_cmds::update_restart,
+            ipc::update_cmds::update_open_page,
         ])
         .setup(|app| {
             use tauri::Manager;
@@ -106,6 +115,10 @@ pub fn run() {
             ipc::player_cmds::apply_saved_settings(app.handle());
 
             catalog::sync_engine::spawn_periodic(app.handle().clone());
+
+            // Before the frontend can ask: its first `update_status` needs
+            // the state to exist. The first check itself waits a minute.
+            ipc::update_cmds::install(app.handle());
 
             // Development hooks. Nothing here runs in a normal launch: they
             // exist because the composited window cannot be screenshotted on

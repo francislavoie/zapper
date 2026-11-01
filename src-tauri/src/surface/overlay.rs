@@ -342,29 +342,56 @@ pub fn install(window: &tauri::WebviewWindow) -> Result<Overlay> {
 ///   mutter: the grab started (configure events followed) but never tracked
 ///   the pointer, and input stayed wedged until the next press.
 ///
-/// Only *connected* handlers are removed. WebKit's own input handling is the
-/// class closure for these signals, which a disconnect cannot touch, and
-/// nothing else in wry or this app connects to them before this runs.
+/// Only tauri's handler goes, and it is found by order rather than identity:
+/// wry connects its own `button-press-event` handler while *building* the
+/// webview (mouse back/forward buttons, `synthetic_mouse_events.rs`), and
+/// tauri attaches the resize handler *after* the build returns. So tauri's is
+/// the most recently connected handler on each signal, and nothing of ours has
+/// been connected yet when this runs. Disconnecting every handler would take
+/// wry's back/forward support with it and leave its release half orphaned.
+/// WebKit's own input handling is the class closure, which no disconnect can
+/// touch.
 fn drop_native_edge_resize(webview: &webkit2gtk::WebView) {
+    use glib::gobject_ffi as gobj;
     use glib::translate::{IntoGlib, ToGlibPtr};
+    let instance: *mut gobj::GObject = webview.upcast_ref::<glib::Object>().to_glib_none().0;
     for signal in ["button-press-event", "touch-event"] {
         let Some(id) = glib::subclass::SignalId::lookup(signal, gtk::Widget::static_type()) else {
             continue;
         };
-        let instance: *mut glib::gobject_ffi::GObject =
-            webview.upcast_ref::<glib::Object>().to_glib_none().0;
-        let removed = unsafe {
-            glib::gobject_ffi::g_signal_handlers_disconnect_matched(
-                instance as *mut _,
-                glib::gobject_ffi::G_SIGNAL_MATCH_ID,
-                id.into_glib(),
-                0,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-            )
-        };
-        tracing::debug!("removed {removed} native {signal} handler(s) from the webview");
+        // `g_signal_handler_find` returns the first match in connection
+        // order, so the handlers are listed by finding and blocking each in
+        // turn, then unblocked again.
+        let mask = gobj::G_SIGNAL_MATCH_ID | gobj::G_SIGNAL_MATCH_UNBLOCKED;
+        let mut handlers = Vec::new();
+        unsafe {
+            loop {
+                let h = gobj::g_signal_handler_find(
+                    instance as *mut _,
+                    mask,
+                    id.into_glib(),
+                    0,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                );
+                if h == 0 {
+                    break;
+                }
+                gobj::g_signal_handler_block(instance as *mut _, h);
+                handlers.push(h);
+            }
+            for &h in &handlers {
+                gobj::g_signal_handler_unblock(instance as *mut _, h);
+            }
+            if let Some(&last) = handlers.last() {
+                gobj::g_signal_handler_disconnect(instance as *mut _, last);
+            }
+        }
+        tracing::debug!(
+            "{signal}: {} handler(s) on the webview, removed tauri's (the last)",
+            handlers.len()
+        );
     }
 }
 

@@ -1,0 +1,394 @@
+# Release: `just release <version>` commits the version bump and tags it v<version>; pushing the
+# tag builds the Linux packages (.deb and .rpm), checks them, and uploads them with SHA256SUMS to
+# a *draft* GitHub release for review. Nothing is published until someone presses Publish.
+#
+# - a pushed v* tag builds that tag and drafts its release;
+# - "Run workflow" (workflow_dispatch) with a tag does the same for that tag (to redo or rescue
+#   a release); without one it is a dry run: the same build and checks, the packages kept as a
+#   workflow artifact, no release.
+#
+# Windows and macOS: the jobs are here, but zapper does not build
+# on either yet (libmpv and the GTK surface are Linux-only so far). They run only on a manual
+# run with "Also build Windows and macOS" ticked, and are expected to fail until the port
+# exists. A tag push never runs them, so they can never hold a release back. When the port
+# lands: make them run on tag pushes too (drop the `inputs.windows_macos` condition) and list
+# their assets in docs/releasing.md.
+#
+# See docs/releasing.md.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release this tag (v1.2.3): build its commit and draft the release. Empty: a dry run.'
+        required: false
+        default: ''
+      windows_macos:
+        description: 'Also build Windows and macOS (not supported yet: expected to fail).'
+        type: boolean
+        required: false
+        default: false
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}-${{ inputs.tag }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  plan:
+    name: Plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read # read the tag through the API, which a private repository requires
+    outputs:
+      tag: ${{ steps.plan.outputs.tag }}
+      sha: ${{ steps.plan.outputs.sha }}
+    steps:
+      - name: What this run builds and releases
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          tag='' sha=$GITHUB_SHA
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            if [ -n "$INPUT_TAG" ]; then
+              tag=$INPUT_TAG
+              # Through the API with the job's token: an unauthenticated
+              # `git ls-remote` can't see a private repository. A lightweight
+              # tag points at its commit; an annotated one at a tag object,
+              # which points at the commit.
+              ref=$(gh api "repos/$GH_REPO/git/ref/tags/$tag" --jq '.object.type + " " + .object.sha') ||
+                { echo "::error::No tag $tag on $GH_REPO"; exit 1; }
+              read -r type sha <<<"$ref"
+              if [ "$type" = tag ]; then
+                sha=$(gh api "repos/$GH_REPO/git/tags/$sha" --jq '.object.sha')
+              fi
+              [ -n "$sha" ] || { echo "::error::Couldn't resolve $tag to a commit"; exit 1; }
+            fi
+          else
+            tag=$GITHUB_REF_NAME
+          fi
+          echo "tag=${tag:-none (dry run)} sha=$sha"
+          { echo "tag=$tag"; echo "sha=$sha"; } >> "$GITHUB_OUTPUT"
+
+  linux:
+    name: Build and check the Linux packages
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          persist-credentials: false
+
+      # The tag must be the version the packages are built as, and the updater inside them must
+      # take its releases from this repository: a build pointing at the placeholder, or at
+      # another repository, would ship installs that never find their next update.
+      - name: Version and releases repository
+        id: version
+        env:
+          TAG: ${{ needs.plan.outputs.tag }}
+        run: |
+          conf=$(jq -er .version src-tauri/tauri.conf.json)
+          if [ -n "$TAG" ]; then
+            v=${TAG#v}
+            if [ "$v" != "$conf" ]; then
+              echo "::error::The tag $TAG doesn't match tauri.conf.json's version $conf; tag with 'just release <version>'."
+              exit 1
+            fi
+          else
+            v=$conf
+          fi
+          python3 scripts/version.py check "$v"
+          repo=$(scripts/releases-repo.sh)
+          if [ "${repo,,}" != "${GITHUB_REPOSITORY,,}" ]; then
+            msg="RELEASES_REPO in src-tauri/src/updates/mod.rs is '$repo', not this repository ($GITHUB_REPOSITORY). See docs/releasing.md, One-time setup."
+            if [ -n "$TAG" ]; then echo "::error::$msg"; exit 1; else echo "::warning::$msg"; fi
+          fi
+          { echo "version=$v"; echo "prerelease=$(python3 scripts/version.py prerelease "$v")"; } >> "$GITHUB_OUTPUT"
+          echo "Version $v (pre-release: $(python3 scripts/version.py prerelease "$v")), releases from $repo"
+
+      # Before the long build: a tag needs its CHANGELOG.md section (just release writes it).
+      - name: Release notes
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ needs.plan.outputs.tag }}
+        run: |
+          mkdir -p dist
+          if python3 scripts/changelog.py notes "$VERSION" CHANGELOG.md > dist/release-notes.md; then
+            echo "Release notes: $(wc -l < dist/release-notes.md) lines"
+          elif [ -n "$TAG" ]; then
+            exit 1
+          else
+            echo "::warning::No CHANGELOG.md section for $VERSION (fine for a dry run)."
+            rm dist/release-notes.md
+          fi
+
+      # The Linux build dependencies (README.md). The packages' Depends are fixed in tauri.conf.json, not
+      # derived from these, so a package built here installs wherever its Depends resolve.
+      - name: System packages
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libmpv-dev libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev librsvg2-dev libxdo-dev libayatana-appindicator3-dev \
+            libepoxy-dev pkg-config jq dpkg-dev desktop-file-utils
+
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        with:
+          toolchain: stable
+
+      # Restore only: a tag's cache would serve nothing but a re-run of that tag, and CI on main
+      # (ci.yml) keeps a debug cache, which a release build can't use anyway.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: src-tauri
+          key: release
+          save-if: 'false'
+
+      - uses: taiki-e/install-action@183e4297cca2404691e9380e1307288dced5c82a # v2.87.25
+        with:
+          tool: just
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+
+      # `just package`: the frontend build, the release binary, the .deb and the .rpm from it,
+      # then scripts/fix-deb.sh (a pre-release's Version in Debian's form) and
+      # scripts/check-deb.sh (name, Depends, /usr/bin, the install-kind marker, the desktop
+      # entry). ZAPPER_RELEASE_VERSION must equal tauri.conf.json's version.
+      - name: Build the packages
+        env:
+          ZAPPER_RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: CARGO_BUILD_JOBS=$(nproc) just package
+
+      # The names are an API: installed copies find their update by them
+      # (src-tauri/src/updates/release.rs, docs/releasing.md).
+      - name: Collect the packages and SHA256SUMS
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          deb=src-tauri/target/release/bundle/deb/zapper_${VERSION}_amd64.deb
+          rpm=src-tauri/target/release/bundle/rpm/zapper-${VERSION}-1.x86_64.rpm
+          for f in "$deb" "$rpm"; do
+            [ -f "$f" ] || { echo "::error::Missing $f: $(ls src-tauri/target/release/bundle/*/)"; exit 1; }
+          done
+          cp "$deb" "$rpm" dist/
+          (cd dist && sha256sum -- *.deb *.rpm > SHA256SUMS && cat SHA256SUMS)
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: zapper-${{ steps.version.outputs.version }}-linux
+          path: dist/
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0
+          overwrite: true # a re-run replaces the earlier attempt's artifact
+
+  # NOT SUPPORTED YET: zapper does not build on Windows. Runs only when asked for on a manual
+  # run (see the top of this file). Unsigned: set a signing step here when there's a certificate.
+  windows:
+    name: Build the Windows installers (experimental)
+    needs: [plan, linux]
+    if: ${{ inputs.windows_macos == true }}
+    runs-on: windows-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: LF checkout
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        with:
+          toolchain: stable
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+
+      # The NSIS installer and the MSI, with the install-kind markers (packaging/windows/).
+      - name: Build the installers
+        run: |
+          $env:CARGO_BUILD_JOBS = "$env:NUMBER_OF_PROCESSORS"
+          npx tauri build --config packaging/windows/installers.conf.json
+
+      - name: Collect the installers and their checksums
+        env:
+          VERSION: ${{ needs.linux.outputs.version }}
+        run: |
+          $files = @(
+            "src-tauri/target/release/bundle/nsis/zapper_${env:VERSION}_x64-setup.exe",
+            "src-tauri/target/release/bundle/msi/zapper_${env:VERSION}_x64_en-US.msi"
+          )
+          New-Item -ItemType Directory -Force dist | Out-Null
+          foreach ($f in $files) {
+            if (-not (Test-Path $f)) { throw "Missing $f" }
+            Copy-Item $f dist/
+          }
+          # sha256sum's format, so the release job checks and merges it with the Linux one.
+          $sums = foreach ($f in Get-ChildItem dist -File) { "{0}  {1}" -f (Get-FileHash -Algorithm SHA256 $f.FullName).Hash.ToLower(), $f.Name }
+          [IO.File]::WriteAllText("$PWD/dist/SHA256SUMS", ($sums -join "`n") + "`n")
+          Get-Content dist/SHA256SUMS
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: zapper-${{ needs.linux.outputs.version }}-windows
+          path: dist/
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0
+          overwrite: true
+
+  # NOT SUPPORTED YET: zapper does not build on macOS. Runs only when asked for on a manual run.
+  # Ad-hoc signed, not notarized: a signing identity and notarization are still to be set up.
+  macos:
+    name: Build the macOS disk image (experimental)
+    needs: [plan, linux]
+    if: ${{ inputs.windows_macos == true }}
+    runs-on: macos-15 # Apple Silicon: the aarch64 .dmg
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        with:
+          toolchain: stable
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+
+      # zapper.app with install-kind = dmg in Contents/Resources, and the .dmg holding it.
+      - name: Build the disk image
+        run: CARGO_BUILD_JOBS=$(sysctl -n hw.ncpu) npx tauri build --config packaging/macos/dmg.conf.json
+
+      - name: Collect the disk image and its checksum
+        env:
+          VERSION: ${{ needs.linux.outputs.version }}
+        run: |
+          dmg=src-tauri/target/release/bundle/dmg/zapper_${VERSION}_aarch64.dmg
+          [ -f "$dmg" ] || { echo "::error::Missing $dmg"; exit 1; }
+          mkdir -p dist
+          cp "$dmg" dist/
+          (cd dist && shasum -a 256 -- *.dmg > SHA256SUMS && cat SHA256SUMS)
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: zapper-${{ needs.linux.outputs.version }}-macos
+          path: dist/
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0
+          overwrite: true
+
+  release:
+    name: Draft the GitHub release
+    needs: [plan, linux, windows, macos]
+    # The Linux packages are the release. Windows and macOS join it when they ran and passed;
+    # skipped (the normal case) they're simply absent, but a failure or a cancel holds the
+    # release back rather than drafting it without them by surprise.
+    if: >-
+      ${{ always() && needs.plan.outputs.tag != '' && needs.linux.result == 'success'
+      && needs.windows.result != 'failure' && needs.windows.result != 'cancelled'
+      && needs.macos.result != 'failure' && needs.macos.result != 'cancelled' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write # create the draft release and upload its assets
+      id-token: write # attestations: the Sigstore signing certificate
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: zapper-${{ needs.linux.outputs.version }}-*
+          path: parts
+
+      # Each job's checksums, then one SHA256SUMS for every package. The updater refuses any
+      # package SHA256SUMS doesn't list, so this file is what makes the release installable.
+      - name: Verify and merge SHA256SUMS
+        run: |
+          mkdir dist
+          mv parts/zapper-*-linux/release-notes.md dist/
+          for part in parts/*/; do
+            (cd "$part" && sha256sum -c SHA256SUMS)
+            cat "$part/SHA256SUMS" >> dist/SHA256SUMS
+            find "$part" -maxdepth 1 -type f ! -name SHA256SUMS -exec mv {} dist/ \;
+          done
+          (cd dist && sha256sum -c SHA256SUMS && cat SHA256SUMS)
+
+      # Attestations need a public repository, or GitHub Enterprise Cloud for a private one:
+      # while the repository is private this is skipped unless the ZAPPER_ATTEST variable is
+      # 'true'.
+      - name: Build provenance
+        if: ${{ !github.event.repository.private || vars.ZAPPER_ATTEST == 'true' }}
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/*.deb
+            dist/*.rpm
+            dist/*.exe
+            dist/*.msi
+            dist/*.dmg
+
+      # Creates the draft, or on a re-run updates it and replaces its assets (--clobber). A
+      # release that's already published is left alone: the run fails instead.
+      - name: Create or update the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          VERSION: ${{ needs.linux.outputs.version }}
+          PRERELEASE: ${{ needs.linux.outputs.prerelease }}
+        run: |
+          shopt -s nullglob
+          assets=(dist/*.deb dist/*.rpm dist/*.exe dist/*.msi dist/*.dmg dist/SHA256SUMS)
+          if draft=$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null); then
+            if [ "$draft" != true ]; then
+              echo "::error::The release $TAG is already published; not replacing its assets."
+              exit 1
+            fi
+            gh release edit "$TAG" --draft --title "zapper $VERSION" --notes-file dist/release-notes.md --prerelease="$PRERELEASE"
+            gh release upload "$TAG" "${assets[@]}" --clobber
+          else
+            gh release create "$TAG" --draft --verify-tag --title "zapper $VERSION" \
+              --notes-file dist/release-notes.md --prerelease="$PRERELEASE" "${assets[@]}"
+          fi
+          url=$(gh release view "$TAG" --json url --jq .url)
+          echo "Draft release: $url" | tee -a "$GITHUB_STEP_SUMMARY"

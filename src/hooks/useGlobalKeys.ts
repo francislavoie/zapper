@@ -35,6 +35,9 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
           dispatch({ type: "menu", open: false });
         } else if (state.aboutOpen) {
           dispatch({ type: "about", open: false });
+        } else if (state.updateOpen) {
+          // Above settings: the settings pane's "Check now" opens it there.
+          dispatch({ type: "updateDialog", open: false });
         } else if (state.settingsOpen) {
           dispatch({ type: "settings", open: false });
         } else if (state.paletteOpen) {
@@ -137,6 +140,7 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
     state.settingsOpen,
     state.menuOpen,
     state.aboutOpen,
+    state.updateOpen,
     state.favouriteMenu,
   ]);
 }

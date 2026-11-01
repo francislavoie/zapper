@@ -204,6 +204,9 @@ pub struct SettingsDto {
     /// application, which is the expensive way to do this.
     pub language: String,
     pub subtitle: SubtitleStyleDto,
+    /// Look for a new release on GitHub a minute after startup and once a
+    /// day after that. On by default; off means only Check for updates asks.
+    pub check_for_updates: bool,
 }
 
 impl Default for SettingsDto {
@@ -216,6 +219,7 @@ impl Default for SettingsDto {
             sync_interval_hours: 6,
             language: "auto".to_owned(),
             subtitle: SubtitleStyleDto::default(),
+            check_for_updates: true,
         }
     }
 }
@@ -253,6 +257,105 @@ pub struct FavouriteDto {
 pub mod events {
     pub const SYNC_STATUS: &str = "zapper://sync-status";
     pub const PLAYER_STATE: &str = "zapper://player-state";
+    pub const UPDATE: &str = "zapper://update";
+}
+
+/// A release the update dialog can show.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateReleaseDto {
+    /// `0.3.0`, `0.4.0-rc.1`.
+    pub version: String,
+    /// The release's title, `zapper 0.3.0`.
+    pub name: String,
+    /// The release's notes, GitHub-flavoured Markdown, shown as plain text.
+    pub notes: String,
+    /// The release page, the one thing a build from source is offered.
+    pub url: String,
+    pub prerelease: bool,
+    pub published_at: Option<String>,
+    /// This install's package in the release. `None` for a build from
+    /// source, or a release that lacks one: then only the page is offered.
+    pub asset: Option<UpdateAssetDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateAssetDto {
+    pub name: String,
+    pub size: u64,
+}
+
+/// Where the update stands. Every change is pushed as `events::UPDATE`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum UpdateStateDto {
+    /// The build does not know which repository its releases come from
+    /// (`updates::RELEASES_REPO` is still the placeholder). Nothing is ever
+    /// fetched in this state.
+    NotConfigured,
+    /// Not checked yet this run.
+    Idle,
+    Checking,
+    UpToDate,
+    Available {
+        release: UpdateReleaseDto,
+    },
+    Downloading {
+        release: UpdateReleaseDto,
+        received: u64,
+        total: u64,
+    },
+    /// Downloaded and checked against the release's SHA256SUMS.
+    Ready {
+        release: UpdateReleaseDto,
+    },
+    Installing {
+        release: UpdateReleaseDto,
+    },
+    /// Installed over the running copy; a restart starts the new one.
+    Installed {
+        release: UpdateReleaseDto,
+    },
+    /// A download or an install went wrong. A failed *check* is not a state:
+    /// it leaves the previous one and is reported to whoever asked.
+    Failed {
+        message: String,
+        release: Option<UpdateReleaseDto>,
+    },
+}
+
+/// The updater as the interface sees it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateStatusDto {
+    /// This build's version.
+    pub current: String,
+    /// How this copy was installed: `deb`, `rpm`, `nsis`, `msi`, `dmg`, or
+    /// `none` for a build from source, which can only be pointed at the page.
+    pub kind: String,
+    /// Unix seconds of the last check that got an answer, this run.
+    pub last_checked: Option<i64>,
+    pub state: UpdateStateDto,
+}
+
+/// What Install did.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "outcome", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum InstallOutcomeDto {
+    /// Installed over the running version: offer a restart.
+    Installed,
+    /// A Windows installer started and zapper is quitting so it can replace
+    /// the files.
+    Quitting,
+    /// zapper could not install it itself (no pkexec, the password prompt was
+    /// cancelled, the package manager failed): the command to run in a
+    /// terminal, why, and the package manager's output when it ran.
+    Manual {
+        command: String,
+        reason: String,
+        output: Option<String>,
+    },
 }
 
 /// A scrollback preview: what the picture looked like at a point in the

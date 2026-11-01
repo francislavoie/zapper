@@ -1,0 +1,14 @@
+{
+  "bundle": {
+    "targets": ["nsis", "msi"],
+    "resources": {
+      "../packaging/install-kind-msi": "install-kind"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "installerHooks": "../packaging/windows/installer-hooks.nsh"
+      }
+    }
+  }
+}

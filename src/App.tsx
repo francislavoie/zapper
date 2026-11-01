@@ -29,6 +29,8 @@ import { CommandPalette } from "./components/CommandPalette";
 import { GuideGrid } from "./components/GuideGrid";
 import { PlayerChrome } from "./components/PlayerChrome";
 import { SettingsModal } from "./components/SettingsModal";
+import { UpdateModal } from "./components/UpdateModal";
+import { useUpdates } from "./hooks/useUpdates";
 import { Toolbar } from "./components/Toolbar";
 import { ResizeEdges } from "./components/ResizeEdges";
 import { ZoomBadge } from "./components/ZoomBadge";
@@ -82,6 +84,9 @@ export function App() {
   }, [fullscreen, cameFrom, dispatch]);
 
   useGlobalKeys(state, dispatch);
+
+  // The updater's state, for the title bar's badge and the dialog.
+  useUpdates();
 
   // Remembered per machine, like zoom, and written here rather than in the
   // reducer so the reducer stays pure.
@@ -360,6 +365,7 @@ export function App() {
         {state.settingsOpen ? <SettingsModal /> : null}
       </Boundary>
       <Boundary what="About">{state.aboutOpen ? <AboutModal /> : null}</Boundary>
+      <Boundary what="Updates">{state.updateOpen ? <UpdateModal /> : null}</Boundary>
 
       <ZoomBadge />
       <Toasts />

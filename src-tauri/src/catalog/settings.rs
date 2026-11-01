@@ -116,10 +116,12 @@ mod tests {
                 outline_size: 2.5,
                 shadow_offset: 1.5,
             },
+            check_for_updates: false,
         };
         save(&c, &want).unwrap();
 
         let got = load(&c);
+        assert!(!got.check_for_updates);
         assert_eq!(got.rewind_minutes, 12.5);
         assert!(!got.hardware_decode);
         assert!(!got.tone_map_hdr);
@@ -132,6 +134,15 @@ mod tests {
         assert_eq!(got.subtitle.backdrop_opacity, 0.75);
         assert_eq!(got.subtitle.outline_size, 2.5);
         assert_eq!(got.subtitle.shadow_offset, 1.5);
+    }
+
+    #[test]
+    fn a_blob_from_before_the_updater_checks_for_updates() {
+        let c = open_in_memory().unwrap();
+        write_raw(&c, r#"{"guideHours":5}"#);
+        let got = load(&c);
+        assert_eq!(got.guide_hours, 5);
+        assert!(got.check_for_updates, "on unless someone turned it off");
     }
 
     #[test]

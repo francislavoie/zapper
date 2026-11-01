@@ -126,6 +126,9 @@ export interface SettingsDto {
    *  than retrofitting every string. */
   language: string;
   subtitle: SubtitleStyleDto;
+  /** Look for a new release a minute after startup and daily after that.
+   *  On by default; off means only "Check for updates" asks. */
+  checkForUpdates: boolean;
 }
 
 /** One channel's row in the guide, programmes included, so the grid needs no
@@ -155,7 +158,62 @@ export interface FavouriteDto {
 export const EVENTS = {
   syncStatus: "zapper://sync-status",
   playerState: "zapper://player-state",
+  update: "zapper://update",
 } as const;
+
+/** A release the update dialog can show. Mirrors `UpdateReleaseDto`. */
+export interface UpdateReleaseDto {
+  /** `0.3.0`, `0.4.0-rc.1`. */
+  version: string;
+  /** The release's title, `zapper 0.3.0`. */
+  name: string;
+  /** Markdown from GitHub, shown as plain text: no renderer is worth
+   *  shipping for a paragraph of release notes. */
+  notes: string;
+  /** The release page. */
+  url: string;
+  prerelease: boolean;
+  publishedAt: string | null;
+  /** This install's package. Null for a build from source, or a release
+   *  without one: then only the page is offered. */
+  asset: { name: string; size: number } | null;
+}
+
+/** Where the update stands, pushed as `EVENTS.update` on every change.
+ *
+ *  `notConfigured` is a build whose releases repository is still the
+ *  placeholder: it never asks GitHub anything. A failed *check* is not a
+ *  state — it leaves the previous one and is told to whoever asked. */
+export type UpdateStateDto =
+  | { state: "notConfigured" }
+  | { state: "idle" }
+  | { state: "checking" }
+  | { state: "upToDate" }
+  | { state: "available"; release: UpdateReleaseDto }
+  | { state: "downloading"; release: UpdateReleaseDto; received: number; total: number }
+  | { state: "ready"; release: UpdateReleaseDto }
+  | { state: "installing"; release: UpdateReleaseDto }
+  | { state: "installed"; release: UpdateReleaseDto }
+  | { state: "failed"; message: string; release: UpdateReleaseDto | null };
+
+/** How this copy was installed. `none` is a build from source. */
+export type InstallKind = "deb" | "rpm" | "nsis" | "msi" | "dmg" | "none";
+
+export interface UpdateStatusDto {
+  /** This build's version. */
+  current: string;
+  kind: InstallKind;
+  /** Unix seconds of the last check that got an answer, this run. */
+  lastChecked: number | null;
+  state: UpdateStateDto;
+}
+
+/** What Install did. `manual`: zapper could not install it itself — the
+ *  command to run, why, and the package manager's output when it ran. */
+export type InstallOutcomeDto =
+  | { outcome: "installed" }
+  | { outcome: "quitting" }
+  | { outcome: "manual"; command: string; reason: string; output: string | null };
 
 /** A scrollback preview: what the picture looked like at a point in the
  *  buffer. `behindLive` is the moment it was actually taken, which is not

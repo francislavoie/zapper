@@ -19,6 +19,8 @@ import {
   type SyncStatusDto,
   type StatsDto,
   type ThumbnailDto,
+  type InstallOutcomeDto,
+  type UpdateStatusDto,
   type VideoRect,
 } from "./types";
 
@@ -73,6 +75,16 @@ export const api = {
   favourites: (limit: number) => invoke<FavouriteDto[]>("favourites", { limit }),
   forgetActivity: (streamId: number) =>
     invoke<void>("forget_activity", { streamId }),
+
+  // The updater. None of these takes a URL or a path: what to fetch, install
+  // and open is decided by the backend from its own state.
+  updateStatus: () => invoke<UpdateStatusDto>("update_status"),
+  updateCheck: () => invoke<UpdateStatusDto>("update_check"),
+  updateDownload: () => invoke<UpdateStatusDto>("update_download"),
+  updateCancel: () => invoke<UpdateStatusDto>("update_cancel"),
+  updateInstall: () => invoke<InstallOutcomeDto>("update_install"),
+  updateRestart: () => invoke<void>("update_restart"),
+  updateOpenPage: () => invoke<void>("update_open_page"),
 };
 
 export const onSyncStatus = (f: (s: SyncStatusDto) => void): Promise<UnlistenFn> =>
@@ -80,3 +92,6 @@ export const onSyncStatus = (f: (s: SyncStatusDto) => void): Promise<UnlistenFn>
 
 export const onPlayerState = (f: (s: PlayerStateDto) => void): Promise<UnlistenFn> =>
   listen<PlayerStateDto>(EVENTS.playerState, (e) => f(e.payload));
+
+export const onUpdate = (f: (s: UpdateStatusDto) => void): Promise<UnlistenFn> =>
+  listen<UpdateStatusDto>(EVENTS.update, (e) => f(e.payload));
