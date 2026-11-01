@@ -7,7 +7,9 @@
 //
 // Pure; no React.
 
-/** One way to press it: the keys of a chord, held together. */
+/** One way to press it: the keys of a chord, held together. "Ctrl" is the
+ *  shortcut modifier, drawn as ⌘ on a Mac, and "Alt" and "Shift" as ⌥ and ⇧
+ *  (logic/keys.ts `chordKeys`). */
 export type Chord = readonly string[];
 
 export interface Shortcut {

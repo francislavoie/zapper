@@ -19,9 +19,9 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn main() {
-    eprintln!("surface_check only runs on Linux/GTK");
+    eprintln!("surface_check runs on Linux and macOS");
     std::process::exit(2);
 }
 
@@ -34,7 +34,7 @@ fn main() {
 /// app on screen is inert scenery, showing "nothing playing" while a stream
 /// plays over it. Matching its corner at least stops the two contradicting
 /// each other while somebody is watching the test run.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const DOCKED: zapper_lib::surface::VideoRect = zapper_lib::surface::VideoRect {
     x: 0.6,
     y: 0.05,
@@ -254,5 +254,194 @@ fn verdict(
          docked GLArea {aw}x{ah} in overlay {ow}x{oh}, window minimum {min_w}x{min_h} with a \
          full-window rect, {thumbs} scrollback thumbnails ({png}-byte PNG), GL renderer \
          {renderer}"
+    ))
+}
+
+/// macOS: the same questions of the Core Animation layer (`surface::macos`).
+/// Did the layer draw, did mpv paint those draws, is the centre of the
+/// picture anything but black, did the docked rect move the view, and were
+/// scrollback thumbnails taken.
+///
+/// With `ZAPPER_SHOTS=<dir>`, `screencapture` takes the screen full-size,
+/// docked, in native fullscreen and at the end, for a person to look at:
+/// macOS composites the layer and the webview itself, so a screenshot is the
+/// real thing rather than a reconstruction.
+#[cfg(target_os = "macos")]
+fn main() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    use std::time::Duration;
+    use tauri::Manager;
+    use zapper_lib::surface::{self, macos, mpv};
+
+    tracing_subscriber::fmt::init();
+
+    let url = match zapper_lib::harness::stream_url(
+        "surface_check",
+        std::env::var("ZAPPER_STREAM_URL").ok(),
+    ) {
+        Ok(u) => u,
+        Err(e) => {
+            eprintln!("FAIL: {e}");
+            std::process::exit(2);
+        }
+    };
+    let seconds: u32 = std::env::args()
+        .nth(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(20);
+
+    tauri::Builder::default()
+        .setup(move |app| {
+            let window = app.get_webview_window("main").unwrap();
+            // Small enough for a CI runner's 1024x768 screen, so the
+            // screenshots show the whole window.
+            window.set_size(tauri::LogicalSize::new(1000.0, 680.0))?;
+            window.set_position(tauri::LogicalPosition::new(12.0, 40.0))?;
+            surface::install(&window)?;
+            // `ao=null` before anything is loaded: this runs unattended and
+            // must never make noise.
+            mpv::with_player(|p| -> anyhow::Result<()> {
+                p.set_property("ao", "null")?;
+                // A decoder other than the app's, for a machine whose OpenGL
+                // cannot take VideoToolbox's frames reliably (CI's software
+                // renderer).
+                if let Some(hwdec) = std::env::var("ZAPPER_HWDEC").ok().filter(|h| !h.is_empty()) {
+                    p.set_property("hwdec", &hwdec)?;
+                }
+                // mpv's own log, verbose, for working out a failure afterwards.
+                if let Ok(path) = std::env::var("ZAPPER_MPV_LOG") {
+                    p.set_property("msg-level", "all=v")?;
+                    p.set_property("log-file", &path)?;
+                }
+                p.load(&url)
+            })
+            .ok_or_else(|| anyhow::anyhow!("no player after install"))??;
+            macos::sample_centre(true);
+
+            let fullscreen = window.clone();
+            let t = Rc::new(Cell::new(0u32));
+            surface::repeat_on_main(Duration::from_secs(1), move || {
+                let n = t.get() + 1;
+                t.set(n);
+                let (draws, painted, peak) = macos::stats();
+                let thumbs = zapper_lib::surface::trickplay::count();
+                tracing::info!(
+                    "t+{n}s: draws={draws} mpv_painted={painted} peak_sample={peak} thumbs={thumbs}"
+                );
+                if n == seconds / 2 {
+                    shot("full");
+                    if let Err(e) = surface::set_video_rect(DOCKED) {
+                        eprintln!("FAIL: docking: {e}");
+                        std::process::exit(1);
+                    }
+                }
+                if n == seconds / 2 + 3 {
+                    shot("docked");
+                }
+                // Native fullscreen, as the green button and F ask for it: the
+                // interface drops its title bar and the stage takes the
+                // screen. Back out well before the verdict, which measures
+                // the docked view against the window.
+                if n == seconds / 2 + 5 {
+                    if let Err(e) = fullscreen.set_fullscreen(true) {
+                        eprintln!("fullscreen: {e}");
+                    }
+                }
+                if n == seconds / 2 + 9 {
+                    shot("fullscreen");
+                    if let Err(e) = fullscreen.set_fullscreen(false) {
+                        eprintln!("leaving fullscreen: {e}");
+                    }
+                }
+                if n >= seconds {
+                    match verdict() {
+                        Ok(msg) => {
+                            println!("PASS: {msg}");
+                            std::process::exit(0)
+                        }
+                        Err(e) => {
+                            eprintln!("FAIL: {e}");
+                            std::process::exit(1)
+                        }
+                    }
+                }
+                true
+            });
+            Ok(())
+        })
+        .run(tauri::generate_context!())
+        .expect("surface_check failed to run");
+}
+
+/// `screencapture` of the whole screen into `$ZAPPER_SHOTS/surface-<name>.png`.
+#[cfg(target_os = "macos")]
+fn shot(name: &str) {
+    let Some(dir) = std::env::var_os("ZAPPER_SHOTS") else {
+        return;
+    };
+    let path = std::path::Path::new(&dir).join(format!("surface-{name}.png"));
+    match std::process::Command::new("screencapture")
+        .arg("-x")
+        .arg(&path)
+        .status()
+    {
+        Ok(s) if s.success() => println!("SHOT {}", path.display()),
+        Ok(s) => eprintln!("screencapture {}: {s}", path.display()),
+        Err(e) => eprintln!("screencapture: {e}"),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn verdict() -> anyhow::Result<String> {
+    use anyhow::anyhow;
+    use zapper_lib::surface::{macos, mpv, trickplay};
+
+    let (draws, painted, peak) = macos::stats();
+    if draws < 30 {
+        return Err(anyhow!(
+            "only {draws} layer draws; the surface is not drawing"
+        ));
+    }
+    if painted < 30 {
+        return Err(anyhow!(
+            "mpv painted only {painted} of {draws} draws; the layer is clearing to black"
+        ));
+    }
+    let (w, h) = mpv::with_player(|p| p.dimensions())
+        .flatten()
+        .ok_or_else(|| anyhow!("mpv reported no video dimensions; the stream never decoded"))?;
+    if peak == 0 {
+        return Err(anyhow!(
+            "the surface is black: mpv decoded {w}x{h} and painted {painted} frames, but the \
+             centre never exceeded 0. Wrong render target, not a decode failure."
+        ));
+    }
+    let ([x, y, vw, vh], [hw, hh]) =
+        macos::geometry().ok_or_else(|| anyhow!("no surface on the main thread"))?;
+    if hw <= 1.0 || hh <= 1.0 {
+        return Err(anyhow!("the host view has no size ({hw}x{hh})"));
+    }
+    // The docked rect, in the host's points: the view must have followed it.
+    let want = [DOCKED.x * hw, DOCKED.y * hh, DOCKED.w * hw, DOCKED.h * hh];
+    let off = [x, y, vw, vh]
+        .iter()
+        .zip(want)
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0, f64::max);
+    if off > 2.0 {
+        return Err(anyhow!(
+            "set_video_rect did not dock the view: it is at {x},{y} {vw}x{vh} in {hw}x{hh}, \
+             the rect asks for {want:?}"
+        ));
+    }
+    let thumbs = trickplay::count();
+    if thumbs == 0 {
+        return Err(anyhow!("no scrollback thumbnails after {painted} frames"));
+    }
+    shot("end");
+    Ok(format!(
+        "{draws} layer draws ({painted} painted by mpv), video {w}x{h}, peak sample {peak}, \
+         docked view {vw}x{vh} at {x},{y} in {hw}x{hh}, {thumbs} scrollback thumbnails"
     ))
 }

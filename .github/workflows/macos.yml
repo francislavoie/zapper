@@ -1,0 +1,328 @@
+# macOS: the port's checks, on the Apple Silicon runners. zapper's own LGPL libmpv for
+# macos-arm64 is built here by scripts/build-libmpv.sh (the libmpv workflow publishes it only on
+# a manual run) and cached on what it is made from, so only a change to the script or to
+# packaging/libmpv/sources.txt builds it again. Against it: Rust's unit tests and clippy, the
+# frontend's build and node checks, and zapper-server.
+#
+# Runs on pull requests and by hand. Actions are
+# pinned by commit, as in release.yml.
+name: macOS
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  PLATFORM: macos-arm64
+
+jobs:
+  libmpv:
+    name: libmpv (macos-arm64)
+    runs-on: macos-15
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    outputs:
+      key: ${{ steps.key.outputs.key }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Cache key
+        id: key
+        run: echo "key=libmpv-$PLATFORM-${{ hashFiles('packaging/libmpv/sources.txt', 'scripts/build-libmpv.sh') }}" >> "$GITHUB_OUTPUT"
+
+      - name: Built already?
+        id: built
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: libmpv-out/libmpv-macos-arm64.tar.xz
+          key: ${{ steps.key.outputs.key }}
+          lookup-only: true
+
+      # The downloads alone, kept apart from the build so a change to the script reuses them.
+      - name: Sources
+        if: steps.built.outputs.cache-hit != 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/libmpv/sources
+          key: libmpv-sources-${{ hashFiles('packaging/libmpv/sources.txt') }}
+
+      # Homebrew for the build tools alone (and a bash newer than macOS's 3.2), as in libmpv.yml.
+      - name: Build tools
+        if: steps.built.outputs.cache-hit != 'true'
+        run: |
+          brew install --quiet bash meson ninja pkgconf
+          echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
+
+      - name: Build
+        if: steps.built.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          LIBMPV_JOBS=$(sysctl -n hw.ncpu) bash scripts/build-libmpv.sh "$PLATFORM" "$RUNNER_TEMP/libmpv" libmpv-out
+          ls -l libmpv-out
+
+      # Saved as soon as it is built, whatever the later jobs make of it.
+      - name: Keep it
+        if: steps.built.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: libmpv-out/libmpv-macos-arm64.tar.xz
+          key: ${{ steps.key.outputs.key }}
+
+  check:
+    name: Tests, lint and build
+    needs: libmpv
+    runs-on: macos-15
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: libmpv-out/libmpv-macos-arm64.tar.xz
+          key: ${{ needs.libmpv.outputs.key }}
+          fail-on-cache-miss: true
+
+      - name: libmpv
+        run: scripts/fetch-libmpv.sh --archive libmpv-out/libmpv-macos-arm64.tar.xz "$PLATFORM"
+
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        with:
+          toolchain: stable
+          components: clippy
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: src-tauri
+          key: macos
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - run: npm ci
+
+      - name: Rust unit tests
+        working-directory: src-tauri
+        run: cargo test --lib -q
+
+      - name: Clippy
+        working-directory: src-tauri
+        run: cargo clippy --lib --bins -q -- -D warnings
+
+      - name: Clippy (harnesses)
+        working-directory: src-tauri
+        run: cargo clippy --lib --bins --features harness -q -- -D warnings
+
+      - name: zapper-server
+        working-directory: src-tauri
+        run: cargo build --release --no-default-features --features server --bin zapper-server
+
+      - name: Frontend build
+        run: npm run build
+
+      - name: Frontend checks
+        run: node --test src/__checks__/*.test.mjs
+
+  # zapper.app and the .dmg, as release.yml's macOS job makes them (`just package-macos`): libmpv
+  # and FFmpeg in Contents/Frameworks, the license notices in Contents/Resources, ad-hoc signed.
+  # Then scripts/check-macos-app.sh on the bundle. The .dmg is kept as an artifact.
+  app:
+    name: zapper.app and the .dmg
+    needs: libmpv
+    runs-on: macos-15
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: libmpv-out/libmpv-macos-arm64.tar.xz
+          key: ${{ needs.libmpv.outputs.key }}
+          fail-on-cache-miss: true
+
+      - name: libmpv
+        run: scripts/fetch-libmpv.sh --archive libmpv-out/libmpv-macos-arm64.tar.xz "$PLATFORM"
+
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        with:
+          toolchain: stable
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: src-tauri
+          key: macos-app
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - run: npm ci
+
+      - uses: taiki-e/install-action@183e4297cca2404691e9380e1307288dced5c82a # v2.87.25
+        with:
+          tool: cargo-about@0.9.2
+
+      - name: License notices
+        run: scripts/licenses.sh
+
+      - name: Build zapper.app and the disk image
+        run: CARGO_BUILD_JOBS=$(sysctl -n hw.ncpu) npx tauri build --config packaging/macos/dmg.conf.json
+
+      - name: Check the bundle
+        run: scripts/check-macos-app.sh src-tauri/target/release/bundle/macos/zapper.app
+
+      - name: Collect the disk image
+        run: |
+          mkdir -p dist
+          cp src-tauri/target/release/bundle/dmg/zapper_*_aarch64.dmg dist/
+          (cd dist && shasum -a 256 -- *.dmg | tee SHA256SUMS)
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: zapper-macos-arm64-dmg
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+          overwrite: true
+
+      # Playback on screen: the runners have a window server. A local test stream
+      # (tools/make_fixtures.sh, served by tools/fake_stream.py), never a provider, and no sound
+      # (ao=null). ffmpeg's command-line tool makes the fixtures and is not part of anything built.
+      - name: Test streams
+        id: streams
+        run: |
+          brew install --quiet ffmpeg
+          tools/make_fixtures.sh
+          # And one whose picture says which way up it is: testsrc draws a frame counter.
+          ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc=size=1280x720:rate=25 -t 30 \
+            -c:v libx264 -pix_fmt yuv420p -g 50 -f mpegts ~/.cache/zapper/fixtures/orient.ts
+          python3 tools/fake_stream.py --port 8788 > fixtures.log 2>&1 &
+          for _ in $(seq 20); do curl -sf --max-time 2 http://127.0.0.1:8788/ >/dev/null && break; sleep 1; done
+          curl -sf --max-time 2 http://127.0.0.1:8788/ | grep '\.ts'
+
+      # The surface harness against the fixture: the layer draws, mpv paints, the picture is not
+      # black, the rect docks the view, thumbnails are taken. Built against the interface the app
+      # embeds (tauri/custom-protocol), so its screenshots show the page over the video.
+      #
+      # The runners have no GPU: OpenGL is Apple's software renderer there, a few frames a second,
+      # and VideoToolbox's frames (handed to it as IOSurfaces) have stayed black for a whole run in
+      # one run of several. So the check that gates decodes in software, which exercises
+      # everything of zapper's; the app's own path, VideoToolbox into OpenGL, is run after it twice
+      # for the record, without failing the job (docs/macos.md).
+      - name: Surface check
+        working-directory: src-tauri
+        run: |
+          CARGO_BUILD_JOBS=$(sysctl -n hw.ncpu) cargo build --release --features harness,tauri/custom-protocol --bin surface_check
+          check() { # check <name> [hwdec]
+            local out=$PWD/../shots/surface-$1
+            mkdir -p "$out"
+            ZAPPER_HWDEC=${2:-} ZAPPER_MPV_LOG=$out/mpv.log ZAPPER_SHOTS=$out \
+              ./target/release/surface_check 30 > "$out/check.log" 2>&1
+            grep -E '^(PASS|FAIL)' "$out/check.log" || tail -20 "$out/check.log"
+            grep -q '^PASS' "$out/check.log"
+          }
+          check software no
+          for n in 1 2; do
+            if check videotoolbox-$n; then
+              echo "VideoToolbox run $n: passed" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "::warning::VideoToolbox into the software renderer, run $n: $(grep -E '^FAIL' ../shots/surface-videotoolbox-$n/check.log)"
+            fi
+          done
+
+      # The app itself, from the bundle, playing the orientation fixture (ZAPPER_AUTOPLAY on a
+      # scratch account, ZAPPER_MUTE): a screenshot of the real interface over real video, with the
+      # system's title bar and menu bar. Its window is larger than the runner's screen, so the
+      # window itself is captured by its id. Then the menu and the ⌘ keys, typed through System
+      # Events: ⌘V into the search box, ⌘, for Settings, ⌃⌘F for fullscreen, ⌘Q to quit. That
+      # needs the runner to allow accessibility control; where it does not, this says so.
+      - name: The app, playing
+        if: ${{ !cancelled() && steps.streams.outcome == 'success' }}
+        run: |
+          cat > "$RUNNER_TEMP/window-id.swift" <<'SWIFT'
+          import CoreGraphics
+          import Foundation
+          let owner = CommandLine.arguments[1]
+          let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
+          for w in windows where w[kCGWindowOwnerName as String] as? String == owner && w[kCGWindowLayer as String] as? Int == 0 {
+              print(w[kCGWindowNumber as String] as? Int ?? 0)
+              exit(0)
+          }
+          exit(1)
+          SWIFT
+          swiftc -O -o "$RUNNER_TEMP/window-id" "$RUNNER_TEMP/window-id.swift"
+          win() { # win <name>: the zapper window alone, into shots/app-<name>.png
+            local id
+            if id=$("$RUNNER_TEMP/window-id" zapper); then screencapture -x -o -l"$id" "shots/app-$1.png"
+            else echo "::warning::no zapper window to capture for $1"; fi
+          }
+          keys() { osascript -e "tell application \"System Events\" to $1"; }
+          mkdir -p shots
+          app=src-tauri/target/release/bundle/macos/zapper.app/Contents/MacOS/zapper
+          ZAPPER_MUTE=1 ZAPPER_AUTOPLAY=1 ZAPPER_FIXTURE_BASE=http://127.0.0.1:8788 \
+            ZAPPER_FIXTURE_NAME=orient.ts "$app" > shots/app.log 2>&1 &
+          pid=$!
+          sleep 20
+          screencapture -x shots/app-screen.png
+          win window
+          kill -0 "$pid" || { echo "::error::the app exited"; tail -40 shots/app.log; exit 1; }
+
+          set +e
+          if keys 'set frontmost of process "zapper" to true'; then
+            sleep 1
+            printf 'paste-check' | pbcopy
+            keys 'keystroke "/"'; sleep 1
+            keys 'keystroke "v" using command down'; sleep 2
+            win paste
+            keys 'keystroke "," using command down'; sleep 2
+            win settings
+            keys 'key code 53'; sleep 1
+            keys 'keystroke "f" using {control down, command down}'; sleep 4
+            screencapture -x shots/app-fullscreen.png
+            keys 'keystroke "f" using {control down, command down}'; sleep 4
+            keys 'keystroke "q" using command down'; sleep 5
+            if kill -0 "$pid" 2>/dev/null; then
+              echo "::warning::⌘Q did not quit zapper"
+              kill "$pid"
+            else
+              echo "⌘Q quit zapper through its menu" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          else
+            echo "::warning::System Events refused the keystrokes: the menu and ⌘ keys are untested here"
+            kill "$pid"
+          fi
+          set -e
+          tail -30 shots/app.log
+          ! grep -E 'panicked at|CAPTURE FAILED|creating mpv render context' shots/app.log
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: macos-screenshots
+          path: |
+            shots/
+            fixtures.log
+          if-no-files-found: ignore
+          retention-days: 14
+          overwrite: true

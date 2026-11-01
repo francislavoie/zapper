@@ -8,10 +8,12 @@
 #   a release); without one it is a dry run: the same build and checks, the packages kept as a
 #   workflow artifact, no release.
 #
-# macOS: the job is here and wired up, but zapper has only a stub surface there. It runs only on
-# a manual run with "Also build macOS" ticked, and is expected to fail until that port exists. A
-# tag push never runs it, so it can never hold a release back. When the port lands: make it run
-# on tag pushes too (drop the `inputs.macos` condition) and list its asset in docs/releasing.md.
+# macOS: the job is here and wired up. macOS builds, packages and plays on the CI runners
+# (.github/workflows/macos.yml, docs/macos.md) but has not been tried on a real Mac, and needs a
+# published libmpv for macos-arm64 in packaging/libmpv/manifest.json. It runs only on a manual
+# run with "Also build macOS" ticked. A tag push never runs it, so it can never hold a release
+# back. When the port is ready: make it run on tag pushes too (drop the `inputs.macos`
+# condition) and list its asset in docs/releasing.md.
 #
 # See docs/releasing.md.
 name: Release
@@ -26,7 +28,7 @@ on:
         required: false
         default: ''
       macos:
-        description: 'Also build macOS (not supported yet: expected to fail).'
+        description: 'Also build macOS (not released yet; needs a published macOS libmpv in the manifest).'
         type: boolean
         required: false
         default: false
@@ -361,8 +363,8 @@ jobs:
           compression-level: 0
           overwrite: true
 
-  # NOT SUPPORTED YET: zapper does not build on macOS. Runs only when asked for on a manual run.
-  # Ad-hoc signed, not notarized: a signing identity and notarization are still to be set up.
+  # Not released yet (docs/macos.md). Runs only when asked for on a manual run. Ad-hoc signed,
+  # not notarized: a signing identity and notarization are still to be set up.
   macos:
     name: Build the macOS disk image (experimental)
     needs: [plan, linux]
@@ -403,6 +405,10 @@ jobs:
       # zapper.app with install-kind = dmg in Contents/Resources, and the .dmg holding it.
       - name: Build the disk image
         run: CARGO_BUILD_JOBS=$(sysctl -n hw.ncpu) npx tauri build --config packaging/macos/dmg.conf.json
+
+      # What it links, that nothing in it is GPL, the notices, the marker and the signature.
+      - name: Check the bundle
+        run: scripts/check-macos-app.sh src-tauri/target/release/bundle/macos/zapper.app
 
       - name: Collect the disk image and its checksum
         env:

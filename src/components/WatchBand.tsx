@@ -17,6 +17,8 @@
 import { useRef, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 import { playChannel } from "../actions";
 import { endedMessage, startingLine } from "../logic/ending";
+import { chordLabel } from "../logic/keys";
+import { IS_MAC } from "../platform";
 import { slotAction } from "../logic/gestures";
 import { backend } from "../backend";
 import { useClock } from "../hooks/useClock";
@@ -259,7 +261,7 @@ function Idle() {
           <b>G</b> the guide
         </li>
         <li>
-          <b>Ctrl+P</b> everything else
+          <b>{chordLabel(["Ctrl", "P"], IS_MAC)}</b> everything else
         </li>
       </ul>
     </div>

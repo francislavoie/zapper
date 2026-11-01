@@ -2,6 +2,10 @@
 //
 //  - a keystroke aimed at a text field is left alone, except Ctrl+P;
 //  - Escape unwinds exactly one thing per press, never two.
+//
+// "Ctrl" is the shortcut modifier: Command on a Mac (logic/keys.ts), where a
+// plain-letter shortcut also stands aside while Command or Control is held,
+// so ⌘F or ⌃T is never mistaken for F or T.
 
 import { useEffect } from "react";
 import { backend } from "../backend";
@@ -9,6 +13,8 @@ import { playPrevious, runAction } from "../actions";
 import { focusSearch, typingInto } from "../focus";
 import { exitFullscreen, toggleFullscreen } from "../fullscreen";
 import { fullscreenNow, refreshFullscreen } from "./useFullscreen";
+import { blocksPlainKey, shortcutModifier } from "../logic/keys";
+import { IS_MAC } from "../platform";
 import { run } from "../store";
 import type { State } from "../store";
 import type { Action } from "../store";
@@ -17,7 +23,7 @@ import type { Dispatch } from "react";
 export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && (e.key === "p" || e.key === "P")) {
+      if (shortcutModifier(e, IS_MAC) && (e.key === "p" || e.key === "P")) {
         e.preventDefault();
         dispatch({ type: "palette", open: !state.paletteOpen });
         return;
@@ -26,7 +32,7 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
       // Quit, from anywhere, the way desktop apps do. Closing the window is
       // quitting: there is one window and nothing stays behind it (the
       // recording service is its own process and keeps its schedule).
-      if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === "q" || e.key === "Q")) {
+      if (shortcutModifier(e, IS_MAC) && !e.altKey && (e.key === "q" || e.key === "Q")) {
         e.preventDefault();
         runAction("quit", { dispatch, player: state.player, previous: state.previousChannel });
         return;
@@ -92,6 +98,7 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
       }
 
       if (typingInto(e.target)) return;
+      if (blocksPlainKey(e, IS_MAC)) return;
 
       if (e.key === "/") {
         e.preventDefault();

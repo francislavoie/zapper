@@ -10,6 +10,8 @@
       "../dist/licenses/THIRD-PARTY-NOTICES-ui.txt": "licenses/THIRD-PARTY-NOTICES-ui.txt"
     },
     "macOS": {
+      "minimumSystemVersion": "11.0",
+      "signingIdentity": "-",
       "frameworks": [
         "lib/macos-arm64/runtime/libmpv.2.dylib",
         "lib/macos-arm64/runtime/libavutil.60.dylib",

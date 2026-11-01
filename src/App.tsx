@@ -18,6 +18,7 @@ import { paintMockStill } from "./mock";
 import { loadCategories } from "./actions";
 import { errorMessage } from "./logic/async";
 import { useGlobalKeys } from "./hooks/useGlobalKeys";
+import { useMenuCommands } from "./hooks/useMenuCommands";
 import { useMediaControls } from "./mediaKeys";
 import { useWheelSteps } from "./hooks/useWheelSteps";
 import { useSettings } from "./hooks/useSettings";
@@ -110,6 +111,7 @@ export function App() {
   }, [fullscreen, cameFrom, dispatch]);
 
   useGlobalKeys(state, dispatch);
+  useMenuCommands(dispatch);
   // The desktop's media keys, when Settings › Playback turns them on.
   useMediaControls(state, dispatch);
   // Wheel scrolling that steps rather than glides; see logic/wheel.ts.

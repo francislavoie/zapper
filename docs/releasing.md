@@ -130,7 +130,7 @@ zapper updates itself without Tauri's updater plugin
      it again, runs it (the NSIS installer, or `msiexec /i` for the MSI) and quits so it can
      replace the files. This narrows the swap window but can't close it: there is no
      privilege boundary to copy across first. Code signing is the real fix;
-   - macOS (not built yet): mounts the `.dmg` and swaps its `zapper.app` for the running one,
+   - macOS (not released yet): mounts the `.dmg` and swaps its `zapper.app` for the running one,
      when this user can write there; otherwise says to drag it to Applications.
 
    If pkexec is missing or the password prompt is cancelled, the dialog shows the command to
@@ -156,7 +156,7 @@ release: a package `SHA256SUMS` doesn't list is never installed.
 | Arch Linux | `zapper-<pkgver>-1-x86_64.pkg.tar.zst` (pacman's own name for it: `<pkgver>` is the version without the pre-release's `-`, `0.2.0rc.1`) |
 | Windows NSIS (per-user setup) | `zapper_<version>_x64-setup.exe` |
 | Windows MSI (per-machine) | `zapper_<version>_x64_en-US.msi` (the full version in the name; the MSI's own version is `X.Y.Z`, below) |
-| macOS (not built yet) | `zapper_<version>_aarch64.dmg` (an Intel Mac would look for `_x64.dmg`) |
+| macOS (not released yet) | `zapper_<version>_aarch64.dmg` (an Intel Mac would look for `_x64.dmg`) |
 | all | `SHA256SUMS` (`sha256sum` output listing each package) |
 
 The tag stays `v<version>`, and the release's body (the CHANGELOG section) is what the update
@@ -178,8 +178,8 @@ app reads at run time, `install-kind`
 - Windows: `packaging/windows/installers.conf.json` ships `install-kind` = `msi`
   beside `zapper.exe` as a resource, and the NSIS installer's post-install hook
   (`packaging/windows/installer-hooks.nsh`) overwrites it with `nsis`;
-- macOS (not built yet): `packaging/macos/dmg.conf.json` puts `install-kind` = `dmg` in
-  `zapper.app/Contents/Resources`.
+- macOS (not released yet): `packaging/macos/dmg.conf.json` puts `install-kind` = `dmg` in
+  `zapper.app/Contents/Resources`, and `scripts/check-macos-app.sh` fails a bundle without it.
 
 No marker: a build from source (`npm run app`, or `npx tauri build` on Windows and macOS without
 those configs), which is only shown the release page. A `.deb`, `.rpm` or Arch package you build
@@ -258,14 +258,18 @@ warns on their first run (README.md); signing needs a certificate and a signing 
 `windows` job. Updating from one installed Windows release to the next is first possible from
 the release after the first one that carries them.
 
-macOS has only a stub surface. What is in place:
+macOS (Apple Silicon) builds, packages and plays on the CI runners (`.github/workflows/macos.yml`,
+on every pull request; docs/macos.md), but has not been tried on a real Mac or released. What is
+in place:
 
 - the updater already knows the `.dmg` install (asset name, the bundle swap), and its tests
   cover it;
 - `packaging/macos/` holds the install-kind wiring, and `just package-macos` builds with it;
 - `release.yml` has a `macos` job that runs only on Run workflow with **Also build macOS**
-  ticked. A tag push skips it. It fails until that port exists, and a failure holds that run's
-  draft back.
+  ticked. A tag push skips it, and a failure holds that run's draft back. It fetches libmpv
+  through the manifest, so it fails until a libmpv release with macOS is published (the
+  **libmpv** workflow with **macOS** ticked, docs/licensing.md) and its `manifest.json`
+  committed. It checks the bundle with `scripts/check-macos-app.sh`, as `macos.yml` does.
 
 When that port lands: the `.app` is ad-hoc signed and not notarized (Gatekeeper asks once), and
 the job is turned on for tags by dropping `inputs.macos == true` from its `if:`.
