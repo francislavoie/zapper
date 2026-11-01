@@ -20,8 +20,9 @@
 //!   WebKit exists lives there and nowhere else.
 //! - `windows`: a child window beneath WebView2's, which mpv draws into by
 //!   itself (`wid` embedding); the webview is transparent over it.
-//! - `macos`: a slot, not an implementation. [`install`] fails with a clear
-//!   error, so a macOS build compiles and says why it cannot play.
+//! - `macos`: AppKit and Core Animation. An OpenGL layer in a view beneath
+//!   the WKWebView, mpv rendering into it through the OpenGL render API as
+//!   on Linux, the webview transparent over it as on Windows.
 //!
 //! Every platform function is main-thread-only, for the same reason on each:
 //! the toolkit's objects are not `Send`. Commands on worker threads hop with
@@ -29,6 +30,8 @@
 
 pub mod mpv;
 pub mod png;
+#[cfg(any(windows, target_os = "macos"))]
+mod screenshot;
 pub mod trickplay;
 
 #[cfg(target_os = "linux")]
@@ -47,7 +50,7 @@ pub mod macos;
 use macos as platform;
 
 #[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
-compile_error!("zapper has a playback surface for Linux and Windows (and a stub for macOS) only");
+compile_error!("zapper has a playback surface for Linux, Windows and macOS only");
 
 use std::path::PathBuf;
 use std::time::Duration;
