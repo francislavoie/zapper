@@ -98,6 +98,14 @@ pub fn load_or_default() -> SettingsDto {
     db::with_db(|c| Ok(load(c))).unwrap_or_default()
 }
 
+/// Serialises the tests that write the settings: the process shares one
+/// in-memory database, and the settings are one key in it.
+#[cfg(test)]
+pub fn test_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
