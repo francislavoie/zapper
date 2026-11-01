@@ -3,16 +3,22 @@
 //! Every command here must answer from SQLite alone. Nothing on this path may
 //! block on the network: startup latency is the whole point of the local
 //! mirror, and a week-old cache must open exactly as fast as a fresh one.
+//! The reads themselves are in [`reads`], which the recording service's web
+//! API answers from too.
 
+#[cfg(test)]
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::catalog::settings as settings_store;
-use crate::catalog::{activity, db, guide_search, index, status, store, sync_engine};
+use crate::catalog::{db, reads, status, sync_engine};
+#[cfg(test)]
+use crate::catalog::{guide_search, index, store};
 use crate::ipc::types::{
     CategoryDto, ChannelDto, FavouriteDto, GuideRowDto, ProgrammeDto, ProgrammeHitDto, SettingsDto,
     SyncStatusDto,
 };
 
+#[cfg(test)]
 fn now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -20,25 +26,13 @@ fn now() -> i64 {
         .unwrap_or(0)
 }
 
-/// Attaches what is on air to a page of channels. Done for the page rather
-/// than in the listing query so browsing a huge catalogue never joins the
-/// guide for rows nobody is looking at.
-fn attach_now_playing(conn: &rusqlite::Connection, page: &mut [ChannelDto]) -> anyhow::Result<()> {
-    let ids: Vec<i64> = page
-        .iter()
-        .filter(|c| !c.is_separator)
-        .map(|c| c.stream_id)
-        .collect();
-    let mut playing = store::now_playing(conn, &ids, now())?;
-    for ch in page.iter_mut() {
-        ch.now_playing = playing.remove(&ch.stream_id);
-    }
-    Ok(())
+fn words(e: anyhow::Error) -> String {
+    e.to_string()
 }
 
 #[tauri::command]
 pub async fn categories() -> Result<Vec<CategoryDto>, String> {
-    db::with_db(store::categories).map_err(|e| e.to_string())
+    reads::categories().map_err(words)
 }
 
 /// `category_id` of `None` means every channel, ordered by `num`.
@@ -48,12 +42,7 @@ pub async fn channels(
     offset: u32,
     limit: u32,
 ) -> Result<Vec<ChannelDto>, String> {
-    db::with_db(|conn| {
-        let mut page = store::channels_in(conn, category_id.as_deref(), offset, limit)?;
-        attach_now_playing(conn, &mut page)?;
-        Ok(page)
-    })
-    .map_err(|e| e.to_string())
+    reads::channels(category_id.as_deref(), offset, limit).map_err(words)
 }
 
 /// Specific channels, by stream id, with their now-playing attached.
@@ -65,19 +54,11 @@ pub async fn channels(
 /// that is a thing to notice quietly rather than fail on.
 #[tauri::command]
 pub async fn channels_by_ids(ids: Vec<i64>) -> Result<Vec<ChannelDto>, String> {
-    if ids.is_empty() {
-        return Ok(Vec::new());
-    }
-    db::with_db(|conn| {
-        let mut rows = store::channels_by_ids(conn, &ids)?;
-        attach_now_playing(conn, &mut rows)?;
-        Ok(rows)
-    })
-    .map_err(|e| e.to_string())
+    reads::channels_by_ids(&ids).map_err(words)
 }
 
 /// Every channel number and the channel it tunes, for typing a number to
-/// change channel. See [`store::channel_numbers`].
+/// change channel. See [`crate::catalog::store::channel_numbers`].
 ///
 /// The whole list in one answer rather than a lookup per keystroke: deciding
 /// whether another digit could still be coming needs every number that starts
@@ -85,50 +66,25 @@ pub async fn channels_by_ids(ids: Vec<i64>) -> Result<Vec<ChannelDto>, String> {
 /// until the next sync.
 #[tauri::command]
 pub async fn channel_numbers() -> Result<Vec<(String, i64)>, String> {
-    db::with_db(store::channel_numbers).map_err(|e| e.to_string())
+    reads::channel_numbers().map_err(words)
 }
 
 /// Fuzzy match over all channels. Separators are never returned.
 #[tauri::command]
 pub async fn search(query: String, limit: u32) -> Result<Vec<ChannelDto>, String> {
-    // A blank query means "nothing yet", not "every channel": the picker
-    // opens empty and fills as you type.
-    if query.trim().is_empty() {
-        return Ok(Vec::new());
-    }
-    db::with_db(|conn| {
-        // The index is built by sync, but search must work before the first
-        // sync of the session lands — the mirror on disk is enough.
-        if !index::is_built() {
-            index::rebuild(conn)?;
-        }
-        let ids = index::query(&query, limit as usize);
-        let mut hits = store::channels_by_ids(conn, &ids)?;
-        attach_now_playing(conn, &mut hits)?;
-        Ok(hits)
-    })
-    .map_err(|e| e.to_string())
+    reads::search(&query, limit).map_err(words)
 }
 
-/// The most one page of programme search returns, whatever is asked for.
-const PROGRAMME_PAGE_MAX: u32 = 500;
-
 /// Airings whose title matches, on now first, then upcoming, then what can
-/// still be played from an archive — see [`guide_search::search`]. Paged,
-/// because a common word can match thousands of airings across a week.
+/// still be played from an archive — see [`crate::catalog::guide_search::search`].
+/// Paged, because a common word can match thousands of airings across a week.
 #[tauri::command]
 pub async fn search_programmes(
     query: String,
     offset: u32,
     limit: u32,
 ) -> Result<Vec<ProgrammeHitDto>, String> {
-    // Blank finds nothing, as channel search does.
-    if query.trim().is_empty() {
-        return Ok(Vec::new());
-    }
-    let limit = limit.min(PROGRAMME_PAGE_MAX);
-    db::with_db(|conn| guide_search::search(conn, &query, now(), offset, limit))
-        .map_err(|e| e.to_string())
+    reads::search_programmes(&query, offset, limit).map_err(words)
 }
 
 /// Where a channel sits in a category's listing, so the guide can be opened
@@ -138,8 +94,7 @@ pub async fn channel_index(
     category_id: Option<String>,
     stream_id: i64,
 ) -> Result<Option<u32>, String> {
-    db::with_db(|conn| store::channel_index(conn, category_id.as_deref(), stream_id))
-        .map_err(|e| e.to_string())
+    reads::channel_index(category_id.as_deref(), stream_id).map_err(words)
 }
 
 /// Programmes overlapping `[from, to]` for the given channels.
@@ -149,7 +104,7 @@ pub async fn guide(
     from: i64,
     to: i64,
 ) -> Result<Vec<(i64, Vec<ProgrammeDto>)>, String> {
-    db::with_db(|conn| store::programmes(conn, &stream_ids, from, to)).map_err(|e| e.to_string())
+    reads::guide(&stream_ids, from, to).map_err(words)
 }
 
 #[tauri::command]
@@ -334,8 +289,9 @@ mod tests {
     #[tokio::test]
     async fn settings_default_before_anything_is_saved_and_round_trip_after() {
         db::install_test_db();
-        // The key is process-wide, so this is deliberately the only test that
-        // writes it.
+        let _lock = settings_store::test_lock();
+        // The key is process-wide, so this is the only test that writes the
+        // guide's hours; the others that write settings leave them alone.
         let first = settings().await.unwrap();
         assert_eq!(first.guide_hours, SettingsDto::default().guide_hours);
 
@@ -966,7 +922,7 @@ pub async fn guide_rows(
     from: i64,
     to: i64,
 ) -> Result<Vec<GuideRowDto>, String> {
-    db::with_db(|conn| store::guide_rows(conn, &stream_ids, from, to)).map_err(|e| e.to_string())
+    reads::guide_rows(&stream_ids, from, to).map_err(words)
 }
 
 /// Channels ordered by how much they are actually watched, most first.
@@ -978,29 +934,14 @@ pub async fn guide_rows(
 /// first-run answer, not a failure.
 #[tauri::command]
 pub async fn favourites(limit: u32) -> Result<Vec<FavouriteDto>, String> {
-    let at = now();
-    db::with_db(|conn| {
-        let mut top = activity::rank(store::watched(conn)?, at, limit as usize);
-        // Cheap here in a way it would not be for a listing: this is a
-        // screenful at most, and it is the same channel row the rest of the
-        // app draws, so it should not be the one place that claims nothing is
-        // on air.
-        let mut channels: Vec<ChannelDto> =
-            top.iter().map(|f| f.channel.clone()).collect();
-        attach_now_playing(conn, &mut channels)?;
-        for (f, ch) in top.iter_mut().zip(channels) {
-            f.channel = ch;
-        }
-        Ok(top)
-    })
-    .map_err(|e| e.to_string())
+    reads::favourites(limit).map_err(words)
 }
 
 /// Forgets one channel's history, for when something was left playing by
 /// accident and has crowded out the real list.
 #[tauri::command]
 pub async fn forget_activity(stream_id: i64) -> Result<(), String> {
-    db::with_db(|conn| store::forget_activity(conn, stream_id)).map_err(|e| e.to_string())
+    reads::forget_activity(stream_id).map_err(words)
 }
 
 #[cfg(test)]
