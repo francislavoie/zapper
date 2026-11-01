@@ -488,8 +488,11 @@ case $family in
     mpv_opts+=(-Diconv=enabled -Dcocoa=enabled -Dswift-build=enabled -Dcoreaudio=enabled
       -Davfoundation=enabled -Dgl-cocoa=enabled -Dvideotoolbox-gl=enabled
       -Dmacos-10-15-4-features=enabled -Dmacos-11-features=enabled -Dmacos-11-3-features=enabled
-      -Dmacos-12-features=enabled)
-    # mpv's API alone is exported.
+      -Dmacos-12-features=enabled
+      -Dswift-flags="-target $arch-apple-macos$MACOSX_DEPLOYMENT_TARGET")
+    # mpv's API alone is exported. Its Swift parts are compiled by mpv's own rule, which knows
+    # nothing of MACOSX_DEPLOYMENT_TARGET: without the target above they are built for the
+    # build machine's macOS and the library needs that version or newer.
     mpv_ldflags="-Wl,-exported_symbol,_mpv_*"
     ;;
 esac
@@ -588,6 +591,11 @@ case $family in
       install_name_tool -id "@rpath/$n" "$stage/runtime/$n"
       for dep in $(otool -L "$stage/runtime/$n" | awk 'NR > 1 {print $1}' | grep "^$prefix/lib/" || true); do
         install_name_tool -change "$dep" "@rpath/${dep##*/}" "$stage/runtime/$n"
+      done
+      # mpv's Swift link adds the build machine's Xcode toolchain as an rpath; the Swift runtime
+      # it needs is macOS's own, in /usr/lib/swift, which it names directly.
+      for rp in $(otool -l "$stage/runtime/$n" | awk '$1 == "cmd" && $2 == "LC_RPATH" { getline; getline; print $2 }'); do
+        case $rp in /usr/lib/*|@*) ;; *) install_name_tool -delete_rpath "$rp" "$stage/runtime/$n" ;; esac
       done
       install_name_tool -add_rpath @loader_path "$stage/runtime/$n"
       strip -x "$stage/runtime/$n"
