@@ -39,6 +39,7 @@ import { loadRailWidth } from "./railWidth";
 import { clampRailWidth } from "./logic/railWidth";
 import { clampVideoWidth } from "./logic/videoSize";
 import { syncChangedCatalogue } from "./logic/catalogueRefresh";
+import { addToast, type Toast } from "./logic/toasts";
 import { setHidden, setPinned, type CategorySort } from "./logic/categoryOrder";
 import { loadCategoryHidden, loadCategoryPins, loadCategorySort } from "./categoryPrefs";
 import type { ZapView } from "./logic/zap";
@@ -108,11 +109,7 @@ export interface GuideFocus {
   seq: number;
 }
 
-export interface Toast {
-  id: number;
-  text: string;
-  kind: "error" | "info";
-}
+export type { Toast } from "./logic/toasts";
 
 export interface State {
   mode: Mode;
@@ -266,7 +263,7 @@ export interface State {
    *  being cleared. Remembered per machine, like zoom, for the same reason:
    *  a portrait monitor and a laptop want different answers. */
   stacked: boolean;
-  toasts: Toast[];
+  toasts: readonly Toast[];
   /** The recording service's recordings, as last fetched; `null` while it
    *  has not answered (not installed, not running). See RecordingsWatcher. */
   recordings: RecordingDto[] | null;
@@ -764,14 +761,16 @@ export function reducer(state: State, action: Action): State {
             ? state.nowChannel
             : state.previousChannel,
       };
-    case "toast":
-      return {
-        ...state,
-        toasts: [
-          ...state.toasts.slice(-2),
-          { id: ++toastSeq, text: action.text, kind: action.kind ?? "error" },
-        ],
-      };
+    case "toast": {
+      const toasts = addToast(state.toasts, {
+        id: toastSeq + 1,
+        text: action.text,
+        kind: action.kind ?? "error",
+      });
+      if (toasts === state.toasts) return state;
+      toastSeq += 1;
+      return { ...state, toasts };
+    }
     case "dismissToast":
       return {
         ...state,
