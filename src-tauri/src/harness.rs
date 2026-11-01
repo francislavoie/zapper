@@ -119,9 +119,75 @@ pub fn is_local(url: &str) -> bool {
             .is_ok_and(|ip| ip.is_loopback())
 }
 
+/// The program a harness runs for `name` (`python3`, `ffprobe`, `ffmpeg`):
+/// `ZAPPER_<NAME>` when set, else what `PATH` gives.
+///
+/// On Windows two more things: `python3` is often only `python` there, and
+/// a scoop shim (`…\scoop\shims\ffprobe.exe` beside `ffprobe.shim`) is
+/// replaced by the program it starts, read from the `.shim` file. A shim is a
+/// launcher in between that can fail where the program itself does not (it
+/// cannot start its target through scoop's `current` link in an elevated
+/// session, such as an administrator's SSH login), and killing it leaves the
+/// program running.
+pub fn tool(name: &str) -> PathBuf {
+    let var = format!("ZAPPER_{}", name.to_ascii_uppercase());
+    if let Some(p) = std::env::var_os(&var).filter(|v| !v.is_empty()) {
+        return PathBuf::from(p);
+    }
+    if cfg!(windows) {
+        let names: &[&str] = if name == "python3" { &["python3", "python"] } else { &[name] };
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        for n in names {
+            for dir in std::env::split_paths(&path) {
+                let exe = dir.join(format!("{n}.exe"));
+                if exe.is_file() {
+                    return shim_target(&exe).unwrap_or(exe);
+                }
+            }
+        }
+    }
+    PathBuf::from(name)
+}
+
+/// What a scoop shim starts: the `path = "…"` line of the `.shim` beside it,
+/// through scoop's `current` link resolved here (an elevated process may not
+/// follow a link a user made; reading where it points is allowed).
+fn shim_target(exe: &std::path::Path) -> Option<PathBuf> {
+    let text = std::fs::read_to_string(exe.with_extension("shim")).ok()?;
+    let target = PathBuf::from(shim_path(&text)?);
+    let mut resolved = PathBuf::new();
+    for part in target.components() {
+        resolved.push(part);
+        if part.as_os_str() == "current" {
+            if let Ok(to) = std::fs::read_link(&resolved) {
+                resolved = to;
+            }
+        }
+    }
+    Some(resolved).filter(|p| p.is_file())
+}
+
+/// `path = "C:\…\ffprobe.exe"` → `C:\…\ffprobe.exe`.
+fn shim_path(text: &str) -> Option<&str> {
+    text.lines().find_map(|line| {
+        let (key, value) = line.split_once('=')?;
+        (key.trim() == "path").then(|| value.trim().trim_matches('"'))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_scoop_shim_names_its_program() {
+        let shim = "path = \"C:\\Users\\u\\scoop\\apps\\ffmpeg\\current\\bin\\ffprobe.exe\"\nargs = -hide_banner\n";
+        assert_eq!(
+            shim_path(shim),
+            Some(r"C:\Users\u\scoop\apps\ffmpeg\current\bin\ffprobe.exe")
+        );
+        assert_eq!(shim_path("args = x\n"), None);
+    }
 
     #[test]
     fn the_fixture_server_is_local() {

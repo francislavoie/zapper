@@ -22,7 +22,9 @@
 //! - each fixture server saw exactly one stream request: nothing retried a
 //!   feed in a loop.
 //!
-//! Needs python3, ffprobe and ffmpeg, and the fixtures (tools/make_fixtures.sh).
+//! Needs python3, ffprobe and ffmpeg (`ZAPPER_PYTHON3`, `ZAPPER_FFPROBE` and
+//! `ZAPPER_FFMPEG` name them when `PATH` does not; see `harness::tool`), and
+//! the fixtures (tools/make_fixtures.sh, or a folder named by `ZAPPER_FIXTURES`).
 
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -366,7 +368,7 @@ struct Probe {
 
 /// `kind:codec[:title:default|not-default]` per stream, and the duration.
 fn ffprobe(path: &str) -> Result<Probe, String> {
-    let out = Command::new("ffprobe")
+    let out = Command::new(zapper_lib::harness::tool("ffprobe"))
         .args([
             "-v",
             "error",
@@ -414,7 +416,7 @@ fn ffprobe(path: &str) -> Result<Probe, String> {
 
 /// The clock track's cues as seconds of the day, in order.
 fn clock_cues(path: &str) -> Result<Vec<i64>, String> {
-    let out = Command::new("ffmpeg")
+    let out = Command::new(zapper_lib::harness::tool("ffmpeg"))
         .args([
             "-v", "error", "-nostdin", "-i", path, "-map", "0:s:0", "-c", "copy", "-f", "ass", "-",
         ])
@@ -446,7 +448,7 @@ impl Service {
     fn start(port: u16) -> Result<Self, String> {
         let exe = std::env::current_exe()
             .map_err(|e| e.to_string())?
-            .with_file_name("zapper-server");
+            .with_file_name(format!("zapper-server{}", std::env::consts::EXE_SUFFIX));
         if !exe.is_file() {
             return Err(format!(
                 "{} is missing; build it with --bin zapper-server",
@@ -485,7 +487,7 @@ struct Fixture {
 impl Fixture {
     fn start(port: u16, flags: &[&str]) -> Result<Self, String> {
         let script = concat!(env!("CARGO_MANIFEST_DIR"), "/../tools/fake_stream.py");
-        let mut child = Command::new("python3")
+        let mut child = Command::new(zapper_lib::harness::tool("python3"))
             .arg(script)
             .args(["--port", &port.to_string(), "--verbose"])
             .args(flags)
