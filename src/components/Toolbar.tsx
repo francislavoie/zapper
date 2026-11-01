@@ -141,6 +141,7 @@ export function Toolbar() {
           onRetry={() =>
             runAction("sync", { dispatch, player: state.player, previous: state.previousChannel })
           }
+          onAccount={() => dispatch({ type: "settings", open: true, page: "Account" })}
         />
       </div>
 
@@ -236,11 +237,17 @@ function Status({
   text,
   detail,
   spinning,
+  action,
   onRetry,
+  onAccount,
   onDrag,
-}: ReturnType<typeof statusLine> & { onRetry: () => void; onDrag: (e: ReactMouseEvent) => void }) {
+}: ReturnType<typeof statusLine> & {
+  onRetry: () => void;
+  onAccount: () => void;
+  onDrag: (e: ReactMouseEvent) => void;
+}) {
   // Words, not a control: pressing them drags the window like the rest of the
-  // bar. The retry link stops its own press from reaching here.
+  // bar. The link stops its own press from reaching here.
   return (
     <div className={`tb-status ${tone}`} role="status" aria-live="polite" onMouseDown={onDrag}>
       {spinning ? <span className="tb-spinner" aria-hidden /> : null}
@@ -248,15 +255,15 @@ function Status({
       {detail ? <span className="tb-status-detail" data-tip-overflow="">
           {detail}
         </span> : null}
-      {tone === "bad" ? (
+      {action ? (
         <button
           className="link"
           // The bar is a drag surface; a click on this button must not also
           // start dragging the window.
           onMouseDown={(e) => e.stopPropagation()}
-          onClick={onRetry}
+          onClick={action === "account" ? onAccount : onRetry}
         >
-          retry
+          {action === "account" ? "Add an account" : "retry"}
         </button>
       ) : null}
     </div>

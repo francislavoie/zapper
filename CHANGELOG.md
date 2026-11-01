@@ -23,6 +23,7 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
   room beside it for the channel's details and below it for the list.
 - Settings → Account: Test connection checks what is in the form, saved or not, so an account can
   be tried before saving it.
+- With no account set up, the title bar offers "Add an account" instead of "retry".
 
 ### Fixed
 
