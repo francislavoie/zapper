@@ -10,6 +10,13 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
 
 ## [Unreleased]
 
+### Added
+
+- Network access for the recording service (Settings → Recording, off by default): other devices
+  on your network can reach it over HTTPS with its own certificate, whose fingerprint Settings
+  shows, after signing in with a password you set there. Each device is listed and can be
+  revoked, and the port can be changed.
+
 ## [0.1.0] - 2026-11-01
 
 The first release.
