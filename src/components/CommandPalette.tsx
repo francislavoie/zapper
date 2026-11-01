@@ -16,7 +16,9 @@ import {
   paletteItems,
   type PaletteItem,
 } from "../logic/palette";
+import { hintLabel } from "../logic/keys";
 import { airingTag, airingWhen } from "../logic/programmes";
+import { IS_MAC } from "../platform";
 import { categoryNames, categoryOf } from "../logic/searchGroups";
 import { useApp, useDispatch } from "../store";
 
@@ -183,7 +185,7 @@ export function CommandPalette() {
                   ) : null}
                   <span className="palette-hint">
                     {item.kind === "action"
-                      ? (item.action.hint ?? "")
+                      ? hintLabel(item.action.hint ?? "", IS_MAC)
                       : item.kind === "channel"
                         ? (item.channel.numLabel ?? item.channel.num ?? "")
                         : airingWhen(item.hit, now)}

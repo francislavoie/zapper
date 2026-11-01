@@ -1,5 +1,6 @@
 // Application zoom, bound to the two gestures people already have in their
-// fingers: Ctrl with + / - / 0, and Ctrl with the wheel.
+// fingers: Ctrl with + / - / 0 (⌘ on a Mac), and Ctrl with the wheel (which
+// is also what a trackpad pinch sends).
 //
 // Both listeners are on the window and neither asks whether a text field has
 // focus. That is deliberate — Ctrl+- while the cursor is in the search box
@@ -8,6 +9,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, type Dispatch } from "react";
 import { zoomKeyCommand, zoomWheelCommand, type ZoomCommand } from "../logic/zoom";
+import { IS_MAC } from "../platform";
 import type { Action } from "../store";
 import { applyZoom, saveZoom } from "../zoom";
 
@@ -42,7 +44,7 @@ export function useZoom(zoom: number, dispatch: Dispatch<Action>): ZoomControl {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const command = zoomKeyCommand(e);
+      const command = zoomKeyCommand(e, IS_MAC);
       if (!command) return;
       // Ctrl+- is the WebView's own zoom as well. Letting both happen would
       // scale the page on top of the interface, and the video rect — which is
