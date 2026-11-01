@@ -24,10 +24,11 @@
 //! Neither view takes input: the host answers every hit test with nothing,
 //! so clicks reach the webview above even where the page is transparent.
 //!
-//! Scrollback thumbnails come from mpv's `screenshot-raw`
-//! ([`crate::surface::screenshot`]): the layer's framebuffer is current only
-//! inside Core Animation's draw call, and a thumbnail does not need to wait
-//! for one.
+//! Scrollback thumbnails are taken as on Linux: the frame just drawn is
+//! blitted down to thumbnail size on the GPU, inside the draw, and only that
+//! is read back. mpv's `screenshot-raw` cannot stand in for it here, as it
+//! does on Windows: with VideoToolbox decoding into the render API, mpv's
+//! software fallback is handed the hardware frame and fails to convert it.
 
 #![allow(deprecated)] // OpenGL and CAOpenGLLayer are deprecated, not removed.
 
@@ -54,7 +55,8 @@ use objc2_open_gl::{
 };
 use objc2_quartz_core::{CALayer, CAOpenGLLayer, CATransaction};
 
-use crate::surface::{mpv, screenshot, VideoRect};
+use crate::surface::trickplay::{self, THUMB_H, THUMB_W};
+use crate::surface::{mpv, VideoRect};
 
 /// Hand mpv an upside-down target: GL's origin is bottom-left, video's is
 /// top-left, and the layer's framebuffer is an ordinary GL one.
@@ -62,6 +64,14 @@ const FLIP_Y: bool = true;
 
 const GL_COLOR_BUFFER_BIT: u32 = 0x0000_4000;
 const GL_FRAMEBUFFER: u32 = 0x8D40;
+const GL_READ_FRAMEBUFFER: u32 = 0x8CA8;
+const GL_DRAW_FRAMEBUFFER: u32 = 0x8CA9;
+const GL_READ_FRAMEBUFFER_BINDING: u32 = 0x8CAA;
+const GL_RENDERBUFFER: u32 = 0x8D41;
+const GL_COLOR_ATTACHMENT0: u32 = 0x8CE0;
+const GL_FRAMEBUFFER_COMPLETE: u32 = 0x8CD5;
+const GL_RGBA8: u32 = 0x8058;
+const GL_LINEAR: u32 = 0x2601;
 /// `GL_DRAW_FRAMEBUFFER_BINDING`: Core Animation binds a framebuffer of its
 /// own before calling the layer, which may or may not be 0.
 const GL_DRAW_FRAMEBUFFER_BINDING: u32 = 0x8CA6;
@@ -79,6 +89,9 @@ thread_local! {
     /// mpv's render context, created inside the layer's first draw: it needs
     /// the layer's GL context current, and that is the only place it is.
     static CTX: RefCell<Option<RenderContext<'static>>> = const { RefCell::new(None) };
+    /// The thumbnail framebuffer, made in the layer's context on first use.
+    /// `Some(None)` once the context has refused, so it is not asked again.
+    static THUMB_FBO: Cell<Option<Option<u32>>> = const { Cell::new(None) };
 }
 
 struct Surface {
@@ -178,10 +191,6 @@ pub(super) fn install(window: &tauri::WebviewWindow) -> anyhow::Result<()> {
         init.set_property("video-timing-offset", 0i64)
     })?;
 
-    repeat_on_main(screenshot::THUMB_POLL, || {
-        screenshot::thumbnail_tick();
-        true
-    });
     kick();
     tracing::info!("video surface: OpenGL layer beneath the webview");
     Ok(())
@@ -528,7 +537,7 @@ fn draw() {
         let rendered = slot.as_ref().unwrap().render::<()>(fbo, w, h, FLIP_Y);
         // mpv leaves its own framebuffer bound; Core Animation's must be the
         // one bound when the layer hands back.
-        unsafe { bind_framebuffer(fbo) };
+        unsafe { bind_framebuffer(GL_FRAMEBUFFER, fbo) };
         match rendered {
             Ok(()) => true,
             Err(e) => {
@@ -539,6 +548,13 @@ fn draw() {
     });
     if painted {
         MPV_DRAWS.fetch_add(1, Ordering::AcqRel);
+        // A copy of the frame just drawn, for the scrubber. The gate first,
+        // so the ordinary frame does not read mpv's clock.
+        if trickplay::is_due() {
+            if let Some(Some(at)) = mpv::with_player(|p| p.get_f64("playback-time")) {
+                unsafe { thumbnail(fbo, w, h, at) };
+            }
+        }
     } else {
         unsafe { clear_black() };
     }
@@ -635,10 +651,123 @@ unsafe fn gl_string(name: u32) -> String {
         .into_owned()
 }
 
-unsafe fn bind_framebuffer(fbo: i32) {
+unsafe fn bind_framebuffer(target: u32, fbo: i32) {
     if let Some(f) = unsafe { sym::<extern "C" fn(u32, u32)>(b"glBindFramebuffer\0") } {
-        f(GL_FRAMEBUFFER, fbo as u32);
+        f(target, fbo as u32);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Scrollback thumbnails
+// ---------------------------------------------------------------------------
+
+/// Shrinks the frame just drawn into [`THUMB_W`] x [`THUMB_H`] on the GPU and
+/// files it with [`trickplay::record`]: a 57KB readback, rather than the
+/// whole surface's. `fbo` is Core Animation's framebuffer, bound for drawing,
+/// and is bound again on the way out.
+///
+/// # Safety
+/// Requires the layer's GL context current, inside its draw.
+unsafe fn thumbnail(fbo: i32, w: i32, h: i32, at: f64) {
+    if w < 16 || h < 16 || !at.is_finite() {
+        return;
+    }
+    let target = THUMB_FBO.with(|t| match t.get() {
+        Some(made) => made,
+        None => {
+            let made = unsafe { make_thumb_fbo() };
+            t.set(Some(made));
+            made
+        }
+    });
+    let Some(small) = target else { return };
+    let blit = unsafe {
+        sym::<extern "C" fn(i32, i32, i32, i32, i32, i32, i32, i32, u32, u32)>(
+            b"glBlitFramebuffer\0",
+        )
+    };
+    let read =
+        unsafe { sym::<extern "C" fn(i32, i32, i32, i32, u32, u32, *mut u8)>(b"glReadPixels\0") };
+    let (Some(blit), Some(read)) = (blit, read) else {
+        return;
+    };
+    let prev_read = unsafe { get_integer(GL_READ_FRAMEBUFFER_BINDING) };
+    let mut rgba = vec![0u8; (THUMB_W * THUMB_H * 4) as usize];
+    unsafe {
+        bind_framebuffer(GL_READ_FRAMEBUFFER, fbo);
+        bind_framebuffer(GL_DRAW_FRAMEBUFFER, small as i32);
+    }
+    blit(
+        0,
+        0,
+        w,
+        h,
+        0,
+        0,
+        THUMB_W,
+        THUMB_H,
+        GL_COLOR_BUFFER_BIT,
+        GL_LINEAR,
+    );
+    unsafe { bind_framebuffer(GL_READ_FRAMEBUFFER, small as i32) };
+    read(
+        0,
+        0,
+        THUMB_W,
+        THUMB_H,
+        GL_RGBA,
+        GL_UNSIGNED_BYTE,
+        rgba.as_mut_ptr(),
+    );
+    unsafe {
+        bind_framebuffer(GL_READ_FRAMEBUFFER, prev_read);
+        bind_framebuffer(GL_DRAW_FRAMEBUFFER, fbo);
+    }
+    // GL's rows come back bottom first.
+    let row = (THUMB_W * 4) as usize;
+    let top_down: Vec<u8> = rgba.chunks(row).rev().flatten().copied().collect();
+    trickplay::record(at, top_down);
+}
+
+/// The thumbnail's framebuffer: one RGBA8 renderbuffer of thumbnail size.
+/// `None` when the context cannot make one, which costs the thumbnails and
+/// nothing else.
+///
+/// # Safety
+/// Requires a current GL context.
+unsafe fn make_thumb_fbo() -> Option<u32> {
+    let gen_fb = unsafe { sym::<extern "C" fn(i32, *mut u32)>(b"glGenFramebuffers\0") }?;
+    let gen_rb = unsafe { sym::<extern "C" fn(i32, *mut u32)>(b"glGenRenderbuffers\0") }?;
+    let bind_rb = unsafe { sym::<extern "C" fn(u32, u32)>(b"glBindRenderbuffer\0") }?;
+    let storage = unsafe { sym::<extern "C" fn(u32, u32, i32, i32)>(b"glRenderbufferStorage\0") }?;
+    let attach =
+        unsafe { sym::<extern "C" fn(u32, u32, u32, u32)>(b"glFramebufferRenderbuffer\0") }?;
+    let status = unsafe { sym::<extern "C" fn(u32) -> u32>(b"glCheckFramebufferStatus\0") }?;
+
+    let (mut fb, mut rb) = (0u32, 0u32);
+    gen_fb(1, &mut fb);
+    gen_rb(1, &mut rb);
+    if fb == 0 || rb == 0 {
+        return None;
+    }
+    bind_rb(GL_RENDERBUFFER, rb);
+    storage(GL_RENDERBUFFER, GL_RGBA8, THUMB_W, THUMB_H);
+    bind_rb(GL_RENDERBUFFER, 0);
+    let prev = unsafe { get_integer(GL_DRAW_FRAMEBUFFER_BINDING) };
+    unsafe { bind_framebuffer(GL_DRAW_FRAMEBUFFER, fb as i32) };
+    attach(
+        GL_DRAW_FRAMEBUFFER,
+        GL_COLOR_ATTACHMENT0,
+        GL_RENDERBUFFER,
+        rb,
+    );
+    let complete = status(GL_DRAW_FRAMEBUFFER);
+    unsafe { bind_framebuffer(GL_DRAW_FRAMEBUFFER, prev) };
+    if complete != GL_FRAMEBUFFER_COMPLETE {
+        tracing::warn!("thumbnail framebuffer incomplete (0x{complete:x}); no scrollback previews");
+        return None;
+    }
+    Some(fb)
 }
 
 unsafe fn clear_black() {
