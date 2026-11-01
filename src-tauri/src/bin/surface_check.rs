@@ -263,9 +263,9 @@ fn verdict(
 /// scrollback thumbnails taken.
 ///
 /// With `ZAPPER_SHOTS=<dir>`, `screencapture` takes the screen full-size,
-/// docked and at the end, for a person to look at: macOS composites the
-/// layer and the webview itself, so a screenshot is the real thing rather
-/// than a reconstruction.
+/// docked, in native fullscreen and at the end, for a person to look at:
+/// macOS composites the layer and the webview itself, so a screenshot is the
+/// real thing rather than a reconstruction.
 #[cfg(target_os = "macos")]
 fn main() {
     use std::cell::Cell;
@@ -319,6 +319,7 @@ fn main() {
             .ok_or_else(|| anyhow::anyhow!("no player after install"))??;
             macos::sample_centre(true);
 
+            let fullscreen = window.clone();
             let t = Rc::new(Cell::new(0u32));
             surface::repeat_on_main(Duration::from_secs(1), move || {
                 let n = t.get() + 1;
@@ -337,6 +338,21 @@ fn main() {
                 }
                 if n == seconds / 2 + 3 {
                     shot("docked");
+                }
+                // Native fullscreen, as the green button and F ask for it: the
+                // interface drops its title bar and the stage takes the
+                // screen. Back out well before the verdict, which measures
+                // the docked view against the window.
+                if n == seconds / 2 + 5 {
+                    if let Err(e) = fullscreen.set_fullscreen(true) {
+                        eprintln!("fullscreen: {e}");
+                    }
+                }
+                if n == seconds / 2 + 9 {
+                    shot("fullscreen");
+                    if let Err(e) = fullscreen.set_fullscreen(false) {
+                        eprintln!("leaving fullscreen: {e}");
+                    }
                 }
                 if n >= seconds {
                     match verdict() {
