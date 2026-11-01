@@ -59,6 +59,11 @@ package:
     fi
     # Old packages first, so the globs below match only this build's.
     rm -f src-tauri/target/release/bundle/deb/zapper_*.deb src-tauri/target/release/bundle/rpm/zapper-*.rpm
+    # The license notices the packages ship (docs/licensing.md): the Rust crates' and the .deb's
+    # copyright file into src-tauri/target/licenses, unless Cargo.lock, the manifest, about.toml
+    # and LICENSE are as they were for the last ones; the interface's come from the UI build
+    # `tauri build` runs. Either fails the build on a license outside about.toml's allow-list.
+    scripts/licenses.sh --if-changed
     npx tauri build --bundles deb,rpm
     deb=(src-tauri/target/release/bundle/deb/zapper_*.deb)
     [ ${#deb[@]} = 1 ] || { echo "package: expected one .deb, found: ${deb[*]}" >&2; exit 1; }
@@ -67,11 +72,23 @@ package:
     ls -l src-tauri/target/release/bundle/deb/zapper_*.deb src-tauri/target/release/bundle/rpm/zapper-*.rpm
 
 # On Windows (builds; not yet tested on screen or released): the NSIS installer and the MSI,
-# with the install-kind markers the updater reads (packaging/windows/).
+# with the install-kind markers the updater reads and the license notices in licenses\ beside
+# zapper.exe (packaging/windows/). The notices come from scripts/licenses.sh run by Git for
+# Windows' bash, with Windows' crate graph; it needs cargo-about and Python.
 package-windows:
+    $env:PYTHON = 'python'; & "$env:ProgramFiles\Git\bin\bash.exe" scripts/licenses.sh --if-changed; if ($LASTEXITCODE) { exit $LASTEXITCODE }
     npx tauri build --config packaging/windows/installers.conf.json
 
-# On macOS (NOT SUPPORTED YET): zapper.app and the .dmg, with the install-kind marker in
-# Contents/Resources (packaging/macos/dmg.conf.json).
+# On macOS (NOT SUPPORTED YET): zapper.app and the .dmg, with the install-kind marker and the
+# license notices in Contents/Resources (packaging/macos/dmg.conf.json).
 package-macos:
+    scripts/licenses.sh --if-changed
     npx tauri build --config packaging/macos/dmg.conf.json
+
+# The third-party license notices the packages ship (docs/licensing.md): the Rust crates' into
+# src-tauri/target/licenses (scripts/licenses.sh, needs cargo-about), then the UI build, which
+# writes dist/licenses/ with the interface's and copies the rest in beside it for Settings >
+# About. Fails on a license outside the allow-list in about.toml. `just package` runs the same.
+licenses:
+    scripts/licenses.sh
+    npm run build

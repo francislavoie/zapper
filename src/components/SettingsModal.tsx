@@ -27,6 +27,7 @@ import { VOLUME_MAX } from "../logic/volume";
 import { kindLabel, statusLine as updateStatusLine } from "../logic/updates";
 import { checkForUpdates } from "../actions";
 import { run, useApp, useDispatch } from "../store";
+import { AboutPane } from "./AboutPane";
 import { AccountPane } from "./AccountPane";
 import type { SubtitleBackdrop } from "../types";
 
@@ -415,13 +416,7 @@ export function SettingsModal() {
 
           {section === "Keyboard" ? <KeyboardPane /> : null}
 
-          {section === "About" ? (
-            <p>
-              zapper — a live TV player, 60,000 channels, one
-              connection. Video is drawn by mpv beneath this window, not
-              by the browser engine.
-            </p>
-          ) : null}
+          {section === "About" ? <AboutPane /> : null}
         </div>
       </div>
     </div>

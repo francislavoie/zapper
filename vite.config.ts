@@ -1,8 +1,12 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { licenseNotices } from "./tools/licenses.mjs";
 
 export default defineConfig({
-  plugins: [react()],
+  // licenseNotices: the production build writes dist/licenses/ (the npm packages' notices, with
+  // zapper's LICENSE, libmpv's notice and the Rust crates' beside them) for Settings > About and
+  // the packages, and fails on a license outside about.toml's allow-list. docs/licensing.md.
+  plugins: [react(), licenseNotices()],
   clearScreen: false,
   server: {
     port: 5180,

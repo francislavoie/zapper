@@ -1,7 +1,12 @@
 {
   "bundle": {
     "resources": {
-      "../packaging/install-kind-msi": "install-kind"
+      "../packaging/install-kind-msi": "install-kind",
+      "../LICENSE": "licenses/LICENSE.txt",
+      "../packaging/licenses/MPV-FFMPEG-NOTICE.txt": "licenses/MPV-FFMPEG-NOTICE.txt",
+      "../packaging/licenses/GPL-3.0.txt": "licenses/GPL-3.0.txt",
+      "target/licenses/THIRD-PARTY-NOTICES-rust.txt": "licenses/THIRD-PARTY-NOTICES-rust.txt",
+      "../dist/licenses/THIRD-PARTY-NOTICES-ui.txt": "licenses/THIRD-PARTY-NOTICES-ui.txt"
     },
     "windows": {
       "nsis": {

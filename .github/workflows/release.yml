@@ -40,6 +40,8 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # Keep in step with scripts/licenses.sh's install hint and docs/licensing.md.
+  CARGO_ABOUT_VERSION: 0.9.2
 
 jobs:
   plan:
@@ -162,9 +164,11 @@ jobs:
           key: release
           save-if: 'false'
 
+      # just, and cargo-about for the license notices `just package` generates
+      # (scripts/licenses.sh, docs/licensing.md).
       - uses: taiki-e/install-action@183e4297cca2404691e9380e1307288dced5c82a # v2.87.25
         with:
-          tool: just
+          tool: just,cargo-about@${{ env.CARGO_ABOUT_VERSION }}
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -242,6 +246,18 @@ jobs:
       - name: Fetch libmpv
         run: ./tools/fetch-libmpv.ps1 -Tag 20261101
 
+      # The license notices the installers carry in licenses\ (docs/licensing.md): the Rust
+      # crates' from Windows' graph, in Git for Windows' bash. The UI build `tauri build` runs
+      # writes the interface's, and the GPL's text for libmpv-2.dll.
+      - uses: taiki-e/install-action@183e4297cca2404691e9380e1307288dced5c82a # v2.87.25
+        with:
+          tool: cargo-about@${{ env.CARGO_ABOUT_VERSION }}
+      - name: License notices
+        shell: bash
+        env:
+          PYTHON: python
+        run: scripts/licenses.sh
+
       # The NSIS installer and the MSI, with the install-kind markers (packaging/windows/).
       - name: Build the installers
         run: |
@@ -300,6 +316,14 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci
+
+      # The license notices zapper.app carries in Contents/Resources/licenses (docs/licensing.md),
+      # the Rust crates' from this Mac's graph.
+      - uses: taiki-e/install-action@183e4297cca2404691e9380e1307288dced5c82a # v2.87.25
+        with:
+          tool: cargo-about@${{ env.CARGO_ABOUT_VERSION }}
+      - name: License notices
+        run: scripts/licenses.sh
 
       # zapper.app with install-kind = dmg in Contents/Resources, and the .dmg holding it.
       - name: Build the disk image

@@ -1,0 +1,7 @@
+{
+  "_comment": [
+    "Reviewed exceptions to the license allow-list in ../about.toml, for the npm packages in the interface bundle (tools/licenses.mjs, docs/licensing.md).",
+    "packages: a license for a bundled npm package whose package.json declares none, read from its license file by hand: { \"<name>\": { \"license\": \"<SPDX id>\", \"reason\": \"...\" } }. None is needed today."
+  ],
+  "packages": {}
+}

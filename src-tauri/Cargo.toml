@@ -2,6 +2,7 @@
 name = "zapper"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
 publish = false
 # Verification harnesses live alongside the app, so a bare `cargo run`
 # (which is what `tauri dev` issues) cannot tell which to launch.

@@ -2,7 +2,11 @@
   "bundle": {
     "targets": ["app", "dmg"],
     "resources": {
-      "../packaging/install-kind-dmg": "install-kind"
+      "../packaging/install-kind-dmg": "install-kind",
+      "../LICENSE": "licenses/LICENSE.txt",
+      "../packaging/licenses/MPV-FFMPEG-NOTICE.txt": "licenses/MPV-FFMPEG-NOTICE.txt",
+      "target/licenses/THIRD-PARTY-NOTICES-rust.txt": "licenses/THIRD-PARTY-NOTICES-rust.txt",
+      "../dist/licenses/THIRD-PARTY-NOTICES-ui.txt": "licenses/THIRD-PARTY-NOTICES-ui.txt"
     }
   }
 }

@@ -36,6 +36,8 @@
       "icons/icon.png"
     ],
     "category": "Video",
+    "license": "MIT",
+    "copyright": "© 2026 Francis Lavoie",
     "shortDescription": "A fast Xtream live-TV client",
     "longDescription": "A live-TV client for Xtream Codes panels: instant channel switching, a full guide, catch-up, and a picture that keeps playing while you browse.",
     "linux": {
@@ -47,7 +49,12 @@
           "libgtk-3-0"
         ],
         "files": {
-          "/usr/lib/zapper/install-kind": "../packaging/install-kind-deb"
+          "/usr/lib/zapper/install-kind": "../packaging/install-kind-deb",
+          "/usr/share/doc/zapper/copyright": "target/licenses/copyright",
+          "/usr/share/doc/zapper/LICENSE": "../LICENSE",
+          "/usr/share/doc/zapper/MPV-FFMPEG-NOTICE.txt": "../packaging/licenses/MPV-FFMPEG-NOTICE.txt",
+          "/usr/share/doc/zapper/THIRD-PARTY-NOTICES-rust.txt": "target/licenses/THIRD-PARTY-NOTICES-rust.txt",
+          "/usr/share/doc/zapper/THIRD-PARTY-NOTICES-ui.txt": "../dist/licenses/THIRD-PARTY-NOTICES-ui.txt"
         }
       },
       "rpm": {
@@ -58,7 +65,11 @@
           "libgtk-3.so.0()(64bit)"
         ],
         "files": {
-          "/usr/lib/zapper/install-kind": "../packaging/install-kind-rpm"
+          "/usr/lib/zapper/install-kind": "../packaging/install-kind-rpm",
+          "/usr/share/licenses/zapper/LICENSE": "../LICENSE",
+          "/usr/share/licenses/zapper/MPV-FFMPEG-NOTICE.txt": "../packaging/licenses/MPV-FFMPEG-NOTICE.txt",
+          "/usr/share/licenses/zapper/THIRD-PARTY-NOTICES-rust.txt": "target/licenses/THIRD-PARTY-NOTICES-rust.txt",
+          "/usr/share/licenses/zapper/THIRD-PARTY-NOTICES-ui.txt": "../dist/licenses/THIRD-PARTY-NOTICES-ui.txt"
         }
       }
     }

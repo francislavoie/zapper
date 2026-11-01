@@ -9,6 +9,7 @@
 #     (src-tauri/Cargo.toml, [features]);
 #   - /usr/lib/zapper/install-kind saying `deb`: without it the updater thinks the install is a
 #     build from source and never offers to update it;
+#   - the license notices in /usr/share/doc/zapper/, none empty (docs/licensing.md);
 #   - one desktop entry, with StartupWMClass=zapper (the window's app_id, src-tauri/src/lib.rs),
 #     valid by desktop-file-validate when that is installed.
 set -euo pipefail
@@ -33,6 +34,14 @@ bins=$(grep -E '^/usr/bin/[^/]+$' <<<"$contents" || true)
 
 kind=$(dpkg-deb --fsys-tarfile "$deb" | tar -xO --wildcards '*usr/lib/zapper/install-kind' 2>/dev/null) || true
 [ "$kind" = deb ] || fail "/usr/lib/zapper/install-kind isn't 'deb': '$kind'"
+
+# The license notices (docs/licensing.md), each there and not empty: scripts/licenses.sh and the
+# UI build make them, tauri.conf.json's files map puts them here.
+sizes=$(dpkg-deb -c "$deb" | awk '{ print $3, $NF }' | sed 's| \./| /|')
+for f in copyright LICENSE MPV-FFMPEG-NOTICE.txt THIRD-PARTY-NOTICES-rust.txt THIRD-PARTY-NOTICES-ui.txt; do
+  size=$(awk -v p="/usr/share/doc/zapper/$f" '$2 == p { print $1 }' <<<"$sizes")
+  [ -n "$size" ] && [ "$size" -gt 0 ] || fail "/usr/share/doc/zapper/$f is missing or empty"
+done
 
 meta=$(mktemp -d); trap 'rm -rf "$meta"' EXIT
 dpkg-deb --fsys-tarfile "$deb" | tar -x -C "$meta" --wildcards '*usr/share/applications/*' 2>/dev/null || true

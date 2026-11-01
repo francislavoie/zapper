@@ -2620,6 +2620,166 @@ button.prog:hover {
   justify-content: flex-end;
 }
 
+/* The palette's About, showing the licenses: as big as the settings dialog,
+   so the list and the text have the same room in either place. */
+.about.wide {
+  width: min(51.25rem, 100%);
+  height: min(35rem, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+/* The About pane (AboutPane.tsx), in Settings and in the dialog above: the
+   name and version as one line, then plain sentences, then the way in to the
+   licenses. */
+.about-id {
+  display: flex;
+  align-items: baseline;
+  gap: 0.625rem;
+  margin-bottom: 0.25rem;
+}
+
+.about-name {
+  font-size: 1.25rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.about-version {
+  color: var(--dim);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.about-pane p {
+  color: var(--dim);
+  font-size: 0.75rem;
+  max-width: 52ch;
+}
+
+.about-pane p.about-license {
+  color: var(--text);
+}
+
+.about-pane-actions {
+  margin-top: 0.875rem;
+}
+
+/* The licenses view takes the whole dialog, the section list folded away
+   until Back: the notices are set at 80 columns, and beside both lists they
+   wrapped every line in two. Within it, the list and the text scroll on their
+   own: the pane scrolling as a whole would carry the list away with a long
+   notice. */
+.settings:has(.about-licenses) .settings-side {
+  display: none;
+}
+
+.settings-body:has(.about-licenses) {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+}
+
+.about-licenses {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+}
+
+.about-licenses-head {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.about-licenses-head h4 {
+  margin: 0;
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.licenses {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  gap: 0.75rem;
+}
+
+.licenses-list {
+  flex: 0 0 11rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-y: auto;
+}
+
+.licenses-list button {
+  display: flex;
+  flex-direction: column;
+  gap: 0.0625rem;
+  width: 100%;
+  padding: 0.3125rem 0.5rem;
+  text-align: left;
+  border-radius: 0.3125rem;
+  color: var(--text);
+}
+
+.licenses-list button:hover {
+  background: var(--bg-3);
+}
+
+.licenses-list button.sel {
+  background: var(--accent-dim);
+}
+
+.licenses-label,
+.licenses-detail {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.75rem;
+}
+
+.licenses-detail {
+  color: var(--dim);
+  font-size: 0.6875rem;
+}
+
+.licenses-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  padding: 0.5rem 0.625rem;
+  overflow: auto;
+  font: 0.6875rem/1.45 ui-monospace, "DejaVu Sans Mono", monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 0.375rem;
+}
+
+.licenses-text:focus-visible {
+  outline: 1px solid var(--accent);
+}
+
+.licenses-missing {
+  color: var(--dim);
+  font-size: 0.75rem;
+  max-width: 52ch;
+}
+
+.licenses-missing code {
+  font: 0.6875rem ui-monospace, "DejaVu Sans Mono", monospace;
+  color: var(--text);
+}
+
 .settings {
   width: min(51.25rem, 100%);
   /* The height it wants, capped at the screen. Both panes below already

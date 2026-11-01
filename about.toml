@@ -1,0 +1,48 @@
+# cargo-about's configuration for the Rust notices (scripts/licenses.sh, `just licenses`).
+#
+# `accepted` is zapper's license allow-list, for the Rust crates and (read from this file by
+# tools/licenses.mjs) the npm packages in the UI bundle alike. A dependency under any other
+# license fails the build, so a copyleft (GPL, LGPL, AGPL) or unknown license never ships
+# unnoticed: review it, then add it here or drop the dependency. For a choice ("MIT OR
+# Apache-2.0") the first accepted license in this list's order is used.
+accepted = [
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "0BSD",
+  "Zlib",
+  # Weak, file-level copyleft: fine alongside MIT code as long as the covered files stay under it and
+  # their source stays available.
+  "MPL-2.0",
+  "EPL-2.0",
+  "Unicode-3.0",
+  "Unicode-DFS-2016",
+  "OFL-1.1",
+  "CC0-1.0",
+  "BSL-1.0",
+  "Unlicense",
+  "CDLA-Permissive-2.0",
+]
+# The app's graph only: what zapper links on Linux, not dev-only, build-time or harness crates
+# (scripts/licenses.sh passes Windows' or macOS's target when it runs there).
+targets = ["x86_64-unknown-linux-gnu"]
+ignore-build-dependencies = true
+ignore-dev-dependencies = true
+private = { ignore = true }
+# cargo-about's built-in clarification of rustls's license files.
+workarounds = ["rustls"]
+
+# The libmpv bindings, the one exception to the list above: LGPL-2.1, accepted for these two crates
+# alone, never in general. They are compiled into zapper's binary, which the LGPL allows as long as
+# whoever gets the binary can rebuild it against a modified copy of them: zapper's own source is
+# public (MIT), and theirs is on crates.io (docs/licensing.md). THIRD-PARTY-NOTICES-rust.txt
+# carries the LGPL's text with them. libmpv itself is a separate shared library, under its own
+# terms (packaging/licenses/MPV-FFMPEG-NOTICE.txt).
+[libmpv2]
+accepted = ["LGPL-2.1"]
+
+[libmpv2-sys]
+accepted = ["LGPL-2.1"]

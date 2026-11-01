@@ -3,7 +3,8 @@
 #
 # The release scripts, on throwaway copies: the version rules and their order, the changelog's
 # release and notes, set-version on copies of the real files (only the versions change), the
-# placeholder repository refused by release.sh, and fix-deb/check-deb on a small fake .deb.
+# placeholder repository refused by release.sh, fix-deb/check-deb on a small fake .deb, and the
+# license helpers in notices.py.
 # Nothing here touches the repository's own files, its tags or the network.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
@@ -73,7 +74,10 @@ esac
 # --- fix-deb.sh and check-deb.sh, on a tiny .deb shaped like Tauri's
 if command -v dpkg-deb >/dev/null; then
   pkg=$tmp/pkg
-  mkdir -p "$pkg/DEBIAN" "$pkg/usr/bin" "$pkg/usr/lib/zapper" "$pkg/usr/share/applications"
+  mkdir -p "$pkg/DEBIAN" "$pkg/usr/bin" "$pkg/usr/lib/zapper" "$pkg/usr/share/applications" "$pkg/usr/share/doc/zapper"
+  for f in copyright LICENSE MPV-FFMPEG-NOTICE.txt THIRD-PARTY-NOTICES-rust.txt THIRD-PARTY-NOTICES-ui.txt; do
+    printf 'notice\n' > "$pkg/usr/share/doc/zapper/$f"
+  done
   printf '#!/bin/sh\n' > "$pkg/usr/bin/zapper"; chmod 755 "$pkg/usr/bin/zapper"
   cp "$root/packaging/install-kind-deb" "$pkg/usr/lib/zapper/install-kind"
   printf '[Desktop Entry]\nType=Application\nName=zapper\nExec=zapper\nIcon=zapper\nCategories=AudioVideo;Video;\nStartupWMClass=zapper\n' > "$pkg/usr/share/applications/zapper.desktop"
@@ -90,6 +94,30 @@ if command -v dpkg-deb >/dev/null; then
   printf 'rpm\n' > "$pkg/usr/lib/zapper/install-kind"
   dpkg-deb --root-owner-group --build "$pkg" "$tmp/wrong.deb" >/dev/null
   ! "$here/check-deb.sh" "$tmp/wrong.deb" >/dev/null 2>&1 || fail "check-deb must refuse a .deb whose marker isn't deb"; ok
+  printf 'deb\n' > "$pkg/usr/lib/zapper/install-kind"
+  : > "$pkg/usr/share/doc/zapper/THIRD-PARTY-NOTICES-ui.txt"
+  dpkg-deb --root-owner-group --build "$pkg" "$tmp/nonotice.deb" >/dev/null
+  ! "$here/check-deb.sh" "$tmp/nonotice.deb" >/dev/null 2>&1 || fail "check-deb must refuse a .deb with an empty notice"; ok
 fi
+
+# --- notices.py: the .deb's copyright file from LICENSE, and the Rust notices from a small
+# cargo-about report with an LGPL crate (which gets its source address).
+python3 "$here/notices.py" copyright "$root/LICENSE" "$tmp/copyright"
+grep -qx 'Copyright: 2026 Francis Lavoie' "$tmp/copyright" || fail "copyright: no Copyright line"; ok
+grep -qx 'License: MIT' "$tmp/copyright" || fail "copyright: no License: MIT"; ok
+cat > "$tmp/about.json" <<'EOF'
+{"licenses": [
+  {"id": "MIT", "text": "MIT License\n\nCopyright (c) 2020 A\n\nPermission is hereby granted.", "source_path": "LICENSE-MIT",
+   "used_by": [{"crate": {"name": "a", "version": "1.0.0", "authors": ["A <a@a>"]}}]},
+  {"id": "LGPL-2.1", "text": "GNU LESSER GENERAL PUBLIC LICENSE\nCopyright (C) 1991, 1999 Free Software Foundation, Inc.\nterms", "source_path": "LICENSE",
+   "used_by": [{"crate": {"name": "libmpv2", "version": "7.0.0", "authors": ["kohsine"], "repository": "https://github.com/kohsine/libmpv-rs"}}]}
+]}
+EOF
+ZAPPER_REPO=me/zapper python3 "$here/notices.py" rust "$tmp/about.json" "$tmp/rust.txt"
+grep -q '^  Copyright (c) 2020 A$' "$tmp/rust.txt" || fail "rust notices: the crate's copyright line"; ok
+grep -q 'Free Software Foundation' "$tmp/rust.txt" && ! grep -q '^  Copyright (C) 1991' "$tmp/rust.txt" ||
+  fail "rust notices: the LGPL's own copyright stays in its text, not under the crate"; ok
+grep -q '^  crate: https://crates.io/crates/libmpv2/7.0.0$' "$tmp/rust.txt" || fail "rust notices: the LGPL crate's source"; ok
+grep -q 'https://github.com/me/zapper' "$tmp/rust.txt" || fail "rust notices: zapper's own source"; ok
 
 echo "test-scripts: $n checks passed"
