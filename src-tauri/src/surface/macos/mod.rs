@@ -68,6 +68,8 @@ const GL_DRAW_FRAMEBUFFER_BINDING: u32 = 0x8CA6;
 const GL_VIEWPORT: u32 = 0x0BA2;
 const GL_RGBA: u32 = 0x1908;
 const GL_UNSIGNED_BYTE: u32 = 0x1401;
+const GL_RENDERER: u32 = 0x1F01;
+const GL_VERSION: u32 = 0x1F02;
 
 thread_local! {
     /// The installed views and layer, on the main thread.
@@ -380,7 +382,12 @@ define_class!(
                 return pf;
             }
             tracing::warn!("no OpenGL 3.2 core pixel format; falling back to Core Animation's");
-            unsafe { msg_send![super(self), copyCGLPixelFormatForDisplayMask: mask] }
+            let pf: CGLPixelFormatObj =
+                unsafe { msg_send![super(self), copyCGLPixelFormatForDisplayMask: mask] };
+            if pf.is_null() {
+                tracing::error!("no OpenGL pixel format at all; the video layer cannot draw");
+            }
+            pf
         }
 
         #[unsafe(method(drawInCGLContext:pixelFormat:forLayerTime:displayTime:))]
@@ -412,27 +419,48 @@ impl VideoLayer {
     }
 }
 
+/// An OpenGL 3.2 core pixel format for the displays in `mask`: a hardware
+/// renderer if there is one, otherwise any renderer that has the profile.
+///
+/// The second is not a theoretical case. A Mac with no GPU of its own to
+/// offer (a virtual machine, a CI runner) has only Apple's software
+/// renderer, which drives no display in particular and is not
+/// "accelerated", so asking for either finds nothing.
 fn core_profile(mask: u32) -> Option<CGLPixelFormatObj> {
-    let attrs = [
-        CGLPixelFormatAttribute::CGLPFAOpenGLProfile.0,
+    use CGLPixelFormatAttribute as A;
+    let core = [
+        A::CGLPFAOpenGLProfile.0,
         CGLOpenGLProfile::CGLOGLPVersion_3_2_Core.0,
-        CGLPixelFormatAttribute::CGLPFAAccelerated.0,
-        CGLPixelFormatAttribute::CGLPFADoubleBuffer.0,
-        CGLPixelFormatAttribute::CGLPFAAllowOfflineRenderers.0,
-        CGLPixelFormatAttribute::CGLPFADisplayMask.0,
-        mask,
-        0,
     ];
-    let mut pf: CGLPixelFormatObj = std::ptr::null_mut();
-    let mut n: i32 = 0;
-    let err = unsafe {
-        CGLChoosePixelFormat(
-            NonNull::new(attrs.as_ptr() as *mut CGLPixelFormatAttribute)?,
-            NonNull::from(&mut pf),
-            NonNull::from(&mut n),
-        )
-    };
-    (err == CGLError::NoError && !pf.is_null()).then_some(pf)
+    let hardware = [
+        A::CGLPFAAccelerated.0,
+        A::CGLPFADoubleBuffer.0,
+        A::CGLPFAAllowOfflineRenderers.0,
+        A::CGLPFADisplayMask.0,
+        mask,
+    ];
+    let any = [A::CGLPFADoubleBuffer.0, A::CGLPFAAllowOfflineRenderers.0];
+    for (what, rest) in [("hardware", &hardware[..]), ("any renderer", &any[..])] {
+        let attrs: Vec<u32> = core.iter().chain(rest).copied().chain([0]).collect();
+        let mut pf: CGLPixelFormatObj = std::ptr::null_mut();
+        let mut n: i32 = 0;
+        let err = unsafe {
+            CGLChoosePixelFormat(
+                NonNull::new(attrs.as_ptr() as *mut CGLPixelFormatAttribute)?,
+                NonNull::from(&mut pf),
+                NonNull::from(&mut n),
+            )
+        };
+        if err == CGLError::NoError && !pf.is_null() {
+            tracing::info!("OpenGL 3.2 core pixel format: {what} ({n} screens)");
+            return Some(pf);
+        }
+        tracing::info!(
+            "no OpenGL 3.2 core pixel format with {what}: CGL error {}",
+            err.0
+        );
+    }
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -491,7 +519,11 @@ fn draw() {
             }
         }
         if !TARGET_LOGGED.swap(true, Ordering::AcqRel) {
-            tracing::info!("mpv render target: Core Animation FBO {fbo} at {w}x{h}");
+            let renderer = unsafe { gl_string(GL_RENDERER) };
+            let version = unsafe { gl_string(GL_VERSION) };
+            tracing::info!(
+                "mpv render target: Core Animation FBO {fbo} at {w}x{h}, {renderer}, OpenGL {version}"
+            );
         }
         let rendered = slot.as_ref().unwrap().render::<()>(fbo, w, h, FLIP_Y);
         // mpv leaves its own framebuffer bound; Core Animation's must be the
@@ -537,7 +569,9 @@ unsafe fn sample(w: i32, h: i32) {
     );
     // Alpha is skipped: an opaque black surface has alpha 255.
     let brightest = buf
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .flat_map(|px| px[..3].iter().copied())
         .max()
         .unwrap_or(0);
@@ -584,6 +618,21 @@ unsafe fn get_integers(pname: u32, out: &mut [i32]) {
     if let Some(f) = unsafe { sym::<extern "C" fn(u32, *mut i32)>(b"glGetIntegerv\0") } {
         f(pname, out.as_mut_ptr());
     }
+}
+
+/// `glGetString`, for the log. Requires a current context.
+unsafe fn gl_string(name: u32) -> String {
+    let get = unsafe { sym::<extern "C" fn(u32) -> *const std::ffi::c_char>(b"glGetString\0") };
+    let Some(get) = get else {
+        return "?".to_owned();
+    };
+    let p = get(name);
+    if p.is_null() {
+        return "?".to_owned();
+    }
+    unsafe { std::ffi::CStr::from_ptr(p) }
+        .to_string_lossy()
+        .into_owned()
 }
 
 unsafe fn bind_framebuffer(fbo: i32) {
