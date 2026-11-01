@@ -407,10 +407,16 @@ jobs:
       - name: Verify and merge SHA256SUMS
         run: |
           mkdir dist
-          mv parts/zapper-*-linux/release-notes.md dist/
-          for part in parts/*/; do
+          # One folder per job's artifact, except when the run has only one: then the artifact is
+          # unpacked straight into parts/. Each job's files sit beside its own SHA256SUMS, so go
+          # by those wherever they are.
+          notes=$(find parts -name release-notes.md)
+          [ "$(wc -l <<<"$notes")" = 1 ] && [ -n "$notes" ] || { echo "::error::expected one release-notes.md, found: $notes"; exit 1; }
+          mv "$notes" dist/
+          find parts -name SHA256SUMS | while read -r sums; do
+            part=$(dirname "$sums")
             (cd "$part" && sha256sum -c SHA256SUMS)
-            cat "$part/SHA256SUMS" >> dist/SHA256SUMS
+            cat "$sums" >> dist/SHA256SUMS
             find "$part" -maxdepth 1 -type f ! -name SHA256SUMS -exec mv {} dist/ \;
           done
           (cd dist && sha256sum -c SHA256SUMS && cat SHA256SUMS)
