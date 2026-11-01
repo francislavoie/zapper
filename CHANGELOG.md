@@ -52,6 +52,8 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
 
 ### Fixed
 
+- An Xtream server's guide download cut off partway no longer replaces part of the guide with what
+  had arrived: the guide stays as it was until a download completes, and the failure is logged.
 - After a sync — the first one, or Refresh data from the provider — the categories, channel list
   and guide now show the new data straight away instead of after a restart.
 - Windows: a channel whose server can't be reached, or whose stream stalls, is now recognised as a
