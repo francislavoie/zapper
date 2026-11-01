@@ -104,10 +104,12 @@ the record (the job summary says how each went) and in the bundled app's screens
 - **The window by hand.** Dragging it by the bar, the double click (whichever action System
   Settings names), the traffic lights, resizing from the edges, the green button's tiling
   menu, full screen with a pointer that reveals the menu bar, Mission Control. CI only sees
-  screenshots of the bar and of full screen set from code.
-- **The keyboard by hand.** ⌘ for every shortcut, ⌃ letting them be, and the Edit menu's ⌘C,
-  ⌘V and ⌘A in the search box and Settings, as far as CI could not type them (the run's
-  summary says whether it could).
+  screenshots of the bar and of full screen. On the runner, a window resized from code came
+  back from full screen at its first size; whether a window resized by hand keeps its size
+  through full screen wants checking.
+- **The keyboard by hand.** ⌘ for every shortcut and ⌃ letting them be. CI types ⌘V into the
+  search box, ⌘, ⌃⌘F and ⌘Q through System Events (the run's summary says whether ⌘Q quit),
+  but not ⌘C, ⌘A or anything in Settings' fields.
 - **First launch.** Ad-hoc signed and not notarized, so Gatekeeper asks before it opens
   (Control-click, Open), and quarantine applies to a downloaded `.dmg`.
 - **Updates.** The updater's `.dmg` install (mount, swap the bundle) has tests but has never run.
