@@ -124,6 +124,10 @@ jobs:
         working-directory: src-tauri
         run: cargo clippy --lib --bins -q -- -D warnings
 
+      - name: Clippy (harnesses)
+        working-directory: src-tauri
+        run: cargo clippy --lib --bins --features harness -q -- -D warnings
+
       - name: zapper-server
         working-directory: src-tauri
         run: cargo build --release --no-default-features --features server --bin zapper-server
@@ -200,4 +204,51 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           compression-level: 0
+          overwrite: true
+
+      # Playback on screen: the runners have a window server. A local test stream
+      # (tools/make_fixtures.sh, served by tools/fake_stream.py), never a provider, and no sound
+      # (ao=null). ffmpeg's command-line tool makes the fixtures and is not part of anything built.
+      - name: Test streams
+        run: |
+          brew install --quiet ffmpeg
+          tools/make_fixtures.sh
+          python3 tools/fake_stream.py --port 8788 > fixtures.log 2>&1 &
+          for _ in $(seq 20); do curl -sf --max-time 2 http://127.0.0.1:8788/ >/dev/null && break; sleep 1; done
+          curl -sf --max-time 2 http://127.0.0.1:8788/ | grep '\.ts'
+
+      # The surface harness against the fixture: the layer draws, mpv paints, the picture is not
+      # black, the rect docks the view, thumbnails are taken. Built against the interface the app
+      # embeds (tauri/custom-protocol), so its screenshots show the page over the video.
+      - name: Surface check
+        working-directory: src-tauri
+        run: |
+          mkdir -p ../shots
+          CARGO_BUILD_JOBS=$(sysctl -n hw.ncpu) cargo build --release --features harness,tauri/custom-protocol --bin surface_check
+          ZAPPER_SHOTS=$PWD/../shots ./target/release/surface_check 20 2>&1 | tee ../shots/surface_check.log
+          grep -q '^PASS' ../shots/surface_check.log
+
+      # The app itself, from the bundle, playing the fixture (ZAPPER_AUTOPLAY on a scratch
+      # account, ZAPPER_MUTE): a screenshot of the real interface over real video.
+      - name: The app, playing
+        run: |
+          app=src-tauri/target/release/bundle/macos/zapper.app/Contents/MacOS/zapper
+          ZAPPER_MUTE=1 ZAPPER_AUTOPLAY=1 ZAPPER_FIXTURE_BASE=http://127.0.0.1:8788 \
+            ZAPPER_FIXTURE_NAME=sample1080.ts "$app" > shots/app.log 2>&1 &
+          pid=$!
+          sleep 15
+          screencapture -x shots/app-playing.png
+          kill -0 "$pid" || { echo "::error::the app exited"; tail -40 shots/app.log; exit 1; }
+          kill "$pid"
+          ! grep -E 'panicked at|CAPTURE FAILED|creating mpv render context' shots/app.log
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: macos-screenshots
+          path: |
+            shots/
+            fixtures.log
+          if-no-files-found: ignore
+          retention-days: 14
           overwrite: true
