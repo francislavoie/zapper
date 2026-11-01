@@ -19,7 +19,8 @@ It's built with a Rust core, a React interface and [Tauri](https://tauri.app/), 
 ![zapper's browse view: a football match playing in the picture at the top right, the playing channel's now and next programmes beside it, and below, the category list on the left with the guide's timeline of what's on across the sports channels](docs/images/screenshot.webp)
 
 > **Status:** used day to day on Linux. Windows builds and runs; its installers aren't published
-> yet. macOS isn't supported yet.
+> yet. macOS (Apple Silicon) builds and plays in CI, but hasn't been tried on a real Mac or
+> released yet.
 
 ## Platforms
 
@@ -27,7 +28,7 @@ It's built with a Rust core, a React interface and [Tauri](https://tauri.app/), 
 |---|---|
 | Linux | Supported: `.deb`, `.rpm` and Arch Linux packages |
 | Windows | Builds and runs (10 and 11); installers not published yet |
-| macOS | Not supported yet |
+| macOS | Apple Silicon: builds, packages (`.dmg`) and plays in CI; not yet tried on a real Mac or released ([docs/macos.md](docs/macos.md)) |
 
 ## Installing
 
@@ -175,14 +176,16 @@ just package       # build the .deb and .rpm
 just licenses      # regenerate the third-party license notices
 ```
 
-[docs/windows.md](docs/windows.md) covers building on Windows, and
-[docs/releasing.md](docs/releasing.md) cutting a release.
+[docs/windows.md](docs/windows.md) covers building on Windows, [docs/macos.md](docs/macos.md)
+on macOS, and [docs/releasing.md](docs/releasing.md) cutting a release.
 
 ## Documentation
 
 - [docs/recording.md](docs/recording.md): the recording service, its settings and its API
 - [docs/releasing.md](docs/releasing.md): versions, packages, releases and the updater
 - [docs/windows.md](docs/windows.md): building and running on Windows
+- [docs/macos.md](docs/macos.md): building on macOS, what CI checks there, and what still needs a
+  real Mac
 - [docs/licensing.md](docs/licensing.md): how third-party licenses are collected and shipped
 - [tools/README.md](tools/README.md): test fixtures and development tools
 
