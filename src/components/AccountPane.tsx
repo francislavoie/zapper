@@ -14,14 +14,13 @@
 // keep. An address with nothing secret in it is shown as typed.
 //
 // The two kinds are not equivalent, and the pane says how before anyone
-// picks one: the comparison under the switch is `SOURCE_COMPARISON`, kept as
+// picks one: each type's card lists what it needs and what it gets, kept as
 // data in logic/sources.ts so it is checked against what the backend does.
 
 import { useEffect, useState } from "react";
 import { backend } from "../backend";
 import { errorMessage } from "../logic/async";
 import {
-  SOURCE_COMPARISON,
   SOURCE_KINDS,
   asKind,
   kindInfo,
@@ -119,54 +118,47 @@ export function AccountPane() {
 
   return (
     <>
-      {/* The choice first, with what it means right under it: the two kinds
-          do different amounts for you, and finding that out after setting
-          one up is finding it out too late. */}
-      <div className="row-field wrap">
-        <label>Account type</label>
-        <div className="choices" role="radiogroup" aria-label="Account type">
-          {SOURCE_KINDS.map((k) => (
+      {/* The choice is the explanation: one card per type, saying what you
+          need for it and what you get from it, so picking one and learning
+          what it means are the same act. */}
+      <div className="source-cards" role="radiogroup" aria-label="Account type">
+        {SOURCE_KINDS.map((k) => {
+          const on = kind === k.id;
+          return (
             <button
               key={k.id}
               role="radio"
-              aria-checked={kind === k.id}
-              className={`ctl ${kind === k.id ? "on" : ""}`}
+              aria-checked={on}
+              className={`source-card ${on ? "on" : ""}`}
               onClick={() => {
                 setKind(k.id);
                 setNote(null);
               }}
             >
-              {k.label}
+              <span className="source-card-head">
+                <span className="source-card-dot" aria-hidden />
+                <span className="source-card-title">{k.label}</span>
+              </span>
+              <span className="source-card-needs">Needs: {k.needs}</span>
+              <span className="source-card-points">
+                {k.points.map((p) => (
+                  <span key={p.text} className={`source-point ${p.ok ? "ok" : "limit"}`}>
+                    <span className="source-point-mark" aria-label={p.ok ? "yes" : "limit"}>
+                      {p.ok ? "✓" : "–"}
+                    </span>
+                    {p.text}
+                  </span>
+                ))}
+              </span>
             </button>
-          ))}
-        </div>
+          );
+        })}
       </div>
-      <p className="source-blurb">
-        {kindInfo(kind).blurb}
-        {switching ? " Saving switches the account to this type." : ""}
-      </p>
-
-      <table className="source-compare">
-        <thead>
-          <tr>
-            <th scope="col" />
-            {SOURCE_KINDS.map((k) => (
-              <th key={k.id} scope="col" className={kind === k.id ? "sel" : ""}>
-                {k.label}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {SOURCE_COMPARISON.map((row) => (
-            <tr key={row.aspect}>
-              <th scope="row">{row.aspect}</th>
-              <td className={kind === "xtream" ? "sel" : ""}>{row.xtream}</td>
-              <td className={kind === "m3u" ? "sel" : ""}>{row.m3u}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      {switching ? (
+        <p className="source-switching">
+          Saving switches the account type to {kindInfo(kind).label}.
+        </p>
+      ) : null}
 
       {/* One form, so the labels share a column and the boxes line up. */}
       {kind === "xtream" ? (

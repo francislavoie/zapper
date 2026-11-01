@@ -16,6 +16,7 @@ import { ALL_CATEGORIES, useApp, useDispatch } from "../store";
 import type { Async } from "../logic/async";
 import type { ChannelDto } from "../types";
 import { ChannelRow } from "./ChannelRow";
+import { ViewSwitch } from "./ViewSwitch";
 
 /** The backend caps search at a sane number; 100 is plenty to scan. */
 const SEARCH_LIMIT = 100;
@@ -44,6 +45,12 @@ export function ChannelList() {
 
   const searching = state.query.trim() !== "";
   const categoryId = state.categoryId === ALL_CATEGORIES ? null : state.categoryId;
+  const categoryName =
+    categoryId === null
+      ? "All channels"
+      : state.categories.status === "ready"
+        ? (state.categories.data.find((c) => c.id === categoryId)?.name ?? "Channels")
+        : "Channels";
 
   const estimate =
     state.categories.status === "ready"
@@ -168,9 +175,19 @@ export function ChannelList() {
 
   return (
     <main className="list-pane">
+      {/* Two rows, matching the rail's beside it row for row: a heading the
+          height of the rail's tabs, then the search box the height of the
+          rail's filter box, so the two inputs sit on one line. A full-width search box above a
+          count line would put the search level with the rail's tabs and the
+          filter a row lower. */}
+      <ListHead
+        title={searching ? "Search results" : categoryName}
+        total={source.total}
+        loading={source.loading}
+      />
       <div className="pane-head">
         <input
-          className="field"
+          className="field list-search"
           ref={registerSearchInput}
           placeholder="Search channels    /"
           spellCheck={false}
@@ -178,7 +195,6 @@ export function ChannelList() {
           onChange={(e) => dispatch({ type: "query", text: e.target.value })}
         />
       </div>
-      <ListHead searching={searching} total={source.total} loading={source.loading} />
 
       {source.error ? (
         <div className="pane-error">
@@ -234,20 +250,19 @@ export function ChannelList() {
   );
 }
 
-function ListHead({
-  searching,
-  total,
-  loading,
-}: {
-  searching: boolean;
-  total: number;
-  loading: boolean;
-}) {
+/** What the list is showing, and the way to the guide. */
+function ListHead({ title, total, loading }: { title: string; total: number; loading: boolean }) {
   return (
-    <div className="list-meta">
-      <span>{searching ? "Search results" : "Channels"}</span>
-      <span>{total.toLocaleString()}</span>
-      {loading ? <span>loading…</span> : null}
+    <div className="list-head">
+      <span className="list-title" title={title}>
+        {title}
+      </span>
+      <span className="list-count">{total.toLocaleString()}</span>
+      {loading ? <span className="list-count">loading…</span> : null}
+      <span className="spring" />
+      {/* Beside the list's own title: the guide is the same channels as a
+          timeline, so the switch belongs to the list, not the window. */}
+      <ViewSwitch current="browse" />
     </div>
   );
 }

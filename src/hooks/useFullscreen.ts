@@ -58,6 +58,13 @@ export function refreshFullscreen(): void {
   refresh();
 }
 
+/** The shared answer, read outside React — for a key handler that has to
+ *  decide on the keystroke, not on the next render. */
+export function fullscreenNow(): boolean {
+  start();
+  return current;
+}
+
 export function useFullscreen(): boolean {
   return useSyncExternalStore(
     subscribe,

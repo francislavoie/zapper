@@ -33,6 +33,7 @@ import {
 import { OVERSCAN, computeWindow } from "../logic/virtual";
 import { ALL_CATEGORIES, useApp, useDispatch } from "../store";
 import type { ChannelDto, ProgrammeDto } from "../types";
+import { ViewSwitch } from "./ViewSwitch";
 
 /** Anything narrower than this cannot hold a legible title. */
 const LABEL_MIN_PX = 34;
@@ -154,13 +155,7 @@ export function GuideGrid() {
         >
           ›
         </button>
-        <button
-          className="ctl ghost"
-          title="Back to the channel list (Escape)"
-          onClick={() => dispatch({ type: "mode", mode: "browse" })}
-        >
-          Browse
-        </button>
+        <ViewSwitch current="guide" />
       </header>
 
       {source.error ? (

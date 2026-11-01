@@ -205,14 +205,24 @@ export function WatchBand({ videoRef }: WatchBandProps) {
         role={live || ready ? "button" : undefined}
         tabIndex={live || ready ? 0 : undefined}
         title={
-          live ? "Back to full screen" : ready ? "Click to start this channel" : undefined
+          player.state === "paused"
+            ? "Click to resume"
+            : live
+              ? "Back to full screen"
+              : ready
+                ? "Click to start this channel"
+                : undefined
         }
         // The slot looks like the picture, so it has to behave like it: while
         // something is playing it goes full screen, and while a channel is
         // merely restored it starts it. Doing nothing was the worst of the
         // three — it said "ready" and then ignored the click.
         onClick={() => {
-          if (live) toWatch();
+          // Paused, a click resumes where it is rather than going full
+          // screen: the picture is frozen, and getting it moving is the
+          // obvious thing being asked for.
+          if (player.state === "paused") void run(dispatch, "pause", backend.togglePause());
+          else if (live) toWatch();
           else if (ready) resume();
         }}
         onKeyDown={(e) => {

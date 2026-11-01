@@ -1,10 +1,10 @@
 // The two kinds of account, what each can do, and the playlist form's rules.
 //
-// The comparison is data rather than markup so it can be checked: it is a
-// promise about what the backend does, and a promise kept in JSX drifts the
-// first time the backend changes and nobody rereads the settings pane. Each
-// row says what zapper actually does with that kind of account today — not
-// what the format could do in principle.
+// What each kind can do is data rather than markup so it can be checked: it
+// is a promise about what the backend does, and a promise kept in JSX drifts
+// the first time the backend changes and nobody rereads the settings pane.
+// Each point says what zapper actually does with that kind of account today
+// — not what the format could do in principle.
 //
 // Pure; checked in src/__checks__/sources.test.mjs.
 
@@ -12,58 +12,47 @@ import type { AccountDto } from "../types";
 
 export type SourceKind = "xtream" | "m3u";
 
+/** One thing an account type does — or, with `ok: false`, does not do. */
+export interface SourcePoint {
+  text: string;
+  ok: boolean;
+}
+
 export interface SourceKindInfo {
   id: SourceKind;
   label: string;
-  /** One line under the switch: what you need to have to hand. */
-  blurb: string;
+  /** What you need to have to hand, in the words a provider's email uses. */
+  needs: string;
+  /** What you get, in a few short lines. Limits are listed too, marked as
+   *  such, because finding out after setting one up is finding out late. */
+  points: readonly SourcePoint[];
 }
 
+// Each type is described on its own card rather than in a side-by-side
+// table. A table would need a toggle, a sentence about one side and a
+// five-row grid about both to be read together before anything made sense;
+// a card per type says the same things where the choice is made.
 export const SOURCE_KINDS: readonly SourceKindInfo[] = [
   {
     id: "xtream",
     label: "Xtream panel",
-    blurb: "The panel address, username and password your provider sent.",
+    needs: "Server address, username and password",
+    points: [
+      { text: "Channels and guide from one login", ok: true },
+      { text: "Catch-up wherever your provider offers it", ok: true },
+      { text: "Shows account status and connections in use", ok: true },
+    ],
   },
   {
     id: "m3u",
     label: "M3U playlist",
-    blurb: "A playlist link or file, and optionally an XMLTV guide.",
-  },
-];
-
-/** One row of the side-by-side: the same question, answered per kind. */
-export interface Capability {
-  aspect: string;
-  xtream: string;
-  m3u: string;
-}
-
-export const SOURCE_COMPARISON: readonly Capability[] = [
-  {
-    aspect: "Sign-in",
-    xtream: "One login covers channels, guide and catch-up",
-    m3u: "A playlist URL or file; the guide is a separate address",
-  },
-  {
-    aspect: "Categories",
-    xtream: "The panel's own categories",
-    m3u: "From each entry's group-title",
-  },
-  {
-    aspect: "Guide",
-    xtream: "Comes from the panel",
-    m3u: "Only from an XMLTV address you add, or one the playlist names",
-  },
-  {
-    aspect: "Catch-up",
-    xtream: "The panel's archive, where the provider allows it",
-    m3u: "Only on entries that declare it (catchup=…)",
-  },
-  {
-    aspect: "Account info",
-    xtream: "Status and connections in use",
-    m3u: "None: no status, expiry or connection count",
+    needs: "A playlist link or file",
+    points: [
+      { text: "Categories from the playlist's groups", ok: true },
+      { text: "Guide only if you add an XMLTV link", ok: false },
+      { text: "Catch-up only where the playlist marks it", ok: false },
+      { text: "No account status or expiry", ok: false },
+    ],
   },
 ];
 

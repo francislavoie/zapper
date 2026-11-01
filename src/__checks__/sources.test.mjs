@@ -8,7 +8,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  SOURCE_COMPARISON,
   SOURCE_KINDS,
   asKind,
   kindInfo,
@@ -34,32 +33,28 @@ test("there are exactly the two kinds the backend knows, each labelled once", ()
   );
   const labels = SOURCE_KINDS.map((k) => k.label);
   assert.equal(new Set(labels).size, labels.length);
-  for (const k of SOURCE_KINDS) assert.ok(k.blurb.length > 0, k.id);
+  for (const k of SOURCE_KINDS) assert.ok(k.needs.length > 0, k.id);
 });
 
-test("every comparison row answers for both kinds, briefly", () => {
-  assert.ok(SOURCE_COMPARISON.length >= 4);
-  const aspects = SOURCE_COMPARISON.map((r) => r.aspect);
-  assert.equal(new Set(aspects).size, aspects.length, "duplicate row");
-  for (const r of SOURCE_COMPARISON) {
-    for (const cell of [r.aspect, r.xtream, r.m3u]) {
-      assert.ok(cell.trim().length > 0, `empty cell in ${r.aspect}`);
-      // Scannable means short: a cell that wraps to four lines in a 40rem
-      // table is a paragraph, and nobody compares paragraphs.
-      assert.ok(cell.length <= 70, `too long to scan: ${cell}`);
-    }
-    assert.notEqual(r.xtream, r.m3u, `${r.aspect} says the same thing twice`);
+test("each card is a few short lines, not a paragraph", () => {
+  for (const k of SOURCE_KINDS) {
+    assert.ok(k.points.length >= 2 && k.points.length <= 4, `${k.id}: ${k.points.length} points`);
+    // A card is half the pane wide; a point that wraps more than once there
+    // has stopped being scannable.
+    assert.ok(k.needs.length <= 45, `needs too long: ${k.needs}`);
+    for (const p of k.points) assert.ok(p.text.length <= 50, `too long to scan: ${p.text}`);
   }
 });
 
-test("the comparison is honest about what a playlist does not get", () => {
+test("the cards are honest about what a playlist does not get", () => {
   // These are the differences the backend actually has; if one of them stops
-  // being true, this row is what has to change.
-  const row = (a) => SOURCE_COMPARISON.find((r) => r.aspect === a);
-  assert.match(row("Guide").m3u, /XMLTV/);
-  assert.match(row("Catch-up").m3u, /catchup=/);
-  assert.match(row("Categories").m3u, /group-title/);
-  assert.match(row("Account info").m3u, /no status/i);
+  // being true, the point is what has to change.
+  const m3u = kindInfo("m3u").points;
+  const limit = (re) => m3u.find((p) => re.test(p.text));
+  assert.equal(limit(/XMLTV/)?.ok, false, "guide needs an XMLTV link");
+  assert.equal(limit(/catch-up/i)?.ok, false, "catch-up only where marked");
+  assert.equal(limit(/status/i)?.ok, false, "no account status");
+  assert.ok(kindInfo("xtream").points.every((p) => p.ok), "a panel has no listed limits");
 });
 
 test("an unknown or missing kind reads as a panel", () => {

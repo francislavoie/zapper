@@ -338,7 +338,19 @@ fn tick(app: &AppHandle, p: &Player) {
         let mut m = STATE.lock().expect("player state mutex poisoned");
         for s in &signals {
             match s {
-                Signal::VideoReconfig => m.playing(),
+                Signal::VideoReconfig => {
+                    m.playing();
+                    // Which decoder is doing the work, once per reconfigure.
+                    // Software decoding is the difference between a busy CPU
+                    // being unnoticeable and it dropping frames and starving
+                    // the audio, and it falls back silently — so it is said.
+                    tracing::info!(
+                        "decoding {} with {}",
+                        p.get_string("video-codec").unwrap_or_else(|| "video".into()),
+                        p.get_string("hwdec-current")
+                            .map_or_else(|| "software (no hardware decoder)".into(), |h| format!("hardware ({h})"))
+                    );
+                }
                 Signal::EndFile { error: Some(e), .. } => m.failed(e.clone()),
                 // A file ended because we replaced it is the *previous*
                 // stream's obituary arriving after the new one opened.

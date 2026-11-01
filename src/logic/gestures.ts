@@ -5,9 +5,10 @@
 // minority of the width — fullscreen is the gesture people reach for most, and
 // a mis-hit that jumps the stream is more annoying than one that does not.
 //
-// Single click still does nothing. This is live TV, and click-to-pause is a
-// VOD idiom that misfires every time a click meant for the window lands on
-// the video.
+// A single click never pauses. This is live TV, and click-to-pause is a VOD
+// idiom that misfires every time a click meant for the window lands on the
+// video. It does *resume* a paused picture (PlayerChrome, WatchBand): that
+// direction cannot misfire, since a paused picture is waiting to be resumed.
 //
 // Checked in src/__checks__/gestures.test.mjs.
 

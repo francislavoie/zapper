@@ -61,13 +61,16 @@ export function widthAfterDrag(
   return clampVideoWidth(startRem - deltaPx / pxPerRem);
 }
 
-/** The most of the stage's height the band may take. Past half, the list
- *  under it is the thing that has been squeezed out. */
-export const VIDEO_BAND_SHARE = 0.5;
+/** What has to stay under the band for the list to be usable, in rem: four
+ *  or five rows. A fixed strip rather than a share of the height — capping
+ *  the band at half the stage stopped a big window from having a big
+ *  picture, which is the whole reason to drag it bigger. */
+export const VIDEO_LIST_MIN = 12;
 
 /** What has to stay beside the picture for the channel's name and programme
- *  to be readable, in rem. */
-export const VIDEO_INFO_MIN = 18;
+ *  to be readable, in rem. The column wraps, so this is its floor, not its
+ *  comfortable width. */
+export const VIDEO_INFO_MIN = 14;
 
 /** The widest picture this stage has room for, in rem, or `Infinity` when the
  *  stage has not been measured yet.
@@ -79,7 +82,7 @@ export const VIDEO_INFO_MIN = 18;
  *  window quietly threw the chosen size away. */
 export function videoRoomRem(stageWidthRem: number, stageHeightRem: number): number {
   if (!(stageWidthRem > 0) || !(stageHeightRem > 0)) return Infinity;
-  const byHeight = (stageHeightRem * VIDEO_BAND_SHARE * 16) / 9;
+  const byHeight = ((stageHeightRem - VIDEO_LIST_MIN) * 16) / 9;
   const byWidth = stageWidthRem - VIDEO_INFO_MIN;
   // Down to the quarter: rounding up could hand back a width that does not
   // fit, and a value that moves in quarter steps re-renders only when it

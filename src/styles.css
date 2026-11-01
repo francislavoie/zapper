@@ -40,6 +40,9 @@
   /* The window is undecorated: its outer few pixels belong to the resize
      grab, so nothing clickable may start inside this ring. */
   --edge-inset: 0.375rem;
+  /* The heading row both browse columns share: the rail's tabs and the
+     list's title. One number, so their filter boxes stay on one line. */
+  --pane-head-h: 2.125rem;
   /* The docked picture. One number moves it; the height and the band follow,
      and the rect handed to mpv is measured from the slot. */
   --video-w: 22.25rem;
@@ -804,6 +807,9 @@ select option {
 .rail-tabs {
   display: flex;
   flex: 0 0 auto;
+  /* Shared with the list's heading row, so the two columns' filter boxes
+     line up. */
+  height: var(--pane-head-h);
   border-bottom: 1px solid var(--line);
   background: var(--bg-2);
 }
@@ -907,6 +913,35 @@ select option {
   flex: 0 0 auto;
 }
 
+/* List | Guide, the same two-way switch in both views' headers. A segmented
+   control rather than a single button, so it says which view you are in as
+   well as how to reach the other one. */
+.view-switch {
+  flex: 0 0 auto;
+  display: inline-flex;
+  padding: 0.125rem;
+  gap: 0.125rem;
+  border: 1px solid var(--line);
+  border-radius: 0.375rem;
+  background: var(--bg-3);
+}
+
+.view-switch button {
+  padding: 0.1875rem 0.625rem;
+  border-radius: 0.25rem;
+  font-size: 0.75rem;
+  color: var(--dim);
+}
+
+.view-switch button:hover {
+  color: var(--text);
+}
+
+.view-switch button.on {
+  color: var(--text);
+  background: var(--accent-dim);
+}
+
 .field {
   flex: 1 1 auto;
   min-width: 0;
@@ -982,15 +1017,41 @@ select option {
 
 /* ------------------------------------------------------------------ list */
 
-.list-meta {
+/* The list's heading row: what it shows, how many, and List | Guide. Exactly
+   as tall as the rail's tabs beside it (--pane-head-h), so the search box
+   under it lands on the same line as the rail's filter box. */
+.list-head {
   display: flex;
-  gap: 0.625rem;
-  align-items: baseline;
-  padding: 0.25rem 0.625rem;
+  gap: 0.5rem;
+  align-items: center;
+  height: var(--pane-head-h);
+  padding: 0 0.375rem 0 0.625rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-2);
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.list-title {
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.list-count {
+  flex: 0 0 auto;
   font-size: 0.6875rem;
   color: var(--dimmer);
-  border-bottom: 1px solid var(--line);
-  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+}
+
+/* A search box is as wide as what gets typed into it, not as wide as the
+   window: a channel name is a few words. */
+.list-search {
+  flex: 0 1 22rem;
 }
 
 .viewport {
@@ -1637,6 +1698,32 @@ button.prog:hover {
   color: var(--dim);
 }
 
+/* Text buttons carry an edge. With a transparent border and a background
+   barely different from the band behind them, "Full screen" and "Stop" read
+   as two words rather than two buttons. A filled face with a hairline for a
+   primary button, the hairline alone for a ghost; both brighten on hover.
+   Icon buttons are left as they are — the glyph is the affordance — and the
+   face stays a little translucent so the player's controls still sit right
+   over the picture. */
+.ctl:not(.icon) {
+  border-color: var(--line);
+  background: rgba(27, 31, 38, 0.88);
+}
+
+.ctl.ghost:not(.icon) {
+  background: transparent;
+}
+
+.ctl:not(.icon):hover {
+  border-color: var(--dimmer);
+  background: rgba(38, 43, 52, 0.95);
+  color: var(--text);
+}
+
+.ctl.on:not(.icon) {
+  border-color: var(--accent);
+}
+
 .spring {
   flex: 1 1 auto;
 }
@@ -2076,6 +2163,26 @@ button.prog:hover {
   border-right: 1px solid var(--line);
   padding: 0.625rem 0;
   overflow-y: auto;
+  /* A column, so the save indicator can sit at the foot. */
+  display: flex;
+  flex-direction: column;
+}
+
+/* "Saving…" / "Saved", pinned to the bottom-left corner of the dialog. It
+   always takes its line, shown or not, so its coming and going moves
+   nothing; only its opacity changes. */
+.settings-saving {
+  margin-top: auto;
+  padding: 0.5rem 0.875rem 0.125rem;
+  min-height: 1.75rem;
+  font-size: 0.6875rem;
+  color: var(--dimmer);
+  opacity: 0;
+  transition: opacity 0.25s ease;
+}
+
+.settings-saving.shown {
+  opacity: 1;
 }
 
 .settings-side button {
@@ -2172,45 +2279,118 @@ button.prog:hover {
   gap: 0.375rem;
 }
 
-/* What the chosen account type needs, said once under the switch. */
-.settings-body p.source-blurb {
-  margin: 0.375rem 0 0.5rem;
+/* The account type, as two cards: the choice and what it means in one
+   place. The chosen card takes the accent; the other stays readable but
+   quiet, so the two can still be compared at a glance. Limits are marked
+   with a dash in the dimmer colour, so what you get and what you don't read
+   differently before a word of either is read. */
+.source-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
 }
 
-/* Xtream and M3U side by side. A table because it is one: the same five
-   questions, answered twice. Small and dim so it informs the choice without
-   outshouting the form under it; the chosen column is lifted to the normal
-   text colour, which is enough to say "this is what you get". */
-.source-compare {
-  width: 100%;
-  max-width: 40rem;
-  margin-bottom: 0.75rem;
-  border-collapse: collapse;
+.source-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  padding: 0.625rem 0.75rem 0.75rem;
+  text-align: left;
+  font: inherit;
+  color: var(--dim);
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  cursor: pointer;
+}
+
+.source-card:hover {
+  border-color: var(--dimmer);
+}
+
+.source-card.on {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent-dim) 45%, var(--bg-2));
+  border-color: var(--accent);
+}
+
+.source-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.source-card-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* A radio dot, so the cards read as one-of-two rather than as buttons. */
+.source-card-dot {
+  flex: 0 0 auto;
+  width: 0.75rem;
+  height: 0.75rem;
+  border-radius: 50%;
+  border: 1.5px solid var(--dimmer);
+}
+
+.source-card.on .source-card-dot {
+  border-color: var(--accent);
+  background: radial-gradient(circle, var(--accent) 0 45%, transparent 50%);
+}
+
+.source-card-title {
+  font-weight: 600;
+  font-size: 0.8125rem;
+}
+
+.source-card.on .source-card-title {
+  color: var(--text);
+}
+
+.source-card-needs {
   font-size: 0.6875rem;
-  line-height: 1.4;
+  color: var(--dimmer);
+}
+
+.source-card.on .source-card-needs {
   color: var(--dim);
 }
 
-.source-compare th,
-.source-compare td {
-  padding: 0.25rem 0.5rem 0.25rem 0;
-  border-bottom: 1px solid var(--line);
-  text-align: left;
-  vertical-align: top;
+.source-card-points {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1875rem;
+  font-size: 0.75rem;
+  line-height: 1.35;
 }
 
-.source-compare thead th {
-  font-weight: 600;
+.source-point {
+  display: flex;
+  gap: 0.375rem;
 }
 
-.source-compare tbody th {
-  font-weight: 500;
-  white-space: nowrap;
-  width: 6.5rem;
+.source-point-mark {
+  flex: 0 0 0.75rem;
+  text-align: center;
 }
 
-.source-compare .sel {
-  color: var(--text);
+.source-point.ok .source-point-mark {
+  color: var(--accent);
+}
+
+.source-point.limit {
+  color: var(--dimmer);
+}
+
+.source-card.on .source-point.limit {
+  color: var(--dim);
+}
+
+.settings-body p.source-switching {
+  margin: -0.25rem 0 0.75rem;
+  color: var(--accent);
 }
 
 /* The guide box takes several addresses, one per line. */

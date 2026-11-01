@@ -6,8 +6,8 @@
 import { useEffect } from "react";
 import { backend } from "../backend";
 import { focusSearch, typingInto } from "../focus";
-import { toggleFullscreen } from "../fullscreen";
-import { refreshFullscreen } from "./useFullscreen";
+import { exitFullscreen, toggleFullscreen } from "../fullscreen";
+import { fullscreenNow, refreshFullscreen } from "./useFullscreen";
 import { clampHours } from "../logic/guide";
 import { run } from "../store";
 import type { State } from "../store";
@@ -42,6 +42,17 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
           dispatch({ type: "settings", open: false });
         } else if (state.paletteOpen) {
           dispatch({ type: "palette", open: false });
+        } else if (fullscreenNow()) {
+          // Fullscreen is the one thing Escape means everywhere else on the
+          // desktop, so it is the whole meaning here: leave fullscreen and
+          // nothing more. Falling through to the mode steps below made the
+          // first press swap the picture for the browse view while staying
+          // fullscreen. Overlays above still close first — they are on top.
+          void exitFullscreen()
+            .then(refreshFullscreen)
+            .catch((err: unknown) =>
+              dispatch({ type: "toast", text: `fullscreen: ${String(err)}` }),
+            );
         } else if (state.query !== "") {
           dispatch({ type: "query", text: "" });
         } else if (state.mode === "guide") {

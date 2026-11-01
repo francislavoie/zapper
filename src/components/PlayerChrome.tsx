@@ -118,6 +118,15 @@ export function PlayerChrome() {
         }
       }}
       onPointerLeave={() => on({ type: "leave" })}
+      onClick={(e) => {
+        // A click on a paused picture resumes it. Only that way round: a
+        // click never pauses (see logic/gestures.ts), so this cannot misfire
+        // on live TV — the worst a stray click does is what was wanted.
+        if (player.state !== "paused") return;
+        if ((e.target as HTMLElement).closest(".chrome-top, .chrome-bottom")) return;
+        on({ type: "activity" });
+        void run(dispatch, "pause", backend.togglePause());
+      }}
       onWheel={(e) => {
         // Ctrl+wheel is application zoom, handled on the window. A zoom is not
         // a volume change, and doing both would be two surprises at once.

@@ -91,10 +91,10 @@ test("a smaller window draws less of the picture without forgetting its size", (
   const room = videoRoomRem(56, 33);
   const shown = fittedVideoWidth(chosen, room);
   assert.ok(shown < chosen, "the oversized picture was drawn anyway");
-  // Never more than half the stage's height...
-  assert.ok((shown * 9) / 16 <= 33 * 0.5 + 1e-9, `band too tall: ${shown}`);
+  // The list keeps a usable strip under the band...
+  assert.ok(33 - (shown * 9) / 16 >= 12 - 1e-9, `band too tall: ${shown}`);
   // ...and the information beside it keeps its column.
-  assert.ok(56 - shown >= 18 - 1e-9, `info column crushed: ${shown}`);
+  assert.ok(56 - shown >= 14 - 1e-9, `info column crushed: ${shown}`);
   // The chosen width is untouched: back in a big window it all comes back.
   assert.equal(fittedVideoWidth(chosen, videoRoomRem(150, 90)), chosen);
 });
@@ -112,5 +112,13 @@ test("a window too small for even the minimum still draws the minimum", () => {
 test("room is quantised down, so what is drawn always fits", () => {
   const room = videoRoomRem(100, 33.3);
   assert.equal(room * 4, Math.floor(room * 4));
-  assert.ok((room * 9) / 16 <= 33.3 * 0.5);
+  assert.ok(33.3 - (room * 9) / 16 >= 12);
+});
+
+test("a big window allows a big picture", () => {
+  // 1920x1080 maximised at 16px/rem: about 120 x 65rem of stage. The old
+  // half-height cap held the picture to ~58rem here; the band may now take
+  // all but the list's strip, up to the overall maximum.
+  assert.ok(videoRoomRem(120, 65) >= VIDEO_WIDTH_MAX, `room ${videoRoomRem(120, 65)}`);
+  assert.equal(fittedVideoWidth(70, videoRoomRem(120, 65)), 70);
 });

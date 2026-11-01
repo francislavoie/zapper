@@ -80,6 +80,7 @@ export function SettingsModal() {
               {x}
             </button>
           ))}
+          <SaveIndicator saving={s.saving} failed={s.saveError !== null} />
         </nav>
 
         <div className="settings-body">
@@ -94,7 +95,6 @@ export function SettingsModal() {
             <Status
               status={s.status}
               saveError={s.saveError}
-              saving={s.saving}
               onRetry={s.reload}
             />
           ) : null}
@@ -480,12 +480,10 @@ function UpdatesPane({ s }: { s: SettingsControl }) {
 function Status({
   status,
   saveError,
-  saving,
   onRetry,
 }: {
   status: ReturnType<typeof useSettings>["status"];
   saveError: string | null;
-  saving: boolean;
   onRetry: () => void;
 }) {
   return (
@@ -506,8 +504,40 @@ function Status({
           <span>Not saved — {saveError}. Your value is still here.</span>
         </div>
       ) : null}
-      {saving && !saveError ? <div className="settings-note">Saving…</div> : null}
     </>
+  );
+}
+
+/** How long "Saved" stays after a save lands. */
+const SAVED_FOR_MS = 1500;
+
+/** The routine half of the save status, in the corner of the section list.
+ *
+ *  A box at the top of the pane would appear and vanish on every toggle and
+ *  push everything under it down and back up — the control just clicked
+ *  would move out from under the pointer. Down here it sits
+ *  in space nothing else uses, so it can come and go freely. Failures are
+ *  not routine and stay at the top of the pane, where `Status` puts them. */
+function SaveIndicator({ saving, failed }: { saving: boolean; failed: boolean }) {
+  const [saved, setSaved] = useState(false);
+  const was = useRef(saving);
+  useEffect(() => {
+    const finished = was.current && !saving;
+    was.current = saving;
+    if (saving || !finished || failed) {
+      setSaved(false);
+      return;
+    }
+    setSaved(true);
+    const t = window.setTimeout(() => setSaved(false), SAVED_FOR_MS);
+    return () => window.clearTimeout(t);
+  }, [saving, failed]);
+
+  const text = saving ? "Saving…" : saved ? "Saved" : "";
+  return (
+    <div className={`settings-saving ${text ? "shown" : ""}`} role="status" aria-live="polite">
+      {text}
+    </div>
   );
 }
 

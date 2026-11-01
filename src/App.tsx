@@ -10,6 +10,7 @@ import { backend, isMock, subscribePlayer, subscribeSync } from "./backend";
 import { loadCategories } from "./actions";
 import { errorMessage } from "./logic/async";
 import { useGlobalKeys } from "./hooks/useGlobalKeys";
+import { useWheelSteps } from "./hooks/useWheelSteps";
 import { useSettings } from "./hooks/useSettings";
 import { useVideoRect } from "./hooks/useVideoRect";
 import { useZoom } from "./hooks/useZoom";
@@ -84,6 +85,8 @@ export function App() {
   }, [fullscreen, cameFrom, dispatch]);
 
   useGlobalKeys(state, dispatch);
+  // Wheel scrolling that steps rather than glides; see logic/wheel.ts.
+  useWheelSteps();
 
   // The updater's state, for the title bar's badge and the dialog.
   useUpdates();

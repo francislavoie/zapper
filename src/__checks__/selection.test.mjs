@@ -119,7 +119,9 @@ test("ordinary chrome is not on the allowlist, by class or by ancestor", () => {
     "prog-title",
     "prog-time",
     "palette-label",
-    "list-meta",
+    "list-head",
+    "list-title",
+    "list-count",
     "sticky-head",
   ];
   for (const cls of chrome) {
