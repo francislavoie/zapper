@@ -1,14 +1,18 @@
-// The ⚙ modal: a left sidebar of sections, and no curation page by design.
+// The ⚙ modal: a left sidebar of pages, and each page its settings in titled
+// boxes (SettingsParts.tsx). No curation page, by design.
 //
-// Every control writes through useSettings: the value moves at once,
-// the save is debounced, and a failed save is said out loud without taking the
-// user's value away.
+// Every control writes through useSettings: the value moves at once, the
+// save is debounced, and a failed save is said out loud without taking the
+// user's value away. Each stored setting can be put back on its own with the
+// ↺ its row shows once it differs from the default.
 
 import { useEffect, useRef, useState } from "react";
 import { backend } from "../backend";
 import { useSettings, type SettingsControl } from "../hooks/useSettings";
-import { clampVolume, duration } from "../logic/format";
+import { clampVolume, dateTime, duration, hhmm, systemUses12h, uses12h } from "../logic/format";
 import {
+  DEFAULT_SETTINGS,
+  DEFAULT_SUBTITLE,
   REWIND_BITRATES,
   REWIND_MAX,
   REWIND_MIN,
@@ -18,19 +22,26 @@ import {
   SUB_SIZE_MIN,
   SYNC_MAX,
   SYNC_MIN,
+  TIME_FORMAT_LABEL,
+  isDefault,
   normaliseColor,
+  resetPatch,
   subtitlePreview,
+  type SettingKey,
 } from "../logic/settings";
 import { MAX_GUIDE_HOURS, MIN_GUIDE_HOURS } from "../logic/guide";
 import { MOUSE_WORDS, SHORTCUT_GROUPS } from "../logic/shortcuts";
-import { VOLUME_MAX } from "../logic/volume";
+import { VOLUME_MAX, VOLUME_UNITY } from "../logic/volume";
 import { kindLabel, statusLine as updateStatusLine } from "../logic/updates";
 import { checkForUpdates } from "../actions";
 import { run, useApp, useDispatch } from "../store";
 import { AboutPane } from "./AboutPane";
 import { AccountPane } from "./AccountPane";
 import { BackupPane } from "./BackupPane";
-import type { SubtitleBackdrop } from "../types";
+import { RangeField, Segmented, SettingRow, SettingsGroup, SettingsPage } from "./SettingsParts";
+import { Switch } from "./Switch";
+import { VolumeControl } from "./VolumeControl";
+import type { SubtitleBackdrop, SettingsDto } from "../types";
 
 const SECTIONS = [
   "Account",
@@ -46,6 +57,19 @@ const SECTIONS = [
 
 type Section = (typeof SECTIONS)[number];
 
+/** The line under each page's title: what is on it. */
+const SUMMARY: Record<Section, string> = {
+  Account: "Where the channels and the guide come from.",
+  Playback: "How much live TV is kept for rewinding, how video is decoded, and the media keys.",
+  Audio: "The volume and the compressor, for whatever is playing.",
+  Subtitles: "How subtitles look. mpv draws them under this window; the preview stands in.",
+  Guide: "The guide's width, how times are written, and how often the catalogue refreshes.",
+  Data: "The catalogue, and backups of your settings and favourites.",
+  Updates: "Whether zapper looks for new versions, and which one is installed.",
+  Keyboard: "Every shortcut and mouse gesture, grouped by where it works.",
+  About: "",
+};
+
 const FONTS = ["Sans", "Serif", "Monospace"];
 
 /** Presets rather than <input type="color">: the native swatch is a light
@@ -53,20 +77,30 @@ const FONTS = ["Sans", "Serif", "Monospace"];
  *  actually uses for subtitles. The hex field is there for the rest. */
 const COLORS = ["#ffffff", "#f2e600", "#00e5ff", "#c8c8c8"];
 
-const BACKDROPS: { id: SubtitleBackdrop; label: string; note: string }[] = [
-  { id: "background", label: "Background", note: "a box behind each line" },
-  { id: "window", label: "Window", note: "a band across the whole line" },
-  { id: "outline", label: "Outline", note: "an edge around the letters" },
-  { id: "shadow", label: "Shadow", note: "offset behind the letters" },
-  { id: "none", label: "None", note: "letters only" },
+const BACKDROPS: { id: SubtitleBackdrop; label: string; tip: string }[] = [
+  { id: "background", label: "Background", tip: "A box behind each line" },
+  { id: "window", label: "Window", tip: "A band across the whole line" },
+  { id: "outline", label: "Outline", tip: "An edge around the letters" },
+  { id: "shadow", label: "Shadow", tip: "Offset behind the letters" },
+  { id: "none", label: "None", tip: "Letters only" },
 ];
 
+const BACKDROP_LABEL = Object.fromEntries(BACKDROPS.map((b) => [b.id, b.label]));
+
+/** Pages that write stored settings, and so show their state at the top. */
+const WRITES: ReadonlySet<Section> = new Set(["Playback", "Subtitles", "Guide", "Updates"]);
+
 export function SettingsModal() {
-  const { player, sync } = useApp();
   const dispatch = useDispatch();
   const [section, setSection] = useState<Section>("Account");
   const s = useSettings(true);
   const close = () => dispatch({ type: "settings", open: false });
+  const bodyRef = useRef<HTMLDivElement | null>(null);
+
+  // A new page starts at its top, not wherever the last one was scrolled to.
+  useEffect(() => {
+    bodyRef.current?.scrollTo?.(0, 0);
+  }, [section]);
 
   return (
     <div
@@ -89,11 +123,13 @@ export function SettingsModal() {
             <path d="M2.5 2.5l7 7M9.5 2.5l-7 7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
           </svg>
         </button>
-        <nav className="settings-side">
+        <nav className="settings-side" aria-label="Settings pages">
+          <div className="settings-side-title">Settings</div>
           {SECTIONS.map((x) => (
             <button
               key={x}
               className={x === section ? "sel" : ""}
+              aria-current={x === section ? "page" : undefined}
               onClick={() => setSection(x)}
             >
               {x}
@@ -102,350 +138,571 @@ export function SettingsModal() {
           <SaveIndicator saving={s.saving} failed={s.saveError !== null} />
         </nav>
 
-        <div className="settings-body">
-          <h3>{section}</h3>
+        <div className="settings-body" ref={bodyRef}>
+          <SettingsPage heading={section} summary={SUMMARY[section]}>
+            {/* One line, at the top of every page that writes settings,
+                saying what state the settings themselves are in. */}
+            {WRITES.has(section) ? (
+              <Status status={s.status} saveError={s.saveError} onRetry={s.reload} />
+            ) : null}
 
-          {/* One line, at the top of every pane that writes settings, saying
-              what state the settings themselves are in. */}
-          {section === "Playback" ||
-          section === "Subtitles" ||
-          section === "Guide" ||
-          section === "Updates" ? (
-            <Status
-              status={s.status}
-              saveError={s.saveError}
-              onRetry={s.reload}
-            />
-          ) : null}
-
-          {section === "Account" ? <AccountPane /> : null}
-
-          {section === "Playback" ? (
-            <>
-              <div className="row-field">
-                <label htmlFor="set-rewind">
-                  Rewind buffer — {s.settings.rewindMb.toLocaleString()} MB
-                </label>
-                <input
-                  id="set-rewind"
-                  type="range"
-                  min={REWIND_MIN}
-                  max={REWIND_MAX}
-                  step={REWIND_STEP}
-                  value={s.settings.rewindMb}
-                  onChange={(e) => s.patch({ rewindMb: Number(e.target.value) })}
-                />
-              </div>
-              <RewindEstimates
-                megabytes={s.settings.rewindMb}
-                playing={player.state === "playing" || player.state === "paused"}
-              />
-              <div className="row-field">
-                <label htmlFor="set-hwdec">Hardware decode</label>
-                <button
-                  id="set-hwdec"
-                  className={`ctl ${s.settings.hardwareDecode ? "on" : ""}`}
-                  aria-pressed={s.settings.hardwareDecode}
-                  onClick={() => s.patch({ hardwareDecode: !s.settings.hardwareDecode })}
-                >
-                  {s.settings.hardwareDecode ? "on" : "off"}
-                </button>
-              </div>
-              <div className="row-field">
-                <label htmlFor="set-hdr">Tone-map HDR to SDR</label>
-                <button
-                  id="set-hdr"
-                  className={`ctl ${s.settings.toneMapHdr ? "on" : ""}`}
-                  aria-pressed={s.settings.toneMapHdr}
-                  onClick={() => s.patch({ toneMapHdr: !s.settings.toneMapHdr })}
-                >
-                  {s.settings.toneMapHdr ? "on" : "off"}
-                </button>
-              </div>
-              <p>
-                The rewind buffer is memory set aside for live scrollback.
-                How far back it reaches depends on the channel’s bitrate, so
-                the times above are estimates. Turning tone mapping off
-                leaves HDR channels washed out on an SDR panel.
-              </p>
-              <div className="row-field">
-                <label htmlFor="set-media">Media keys and desktop controls</label>
-                <button
-                  id="set-media"
-                  className={`ctl ${s.settings.mediaControls ? "on" : ""}`}
-                  aria-pressed={s.settings.mediaControls}
-                  onClick={() => s.patch({ mediaControls: !s.settings.mediaControls })}
-                >
-                  {s.settings.mediaControls ? "on" : "off"}
-                </button>
-              </div>
-              <p>
-                Lets the keyboard’s play/pause, next and previous keys and the
-                desktop’s media controls drive zapper, which shows them the
-                channel and what is on it. Next and previous change channel
-                within the list on screen. Off by default: the desktop gives
-                those keys to one player at a time, so turning this on can
-                take them from a music player.
-              </p>
-            </>
-          ) : null}
-
-          {section === "Subtitles" ? (
-            <>
-              <Preview />
-
-              <div className="row-field">
-                <label htmlFor="set-font">Font</label>
-                <select
-                  id="set-font"
-                  value={FONTS.includes(s.settings.subtitle.font) ? s.settings.subtitle.font : ""}
-                  onChange={(e) => s.patchSubtitle({ font: e.target.value })}
-                >
-                  {FONTS.map((f) => (
-                    <option key={f} value={f}>
-                      {f}
-                    </option>
-                  ))}
-                  {FONTS.includes(s.settings.subtitle.font) ? null : (
-                    <option value="">{s.settings.subtitle.font}</option>
-                  )}
-                </select>
-              </div>
-
-              <div className="row-field">
-                <label htmlFor="set-size">Size — {s.settings.subtitle.size}pt at 720p</label>
-                <input
-                  id="set-size"
-                  type="range"
-                  min={SUB_SIZE_MIN}
-                  max={SUB_SIZE_MAX}
-                  step={1}
-                  value={s.settings.subtitle.size}
-                  onChange={(e) => s.patchSubtitle({ size: Number(e.target.value) })}
-                />
-              </div>
-
-              <div className="row-field">
-                <label>Colour</label>
-                <div className="swatches">
-                  {COLORS.map((c) => (
-                    <button
-                      key={c}
-                      className={`swatch ${s.settings.subtitle.color === c ? "sel" : ""}`}
-                      style={{ background: c }}
-                      data-tip={c}
-                      aria-label={c}
-                      onClick={() => s.patchSubtitle({ color: c })}
-                    />
-                  ))}
-                  <input
-                    className="field hex"
-                    value={s.settings.subtitle.color}
-                    spellCheck={false}
-                    aria-label="Subtitle colour, hex"
-                    onChange={(e) => s.patchSubtitle({ color: normaliseColor(e.target.value) })}
-                  />
-                </div>
-              </div>
-
-              <div className="row-field wrap">
-                <label>Backdrop</label>
-                <div className="choices">
-                  {BACKDROPS.map((b) => (
-                    <button
-                      key={b.id}
-                      className={`ctl ${s.settings.subtitle.backdrop === b.id ? "on" : ""}`}
-                      data-tip={b.note}
-                      onClick={() => s.patchSubtitle({ backdrop: b.id })}
-                    >
-                      {b.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {s.settings.subtitle.backdrop === "background" ||
-              s.settings.subtitle.backdrop === "window" ? (
-                <div className="row-field">
-                  <label htmlFor="set-op">
-                    Backdrop opacity — {Math.round(s.settings.subtitle.backdropOpacity * 100)}%
-                  </label>
-                  <input
-                    id="set-op"
-                    type="range"
-                    min={0}
-                    max={100}
-                    step={5}
-                    value={Math.round(s.settings.subtitle.backdropOpacity * 100)}
-                    onChange={(e) =>
-                      s.patchSubtitle({ backdropOpacity: Number(e.target.value) / 100 })
-                    }
-                  />
-                </div>
-              ) : null}
-
-              {s.settings.subtitle.backdrop === "outline" ? (
-                <div className="row-field">
-                  <label htmlFor="set-outline">
-                    Outline size — {s.settings.subtitle.outlineSize}
-                  </label>
-                  <input
-                    id="set-outline"
-                    type="range"
-                    min={0}
-                    max={8}
-                    step={0.5}
-                    value={s.settings.subtitle.outlineSize}
-                    onChange={(e) => s.patchSubtitle({ outlineSize: Number(e.target.value) })}
-                  />
-                </div>
-              ) : null}
-
-              {s.settings.subtitle.backdrop === "shadow" ? (
-                <div className="row-field">
-                  <label htmlFor="set-shadow">
-                    Shadow offset — {s.settings.subtitle.shadowOffset}
-                  </label>
-                  <input
-                    id="set-shadow"
-                    type="range"
-                    min={0}
-                    max={8}
-                    step={0.5}
-                    value={s.settings.subtitle.shadowOffset}
-                    onChange={(e) => s.patchSubtitle({ shadowOffset: Number(e.target.value) })}
-                  />
-                </div>
-              ) : null}
-
-              <p>
-                The real subtitles are drawn by libass into the video plane,
-                underneath this window, so they cannot be shown here. The
-                preview is CSS standing in for them: the size scales the same
-                way mpv scales it — points at 720p — and each backdrop is the
-                shape mpv will draw.
-              </p>
-            </>
-          ) : null}
-
-          {section === "Guide" ? (
-            <>
-              <div className="row-field">
-                <label htmlFor="set-hours">
-                  Hours per screen — {s.settings.guideHours}
-                </label>
-                <input
-                  id="set-hours"
-                  type="range"
-                  min={MIN_GUIDE_HOURS}
-                  max={MAX_GUIDE_HOURS}
-                  step={1}
-                  value={s.settings.guideHours}
-                  onChange={(e) => s.patch({ guideHours: Number(e.target.value) })}
-                />
-              </div>
-              <div className="row-field">
-                <label htmlFor="set-sync">
-                  Refresh the catalogue every {s.settings.syncIntervalHours}h
-                </label>
-                <input
-                  id="set-sync"
-                  type="range"
-                  min={SYNC_MIN}
-                  max={SYNC_MAX}
-                  step={1}
-                  value={s.settings.syncIntervalHours}
-                  onChange={(e) => s.patch({ syncIntervalHours: Number(e.target.value) })}
-                />
-              </div>
-              <p>
-                Fewer hours per screen means wider programme blocks and less
-                squinting; more means less paging. The guide reads this
-                immediately — press <b>G</b> to see it.
-              </p>
-            </>
-          ) : null}
-
-          {section === "Audio" ? (
-            <>
-              <div className="row-field">
-                <label htmlFor="set-comp">Compressor</label>
-                <button
-                  id="set-comp"
-                  className={`ctl ${player.compressor ? "on" : ""}`}
-                  onClick={() =>
-                    void run(
-                      dispatch,
-                      "compressor",
-                      backend.setCompressor(!player.compressor),
-                    )
-                  }
-                >
-                  {player.compressor ? "on" : "off"}
-                </button>
-              </div>
-              <div className="row-field">
-                <label htmlFor="set-vol">Volume ({player.volume}%)</label>
-                <input
-                  id="set-vol"
-                  type="range"
-                  min={0}
-                  max={VOLUME_MAX}
-                  value={player.volume}
-                  onChange={(e) =>
-                    void run(
-                      dispatch,
-                      "volume",
-                      backend.setVolume(clampVolume(Number(e.target.value), VOLUME_MAX)),
-                    )
-                  }
-                />
-              </div>
-              <p>
-                Boost above 100% is mpv’s <code>volume-max</code>; the
-                compressor is ffmpeg’s <code>speechnorm</code> followed by a
-                limiter.
-              </p>
-            </>
-          ) : null}
-
-          {section === "Data" ? (
-            <>
-              <div className="row-field">
-                <label>
-                  Last synced:{" "}
-                  {sync.lastSynced
-                    ? new Date(sync.lastSynced * 1000).toLocaleString()
-                    : "never"}
-                </label>
-                <button
-                  className="ctl"
-                  onClick={() => void run(dispatch, "sync", backend.syncNow())}
-                >
-                  Refresh now
-                </button>
-              </div>
-              <p>
-                {sync.channelsTotal.toLocaleString()} channels known. Sync
-                failures are non-fatal — the last good catalogue keeps serving.
-              </p>
-              <BackupPane s={s} />
-            </>
-          ) : null}
-
-          {section === "Updates" ? <UpdatesPane s={s} /> : null}
-
-          {section === "Keyboard" ? <KeyboardPane /> : null}
-
-          {section === "About" ? <AboutPane /> : null}
+            {section === "Account" ? <AccountPane /> : null}
+            {section === "Playback" ? <PlaybackPage s={s} /> : null}
+            {section === "Audio" ? <AudioPage /> : null}
+            {section === "Subtitles" ? <SubtitlesPage s={s} /> : null}
+            {section === "Guide" ? <GuidePage s={s} /> : null}
+            {section === "Data" ? <DataPage s={s} /> : null}
+            {section === "Updates" ? <UpdatesPage s={s} /> : null}
+            {section === "Keyboard" ? <KeyboardPane /> : null}
+            {section === "About" ? <AboutPane /> : null}
+          </SettingsPage>
         </div>
       </div>
     </div>
   );
 }
 
+/** A row's ↺ for a stored setting: shown while it differs from the default,
+ *  and putting back that one setting. */
+function resettable(s: SettingsControl, key: SettingKey, resetTo: string) {
+  return {
+    modified: !isDefault(s.settings, key),
+    onReset: () => s.patch(resetPatch(s.settings, key)),
+    resetTo,
+  };
+}
+
+const onOff = (b: boolean) => (b ? "on" : "off");
+
+// ---------------------------------------------------------------- playback
+
+function PlaybackPage({ s }: { s: SettingsControl }) {
+  const { player } = useApp();
+  const playing = player.state === "playing" || player.state === "paused";
+  const channelMbps = useChannelMbps(playing);
+  const mb = s.settings.rewindMb;
+  // What the buffer buys, said at the channel playing now when it has been
+  // measured, and otherwise at a bitrate most HD channels are near.
+  const reach =
+    channelMbps !== null
+      ? `≈ ${duration(rewindSeconds(mb, channelMbps))} on this channel`
+      : `≈ ${duration(rewindSeconds(mb, 10))} at 1080p`;
+  const d = DEFAULT_SETTINGS;
+
+  return (
+    <>
+      <SettingsGroup heading="Rewind">
+        <SettingRow
+          label="Rewind buffer"
+          htmlFor="set-rewind"
+          description="Memory set aside for live scrollback. How far back it reaches depends on the channel’s bitrate, so the times are estimates."
+          {...resettable(s, "rewindMb", `${d.rewindMb} MB`)}
+        >
+          <RangeField
+            id="set-rewind"
+            min={REWIND_MIN}
+            max={REWIND_MAX}
+            step={REWIND_STEP}
+            value={mb}
+            mark={d.rewindMb}
+            format={(v) => `${v.toLocaleString("en")} MB`}
+            note={reach}
+            onChange={(v) => s.patch({ rewindMb: v })}
+          />
+        </SettingRow>
+        <SettingRow label="How far back that reaches" layout="stack">
+          <RewindEstimates megabytes={mb} channelMbps={channelMbps} />
+        </SettingRow>
+      </SettingsGroup>
+
+      <SettingsGroup heading="Video">
+        <SettingRow
+          label="Hardware decode"
+          htmlFor="set-hwdec"
+          description="Decode on the graphics card where it can. Off decodes on the processor, which is slower but sidesteps a driver that draws garbage."
+          {...resettable(s, "hardwareDecode", onOff(d.hardwareDecode))}
+        >
+          <Switch
+            id="set-hwdec"
+            checked={s.settings.hardwareDecode}
+            onChange={(v) => s.patch({ hardwareDecode: v })}
+          />
+        </SettingRow>
+        <SettingRow
+          label="Tone-map HDR to SDR"
+          htmlFor="set-hdr"
+          description="Off leaves HDR channels washed out on an SDR panel."
+          {...resettable(s, "toneMapHdr", onOff(d.toneMapHdr))}
+        >
+          <Switch
+            id="set-hdr"
+            checked={s.settings.toneMapHdr}
+            onChange={(v) => s.patch({ toneMapHdr: v })}
+          />
+        </SettingRow>
+      </SettingsGroup>
+
+      <SettingsGroup heading="Desktop">
+        <SettingRow
+          label="Media keys and desktop controls"
+          htmlFor="set-media"
+          description={
+            <>
+              The keyboard’s play/pause, next and previous keys and the desktop’s media
+              controls drive zapper, which shows them the channel and what is on it. Next and
+              previous change channel within the list on screen. Off by default: the desktop
+              gives those keys to one player at a time, so turning this on can take them from a
+              music player.
+            </>
+          }
+          {...resettable(s, "mediaControls", onOff(d.mediaControls))}
+        >
+          <Switch
+            id="set-media"
+            checked={s.settings.mediaControls}
+            onChange={(v) => s.patch({ mediaControls: v })}
+          />
+        </SettingRow>
+      </SettingsGroup>
+    </>
+  );
+}
+
+/** The bitrate of the channel playing now, measured, or null when nothing
+ *  is playing or it has not been measured yet. */
+function useChannelMbps(playing: boolean): number | null {
+  const [mbps, setMbps] = useState<number | null>(null);
+  useEffect(() => {
+    if (!playing) {
+      setMbps(null);
+      return;
+    }
+    let live = true;
+    void backend
+      .playerStats()
+      .then((st) => {
+        const bps = (st.videoBitrate ?? 0) + (st.audioBitrate ?? 0);
+        if (live) setMbps(bps > 0 ? bps / 1_000_000 : null);
+      })
+      .catch(() => {
+        // The common bitrates still answer the question.
+      });
+    return () => {
+      live = false;
+    };
+  }, [playing]);
+  return mbps;
+}
+
+/** What the rewind buffer buys, in time, at bitrates people recognise — and
+ *  at the channel playing now, measured, which is the one that matters.
+ *
+ *  The setting is megabytes because that is all mpv's buffer understands;
+ *  saying "4 minutes" instead was a promise it kept only at one bitrate. */
+function RewindEstimates({ megabytes, channelMbps }: { megabytes: number; channelMbps: number | null }) {
+  return (
+    <dl className="rewind-estimates" aria-label="How far back the buffer reaches">
+      {channelMbps !== null ? (
+        <div className="this-channel">
+          <dt>This channel</dt>
+          <dd className="rate">{channelMbps.toFixed(1)} Mbps</dd>
+          <dd>{duration(rewindSeconds(megabytes, channelMbps))}</dd>
+        </div>
+      ) : null}
+      {REWIND_BITRATES.map((b) => (
+        <div key={b.label}>
+          <dt>{b.label}</dt>
+          <dd className="rate">{b.mbps} Mbps</dd>
+          <dd>{duration(rewindSeconds(megabytes, b.mbps))}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+// ------------------------------------------------------------------- audio
+
+/** The volume and the compressor are the player's, not stored settings: they
+ *  start at 100% and off with every launch, so those are what ↺ puts back. */
+function AudioPage() {
+  const { player } = useApp();
+  const dispatch = useDispatch();
+  // As the player's bar does it: reaching for the slider while muted means
+  // "let me hear this".
+  const setVolume = (v: number) => {
+    void run(dispatch, "volume", backend.setVolume(clampVolume(v, VOLUME_MAX)));
+    if (player.muted) void run(dispatch, "mute", backend.setMuted(false));
+  };
+  const setCompressor = (on: boolean) =>
+    void run(dispatch, "compressor", backend.setCompressor(on));
+
+  return (
+    <SettingsGroup heading="Sound">
+      <SettingRow
+        label="Volume"
+        description={
+          <>
+            Above {VOLUME_UNITY}% is software gain, up to {VOLUME_MAX}% (mpv’s{" "}
+            <code>volume-max</code>): the hatched end of the track. The same control as the
+            player’s bar.
+          </>
+        }
+        modified={player.volume !== VOLUME_UNITY}
+        onReset={() => setVolume(VOLUME_UNITY)}
+        resetTo={`${VOLUME_UNITY}%`}
+      >
+        <VolumeControl
+          volume={player.volume}
+          muted={player.muted}
+          onVolume={setVolume}
+          onToggleMute={() => void run(dispatch, "mute", backend.setMuted(!player.muted))}
+          scale
+        />
+      </SettingRow>
+      <SettingRow
+        label="Compressor"
+        htmlFor="set-comp"
+        description={
+          <>
+            Evens out loud and quiet passages, for speech over a noisy room: ffmpeg’s{" "}
+            <code>speechnorm</code> followed by a limiter.
+          </>
+        }
+        modified={player.compressor}
+        onReset={() => setCompressor(false)}
+        resetTo="off"
+      >
+        <Switch id="set-comp" checked={player.compressor} onChange={setCompressor} />
+      </SettingRow>
+    </SettingsGroup>
+  );
+}
+
+// --------------------------------------------------------------- subtitles
+
+function SubtitlesPage({ s }: { s: SettingsControl }) {
+  const sub = s.settings.subtitle;
+  const d = DEFAULT_SUBTITLE;
+  const customFont = !FONTS.includes(sub.font);
+  return (
+    <>
+      <SettingsGroup heading="Preview" bare>
+        <div className="set-card sub-stage">
+          <Preview />
+        </div>
+      </SettingsGroup>
+
+      <SettingsGroup heading="Text">
+        <SettingRow label="Font" htmlFor="set-font" {...resettable(s, "subtitle.font", d.font)}>
+          <select
+            id="set-font"
+            value={customFont ? "" : sub.font}
+            onChange={(e) => s.patchSubtitle({ font: e.target.value })}
+          >
+            {FONTS.map((f) => (
+              <option key={f} value={f}>
+                {f}
+              </option>
+            ))}
+            {customFont ? <option value="">{sub.font}</option> : null}
+          </select>
+        </SettingRow>
+        <SettingRow
+          label="Size"
+          htmlFor="set-size"
+          description="In points at 720 lines, the way mpv scales it to the window."
+          {...resettable(s, "subtitle.size", `${d.size} pt`)}
+        >
+          <RangeField
+            id="set-size"
+            min={SUB_SIZE_MIN}
+            max={SUB_SIZE_MAX}
+            step={1}
+            value={sub.size}
+            mark={d.size}
+            format={(v) => `${v} pt`}
+            note="at 720p"
+            onChange={(v) => s.patchSubtitle({ size: v })}
+          />
+        </SettingRow>
+        <SettingRow label="Colour" {...resettable(s, "subtitle.color", d.color)}>
+          <div className="swatches">
+            {COLORS.map((c) => (
+              <button
+                key={c}
+                className={`swatch ${sub.color === c ? "sel" : ""}`}
+                style={{ background: c }}
+                data-tip={c}
+                aria-label={c}
+                aria-pressed={sub.color === c}
+                onClick={() => s.patchSubtitle({ color: c })}
+              />
+            ))}
+            <input
+              className="field hex"
+              value={sub.color}
+              spellCheck={false}
+              aria-label="Subtitle colour, hex"
+              onChange={(e) => s.patchSubtitle({ color: normaliseColor(e.target.value) })}
+            />
+          </div>
+        </SettingRow>
+      </SettingsGroup>
+
+      <SettingsGroup heading="Backdrop">
+        <SettingRow
+          label="Backdrop"
+          description="What stands between the letters and the picture."
+          {...resettable(s, "subtitle.backdrop", BACKDROP_LABEL[d.backdrop])}
+        >
+          <Segmented
+            label="Backdrop"
+            value={sub.backdrop}
+            options={BACKDROPS}
+            onChange={(backdrop) => s.patchSubtitle({ backdrop })}
+          />
+        </SettingRow>
+
+        {sub.backdrop === "background" || sub.backdrop === "window" ? (
+          <SettingRow
+            label="Opacity"
+            htmlFor="set-op"
+            {...resettable(s, "subtitle.backdropOpacity", `${Math.round(d.backdropOpacity * 100)}%`)}
+          >
+            <RangeField
+              id="set-op"
+              min={0}
+              max={100}
+              step={5}
+              value={Math.round(sub.backdropOpacity * 100)}
+              mark={Math.round(d.backdropOpacity * 100)}
+              format={(v) => `${v}%`}
+              onChange={(v) => s.patchSubtitle({ backdropOpacity: v / 100 })}
+            />
+          </SettingRow>
+        ) : null}
+
+        {sub.backdrop === "outline" ? (
+          <SettingRow
+            label="Outline size"
+            htmlFor="set-outline"
+            {...resettable(s, "subtitle.outlineSize", `${d.outlineSize} px`)}
+          >
+            <RangeField
+              id="set-outline"
+              min={0}
+              max={8}
+              step={0.5}
+              value={sub.outlineSize}
+              mark={d.outlineSize}
+              format={(v) => `${v} px`}
+              onChange={(v) => s.patchSubtitle({ outlineSize: v })}
+            />
+          </SettingRow>
+        ) : null}
+
+        {sub.backdrop === "shadow" ? (
+          <SettingRow
+            label="Shadow offset"
+            htmlFor="set-shadow"
+            {...resettable(s, "subtitle.shadowOffset", `${d.shadowOffset} px`)}
+          >
+            <RangeField
+              id="set-shadow"
+              min={0}
+              max={8}
+              step={0.5}
+              value={sub.shadowOffset}
+              mark={d.shadowOffset}
+              format={(v) => `${v} px`}
+              onChange={(v) => s.patchSubtitle({ shadowOffset: v })}
+            />
+          </SettingRow>
+        ) : null}
+      </SettingsGroup>
+
+      <p className="set-foot">
+        The real subtitles are drawn by libass into the video plane, underneath this window, so
+        they cannot be shown here. The preview is CSS standing in for them: the size scales the
+        same way mpv scales it — points at 720p — and each backdrop is the shape mpv will draw.
+      </p>
+    </>
+  );
+}
+
+// ------------------------------------------------------------------- guide
+
+function GuidePage({ s }: { s: SettingsControl }) {
+  const d = DEFAULT_SETTINGS;
+  const system12 = systemUses12h();
+  // 20:30 today, as an example of each way of writing it.
+  const sample = new Date();
+  sample.setHours(20, 30, 0, 0);
+  const at = sample.getTime() / 1000;
+  const shown = hhmm(at, uses12h(s.settings.timeFormat, system12));
+  const formats: { id: SettingsDto["timeFormat"]; label: string; tip: string }[] = [
+    { id: "auto", label: TIME_FORMAT_LABEL.auto, tip: `As the system writes it: ${hhmm(at, system12)}` },
+    { id: "12h", label: TIME_FORMAT_LABEL["12h"], tip: hhmm(at, true) },
+    { id: "24h", label: TIME_FORMAT_LABEL["24h"], tip: hhmm(at, false) },
+  ];
+
+  return (
+    <>
+      <SettingsGroup heading="Guide">
+        <SettingRow
+          label="Hours per screen"
+          htmlFor="set-hours"
+          description={
+            <>
+              Fewer hours means wider programme blocks and less squinting; more means less
+              paging. The guide reads this at once — press <kbd>G</kbd> to see it.
+            </>
+          }
+          {...resettable(s, "guideHours", `${d.guideHours} h`)}
+        >
+          <RangeField
+            id="set-hours"
+            min={MIN_GUIDE_HOURS}
+            max={MAX_GUIDE_HOURS}
+            step={1}
+            value={s.settings.guideHours}
+            mark={d.guideHours}
+            format={(v) => `${v} h`}
+            onChange={(v) => s.patch({ guideHours: v })}
+          />
+        </SettingRow>
+      </SettingsGroup>
+
+      <SettingsGroup heading="Clock">
+        <SettingRow
+          label="Times of day"
+          description={
+            <>
+              Every time zapper shows — the guide, now and next, programme search, the sleep
+              timer — written as <b data-selectable>{shown}</b>. System follows the language
+              and region settings, which write {hhmm(at, system12)}.
+            </>
+          }
+          {...resettable(s, "timeFormat", TIME_FORMAT_LABEL[d.timeFormat])}
+        >
+          <Segmented
+            label="Times of day"
+            value={s.settings.timeFormat}
+            options={formats}
+            onChange={(timeFormat) => s.patch({ timeFormat })}
+          />
+        </SettingRow>
+      </SettingsGroup>
+
+      <SettingsGroup heading="Catalogue">
+        <SettingRow
+          label="Refresh the catalogue"
+          htmlFor="set-sync"
+          description="How often the channel list and the guide are fetched again in the background."
+          {...resettable(s, "syncIntervalHours", `every ${d.syncIntervalHours} h`)}
+        >
+          <RangeField
+            id="set-sync"
+            min={SYNC_MIN}
+            max={SYNC_MAX}
+            step={1}
+            value={s.settings.syncIntervalHours}
+            mark={d.syncIntervalHours}
+            format={(v) => `${v} h`}
+            onChange={(v) => s.patch({ syncIntervalHours: v })}
+          />
+        </SettingRow>
+      </SettingsGroup>
+    </>
+  );
+}
+
+// -------------------------------------------------------------------- data
+
+function DataPage({ s }: { s: SettingsControl }) {
+  const { sync } = useApp();
+  const dispatch = useDispatch();
+  return (
+    <>
+      <SettingsGroup heading="Catalogue">
+        <SettingRow
+          label={sync.lastSynced ? `Last synced ${dateTime(sync.lastSynced)}` : "Never synced"}
+          description={
+            <>
+              {sync.channelsTotal.toLocaleString()} channels known. A failed sync is not fatal:
+              the last good catalogue keeps serving.
+            </>
+          }
+        >
+          <button className="ctl" onClick={() => void run(dispatch, "sync", backend.syncNow())}>
+            Refresh now
+          </button>
+        </SettingRow>
+      </SettingsGroup>
+      <BackupPane s={s} />
+    </>
+  );
+}
+
+// ----------------------------------------------------------------- updates
+
+/** The automatic check, and the way to ask now. The setting is an ordinary
+ *  one, saved like the rest; the check itself is the update dialog's, so
+ *  "Check now" opens it over this page rather than answering in a line here
+ *  that would then need its own download and install buttons. */
+function UpdatesPage({ s }: { s: SettingsControl }) {
+  const { update } = useApp();
+  const dispatch = useDispatch();
+  const configured = update.state.state !== "notConfigured";
+
+  return (
+    <>
+      <div className={`settings-note ${update.state.state === "failed" ? "bad" : ""}`}>
+        {updateStatusLine(update)}
+      </div>
+      <SettingsGroup heading="Updates">
+        <SettingRow
+          label="Check for updates automatically"
+          htmlFor="set-autoupdate"
+          description="A minute after zapper starts, and once a day while it runs. Off: only Check now asks."
+          {...resettable(s, "checkForUpdates", onOff(DEFAULT_SETTINGS.checkForUpdates))}
+        >
+          <Switch
+            id="set-autoupdate"
+            checked={s.settings.checkForUpdates}
+            onChange={(v) => s.patch({ checkForUpdates: v })}
+          />
+        </SettingRow>
+        <SettingRow
+          label={`Installed: ${update.current || "unknown"}`}
+          description={kindLabel(update.kind)}
+        >
+          <button
+            className="ctl"
+            disabled={!configured}
+            onClick={() => {
+              dispatch({ type: "updateDialog", open: true });
+              void checkForUpdates(dispatch);
+            }}
+          >
+            Check now
+          </button>
+        </SettingRow>
+      </SettingsGroup>
+      <p className="set-foot">
+        The check asks GitHub for zapper’s list of releases. Nothing about you, your provider or
+        what you watch is sent — only zapper’s version, in the request’s user agent. An update is
+        downloaded only when you choose to install it, and only installed if it matches the
+        checksum published with the release.
+      </p>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------- keyboard
+
 /** Every shortcut and gesture, drawn from SHORTCUT_GROUPS: keys as keycaps,
- *  what they do beside them, grouped by where they apply. */
+ *  what they do beside them, a box per place they apply. */
 function KeyboardPane() {
   return (
     <div className="kb">
@@ -481,56 +738,7 @@ function KeyboardPane() {
   );
 }
 
-/** The automatic check, and the way to ask now. The setting is an ordinary
- *  one, saved like the rest; the check itself is the update dialog's, so
- *  "Check now" opens it over this pane rather than answering in a line here
- *  that would then need its own download and install buttons. */
-function UpdatesPane({ s }: { s: SettingsControl }) {
-  const { update } = useApp();
-  const dispatch = useDispatch();
-  const configured = update.state.state !== "notConfigured";
-
-  return (
-    <>
-      <div className={`settings-note ${update.state.state === "failed" ? "bad" : ""}`}>
-        {updateStatusLine(update)}
-      </div>
-      <div className="row-field">
-        <label htmlFor="set-autoupdate">Check for updates automatically</label>
-        <button
-          id="set-autoupdate"
-          className={`ctl ${s.settings.checkForUpdates ? "on" : ""}`}
-          aria-pressed={s.settings.checkForUpdates}
-          onClick={() => s.patch({ checkForUpdates: !s.settings.checkForUpdates })}
-        >
-          {s.settings.checkForUpdates ? "on" : "off"}
-        </button>
-      </div>
-      <div className="row-field">
-        <label>
-          Installed: {update.current || "unknown"} · {kindLabel(update.kind)}
-        </label>
-        <button
-          className="ctl"
-          disabled={!configured}
-          onClick={() => {
-            dispatch({ type: "updateDialog", open: true });
-            void checkForUpdates(dispatch);
-          }}
-        >
-          Check now
-        </button>
-      </div>
-      <p>
-        A minute after zapper starts, and once a day while it runs, it asks
-        GitHub for its list of releases. Nothing about you, your provider or what
-        you watch is sent — only zapper’s version, in the request’s user agent.
-        An update is downloaded only when you choose to install it, and only
-        installed if it matches the checksum published with the release.
-      </p>
-    </>
-  );
-}
+// ------------------------------------------------------------------ status
 
 function Status({
   status,
@@ -563,63 +771,16 @@ function Status({
   );
 }
 
-/** What the rewind buffer buys, in time, at bitrates people recognise — and
- *  at the channel playing now, measured, which is the one that matters.
- *
- *  The setting is megabytes because that is all mpv's buffer understands;
- *  saying "4 minutes" instead was a promise it kept only at one bitrate. */
-function RewindEstimates({ megabytes, playing }: { megabytes: number; playing: boolean }) {
-  const [channelMbps, setChannelMbps] = useState<number | null>(null);
-  useEffect(() => {
-    if (!playing) {
-      setChannelMbps(null);
-      return;
-    }
-    let live = true;
-    void backend
-      .playerStats()
-      .then((st) => {
-        const bps = (st.videoBitrate ?? 0) + (st.audioBitrate ?? 0);
-        if (live) setChannelMbps(bps > 0 ? bps / 1_000_000 : null);
-      })
-      .catch(() => {
-        // The common bitrates below still answer the question.
-      });
-    return () => {
-      live = false;
-    };
-  }, [playing]);
-
-  return (
-    <dl className="rewind-estimates" aria-label="How far back the buffer reaches">
-      {channelMbps !== null ? (
-        <div className="this-channel">
-          <dt>This channel</dt>
-          <dd className="rate">{channelMbps.toFixed(1)} Mbps</dd>
-          <dd>{duration(rewindSeconds(megabytes, channelMbps))}</dd>
-        </div>
-      ) : null}
-      {REWIND_BITRATES.map((b) => (
-        <div key={b.label}>
-          <dt>{b.label}</dt>
-          <dd className="rate">{b.mbps} Mbps</dd>
-          <dd>{duration(rewindSeconds(megabytes, b.mbps))}</dd>
-        </div>
-      ))}
-    </dl>
-  );
-}
-
 /** How long "Saved" stays after a save lands. */
 const SAVED_FOR_MS = 1500;
 
-/** The routine half of the save status, in the corner of the section list.
+/** The routine half of the save status, in the corner of the page list.
  *
- *  A box at the top of the pane would appear and vanish on every toggle and
+ *  A box at the top of the page would appear and vanish on every toggle and
  *  push everything under it down and back up — the control just clicked
- *  would move out from under the pointer. Down here it sits
- *  in space nothing else uses, so it can come and go freely. Failures are
- *  not routine and stay at the top of the pane, where `Status` puts them. */
+ *  would move out from under the pointer. Down here it sits in space
+ *  nothing else uses, so it can come and go freely. Failures are not routine
+ *  and stay at the top of the page, where `Status` puts them. */
 function SaveIndicator({ saving, failed }: { saving: boolean; failed: boolean }) {
   const [saved, setSaved] = useState(false);
   const was = useRef(saving);

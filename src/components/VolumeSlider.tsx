@@ -29,11 +29,14 @@ export interface VolumeSliderProps {
   onVolume: (volume: number) => void;
   /** The chrome fades on idle; touching this control is not idle. */
   onActivity?: () => void;
+  /** The range written under the track: 0, 100% at the unity mark, and
+   *  the ceiling. For Settings, which has the room; the bar does not. */
+  scale?: boolean;
 }
 
 const pct = (n: number) => `${n * 100}%`;
 
-export function VolumeSlider({ volume, muted, onVolume, onActivity }: VolumeSliderProps) {
+export function VolumeSlider({ volume, muted, onVolume, onActivity, scale = false }: VolumeSliderProps) {
   const trackRef = useRef<HTMLDivElement | null>(null);
   const dragging = useRef(false);
 
@@ -160,6 +163,17 @@ export function VolumeSlider({ volume, muted, onVolume, onActivity }: VolumeSlid
         <div className="vol-unity" style={{ left: pct(UNITY_FRACTION) }} />
         <div className={`vol-handle ${boosted ? "over" : ""}`} style={{ left: pct(position) }} />
       </div>
+      {scale ? (
+        <div className="vol-scale" aria-hidden>
+          <span style={{ left: 0 }}>0%</span>
+          <span className="unity" style={{ left: pct(UNITY_FRACTION) }}>
+            {VOLUME_UNITY}%
+          </span>
+          <span className="boost" style={{ left: "100%" }}>
+            {VOLUME_MAX}%
+          </span>
+        </div>
+      ) : null}
     </div>
 
     <span

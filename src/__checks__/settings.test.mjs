@@ -20,6 +20,8 @@ import {
   planSave,
   previewFontPx,
   subtitlePreview,
+  isDefault,
+  resetPatch,
 } from "../logic/settings.ts";
 
 const subtitle = (p) => ({ ...DEFAULT_SUBTITLE, ...p });
@@ -180,4 +182,27 @@ test("none is exactly nothing: no band, no box, no shadow", () => {
 test("the preview takes the chosen colour, normalised", () => {
   assert.equal(subtitlePreview(subtitle({ color: "#F2E600" }), 150).text.color, "#f2e600");
   assert.equal(subtitlePreview(subtitle({ color: "chartreuse" }), 150).text.color, "#ffffff");
+});
+
+test("a setting at its default offers no reset; one moved does, for itself alone", () => {
+  const s = settings({});
+  for (const key of ["rewindMb", "hardwareDecode", "guideHours", "timeFormat", "subtitle.size", "subtitle.color"]) {
+    assert.equal(isDefault(s, key), true, key);
+  }
+  const moved = settings({ rewindMb: 1024, guideHours: 5, subtitle: subtitle({ size: 50, color: "#f2e600" }) });
+  assert.equal(isDefault(moved, "rewindMb"), false);
+  assert.equal(isDefault(moved, "subtitle.size"), false);
+  assert.equal(isDefault(moved, "hardwareDecode"), true);
+
+  const back = { ...moved, ...resetPatch(moved, "subtitle.size") };
+  assert.equal(back.subtitle.size, DEFAULT_SUBTITLE.size);
+  // The rest of the style, and the other settings, stay where they were.
+  assert.equal(back.subtitle.color, "#f2e600");
+  assert.equal(back.rewindMb, 1024);
+  assert.deepEqual(resetPatch(moved, "guideHours"), { guideHours: DEFAULT_SETTINGS.guideHours });
+});
+
+test("the backend's name for the default font counts as the default", () => {
+  assert.equal(isDefault(settings({ subtitle: subtitle({ font: "sans-serif" }) }), "subtitle.font"), true);
+  assert.equal(isDefault(settings({ subtitle: subtitle({ font: "Serif" }) }), "subtitle.font"), false);
 });

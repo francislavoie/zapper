@@ -25,6 +25,7 @@ import type {
 } from "./types";
 import { errorMessage, idle, type Async } from "./logic/async";
 import { DEFAULT_SETTINGS, clampSettings } from "./logic/settings";
+import { setTimeFormat } from "./logic/format";
 import { HOUR, clampOffset, rebaseOffset } from "./logic/guide";
 import { clampZoom, nextZoom, type ZoomCommand } from "./logic/zoom";
 import { loadZoom } from "./zoom";
@@ -720,6 +721,9 @@ const DispatchCtx = createContext<Dispatch<Action>>(() => {});
 export function StoreProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reducer, initialState);
   const d = useMemo(() => dispatch, [dispatch]);
+  // The time helpers' clock, set here as this renders: everything showing a
+  // time renders after it, so nothing draws one in the old format first.
+  setTimeFormat(state.settings.timeFormat);
   return (
     <StateCtx.Provider value={state}>
       <DispatchCtx.Provider value={d}>{children}</DispatchCtx.Provider>

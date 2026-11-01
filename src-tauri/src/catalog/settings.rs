@@ -143,10 +143,12 @@ mod tests {
             },
             check_for_updates: false,
             media_controls: true,
+            time_format: "12h".into(),
         };
         save(&c, &want).unwrap();
 
         let got = load(&c);
+        assert_eq!(got.time_format, "12h");
         assert!(!got.check_for_updates);
         assert!(got.media_controls);
         assert_eq!(got.rewind_mb, 1280);
@@ -180,6 +182,16 @@ mod tests {
         let got = load(&c);
         assert!(!got.media_controls);
         assert!(!got.check_for_updates);
+    }
+
+    #[test]
+    fn a_blob_from_before_the_clock_setting_follows_the_system() {
+        let c = open_in_memory().unwrap();
+        write_raw(&c, r#"{"guideHours":5,"mediaControls":true}"#);
+        let got = load(&c);
+        assert_eq!(got.time_format, "auto");
+        assert!(got.media_controls);
+        assert_eq!(got.guide_hours, 5);
     }
 
     #[test]

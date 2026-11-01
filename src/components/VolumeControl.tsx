@@ -25,6 +25,8 @@ export interface VolumeControlProps {
   /** The slider in a panel above the button, shown on hover or keyboard
    *  focus, rather than inline beside it. */
   popover?: boolean;
+  /** The slider's range written under it (VolumeSlider's `scale`). */
+  scale?: boolean;
 }
 
 export function VolumeControl({
@@ -34,6 +36,7 @@ export function VolumeControl({
   onToggleMute,
   onActivity,
   popover = false,
+  scale = false,
 }: VolumeControlProps) {
   const rootRef = useRef<HTMLDivElement | null>(null);
 
@@ -67,7 +70,7 @@ export function VolumeControl({
   }, []);
 
   const slider = (
-    <VolumeSlider volume={volume} muted={muted} onVolume={onVolume} onActivity={onActivity} />
+    <VolumeSlider volume={volume} muted={muted} onVolume={onVolume} onActivity={onActivity} scale={scale} />
   );
 
   return (

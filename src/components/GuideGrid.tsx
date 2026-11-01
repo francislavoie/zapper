@@ -37,7 +37,7 @@ import { useChannelPages } from "../hooks/useChannelPages";
 import { useClock } from "../hooks/useClock";
 import { useEasedTime } from "../hooks/useEasedTime";
 import { useGuideRows } from "../hooks/useGuideRows";
-import { hhmm } from "../logic/format";
+import { timeRange, timeTick } from "../logic/format";
 import {
   GUIDE_FUTURE_HOURS,
   GUIDE_PAST_HOURS,
@@ -247,7 +247,7 @@ export function GuideGrid({ besideRail = false }: { besideRail?: boolean }) {
             <h2 data-tip-overflow="">{categoryName}</h2>
             <span className="guide-window">
               {day ? `${day} ` : ""}
-              {hhmm(win.from)}–{hhmm(win.to)} · {hours}h
+              {timeRange(win.from, win.to)} · {hours}h
             </span>
           </div>
         </div>
@@ -315,7 +315,7 @@ export function GuideGrid({ besideRail = false }: { besideRail?: boolean }) {
               const left = ((t - win.from) / (win.to - win.from)) * trackWidth;
               return (
                 <span key={t} className="guide-tick" style={{ left }}>
-                  {hhmm(t)}
+                  {timeTick(t)}
                 </span>
               );
             })}
@@ -595,7 +595,7 @@ function Programme({
     act = "inert";
   }
 
-  const time = `${hhmm(programme.start)}–${hhmm(programme.stop)}`;
+  const time = timeRange(programme.start, programme.stop);
   const label = span.width >= LABEL_MIN_PX ? programme.title : "";
   const style = { left: span.left, width: span.width };
   const classes = [

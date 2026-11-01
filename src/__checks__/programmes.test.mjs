@@ -11,6 +11,11 @@ import {
   inGuideReach,
 } from "../logic/programmes.ts";
 import { GUIDE_FUTURE_HOURS, GUIDE_PAST_HOURS, HALF_HOUR, HOUR, anchorFor } from "../logic/guide.ts";
+import { setTimeFormat } from "../logic/format.ts";
+
+// The 24-hour clock unless a check says otherwise: "auto" would follow the
+// locale of whoever runs this.
+setTimeFormat("24h");
 
 /** Local noon on a fixed day, so day names do not depend on when this runs. */
 const NOON = Math.floor(new Date(2026, 8, 8, 12, 0, 0).getTime() / 1000);
@@ -27,8 +32,12 @@ test("each airing does its own thing", () => {
 });
 
 test("on now says until when", () => {
+  setTimeFormat("24h");
   const hit = { airing: "live", programme: { start: at(-1), stop: at(0, 30) } };
   assert.equal(airingWhen(hit, NOON), "until 12:30");
+  setTimeFormat("12h");
+  assert.equal(airingWhen(hit, NOON), "until 12:30 pm");
+  setTimeFormat("24h");
   // A guide entry with no stop has no end to give, rather than "until 00:00".
   const open = { airing: "live", programme: { start: at(-1), stop: 0 } };
   assert.equal(airingWhen(open, NOON), "now");
@@ -44,6 +53,11 @@ test("upcoming and catch-up name the day", () => {
   assert.match(fri, / 12:00$/);
   assert.notEqual(fri.split(" ")[0], "Today");
   assert.notEqual(fri.split(" ")[0], "Tomorrow");
+  // The same airings on the 12-hour clock.
+  setTimeFormat("12h");
+  assert.equal(when("upcoming", at(8)), "Today 8:00 pm");
+  assert.equal(when("upcoming", at(18)), "Tomorrow 6:00 am");
+  setTimeFormat("24h");
 });
 
 test("the guide opens on the half hour the programme starts in", () => {

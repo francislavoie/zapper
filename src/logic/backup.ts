@@ -30,7 +30,7 @@ import {
   SORT_LABEL,
   type CategorySort,
 } from "./categoryOrder.ts";
-import { clampSettings } from "./settings.ts";
+import { TIME_FORMAT_LABEL, clampSettings } from "./settings.ts";
 
 export const BACKUP_FORMAT = "zapper-backup";
 export const BACKUP_VERSION = 1;
@@ -105,6 +105,7 @@ const SETTING_KINDS: Record<Exclude<keyof SettingsDto, "subtitle">, Kind> = {
   language: "string",
   checkForUpdates: "boolean",
   mediaControls: "boolean",
+  timeFormat: "string",
 };
 
 const SUBTITLE_KINDS: Record<keyof SubtitleStyleDto, Kind> = {
@@ -318,6 +319,7 @@ const SETTING_LABELS: Record<Exclude<keyof SettingsDto, "subtitle">, [string, (v
   language: ["Language", (v: string) => v],
   checkForUpdates: ["Check for updates automatically", onOff],
   mediaControls: ["Media keys and desktop controls", onOff],
+  timeFormat: ["Clock", (v: string) => TIME_FORMAT_LABEL[v] ?? v],
 };
 
 const SUBTITLE_LABELS: Record<keyof SubtitleStyleDto, [string, (v: never) => string]> = {

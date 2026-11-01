@@ -14,6 +14,7 @@ import { useEffect, useRef, useState } from "react";
 import { backend } from "../backend";
 import { checkForUpdates } from "../actions";
 import { errorMessage } from "../logic/async";
+import { dateTime } from "../logic/format";
 import {
   asksForPassword,
   formatSize,
@@ -139,7 +140,7 @@ export function UpdateModal() {
           {update.lastChecked ? (
             <div>
               <dt>Checked</dt>
-              <dd>{new Date(update.lastChecked * 1000).toLocaleString()}</dd>
+              <dd>{dateTime(update.lastChecked)}</dd>
             </div>
           ) : null}
           {release?.publishedAt ? (

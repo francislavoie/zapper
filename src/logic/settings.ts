@@ -32,6 +32,8 @@ export const DEFAULT_SETTINGS: SettingsDto = {
   checkForUpdates: true,
   // Opt-in: the desktop gives the media keys to one player at a time.
   mediaControls: false,
+  // The locale's clock until someone says otherwise.
+  timeFormat: "auto",
 };
 
 /** Rewind buffer, in megabytes. The ceiling is the backend's: the buffer is
@@ -62,6 +64,50 @@ export const SUB_SIZE_MIN = 12;
 export const SUB_SIZE_MAX = 72;
 export const SYNC_MIN = 1;
 export const SYNC_MAX = 24;
+
+/** The clock choices as Settings and a backup's import preview name them. */
+export const TIME_FORMAT_LABEL: Record<string, string> = {
+  auto: "System",
+  "12h": "12-hour",
+  "24h": "24-hour",
+};
+
+// ------------------------------------------------------- one setting's reset
+
+/** A setting Settings can put back on its own: a top-level field, or one of
+ *  the subtitle style's. */
+export type SettingKey =
+  | Exclude<keyof SettingsDto, "subtitle">
+  | `subtitle.${keyof SubtitleStyleDto}`;
+
+/** The family names that mean the default font. The backend's own default
+ *  is fontconfig's "sans-serif" where this one says "Sans": the same face,
+ *  so neither should offer to reset to the other. */
+const DEFAULT_FONTS = new Set(["sans", "sans-serif"]);
+
+function valueOf(s: SettingsDto, key: SettingKey): unknown {
+  if (key.startsWith("subtitle.")) {
+    return s.subtitle[key.slice("subtitle.".length) as keyof SubtitleStyleDto];
+  }
+  return s[key as Exclude<keyof SettingsDto, "subtitle">];
+}
+
+/** Whether `key` is at its default, which is when Settings hides its ↺. */
+export function isDefault(s: SettingsDto, key: SettingKey): boolean {
+  const value = valueOf(s, key);
+  if (key === "subtitle.font") return DEFAULT_FONTS.has(String(value).trim().toLowerCase());
+  return value === valueOf(DEFAULT_SETTINGS, key);
+}
+
+/** The patch that puts `key` back to its default and leaves the rest. */
+export function resetPatch(s: SettingsDto, key: SettingKey): Partial<SettingsDto> {
+  if (key.startsWith("subtitle.")) {
+    const field = key.slice("subtitle.".length) as keyof SubtitleStyleDto;
+    return { subtitle: { ...s.subtitle, [field]: DEFAULT_SUBTITLE[field] } };
+  }
+  const k = key as Exclude<keyof SettingsDto, "subtitle">;
+  return { [k]: DEFAULT_SETTINGS[k] } as Partial<SettingsDto>;
+}
 
 const clamp = (n: number, lo: number, hi: number) =>
   Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : lo;
@@ -108,6 +154,8 @@ export function clampSettings(s: SettingsDto): SettingsDto {
     checkForUpdates: s.checkForUpdates !== false,
     // The other way round: only an explicit `true` takes the media keys.
     mediaControls: s.mediaControls === true,
+    // A value this build does not know is the locale's clock, as missing is.
+    timeFormat: s.timeFormat === "12h" || s.timeFormat === "24h" ? s.timeFormat : "auto",
   };
 }
 

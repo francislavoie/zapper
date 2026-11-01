@@ -426,3 +426,16 @@ export function ChevronRight({ className, title }: IconProps) {
     </svg>
   );
 }
+
+/** A setting's "back to the default": an arrow turning back on itself. */
+export function ResetArrow({ className, title }: IconProps) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" aria-hidden={!title} focusable="false">
+      {title ? <title>{title}</title> : null}
+      <path d="M4.5 12a7.5 7.5 0 1 0 2.2-5.3L4.5 8.9" fill="none" stroke="currentColor"
+            strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M4.5 4.5v4.4h4.4" fill="none" stroke="currentColor" strokeWidth="2"
+            strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}

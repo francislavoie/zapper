@@ -21,6 +21,8 @@ import {
 } from "../logic/backup";
 import { useApp, useDispatch } from "../store";
 import type { BackupFileDto } from "../types";
+import { SettingRow, SettingsGroup } from "./SettingsParts";
+import { Switch } from "./Switch";
 
 interface Pending {
   file: BackupFileDto;
@@ -140,49 +142,55 @@ export function BackupPane({ s }: { s: SettingsControl }) {
     setPending((p) => (p ? { ...p, pick: { ...p.pick, [k]: !p.pick[k] } } : p));
 
   return (
-    <div className="backup">
-      <h4>Back up and restore</h4>
-      <div className="row-field">
-        <label htmlFor="backup-export">
-          Settings, favourites and category choices, to a file
-        </label>
+    <SettingsGroup heading="Back up and restore">
+      <SettingRow
+        label="Export"
+        htmlFor="backup-export"
+        description="Settings, favourites and category choices, to a file."
+      >
         <button id="backup-export" className="ctl" disabled={busy} onClick={() => void exportNow()}>
           Export…
         </button>
-      </div>
-      <div className="row-field">
-        <label htmlFor="backup-account">Include the account</label>
-        <input
-          id="backup-account"
-          type="checkbox"
-          checked={withAccount}
-          onChange={(e) => setWithAccount(e.target.checked)}
-        />
-      </div>
-      {withAccount ? (
-        <p className="settings-note bad">
-          The file will contain the account’s password, and any login in its
-          playlist or guide addresses, as plain text. Keep it somewhere
-          private.
-        </p>
-      ) : null}
-      <div className="row-field">
-        <label htmlFor="backup-import">Restore from a file</label>
+      </SettingRow>
+      <SettingRow
+        label="Include the account"
+        htmlFor="backup-account"
+        description={
+          withAccount ? (
+            <span className="set-warn">
+              The file will contain the account’s password, and any login in its playlist or
+              guide addresses, as plain text. Keep it somewhere private.
+            </span>
+          ) : (
+            "Its password too, so the file can set up zapper on another machine."
+          )
+        }
+      >
+        <Switch id="backup-account" checked={withAccount} onChange={setWithAccount} />
+      </SettingRow>
+      <SettingRow
+        label="Restore from a file"
+        htmlFor="backup-import"
+        description="Shows what the file would change, and changes nothing until you apply."
+      >
         <button id="backup-import" className="ctl" disabled={busy} onClick={() => void openNow()}>
           Import…
         </button>
-      </div>
+      </SettingRow>
 
-      {note ? (
-        <p className={`settings-note ${note.bad ? "bad" : ""}`} role="status">
-          {note.text}
-        </p>
+      {note || pending ? (
+        <div className="set-card-foot">
+          {note ? (
+            <p className={`settings-note ${note.bad ? "bad" : ""}`} role="status">
+              {note.text}
+            </p>
+          ) : null}
+          {pending ? (
+            <ImportPreview pending={pending} busy={busy} toggle={toggle} apply={() => void apply()} cancel={() => setPending(null)} />
+          ) : null}
+        </div>
       ) : null}
-
-      {pending ? (
-        <ImportPreview pending={pending} busy={busy} toggle={toggle} apply={() => void apply()} cancel={() => setPending(null)} />
-      ) : null}
-    </div>
+    </SettingsGroup>
   );
 }
 
@@ -296,14 +304,13 @@ function Section({
   const empty = changes ? changes.length === 0 : summary === null;
   return (
     <div className={`backup-section ${empty ? "same" : ""}`}>
-      <div className="row-field">
+      <div className="backup-pick">
         <label htmlFor={`backup-pick-${id}`}>
           {heading}
           {empty ? <span className="backup-same"> — no changes</span> : null}
         </label>
-        <input
+        <Switch
           id={`backup-pick-${id}`}
-          type="checkbox"
           checked={checked}
           disabled={empty}
           onChange={() => onToggle(id)}

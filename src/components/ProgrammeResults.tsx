@@ -36,6 +36,7 @@ export function ProgrammeResults({ search, query }: { search: ProgrammeSearch; q
           key={`${hit.channel.streamId}:${hit.programme.start}`}
           hit={hit}
           now={now}
+          clock={state.settings.timeFormat}
           selected={hit.airing === "live" && state.player.streamId === hit.channel.streamId}
           onChoose={choose}
         />
@@ -66,6 +67,10 @@ const HitRow = memo(function HitRow({
   now: number;
   selected: boolean;
   onChoose: (hit: ProgrammeHitDto) => void;
+  /** The 12/24-hour setting. Unread: airingWhen's times follow the setting
+   *  by themselves, and this prop is only how a change of clock redraws a
+   *  row the memo would otherwise keep. */
+  clock: string;
 }) {
   const { channel, programme, airing } = hit;
   return (

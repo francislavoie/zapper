@@ -23,6 +23,7 @@ import { useClock } from "../hooks/useClock";
 import { useNowNext } from "../hooks/useNowNext";
 import {
   hhmm,
+  timeRange,
   duration,
   liveOffset,
   measuredLine,
@@ -371,7 +372,7 @@ function Playing({
             <div className="watch-prog-head">
               <span className="watch-when">NOW</span>
               <span className="watch-time">
-                {hhmm(onNow.start)}–{hhmm(onNow.stop)}
+                {timeRange(onNow.start, onNow.stop)}
               </span>
             </div>
             <div className="watch-title" data-tip-overflow="">{onNow.title}</div>

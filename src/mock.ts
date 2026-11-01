@@ -635,6 +635,7 @@ let storedSettings: SettingsDto = {
   },
   checkForUpdates: true,
   mediaControls: false,
+  timeFormat: "auto",
 };
 
 // ----------------------------------------------------------------- updates

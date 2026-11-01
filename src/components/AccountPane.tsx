@@ -44,6 +44,7 @@ import {
   type TvhForm,
 } from "../logic/sources";
 import type { AccountDto } from "../types";
+import { SettingRow, SettingsGroup } from "./SettingsParts";
 
 const EMPTY_M3U: M3uForm = { playlist: "", epgText: "", userAgent: "", epgTouched: false };
 const EMPTY_HDHR: HdhrForm = { device: "", epgText: "", epgTouched: false };
@@ -158,248 +159,238 @@ export function AccountPane() {
       {/* The choice is the explanation: one card per type, saying what you
           need for it and what you get from it, so picking one and learning
           what it means are the same act. */}
-      <div className="source-cards" role="radiogroup" aria-label="Account type">
-        {SOURCE_KINDS.map((k) => {
-          const on = kind === k.id;
-          return (
-            <button
-              key={k.id}
-              role="radio"
-              aria-checked={on}
-              className={`source-card ${on ? "on" : ""}`}
-              onClick={() => {
-                setKind(k.id);
-                setNote(null);
-              }}
-            >
-              <span className="source-card-head">
-                <span className="source-card-dot" aria-hidden />
-                <span className="source-card-title">{k.label}</span>
-              </span>
-              <span className="source-card-needs">Needs: {k.needs}</span>
-              <span className="source-card-points">
-                {k.points.map((p) => (
-                  <span key={p.text} className={`source-point ${p.ok ? "ok" : "limit"}`}>
-                    <span className="source-point-mark" aria-label={p.ok ? "yes" : "limit"}>
-                      {p.ok ? "✓" : "–"}
+      <SettingsGroup heading="Account type" bare>
+        <div className="source-cards" role="radiogroup" aria-label="Account type">
+          {SOURCE_KINDS.map((k) => {
+            const on = kind === k.id;
+            return (
+              <button
+                key={k.id}
+                role="radio"
+                aria-checked={on}
+                className={`source-card ${on ? "on" : ""}`}
+                onClick={() => {
+                  setKind(k.id);
+                  setNote(null);
+                }}
+              >
+                <span className="source-card-head">
+                  <span className="source-card-dot" aria-hidden />
+                  <span className="source-card-title">{k.label}</span>
+                </span>
+                <span className="source-card-needs">Needs: {k.needs}</span>
+                <span className="source-card-points">
+                  {k.points.map((p) => (
+                    <span key={p.text} className={`source-point ${p.ok ? "ok" : "limit"}`}>
+                      <span className="source-point-mark" aria-label={p.ok ? "yes" : "limit"}>
+                        {p.ok ? "✓" : "–"}
+                      </span>
+                      {p.text}
                     </span>
-                    {p.text}
-                  </span>
-                ))}
-              </span>
-            </button>
-          );
-        })}
-      </div>
-      {switching ? (
-        <p className="source-switching">
-          Saving switches the account type to {kindInfo(kind).label}.
-        </p>
-      ) : null}
+                  ))}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        {switching ? (
+          <p className="source-switching">
+            Saving switches the account type to {kindInfo(kind).label}.
+          </p>
+        ) : null}
+      </SettingsGroup>
 
-      {/* One form, so the labels share a column and the boxes line up. */}
-      {kind === "xtream" ? (
-        <div className="account-form">
-          <div className="row-field">
+      {/* One box of form rows, so the labels share a column and the inputs
+          line up down their left edge. */}
+      <SettingsGroup heading={kindInfo(kind).label}>
+        {kind === "xtream" ? (
+          <>
             {/* "Xtream URL": it is the address of an Xtream Codes server, and
                 that is how providers usually label it when they hand it out.
                 Somebody pasting a value in should be able to recognise which
                 value it is being asked for. */}
-            <label htmlFor="acct-host">Xtream URL</label>
-            <input
-              id="acct-host"
-              className="field"
-              value={host}
-              spellCheck={false}
-              autoComplete="off"
-              placeholder="http://tv.example.com:8080"
-              onChange={(e) => setHost(e.target.value)}
-            />
-          </div>
-
-          <div className="row-field">
-            <label htmlFor="acct-user">Username</label>
-            <input
-              id="acct-user"
-              className="field"
-              value={username}
-              spellCheck={false}
-              autoComplete="off"
-              onChange={(e) => setUsername(e.target.value)}
-            />
-          </div>
-
-          <div className="row-field">
-            <label htmlFor="acct-pass">Password</label>
-            <input
-              id="acct-pass"
-              className="field"
-              type="password"
-              value={password}
-              autoComplete="off"
-              placeholder={account?.hasPassword ? "unchanged" : "required"}
-              onChange={(e) => setPassword(e.target.value)}
-            />
-          </div>
-        </div>
-      ) : kind === "hdhomerun" ? (
-        <div className="account-form">
-          <div className="row-field">
+            <SettingRow label="Xtream URL" htmlFor="acct-host" layout="form">
+              <input
+                id="acct-host"
+                className="field"
+                value={host}
+                spellCheck={false}
+                autoComplete="off"
+                placeholder="http://tv.example.com:8080"
+                onChange={(e) => setHost(e.target.value)}
+              />
+            </SettingRow>
+            <SettingRow label="Username" htmlFor="acct-user" layout="form">
+              <input
+                id="acct-user"
+                className="field"
+                value={username}
+                spellCheck={false}
+                autoComplete="off"
+                onChange={(e) => setUsername(e.target.value)}
+              />
+            </SettingRow>
+            <SettingRow label="Password" htmlFor="acct-pass" layout="form">
+              <input
+                id="acct-pass"
+                className="field"
+                type="password"
+                value={password}
+                autoComplete="off"
+                placeholder={account?.hasPassword ? "unchanged" : "required"}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+            </SettingRow>
+          </>
+        ) : kind === "hdhomerun" ? (
+          <>
             {/* The address, not a name from a list: zapper does not scan the
                 network, and the HDHomeRun app shows the address on its
                 device page. */}
-            <label htmlFor="acct-hdhr">Tuner address</label>
-            <input
-              id="acct-hdhr"
-              className="field"
-              value={hdhr.device}
-              spellCheck={false}
-              autoComplete="off"
-              placeholder="192.168.1.50 or hdhomerun.local"
-              onChange={(e) => setHdhr({ ...hdhr, device: e.target.value })}
-            />
-          </div>
-
-          <div className="row-field">
-            <label htmlFor="acct-hdhr-epg">Guide (XMLTV)</label>
-            <textarea
-              id="acct-hdhr-epg"
-              className="field"
-              rows={2}
-              value={hdhr.epgText}
-              spellCheck={false}
-              autoComplete="off"
-              placeholder={
-                account?.hdhomerunEpgRedacted
-                  ? `unchanged — ${account.hdhomerunEpgUrls.join(", ")}`
-                  : "optional; leave empty for SiliconDust's free guide"
-              }
-              onChange={(e) => setHdhr({ ...hdhr, epgText: e.target.value, epgTouched: true })}
-            />
-          </div>
-        </div>
-      ) : kind === "tvheadend" ? (
-        <div className="account-form">
-          <div className="row-field">
-            <label htmlFor="acct-tvh">Server</label>
-            <input
-              id="acct-tvh"
-              className="field"
-              value={tvh.url}
-              spellCheck={false}
-              autoComplete="off"
-              placeholder="http://tvheadend.local:9981"
-              onChange={(e) => setTvh({ ...tvh, url: e.target.value })}
-            />
-          </div>
-
-          <div className="row-field">
-            <label htmlFor="acct-tvh-user">Username</label>
-            <input
-              id="acct-tvh-user"
-              className="field"
-              value={tvh.username}
-              spellCheck={false}
-              autoComplete="off"
-              placeholder="optional"
-              onChange={(e) => setTvh({ ...tvh, username: e.target.value })}
-            />
-          </div>
-
-          <div className="row-field">
-            <label htmlFor="acct-tvh-pass">Password</label>
-            <input
-              id="acct-tvh-pass"
-              className="field"
-              type="password"
-              value={tvh.password}
-              autoComplete="off"
-              placeholder={
-                account?.tvheadendHasPassword
-                  ? "unchanged"
-                  : tvh.username.trim() === ""
-                    ? "optional"
-                    : "required"
-              }
-              onChange={(e) => setTvh({ ...tvh, password: e.target.value })}
-            />
-          </div>
-        </div>
-      ) : (
-        <div className="account-form">
-          <div className="row-field">
+            <SettingRow label="Tuner address" htmlFor="acct-hdhr" layout="form">
+              <input
+                id="acct-hdhr"
+                className="field"
+                value={hdhr.device}
+                spellCheck={false}
+                autoComplete="off"
+                placeholder="192.168.1.50 or hdhomerun.local"
+                onChange={(e) => setHdhr({ ...hdhr, device: e.target.value })}
+              />
+            </SettingRow>
+            <SettingRow label="Guide (XMLTV)" htmlFor="acct-hdhr-epg" layout="form">
+              <textarea
+                id="acct-hdhr-epg"
+                className="field"
+                rows={2}
+                value={hdhr.epgText}
+                spellCheck={false}
+                autoComplete="off"
+                placeholder={
+                  account?.hdhomerunEpgRedacted
+                    ? `unchanged — ${account.hdhomerunEpgUrls.join(", ")}`
+                    : "optional; leave empty for SiliconDust's free guide"
+                }
+                onChange={(e) => setHdhr({ ...hdhr, epgText: e.target.value, epgTouched: true })}
+              />
+            </SettingRow>
+          </>
+        ) : kind === "tvheadend" ? (
+          <>
+            <SettingRow label="Server" htmlFor="acct-tvh" layout="form">
+              <input
+                id="acct-tvh"
+                className="field"
+                value={tvh.url}
+                spellCheck={false}
+                autoComplete="off"
+                placeholder="http://tvheadend.local:9981"
+                onChange={(e) => setTvh({ ...tvh, url: e.target.value })}
+              />
+            </SettingRow>
+            <SettingRow label="Username" htmlFor="acct-tvh-user" layout="form">
+              <input
+                id="acct-tvh-user"
+                className="field"
+                value={tvh.username}
+                spellCheck={false}
+                autoComplete="off"
+                placeholder="optional"
+                onChange={(e) => setTvh({ ...tvh, username: e.target.value })}
+              />
+            </SettingRow>
+            <SettingRow label="Password" htmlFor="acct-tvh-pass" layout="form">
+              <input
+                id="acct-tvh-pass"
+                className="field"
+                type="password"
+                value={tvh.password}
+                autoComplete="off"
+                placeholder={
+                  account?.tvheadendHasPassword
+                    ? "unchanged"
+                    : tvh.username.trim() === ""
+                      ? "optional"
+                      : "required"
+                }
+                onChange={(e) => setTvh({ ...tvh, password: e.target.value })}
+              />
+            </SettingRow>
+          </>
+        ) : (
+          <>
             {/* A path is as good as a URL: plenty of playlists are a file
                 somebody downloaded once and edits by hand. */}
-            <label htmlFor="acct-playlist">Playlist</label>
-            <input
-              id="acct-playlist"
-              className="field"
-              value={m3u.playlist}
-              spellCheck={false}
-              autoComplete="off"
-              placeholder={
-                account?.playlistRedacted
-                  ? `unchanged — ${account.playlist}`
-                  : "https://… or /path/to/playlist.m3u"
-              }
-              onChange={(e) => setM3u({ ...m3u, playlist: e.target.value })}
-            />
-          </div>
+            <SettingRow label="Playlist" htmlFor="acct-playlist" layout="form">
+              <input
+                id="acct-playlist"
+                className="field"
+                value={m3u.playlist}
+                spellCheck={false}
+                autoComplete="off"
+                placeholder={
+                  account?.playlistRedacted
+                    ? `unchanged — ${account.playlist}`
+                    : "https://… or /path/to/playlist.m3u"
+                }
+                onChange={(e) => setM3u({ ...m3u, playlist: e.target.value })}
+              />
+            </SettingRow>
+            <SettingRow label="Guide (XMLTV)" htmlFor="acct-epg" layout="form">
+              <textarea
+                id="acct-epg"
+                className="field"
+                rows={2}
+                value={m3u.epgText}
+                spellCheck={false}
+                autoComplete="off"
+                placeholder={
+                  account?.epgRedacted
+                    ? `unchanged — ${account.epgUrls.join(", ")}`
+                    : "optional; one address per line, .xml or .xml.gz"
+                }
+                onChange={(e) => setM3u({ ...m3u, epgText: e.target.value, epgTouched: true })}
+              />
+            </SettingRow>
+            <SettingRow label="User agent" htmlFor="acct-ua" layout="form">
+              <input
+                id="acct-ua"
+                className="field"
+                value={m3u.userAgent}
+                spellCheck={false}
+                autoComplete="off"
+                placeholder="optional; only if the provider asks for one"
+                onChange={(e) => setM3u({ ...m3u, userAgent: e.target.value })}
+              />
+            </SettingRow>
+          </>
+        )}
 
-          <div className="row-field">
-            <label htmlFor="acct-epg">Guide (XMLTV)</label>
-            <textarea
-              id="acct-epg"
-              className="field"
-              rows={2}
-              value={m3u.epgText}
-              spellCheck={false}
-              autoComplete="off"
-              placeholder={
-                account?.epgRedacted
-                  ? `unchanged — ${account.epgUrls.join(", ")}`
-                  : "optional; one address per line, .xml or .xml.gz"
-              }
-              onChange={(e) => setM3u({ ...m3u, epgText: e.target.value, epgTouched: true })}
-            />
+        <div className="set-card-foot">
+          <div className="settings-actions">
+            <button className="ctl primary" disabled={busy || !changed} onClick={() => void save()}>
+              Save
+            </button>
+            {/* Tests what is saved, so it would test the other kind while the
+                switch is showing this one. Save first. */}
+            <button
+              className="ctl"
+              disabled={busy || switching}
+              data-tip={switching ? "Save first: the test checks the saved account" : undefined}
+              onClick={() => void test()}
+            >
+              Test connection
+            </button>
           </div>
-
-          <div className="row-field">
-            <label htmlFor="acct-ua">User agent</label>
-            <input
-              id="acct-ua"
-              className="field"
-              value={m3u.userAgent}
-              spellCheck={false}
-              autoComplete="off"
-              placeholder="optional; only if the provider asks for one"
-              onChange={(e) => setM3u({ ...m3u, userAgent: e.target.value })}
-            />
-          </div>
+          {/* Boxed, because it is news: it is the answer to the button that
+              was just pressed, and it goes away again. */}
+          {note ? (
+            <p className={`settings-note ${note.kind === "bad" ? "bad" : ""}`} role="status">
+              {note.text}
+            </p>
+          ) : null}
         </div>
-      )}
-
-      <div className="settings-actions">
-        <button className="ctl primary" disabled={busy || !changed} onClick={() => void save()}>
-          Save
-        </button>
-        {/* Tests what is saved, so it would test the other kind while the
-            switch is showing this one. Save first. */}
-        <button
-          className="ctl"
-          disabled={busy || switching}
-          data-tip={switching ? "Save first: the test checks the saved account" : undefined}
-          onClick={() => void test()}
-        >
-          Test connection
-        </button>
-      </div>
-
-      {/* Boxed, because it is news: it is the answer to the button that was
-          just pressed, and it goes away again. */}
-      {note ? (
-        <p className={`settings-note ${note.kind === "bad" ? "bad" : ""}`}>{note.text}</p>
-      ) : null}
+      </SettingsGroup>
 
       {/* Unboxed, because these are not news. They are true of the fields
           above whether or not anybody has touched them, and two grey boxes

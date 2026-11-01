@@ -211,6 +211,10 @@ export interface SettingsDto {
    *  SMTC on Windows). Off by default: the desktop gives those keys to one
    *  player at a time, and a music player may want to keep them. */
   mediaControls: boolean;
+  /** How times of day are written: `"auto"` follows the system's locale,
+   *  `"12h"` is "8:30 pm", `"24h"` is "20:30". Any other value reads as
+   *  `"auto"`. */
+  timeFormat: "auto" | "12h" | "24h";
 }
 
 /** One channel's watch history, as a backup carries it. Mirrors

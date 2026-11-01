@@ -352,6 +352,12 @@ pub struct SettingsDto {
     /// desktop gives those keys to one player at a time and plenty of people
     /// want their music player to keep them.
     pub media_controls: bool,
+    /// How the interface writes times of day: `"auto"` follows the system's
+    /// locale, `"12h"` is "8:30 pm", `"24h"` is "20:30". A string rather than
+    /// an enum, like `language`: the backend never reads it, and a value a
+    /// newer build adds must not make this one throw the whole blob away
+    /// (the frontend reads anything it does not know as `"auto"`).
+    pub time_format: String,
 }
 
 impl Default for SettingsDto {
@@ -366,6 +372,7 @@ impl Default for SettingsDto {
             subtitle: SubtitleStyleDto::default(),
             check_for_updates: true,
             media_controls: false,
+            time_format: "auto".to_owned(),
         }
     }
 }

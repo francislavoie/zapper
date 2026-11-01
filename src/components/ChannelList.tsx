@@ -197,6 +197,7 @@ export function ChannelList() {
         pending={state.pendingStreamId === c.streamId}
         onPlay={onPlay}
         onOpenFull={onOpenFull}
+        clock={state.settings.timeFormat}
       />,
     );
   }

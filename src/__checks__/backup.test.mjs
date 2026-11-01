@@ -110,6 +110,24 @@ test("a wrongly typed setting is skipped and said, the rest still imported", () 
   );
 });
 
+test("the clock travels in a backup, named as Settings names it", () => {
+  const doc = buildBackup(
+    { settings: { ...DEFAULT_SETTINGS, timeFormat: "12h" }, categories, favourites: [] },
+    new Date("2026-11-01T12:00:00Z"),
+  );
+  const { backup } = ok(JSON.parse(JSON.stringify(doc)));
+  assert.equal(backup.settings.timeFormat, "12h");
+  const plan = planImport(here(), backup);
+  assert.deepEqual(
+    plan.settings.changes.map((c) => [c.label, c.from, c.to]),
+    [["Clock", "System", "12-hour"]],
+  );
+  // One this build does not know reads as the system's, and changes nothing.
+  const odd = ok({ format: BACKUP_FORMAT, version: 1, settings: { timeFormat: "36h" } });
+  assert.equal(planImport(here(), odd.backup).settings.next.timeFormat, "auto");
+  assert.deepEqual(planImport(here(), odd.backup).settings.changes, []);
+});
+
 test("imported settings are clamped like any other", () => {
   const { backup } = ok({
     format: BACKUP_FORMAT,

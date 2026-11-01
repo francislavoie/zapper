@@ -134,12 +134,95 @@ export function liveState(atLiveEdge: boolean, behindLive: number): LiveState {
   return { live: false, label: `Behind live by ${behindGap(behindLive)}`, canJump: true };
 }
 
-/** Wall-clock HH:MM for a unix-seconds instant, in the local zone. */
-export function hhmm(unixSeconds: number): string {
+// ------------------------------------------------------------ times of day
+//
+// Every time of day the app shows goes through the helpers below, so the
+// 12/24-hour setting reaches all of them at once. The setting lives in the
+// store; `setTimeFormat` copies it here (StoreProvider does, as it renders,
+// so the children rendering after it already read the new value). Each
+// helper also takes the choice explicitly, for the checks and for memoised
+// rows, which need it as a prop to know when to redraw.
+
+/** "auto" follows the system's locale; the other two override it. */
+export type TimeFormat = "auto" | "12h" | "24h";
+export const TIME_FORMATS: readonly TimeFormat[] = ["auto", "12h", "24h"];
+
+/** Whether the system's locale writes the time with am/pm. Asked with an
+ *  hour in the options: without one, `resolvedOptions()` leaves `hourCycle`
+ *  out altogether. */
+export function systemUses12h(locale?: string): boolean {
+  try {
+    const cycle = new Intl.DateTimeFormat(locale, { hour: "numeric" }).resolvedOptions().hourCycle;
+    return cycle === "h11" || cycle === "h12";
+  } catch {
+    return false;
+  }
+}
+
+/** The setting's answer: an override, or the system's. Anything unknown (a
+ *  hand-edited config) counts as "auto". */
+export function uses12h(format: string, system: boolean = systemUses12h()): boolean {
+  return format === "12h" ? true : format === "24h" ? false : system;
+}
+
+let twelve = systemUses12h();
+
+/** Points the helpers below at a setting. Cheap, so whatever owns the
+ *  setting can call it on every render. */
+export function setTimeFormat(format: string): void {
+  twelve = uses12h(format);
+}
+
+/** What the helpers use when they are not told: the setting, as last set. */
+export const clockIs12h = (): boolean => twelve;
+
+const pad = (n: number) => String(n).padStart(2, "0");
+
+/** The hour and minute of an instant, in the local zone. */
+function hm(unixSeconds: number): { h: number; m: number } {
   const d = new Date(unixSeconds * 1000);
-  return `${String(d.getHours()).padStart(2, "0")}:${String(
-    d.getMinutes(),
-  ).padStart(2, "0")}`;
+  return { h: d.getHours(), m: d.getMinutes() };
+}
+
+const meridiem = (h: number) => (h < 12 ? "am" : "pm");
+const hourOf12 = (h: number) => (h % 12 === 0 ? 12 : h % 12);
+
+/** A time of day, the way the setting writes it: "20:05", or "8:05 pm".
+ *  The 24-hour form keeps its leading zero ("08:05") so a column of them
+ *  lines up; the 12-hour one drops it, as people write it. */
+export function hhmm(unixSeconds: number, h12: boolean = twelve): string {
+  const { h, m } = hm(unixSeconds);
+  return h12 ? `${hourOf12(h)}:${pad(m)} ${meridiem(h)}` : `${pad(h)}:${pad(m)}`;
+}
+
+/** From one time to another: "20:00–21:30". On the 12-hour clock the am/pm
+ *  is said once when both ends share it ("8:00–9:30 pm"), and at each end
+ *  when they do not ("11:30 pm–12:30 am"). */
+export function timeRange(from: number, to: number, h12: boolean = twelve): string {
+  if (!h12) return `${hhmm(from, false)}–${hhmm(to, false)}`;
+  const a = hm(from);
+  if (meridiem(a.h) === meridiem(hm(to).h)) return `${hourOf12(a.h)}:${pad(a.m)}–${hhmm(to, true)}`;
+  return `${hhmm(from, true)}–${hhmm(to, true)}`;
+}
+
+/** A mark on a time axis, where width is short. On the 12-hour clock the
+ *  hour is "8 pm" and anything between is "8:30": the hour beside it has
+ *  already said which half of the day. The 24-hour form is short already. */
+export function timeTick(unixSeconds: number, h12: boolean = twelve): string {
+  if (!h12) return hhmm(unixSeconds, false);
+  const { h, m } = hm(unixSeconds);
+  return m === 0 ? `${hourOf12(h)} ${meridiem(h)}` : `${hourOf12(h)}:${pad(m)}`;
+}
+
+/** A date and a time, for placing a moment in the past ("Last synced"): the
+ *  locale's short date, then the time as the setting writes it. */
+export function dateTime(unixSeconds: number, h12: boolean = twelve): string {
+  const date = new Date(unixSeconds * 1000).toLocaleDateString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+  return `${date}, ${hhmm(unixSeconds, h12)}`;
 }
 
 /** How far through a programme we are, 0-1, for the row's progress hairline. */

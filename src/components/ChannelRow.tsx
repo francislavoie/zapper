@@ -17,6 +17,10 @@ export interface ChannelRowProps {
   onPlay: (c: ChannelDto) => void;
   /** Double-click: start it if it is not already going, and take the window. */
   onOpenFull: (c: ChannelDto) => void;
+  /** The 12/24-hour setting. Unread: hhmm follows the setting by itself, and
+   *  this prop is only how a change of clock redraws a row the memo would
+   *  otherwise keep. */
+  clock: string;
 }
 
 export const ChannelRow = memo(function ChannelRow({

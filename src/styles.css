@@ -29,6 +29,13 @@
   --accent-dim: #24384f;
   --bad: #ff6b6b;
   --good: #59d08a;
+  /* A slider's track on a panel: lighter than any surface it sits on, so its
+     length reads before the fill does. */
+  --track: #343b48;
+  /* A box of settings, and the page list beside them: a step darker than the
+     dialog they sit in. */
+  --card: #101318;
+  --track-edge: #414a59;
   --row-h: 1.625rem;
   --rail-w: 16.25rem;
   /* The title bar this app draws for itself, at 100% zoom. Mirrored by
@@ -145,46 +152,72 @@ img {
 }
 
 /* Native controls, styled rather than trusted: a UA range track or checkbox
-   is a light rectangle in several engines whatever color-scheme says. */
+   is a light rectangle in several engines whatever color-scheme says.
+
+   A range is drawn in the volume slider's shape (.vol-track): a track bright
+   enough to see against a panel, filled with the accent up to the handle.
+   The fill is a gradient, so whoever sets `--f` (the value's fraction of the
+   range, RangeField does) moves it; it stops at the handle's centre, which
+   travels half a handle in from either end. */
 input[type="range"] {
+  --thumb: 0.75rem;
+  --fill: calc(var(--thumb) / 2 + (100% - var(--thumb)) * var(--f, 0));
   -webkit-appearance: none;
   appearance: none;
-  height: 1.125rem;
+  display: block;
+  width: 100%;
+  height: 1.25rem;
+  margin: 0;
   background: transparent;
   cursor: pointer;
 }
 
+/* The edge is an inset shadow rather than a border, so the track is exactly
+   its height and the handle centres on it with a plain negative margin. */
 input[type="range"]::-webkit-slider-runnable-track {
-  height: 0.25rem;
-  border-radius: 0.125rem;
-  background: var(--bg-3);
-  border: 1px solid var(--line);
+  height: 0.375rem;
+  border-radius: 0.1875rem;
+  background: linear-gradient(to right, var(--accent) 0 var(--fill), var(--track) var(--fill));
+  box-shadow: inset 0 0 0 1px var(--track-edge);
 }
 
 input[type="range"]::-moz-range-track {
-  height: 0.25rem;
-  border-radius: 0.125rem;
-  background: var(--bg-3);
-  border: 1px solid var(--line);
+  height: 0.375rem;
+  border-radius: 0.1875rem;
+  background: linear-gradient(to right, var(--accent) 0 var(--fill), var(--track) var(--fill));
+  box-shadow: inset 0 0 0 1px var(--track-edge);
 }
 
 input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
-  margin-top: -0.375rem;
-  width: 0.875rem;
-  height: 0.875rem;
+  margin-top: calc((0.375rem - var(--thumb)) / 2);
+  width: var(--thumb);
+  height: var(--thumb);
   border-radius: 50%;
   background: var(--accent);
   border: 1px solid var(--bg);
 }
 
 input[type="range"]::-moz-range-thumb {
-  width: 0.875rem;
-  height: 0.875rem;
+  width: var(--thumb);
+  height: var(--thumb);
+  box-sizing: border-box;
   border: 1px solid var(--bg);
   border-radius: 50%;
   background: var(--accent);
+}
+
+input[type="range"]:focus-visible {
+  outline: none;
+}
+
+input[type="range"]:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 2px var(--accent-dim), 0 0 0 3px var(--accent);
+}
+
+input[type="range"]:focus-visible::-moz-range-thumb {
+  box-shadow: 0 0 0 2px var(--accent-dim), 0 0 0 3px var(--accent);
 }
 
 input[type="checkbox"] {
@@ -2861,8 +2894,8 @@ button.prog:hover {
 /* The palette's About, showing the licenses: as big as the settings dialog,
    so the list and the text have the same room in either place. */
 .about.wide {
-  width: min(51.25rem, 100%);
-  height: min(35rem, 100%);
+  width: min(80rem, 100%);
+  height: min(62rem, 100%);
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
@@ -2913,10 +2946,32 @@ button.prog:hover {
   display: none;
 }
 
-.settings-body:has(.about-licenses) {
+.settings-body:has(.about-licenses),
+.set-page:has(.about-licenses) {
   grid-column: 1 / -1;
+  flex: 1 1 auto;
+  min-height: 0;
   display: flex;
   flex-direction: column;
+}
+
+/* The licenses have a heading of their own, beside Back. */
+.set-page:has(.about-licenses) > .set-page-head {
+  display: none;
+}
+
+/* In Settings the About page is boxed like the others; the About dialog is
+   a box already. */
+.settings-body .about-pane {
+  margin-top: 1.25rem;
+  padding: 1rem 1.125rem;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+}
+
+.settings-body .about-pane p {
+  max-width: 64ch;
 }
 
 .about-licenses {
@@ -3018,15 +3073,16 @@ button.prog:hover {
   color: var(--text);
 }
 
+/* Settings grows with the window, up to a size past which longer lines and
+   taller pages stop helping. Both are capped at the backdrop, whose padding
+   keeps the dialog off the window's edges at any size and zoom; the page
+   list and the page scroll inside it, never the dialog. */
 .settings {
-  width: min(51.25rem, 100%);
-  /* The height it wants, capped at the screen. Both panes below already
-     scroll, so a window too short for the dialog shortens the dialog rather
-     than pushing its foot off the bottom. */
-  height: 35rem;
+  width: min(80rem, 100%);
+  height: 62rem;
   max-height: 100%;
   display: grid;
-  grid-template-columns: 11.25rem minmax(0, 1fr);
+  grid-template-columns: 12.5rem minmax(0, 1fr);
   background: var(--bg-2);
   border: 1px solid var(--line);
   border-radius: 0.625rem;
@@ -3065,12 +3121,12 @@ button.prog:hover {
 
 /* Settings → Keyboard: one block per context, keycaps on the left in a
    column of their own so the descriptions line up, the way a keyboard
-   reference card reads. */
+   reference card reads. Each block is boxed like a group of settings. */
 .kb {
   display: flex;
   flex-direction: column;
-  gap: 1.125rem;
-  max-width: 38rem;
+  gap: 1.25rem;
+  margin-top: 1.25rem;
 }
 
 .kb-group h4 {
@@ -3098,7 +3154,15 @@ button.prog:hover {
   /* One key column width for every group, so descriptions line up down the
      whole pane rather than group by group. */
   grid-template-columns: minmax(11.5rem, max-content) 1fr;
-  border-top: 1px solid var(--line);
+  padding: 0 0.875rem;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+}
+
+.kb-row:last-child > dt,
+.kb-row:last-child > dd {
+  border-bottom: 0;
 }
 
 .kb-row {
@@ -3171,11 +3235,22 @@ kbd.mouse {
 
 .settings-side {
   border-right: 1px solid var(--line);
-  padding: 0.625rem 0;
+  padding: 0.75rem 0.5rem;
   overflow-y: auto;
+  background: var(--card);
   /* A column, so the save indicator can sit at the foot. */
   display: flex;
   flex-direction: column;
+  gap: 1px;
+}
+
+.settings-side-title {
+  padding: 0.25rem 0.625rem 0.5rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--dimmer);
 }
 
 /* "Saving…" / "Saved", pinned to the bottom-left corner of the dialog. It
@@ -3199,8 +3274,14 @@ kbd.mouse {
   display: block;
   width: 100%;
   text-align: left;
-  padding: 0.375rem 0.875rem;
+  padding: 0.375rem 0.625rem;
+  border-radius: 0.3125rem;
   color: var(--dim);
+}
+
+.settings-side button:hover {
+  background: var(--bg-3);
+  color: var(--text);
 }
 
 .settings-side button.sel {
@@ -3209,49 +3290,398 @@ kbd.mouse {
 }
 
 .settings-body {
-  padding: 1rem 1.125rem;
+  padding: 1.125rem 1.75rem 1rem;
   overflow-y: auto;
-}
-
-.settings-body h3 {
-  margin: 0 0 0.625rem;
-  font-size: 0.875rem;
+  /* What the rows below ask of their width: a narrow dialog stacks each
+     row's control under its text instead of squeezing both. */
+  container: set-body / inline-size;
 }
 
 .settings-body p {
   color: var(--dim);
   font-size: 0.75rem;
-  max-width: 52ch;
 }
 
-.row-field {
+/* ------------------------------------------------- settings: page, groups */
+
+/* A page's title and its one line, clear of the ✕ in the corner. */
+.set-page-head {
+  margin-right: 2.5rem;
+}
+
+.set-page-head h3 {
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: 600;
+}
+
+.settings-body .set-summary {
+  margin: 0.25rem 0 0;
+  font-size: 0.8125rem;
+}
+
+/* The status lines a page can open with sit under its title. */
+.set-page-head + .settings-note {
+  margin-top: 1rem;
+}
+
+.set-group {
+  margin-top: 1.125rem;
+}
+
+.set-group-title {
+  margin: 0 0 0.375rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.set-group-hint {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 400;
+  color: var(--dimmer);
+}
+
+/* A group's box: darker than the dialog, so the rows read as one set. */
+.set-card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+}
+
+/* A setting: its label and a line of description on the left, its control
+   on the right in a column of its own, so the controls of a box line up. */
+.set-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 24rem);
+  align-items: center;
+  gap: 0.5rem 1.5rem;
+  padding: 0.75rem 0.875rem;
+}
+
+.set-row + .set-row {
+  border-top: 1px solid var(--line);
+}
+
+/* A form row (the account's fields): the label in a fixed column, so the
+   inputs line up down their left edge, and the input takes the rest. A label
+   that grew, as a setting's does to push its control right, would start
+   each box wherever its own label ended — three boxes starting three places
+   apart look like a mistake. */
+.set-row.form {
+  grid-template-columns: 9rem minmax(0, 1fr);
+  padding-top: 0.5rem;
+  padding-bottom: 0.5rem;
+}
+
+/* The control under the text, the row's full width (a table, a preview). */
+.set-row.stack {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@container set-body (max-width: 40rem) {
+  .set-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.set-head {
   display: flex;
   align-items: center;
-  gap: 0.625rem;
-  padding: 0.375rem 0;
-  border-bottom: 1px solid var(--line);
+  gap: 0.25rem;
+  min-height: 1.375rem;
 }
 
-.row-field label {
-  flex: 1 1 auto;
+.set-label {
+  font-size: 0.8125rem;
+  color: var(--text);
+}
+
+/* The ↺ beside a label whose value is not the default. Quiet until pointed
+   at: it is an offer, not a warning. */
+.set-reset {
+  display: inline-grid;
+  place-items: center;
+  width: 1.375rem;
+  height: 1.375rem;
+  border-radius: 0.3125rem;
+  color: var(--accent);
+}
+
+.set-reset:hover {
+  background: var(--bg-3);
+}
+
+.set-reset .i {
+  width: 0.8125rem;
+  height: 0.8125rem;
+}
+
+.set-desc {
+  margin-top: 0.125rem;
   font-size: 0.75rem;
+  line-height: 1.45;
+  color: var(--dim);
+  max-width: 62ch;
 }
 
-.row-field.wrap {
+.set-desc code {
+  font-size: 0.6875rem;
+  color: var(--text);
+}
+
+.set-desc b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* Inline keycaps in prose sit on the line rather than stretching it. */
+.set-desc kbd {
+  height: 1.125rem;
+  min-width: 1.125rem;
+  padding: 0 0.3125rem;
+  font-size: 0.6875rem;
+}
+
+.set-warn {
+  color: #ffc9c9;
+}
+
+.set-control {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
   flex-wrap: wrap;
+  gap: 0.5rem;
+  min-width: 0;
 }
 
-/* The account's three rows are one form rather than three unrelated settings,
-   so their labels share a column and the boxes line up down their left edge.
-   A label that grows — which is what every other row wants, to push its
-   control to the right — puts each box wherever its own label happens to end,
-   and three boxes starting three places apart look like a mistake. */
-.account-form .row-field label {
-  flex: 0 0 8rem;
+.set-row.form .set-control,
+.set-row.stack .set-control {
+  justify-content: stretch;
 }
 
-.row-field input[type="range"] {
-  flex: 0 0 12.5rem;
+.set-row.form .set-control > .field {
+  width: 100%;
+}
+
+/* Under a box: Save and Test, what they came back with, an import preview. */
+.set-card-foot {
+  padding: 0.75rem 0.875rem;
+  border-top: 1px solid var(--line);
+}
+
+.set-card-foot > :first-child {
+  margin-top: 0;
+}
+
+.set-card-foot > :last-child {
+  margin-bottom: 0;
+}
+
+/* Prose after a page's boxes. */
+.settings-body .set-foot {
+  margin: 1rem 0 0;
+  max-width: 72ch;
+  line-height: 1.5;
+}
+
+/* ------------------------------------------ settings: switch, slider, choice */
+
+/* A switch: the knob's side and the track's colour both say on or off. */
+.switch {
+  position: relative;
+  flex: none;
+  width: 2.125rem;
+  height: 1.25rem;
+  border-radius: 999px;
+  background: var(--track);
+  box-shadow: inset 0 0 0 1px var(--track-edge);
+  transition: background-color 0.15s ease;
+}
+
+.switch[aria-checked="true"] {
+  background: var(--accent);
+  box-shadow: none;
+}
+
+.switch-knob {
+  position: absolute;
+  top: 0.1875rem;
+  left: 0.1875rem;
+  width: 0.875rem;
+  height: 0.875rem;
+  border-radius: 50%;
+  background: var(--dim);
+  transition: left 0.15s ease, background-color 0.15s ease;
+}
+
+.switch[aria-checked="true"] .switch-knob {
+  left: 1.0625rem;
+  background: #fff;
+}
+
+.switch:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.switch:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* A slider with its readout above and its range under (RangeField). */
+.range {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.range-read {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.range-value {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.range-note {
+  font-size: 0.75rem;
+  color: var(--dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.range-track {
+  position: relative;
+  --thumb: 0.75rem;
+}
+
+/* The default: a hairline across the track, as the volume slider marks
+   100%, so the way back is visible before it is needed. */
+.range-mark {
+  position: absolute;
+  top: 50%;
+  left: calc(var(--thumb) / 2 + (100% - var(--thumb)) * var(--m));
+  width: 1px;
+  height: 0.75rem;
+  transform: translate(-50%, -50%);
+  background: var(--dim);
+  pointer-events: none;
+}
+
+.range-scale {
+  position: relative;
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--dimmer);
+}
+
+.range-scale-mark {
+  position: absolute;
+  top: 0;
+  left: calc(var(--thumb, 0.75rem) / 2 + (100% - var(--thumb, 0.75rem)) * var(--m));
+  transform: translateX(-50%);
+  color: var(--dim);
+}
+
+/* One of a few: buttons joined into one control, the chosen one lit. */
+.segmented {
+  display: inline-flex;
+  flex-wrap: wrap;
+  border: 1px solid var(--line);
+  border-radius: 0.375rem;
+  overflow: hidden;
+  background: var(--bg-3);
+}
+
+.segmented button {
+  padding: 0.3125rem 0.75rem;
+  font-size: 0.75rem;
+  color: var(--dim);
+  white-space: nowrap;
+}
+
+.segmented button + button {
+  border-left: 1px solid var(--line);
+}
+
+.segmented button:hover {
+  color: var(--text);
+  background: var(--bg-2);
+}
+
+.segmented button.on {
+  color: var(--text);
+  background: var(--accent-dim);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+/* The volume control in Settings is the player bar's own, given the room a
+   row has, its range written under it, and a track as visible as the other
+   sliders here. */
+.set-control .volume {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.set-control .vol {
+  flex: 1 1 auto;
+  width: auto;
+  position: relative;
+  margin-bottom: 1rem;
+}
+
+.settings .vol-track {
+  background: var(--track);
+  border-color: var(--track-edge);
+}
+
+.vol-scale {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  height: 1rem;
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--dimmer);
+  pointer-events: none;
+}
+
+.vol-scale span {
+  position: absolute;
+  top: 0.125rem;
+  transform: translateX(-50%);
+}
+
+.vol-scale span:first-child {
+  transform: none;
+}
+
+.vol-scale span.boost {
+  transform: translateX(-100%);
+  color: #c98a8a;
+}
+
+.vol-scale span.unity {
+  color: var(--dim);
 }
 
 /* What the rewind buffer buys, per bitrate: a small three-column table
@@ -3260,12 +3690,12 @@ kbd.mouse {
 .rewind-estimates {
   display: grid;
   grid-template-columns: auto auto 1fr;
-  column-gap: 1rem;
+  column-gap: 1.5rem;
   row-gap: 0.125rem;
-  margin: 0.375rem 0 0.5rem;
+  margin: 0;
   font-size: 0.75rem;
   color: var(--dim);
-  max-width: 24rem;
+  max-width: 26rem;
 }
 
 .rewind-estimates > div {
@@ -3316,24 +3746,14 @@ kbd.mouse {
   color: #ffc9c9;
 }
 
-/* Settings › Data's backups: a heading of their own under the sync line, and
-   the import preview, which lists what each section would change before
-   anything does. */
-.backup {
-  margin-top: 1.25rem;
-}
-
-.backup h4 {
-  margin: 0 0 0.25rem;
-  font-size: 0.8125rem;
-}
-
-.backup .settings-note {
-  margin: 0.5rem 0 0;
+/* Settings › Data's import preview, under the backup box's rows: what each
+   section would change before anything does, each with a switch to take
+   it or leave it. */
+.set-card-foot .settings-note + .backup-preview {
+  margin-top: 0.75rem;
 }
 
 .backup-preview {
-  margin-top: 0.75rem;
   padding: 0.5rem 0.75rem 0.625rem;
   border: 1px solid var(--line);
   border-radius: 0.375rem;
@@ -3342,6 +3762,16 @@ kbd.mouse {
 
 .backup-preview > p:first-child {
   margin-top: 0.125rem;
+}
+
+.backup-pick {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.375rem 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.8125rem;
 }
 
 .backup-section.same label {
@@ -3394,12 +3824,6 @@ kbd.mouse {
   margin-top: 0.5rem;
 }
 
-.choices {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.375rem;
-}
-
 /* The account type, as two cards: the choice and what it means in one
    place. The chosen card takes the accent; the other stays readable but
    quiet, so the two can still be compared at a glance. Limits are marked
@@ -3407,9 +3831,9 @@ kbd.mouse {
    differently before a word of either is read. */
 .source-cards {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(12.5rem, 1fr));
   gap: 0.5rem;
-  margin-bottom: 0.75rem;
+  margin-bottom: 0;
 }
 
 .source-card {
@@ -3510,7 +3934,7 @@ kbd.mouse {
 }
 
 .settings-body p.source-switching {
-  margin: -0.25rem 0 0.75rem;
+  margin: 0.375rem 0 0;
   color: var(--accent);
 }
 
@@ -3545,13 +3969,22 @@ textarea.field {
   flex: 0 0 auto;
 }
 
+/* The preview's box: the frame centred in it, so the box is as wide as the
+   others under it whatever the frame's own width. */
+.sub-stage {
+  display: flex;
+  justify-content: center;
+  padding: 0.875rem;
+}
+
 /* The stand-in for a frame of video. Inside the modal, which is opaque
    already, so this paints nothing over the real video plane. */
 .sub-preview {
   position: relative;
   aspect-ratio: 16 / 9;
-  max-height: 15rem;
-  margin-bottom: 0.875rem;
+  height: 15rem;
+  max-width: 100%;
+  margin: 0;
   border: 1px solid var(--line);
   border-radius: 0.5rem;
   overflow: hidden;
@@ -4417,7 +4850,8 @@ textarea.field {
 
 
 
-/* Save and Test, under the account fields.
+/* Save and Test under the account fields, and every other button in a box of
+   settings.
 
    These carry a border of their own. The bar's `.ctl` is transparent-bordered
    and sits on video, where its own dark fill is enough to read as a button;
@@ -4427,19 +4861,30 @@ textarea.field {
 .settings-actions {
   display: flex;
   gap: 0.5rem;
-  margin-top: 0.875rem;
-  margin-bottom: 0.875rem;
 }
 
-.settings-actions .ctl {
+.settings-actions + .settings-note {
+  margin-top: 0.75rem;
+}
+
+.settings-actions .ctl,
+.set-control .ctl:not(.icon),
+.backup-actions .ctl {
   padding: 0.3125rem 0.8125rem;
   border-color: var(--line);
   background: var(--bg-3);
 }
 
-.settings-actions .ctl:hover:not(:disabled) {
+.settings-actions .ctl:hover:not(:disabled),
+.set-control .ctl:not(.icon):hover:not(:disabled),
+.backup-actions .ctl:hover:not(:disabled) {
   border-color: var(--dimmer);
   background: var(--bg-2);
+}
+
+.set-control .ctl:disabled {
+  color: var(--dimmer);
+  background: transparent;
 }
 
 /* The one that commits. Named rather than positional: it is the primary
@@ -4459,6 +4904,11 @@ textarea.field {
 /* The standing explanation under the account form: where the file is, and
    who wrote it. Not boxed, because a box is for something that just
    happened and these two are always true. */
+.settings-foot {
+  margin-top: 1rem;
+  max-width: 96ch;
+}
+
 .settings-foot p {
   margin: 0 0 0.5rem;
   line-height: 1.5;
