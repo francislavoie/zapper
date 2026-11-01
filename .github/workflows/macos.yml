@@ -1,0 +1,135 @@
+# macOS: the port's checks, on the Apple Silicon runners. zapper's own LGPL libmpv for
+# macos-arm64 is built here by scripts/build-libmpv.sh (the libmpv workflow publishes it only on
+# a manual run) and cached on what it is made from, so only a change to the script or to
+# packaging/libmpv/sources.txt builds it again. Against it: Rust's unit tests and clippy, the
+# frontend's build and node checks, and zapper-server.
+#
+# Runs on pull requests and by hand. Actions are
+# pinned by commit, as in release.yml.
+name: macOS
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  PLATFORM: macos-arm64
+
+jobs:
+  libmpv:
+    name: libmpv (macos-arm64)
+    runs-on: macos-15
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    outputs:
+      key: ${{ steps.key.outputs.key }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Cache key
+        id: key
+        run: echo "key=libmpv-$PLATFORM-${{ hashFiles('packaging/libmpv/sources.txt', 'scripts/build-libmpv.sh') }}" >> "$GITHUB_OUTPUT"
+
+      - name: Built already?
+        id: built
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: libmpv-out/libmpv-macos-arm64.tar.xz
+          key: ${{ steps.key.outputs.key }}
+          lookup-only: true
+
+      # The downloads alone, kept apart from the build so a change to the script reuses them.
+      - name: Sources
+        if: steps.built.outputs.cache-hit != 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/libmpv/sources
+          key: libmpv-sources-${{ hashFiles('packaging/libmpv/sources.txt') }}
+
+      # Homebrew for the build tools alone (and a bash newer than macOS's 3.2), as in libmpv.yml.
+      - name: Build tools
+        if: steps.built.outputs.cache-hit != 'true'
+        run: |
+          brew install --quiet bash meson ninja pkgconf
+          echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
+
+      - name: Build
+        if: steps.built.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          LIBMPV_JOBS=$(sysctl -n hw.ncpu) bash scripts/build-libmpv.sh "$PLATFORM" "$RUNNER_TEMP/libmpv" libmpv-out
+          ls -l libmpv-out
+
+      # Saved as soon as it is built, whatever the later jobs make of it.
+      - name: Keep it
+        if: steps.built.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: libmpv-out/libmpv-macos-arm64.tar.xz
+          key: ${{ steps.key.outputs.key }}
+
+  check:
+    name: Tests, lint and build
+    needs: libmpv
+    runs-on: macos-15
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: libmpv-out/libmpv-macos-arm64.tar.xz
+          key: ${{ needs.libmpv.outputs.key }}
+          fail-on-cache-miss: true
+
+      - name: libmpv
+        run: scripts/fetch-libmpv.sh --archive libmpv-out/libmpv-macos-arm64.tar.xz "$PLATFORM"
+
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        with:
+          toolchain: stable
+          components: clippy
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: src-tauri
+          key: macos
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - run: npm ci
+
+      - name: Rust unit tests
+        working-directory: src-tauri
+        run: cargo test --lib -q
+
+      - name: Clippy
+        working-directory: src-tauri
+        run: cargo clippy --lib --bins -q -- -D warnings
+
+      - name: zapper-server
+        working-directory: src-tauri
+        run: cargo build --release --no-default-features --features server --bin zapper-server
+
+      - name: Frontend build
+        run: npm run build
+
+      - name: Frontend checks
+        run: node --test src/__checks__/*.test.mjs
