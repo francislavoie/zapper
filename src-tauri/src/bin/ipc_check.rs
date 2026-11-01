@@ -1,12 +1,17 @@
-//! Exercises the catalogue commands against the real, synced database.
+//! Exercises the catalogue commands against a large catalogue on disk.
 //!
 //! Unit tests run against a fresh in-memory schema, which proves the SQL is
-//! valid but not that it answers usefully over a real, large catalogue. This
-//! runs the same functions the frontend invokes, against
-//! `~/.local/share/zapper`, and fails loudly on an empty or nonsensical
-//! answer.
+//! valid but not that it answers usefully over a large catalogue. This runs
+//! the same functions the frontend invokes, against a database file, and
+//! fails loudly on an empty or nonsensical answer.
 //!
-//! No window, no network, no account: reads come from the mirror.
+//! By default the catalogue is a fixture built here, in a scratch directory:
+//! 600 categories, 12,000 channels and an hour of guide either side of now.
+//! With `ZAPPER_ALLOW_REAL_ACCOUNT=1` it is the mirror a configured copy of
+//! zapper has synced (`~/.local/share/zapper`) instead — which this run also
+//! writes settings to, and puts back.
+//!
+//! No window, no network, no account either way: reads come from the mirror.
 
 use zapper_lib::ipc::catalog_cmds as cmd;
 
@@ -21,15 +26,99 @@ macro_rules! check {
     };
 }
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() {
-    match run().await {
-        Ok(()) => println!("PASS: catalogue commands answer from the real mirror"),
+fn main() {
+    // Before the runtime exists: this may change the environment.
+    let preset = std::env::var_os(zapper_lib::paths::HOME_OVERRIDE).is_some();
+    let real = zapper_lib::harness::isolate("ipc_check");
+    if !real {
+        if let Err(e) = seed_fixture() {
+            eprintln!("FAIL: building the fixture catalogue: {e}");
+            std::process::exit(1);
+        }
+    }
+    let verdict = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a runtime")
+        .block_on(run());
+    // The scratch directory this run made for itself; one a caller chose is
+    // the caller's to clean up.
+    if !real && !preset {
+        if let Some(root) = zapper_lib::paths::data_dir().parent() {
+            let _ = std::fs::remove_dir_all(root);
+        }
+    }
+    let what = if real { "the real mirror" } else { "a fixture catalogue" };
+    match verdict {
+        Ok(()) => println!("PASS: catalogue commands answer from {what}"),
         Err(e) => {
             eprintln!("FAIL: {e}");
             std::process::exit(1);
         }
     }
+}
+
+/// Fills the scratch database with a catalogue the size of a real one.
+///
+/// Shaped like an Xtream server's: numbered categories, channels with a
+/// guide id, some with an archive, a separator here and there, and enough
+/// of them under one name that search has something to rank.
+fn seed_fixture() -> anyhow::Result<()> {
+    const CATEGORIES: i64 = 600;
+    const CHANNELS: i64 = 12_000;
+    const NAMES: [&str; 6] = ["Northwind One", "Harbour Sports", "Meridian News", "Lakeside", "Cinema", "Kids"];
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_secs() as i64;
+    zapper_lib::catalog::db::with_db(|c| {
+        let tx = c.unchecked_transaction()?;
+        for cat in 0..CATEGORIES {
+            tx.execute(
+                "INSERT INTO categories (id, name, sort) VALUES (?1, ?2, ?3)",
+                rusqlite::params![cat.to_string(), format!("Category {cat}"), cat],
+            )?;
+        }
+        for n in 0..CHANNELS {
+            let id = 100_000 + n;
+            // Uneven on purpose, so some categories are large.
+            let cat = if n % 3 == 0 { 0 } else { n % CATEGORIES };
+            let separator = n % 997 == 0;
+            let name = if separator {
+                format!("##### Section {n} #####")
+            } else {
+                format!("{} {n}", NAMES[(n % NAMES.len() as i64) as usize])
+            };
+            let archive = !separator && n % 7 == 0;
+            tx.execute(
+                "INSERT INTO channels (stream_id, category_id, name, clean_name, num,
+                                       epg_channel_id, has_archive, archive_days, is_separator)
+                 VALUES (?1, ?2, ?3, ?3, ?4, ?5, ?6, ?7, ?8)",
+                rusqlite::params![
+                    id,
+                    cat.to_string(),
+                    name,
+                    n + 1,
+                    format!("epg-{id}"),
+                    archive,
+                    archive.then_some(3),
+                    separator,
+                ],
+            )?;
+            if !separator && n % 4 == 0 {
+                for (k, title) in ["Earlier", "Now", "Later"].into_iter().enumerate() {
+                    let start = now - 3600 + k as i64 * 3600 - 1800;
+                    tx.execute(
+                        "INSERT INTO epg (channel_ref, start, stop, title) VALUES (?1, ?2, ?3, ?4)",
+                        rusqlite::params![format!("epg-{id}"), start, start + 3600, title],
+                    )?;
+                }
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    })?;
+    zapper_lib::catalog::status::mark_synced(now);
+    Ok(())
 }
 
 async fn run() -> Result<(), String> {

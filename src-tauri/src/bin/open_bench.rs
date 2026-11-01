@@ -47,9 +47,14 @@ fn behind_live(mpv: &libmpv2::Mpv) -> Option<f64> {
 }
 
 fn main() {
-    let Some(url) = std::env::args().nth(1) else {
-        eprintln!("usage: open_bench <url>");
-        std::process::exit(2);
+    // The fixture server's sample by default; a URL off this machine only
+    // with ZAPPER_ALLOW_REAL_ACCOUNT=1 (see zapper_lib::harness).
+    let url = match zapper_lib::harness::stream_url("open_bench", std::env::args().nth(1)) {
+        Ok(u) => u,
+        Err(e) => {
+            eprintln!("open_bench: {e}");
+            std::process::exit(2);
+        }
     };
 
     let mpv = libmpv2::Mpv::with_initializer(|init| {

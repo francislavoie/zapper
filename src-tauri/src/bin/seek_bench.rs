@@ -173,10 +173,12 @@ fn run(url: &str, cfg: &Config) {
 }
 
 fn main() {
-    let url = match std::env::args().nth(1) {
-        Some(u) => u,
-        None => {
-            eprintln!("usage: seek_bench <url>   (start tools/fake_stream.py first)");
+    // The fixture server's sample by default; a URL off this machine only
+    // with ZAPPER_ALLOW_REAL_ACCOUNT=1 (see zapper_lib::harness).
+    let url = match zapper_lib::harness::stream_url("seek_bench", std::env::args().nth(1)) {
+        Ok(u) => u,
+        Err(e) => {
+            eprintln!("seek_bench: {e}");
             std::process::exit(2);
         }
     };

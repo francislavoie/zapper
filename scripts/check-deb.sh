@@ -37,7 +37,9 @@ kind=$(dpkg-deb --fsys-tarfile "$deb" | tar -xO --wildcards '*usr/lib/zapper/ins
 
 # The license notices (docs/licensing.md), each there and not empty: scripts/licenses.sh and the
 # UI build make them, tauri.conf.json's files map puts them here.
-sizes=$(dpkg-deb -c "$deb" | awk '{ print $3, $NF }' | sed 's| \./| /|')
+# dpkg-deb lists paths as ./usr/… or usr/… depending on how the archive was
+# built; both become /usr/….
+sizes=$(dpkg-deb -c "$deb" | awk '{ p = $NF; sub(/^\.\//, "/", p); if (p !~ /^\//) p = "/" p; print $3, p }')
 for f in copyright LICENSE MPV-FFMPEG-NOTICE.txt THIRD-PARTY-NOTICES-rust.txt THIRD-PARTY-NOTICES-ui.txt; do
   size=$(awk -v p="/usr/share/doc/zapper/$f" '$2 == p { print $1 }' <<<"$sizes")
   [ -n "$size" ] && [ "$size" -gt 0 ] || fail "/usr/share/doc/zapper/$f is missing or empty"

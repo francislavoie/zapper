@@ -32,6 +32,7 @@ fn set_app_id() {
 fn set_app_id() {}
 
 pub mod catalog;
+pub mod harness;
 pub mod hdhomerun;
 pub mod ipc;
 pub mod m3u;
@@ -62,6 +63,14 @@ const APP_ID: &str = "zapper";
 
 pub fn run() {
     tracing_subscriber::fmt::init();
+    // An unattended run — a harness, an autoplay, a capture, a muted check —
+    // gets a scratch account and catalogue, not the ones on this machine:
+    // opening the app as a person's account syncs against their provider and
+    // can spend the one connection they are watching on. Before anything
+    // reads a path, and before Tauri starts any thread.
+    if unattended() {
+        harness::isolate("app");
+    }
     // Before any window exists: the app_id is sent when the surface is
     // created, and Tauri creates it before the setup hook runs.
     set_app_id();
@@ -165,6 +174,15 @@ pub fn run() {
         .expect("failed to start zapper");
 }
 
+/// The variables that make this a run nobody is sitting in front of.
+const UNATTENDED: [&str; 4] = ["ZAPPER_AUTOPLAY", "ZAPPER_CAPTURE", "ZAPPER_MUTE", "ZAPPER_HARNESS"];
+
+fn unattended() -> bool {
+    UNATTENDED
+        .into_iter()
+        .any(|k| std::env::var_os(k).is_some_and(|v| !v.is_empty()))
+}
+
 /// Auto-play, self-capture and silence, all opt-in through the environment.
 ///
 /// `ZAPPER_AUTOPLAY=<stream_id>` starts a channel once the window is up, and
@@ -173,6 +191,11 @@ pub fn run() {
 /// real interface over real video - be taken with nobody watching.
 /// `ZAPPER_MUTE=1` only silences, for looking at the picture on a machine
 /// whose speakers must stay quiet; it is also implied by the other two.
+///
+/// All of them, like `ZAPPER_HARNESS`, run on a scratch account (see
+/// [`run`]), so an autoplay plays a fixture (`ZAPPER_FIXTURE_BASE`) or
+/// nothing — never a channel through the account on this machine, unless
+/// `ZAPPER_ALLOW_REAL_ACCOUNT=1` says so.
 fn dev_hooks(app: &tauri::AppHandle) {
     let wanted = |k: &str| std::env::var_os(k).is_some_and(|v| !v.is_empty());
     if !["ZAPPER_AUTOPLAY", "ZAPPER_CAPTURE", "ZAPPER_MUTE"]

@@ -92,19 +92,90 @@ fn cache_dir_for(os: Os, env: &dyn Fn(&str) -> Option<PathBuf>) -> PathBuf {
     .join("zapper")
 }
 
+/// The variable that moves every directory at once; see [`root_override`].
+pub const HOME_OVERRIDE: &str = "ZAPPER_HOME";
+
+/// Every directory at once, moved somewhere else: `ZAPPER_HOME=<dir>` keeps
+/// config, data and cache in `<dir>/config`, `<dir>/data` and `<dir>/cache`.
+///
+/// One variable rather than the platform's three, because the point is to be
+/// sure: a run pointed here can neither read the account on the machine nor
+/// write into its catalogue, whatever the platform's rules would have said.
+/// Harnesses and unattended runs set it (see [`crate::harness`]).
+///
+/// Unit tests never get the real directories at all: each test thread sees
+/// the directory a test installed with [`with_test_root`], or else one
+/// sandbox for the whole test process under the system's temporary
+/// directory. That is a property of the build, not of the environment the
+/// tests happen to be run from, so nothing a test calls can reach the
+/// account or the catalogue of whoever is running them.
+fn root_override() -> Option<PathBuf> {
+    #[cfg(test)]
+    {
+        Some(test_root())
+    }
+    #[cfg(not(test))]
+    {
+        env(HOME_OVERRIDE)
+    }
+}
+
 /// Where the account and window state live.
 pub fn config_dir() -> PathBuf {
-    config_dir_for(OS, &env)
+    match root_override() {
+        Some(root) => root.join("config"),
+        None => config_dir_for(OS, &env),
+    }
 }
 
 /// Where the catalogue database lives.
 pub fn data_dir() -> PathBuf {
-    data_dir_for(OS, &env)
+    match root_override() {
+        Some(root) => root.join("data"),
+        None => data_dir_for(OS, &env),
+    }
 }
 
 /// Where disposable downloads live.
 pub fn cache_dir() -> PathBuf {
-    cache_dir_for(OS, &env)
+    match root_override() {
+        Some(root) => root.join("cache"),
+        None => cache_dir_for(OS, &env),
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_ROOT: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
+/// See [`root_override`]: this thread's installed root, else the process's
+/// sandbox. Never the real directories.
+#[cfg(test)]
+fn test_root() -> PathBuf {
+    TEST_ROOT.with(|r| r.borrow().clone()).unwrap_or_else(|| {
+        std::env::temp_dir().join(format!("zapper-unit-tests-{}", std::process::id()))
+    })
+}
+
+/// Runs `f` with this thread's directories under `root`.
+///
+/// Per thread rather than through the environment: `set_var` is
+/// process-wide, so a test that moved the config directory that way moved it
+/// for every other test running at that moment too, and moved it back
+/// underneath them.
+#[cfg(test)]
+pub fn with_test_root<T>(root: &std::path::Path, f: impl FnOnce() -> T) -> T {
+    /// Puts the previous root back on unwind as well, so a failing test does
+    /// not leave the next test on this thread in its directory.
+    struct Restore(Option<PathBuf>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            TEST_ROOT.with(|r| *r.borrow_mut() = self.0.take());
+        }
+    }
+    let _restore = Restore(TEST_ROOT.with(|r| r.replace(Some(root.to_path_buf()))));
+    f()
 }
 
 #[cfg(test)]
@@ -173,6 +244,31 @@ mod tests {
             PathBuf::from("/profile/AppData/Roaming/zapper")
         );
         assert_eq!(data_dir_for(Os::Windows, &e), PathBuf::from("/profile/AppData/Local/zapper"));
+    }
+
+    #[test]
+    fn unit_tests_never_see_the_real_directories() {
+        let real = [
+            config_dir_for(OS, &env),
+            data_dir_for(OS, &env),
+            cache_dir_for(OS, &env),
+        ];
+        for d in [config_dir(), data_dir(), cache_dir()] {
+            assert!(d.starts_with(std::env::temp_dir()), "{}", d.display());
+            assert!(!real.contains(&d), "{} is a real directory", d.display());
+        }
+    }
+
+    #[test]
+    fn a_test_root_moves_every_directory_and_is_put_back() {
+        let before = config_dir();
+        let root = std::path::Path::new("/nowhere/zapper-test-root");
+        with_test_root(root, || {
+            assert_eq!(config_dir(), root.join("config"));
+            assert_eq!(data_dir(), root.join("data"));
+            assert_eq!(cache_dir(), root.join("cache"));
+        });
+        assert_eq!(config_dir(), before);
     }
 
     #[test]

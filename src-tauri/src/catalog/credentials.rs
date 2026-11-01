@@ -457,15 +457,10 @@ pub fn summary() -> (Option<Credentials>, Source) {
 mod tests {
     use super::*;
 
-    /// Each test gets its own config root, so none of them can read — or
-    /// write over — the real account file on the machine running them.
+    /// Each test gets a config directory of its own, so none of them sees
+    /// another's account file. (None of them could see the real one anyway:
+    /// see `paths::root_override`.)
     fn in_temp_config<T>(f: impl FnOnce() -> T) -> T {
-        use std::sync::Mutex;
-        // `set_var` is process-wide; two of these at once would see each
-        // other's directory.
-        static LOCK: Mutex<()> = Mutex::new(());
-        let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
         let dir = std::env::temp_dir().join(format!(
             "zapper-credentials-{}-{:?}",
             std::process::id(),
@@ -473,23 +468,7 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("temp config dir");
-
-        // The variable the config directory is read from on this platform,
-        // so that `cargo test` on Windows cannot touch the real %APPDATA%.
-        let var = if cfg!(windows) {
-            "APPDATA"
-        } else if cfg!(target_os = "macos") {
-            "HOME"
-        } else {
-            "XDG_CONFIG_HOME"
-        };
-        let previous = std::env::var_os(var);
-        std::env::set_var(var, &dir);
-        let out = f();
-        match previous {
-            Some(p) => std::env::set_var(var, p),
-            None => std::env::remove_var(var),
-        }
+        let out = crate::paths::with_test_root(&dir, f);
         let _ = std::fs::remove_dir_all(&dir);
         out
     }
@@ -506,7 +485,7 @@ mod tests {
     fn the_account_file_lives_under_the_config_directory() {
         in_temp_config(|| {
             let p = account_path();
-            assert!(p.ends_with("zapper/account.json"), "{}", p.display());
+            assert_eq!(p, crate::paths::config_dir().join("account.json"));
         });
     }
 

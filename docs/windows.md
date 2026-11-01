@@ -89,6 +89,11 @@ $env:ZAPPER_MUTE = "1"; npm run app
 `ZAPPER_AUTOPLAY=<stream id>` also starts a channel three seconds after
 launch, and implies the same silence.
 
+Both are unattended runs, so they get a scratch account and catalogue rather
+than the ones on the machine: point them at the fixture server with
+`ZAPPER_FIXTURE_BASE`, or set `ZAPPER_ALLOW_REAL_ACCOUNT=1` to use the real
+account on purpose (tools/README.md, "Never the real account").
+
 ## How the video gets under the page
 
 On Linux, zapper renders mpv's frames itself into a GL surface slid beneath

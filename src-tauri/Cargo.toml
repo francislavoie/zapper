@@ -56,6 +56,11 @@ name = "open_bench"
 path = "src/bin/open_bench.rs"
 required-features = ["harness"]
 
+[[bin]]
+name = "ending_check"
+path = "src/bin/ending_check.rs"
+required-features = ["harness"]
+
 [lib]
 name = "zapper_lib"
 crate-type = ["lib", "cdylib", "staticlib"]
@@ -77,6 +82,12 @@ thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 libmpv2 = "7"
+# libmpv2-sys is named directly for what the safe wrapper does not expose:
+# `mpv_request_log_messages`, which is the only place mpv says what HTTP
+# status refused a stream (see `ipc::ending`), and on Windows
+# `mpv_command_ret` for `screenshot-raw` (the thumbnails). It is already in
+# the tree under libmpv2, and covered by the same license entry.
+libmpv2-sys = "4"
 # The updater's check of a downloaded package against the release's
 # SHA256SUMS. Already in the tree through Tauri; named here so it is ours.
 sha2 = "0.10"
@@ -114,10 +125,6 @@ libloading = "0.8"
 # Gdi for its black brush, Shell for subclassing the main window so the child
 # follows its size), and the local UTC offset (System_Time). The same 0.62
 # that tauri, tao and wry already build, so this adds features, not a crate.
-#
-# libmpv2-sys is named directly for `mpv_command_ret`, which the safe wrapper
-# does not expose and `screenshot-raw` (the Windows thumbnails) needs. It is
-# already in the tree under libmpv2.
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [
     "Win32_Foundation",
@@ -127,7 +134,6 @@ windows = { version = "0.62", features = [
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
-libmpv2-sys = "4"
 
 # The MPRIS round trip in `media_keys`'s ignored test, which talks to the
 # registration as a desktop would. Already in the tree under tao.

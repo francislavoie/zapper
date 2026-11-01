@@ -16,6 +16,7 @@
 
 import { useRef, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 import { playChannel } from "../actions";
+import { endedMessage } from "../logic/ending";
 import { slotAction } from "../logic/gestures";
 import { backend } from "../backend";
 import { useClock } from "../hooks/useClock";
@@ -37,6 +38,7 @@ import {
 import { run, useApp, useDispatch } from "../store";
 import { Fullscreen, ResizeHandle, Stop } from "./icons";
 import { MiniControls } from "./MiniControls";
+import { StreamEnded } from "./StreamEnded";
 import type { ChannelDto, ProgrammeDto } from "../types";
 
 export interface WatchBandProps {
@@ -225,8 +227,14 @@ export function WatchBand({ videoRef }: WatchBandProps) {
 
         {/* Only while something is playing: there is nothing to transport
             otherwise, and the restored-channel slot is one big click target
-            that these would fight with. */}
-        {live ? <MiniControls onActivate={activate} /> : null}
+            that these would fight with. A stream that stopped by itself
+            gets its explanation and Retry here instead; the details are in
+            the column beside it. */}
+        {player.state === "failed" ? (
+          <StreamEnded compact />
+        ) : live ? (
+          <MiniControls onActivate={activate} />
+        ) : null}
       </div>
     </section>
   );
@@ -312,6 +320,7 @@ function Playing({
   const { player } = useApp();
   const measured = measuredLine(player);
   const badge = playerBadge(player);
+  const ended = endedMessage(player);
 
   return (
     <>
@@ -347,8 +356,12 @@ function Playing({
         </div>
         {player.state === "opening" ? (
           <p className="watch-state">Opening…</p>
-        ) : player.state === "failed" ? (
-          <p className="watch-state bad">{player.error ?? "Stream failed"}</p>
+        ) : ended ? (
+          <>
+            <p className="watch-state bad">{ended.title}</p>
+            {ended.detail ? <p className="watch-state">{ended.detail}</p> : null}
+            {ended.code ? <p className="watch-state">{ended.code}</p> : null}
+          </>
         ) : null}
       </div>
 

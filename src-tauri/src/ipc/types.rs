@@ -147,6 +147,10 @@ pub struct PlayerStateDto {
     /// jumps and the programme is suddenly a few seconds further on — and
     /// the viewer should be told it was the app, and how far.
     pub live_jump: Option<LiveJumpDto>,
+    /// Why a stream that stopped by itself stopped, when the state is
+    /// `Failed` because of it: taken over by another device, refused, the
+    /// network. `None` otherwise. See `ipc::ending`.
+    pub ending: Option<crate::ipc::ending::Ending>,
 }
 
 /// One automatic catch-up to live. See [`PlayerStateDto::live_jump`].
@@ -178,6 +182,7 @@ impl Default for PlayerStateDto {
             compressor: false,
             error: None,
             live_jump: None,
+            ending: None,
         }
     }
 }

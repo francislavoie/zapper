@@ -6,17 +6,22 @@
 //! and that `stop` stops. None of that is unit-testable - the whole point of
 //! these commands is the hop onto the GTK main thread and mpv's real answers.
 //!
-//! Usage: `cargo run --bin player_check [-- seconds]`, optionally with
-//! `ZAPPER_STREAM_ID=<id>`. With no id it asks the server for one, so a stream
-//! URL never reaches a command line: an Xtream URL embeds the account
-//! username and password, and argv is world-readable through `/proc` and
-//! lands verbatim in crash dumps.
+//! Usage: `tools/fake_stream.py &` then `cargo run --bin player_check`. It
+//! plays a local fixture (`ZAPPER_FIXTURE_BASE`, default
+//! `http://127.0.0.1:8788`, and `ZAPPER_FIXTURE_NAME`, default
+//! `sample1080.ts`) on a scratch account: never the account on this machine.
+//!
+//! Against a real provider only with `ZAPPER_ALLOW_REAL_ACCOUNT=1`, which
+//! plays `ZAPPER_STREAM_ID` through the configured account, or with no id
+//! asks the server for one, so a stream URL never reaches a command line: an
+//! Xtream URL embeds the account username and password, and argv is
+//! world-readable through `/proc` and lands verbatim in crash dumps. Many
+//! accounts allow only ONE concurrent connection, so that run takes it from
+//! whoever is watching; it opens one stream, keeps it for the duration, and
+//! exits.
 //!
 //! Audio is disabled outright (`ao=null`) before anything is loaded, not
 //! muted: this runs unattended and must never make noise.
-//!
-//! Many accounts allow only ONE concurrent connection, so this opens one
-//! stream, keeps it for the duration, and exits.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -48,6 +53,24 @@ fn main() {
     use tauri::Manager;
 
     tracing_subscriber::fmt::init();
+
+    // A scratch account, and the fixture server rather than a provider,
+    // unless a real run was asked for in so many words. Before Tauri starts
+    // a thread: this changes the environment.
+    if !zapper_lib::harness::isolate("player_check") {
+        if std::env::var_os("ZAPPER_FIXTURE_BASE").is_none() {
+            std::env::set_var("ZAPPER_FIXTURE_BASE", zapper_lib::harness::FIXTURE_BASE);
+        }
+        if std::env::var_os("ZAPPER_FIXTURE_NAME").is_none() {
+            std::env::set_var("ZAPPER_FIXTURE_NAME", "sample1080.ts");
+        }
+    }
+    if let Ok(base) = std::env::var("ZAPPER_FIXTURE_BASE") {
+        if let Err(e) = zapper_lib::harness::local_url(&base) {
+            eprintln!("FAIL: ZAPPER_FIXTURE_BASE: {e}");
+            std::process::exit(2);
+        }
+    }
 
     tauri::Builder::default()
         .setup(move |app| {
@@ -315,9 +338,11 @@ async fn await_state(
     }
 }
 
-/// A channel to test with. `ZAPPER_STREAM_ID` wins; otherwise the server's
-/// listing is asked for the first playable entry, which keeps credentials out
-/// of both argv and the environment.
+/// A channel to test with. `ZAPPER_STREAM_ID` wins. Otherwise, against a
+/// fixture, any id does (the fixture server ignores it); against a real
+/// account — only when allowed — the server's listing is asked for the first
+/// playable entry, which keeps credentials out of both argv and the
+/// environment.
 #[cfg(target_os = "linux")]
 async fn resolve_stream_id() -> Result<i64, String> {
     if let Ok(id) = std::env::var("ZAPPER_STREAM_ID") {
@@ -325,6 +350,12 @@ async fn resolve_stream_id() -> Result<i64, String> {
             .trim()
             .parse()
             .map_err(|_| format!("ZAPPER_STREAM_ID is not a number: {id}"));
+    }
+    if std::env::var_os("ZAPPER_FIXTURE_BASE").is_some() {
+        return Ok(1);
+    }
+    if !zapper_lib::harness::real_account_allowed() {
+        return Err("no fixture and no permission to use the real account".into());
     }
     let channels = zapper_lib::ipc::player_cmds::xtream()?
         .channels()

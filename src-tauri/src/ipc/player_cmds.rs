@@ -20,6 +20,7 @@ use tauri::{AppHandle, Emitter};
 
 use crate::catalog::activity::{self, Accumulator};
 use crate::catalog::store;
+use crate::ipc::ending::{self, Clues, How};
 use crate::ipc::tracks;
 use crate::ipc::types::{
     events, AspectMode, DeinterlaceMode, LiveJumpDto, PlaybackState, PlayerOptionsDto,
@@ -111,6 +112,15 @@ struct Machine {
     settle: Option<Settle>,
     /// Automatic catch-ups so far this session, for [`LiveJumpDto::seq`].
     jumps: u64,
+    /// Whether this stream is live rather than a catch-up programme. A
+    /// programme that plays to its end is finished; a live stream that ends
+    /// was ended by somebody.
+    live: bool,
+    /// Whether a frame of this stream has been on screen: the difference
+    /// between a stream that was taken away and one that never came.
+    shown: bool,
+    /// What mpv has logged about this stream; see `ipc::ending`.
+    clues: Clues,
 }
 
 /// Brings a freshly tuned channel up to live once its connect burst is over.
@@ -191,9 +201,14 @@ impl Machine {
             last_live_nudge: None,
             settle: None,
             jumps: 0,
+            live: true,
+            shown: false,
+            clues: Clues::default(),
         }
     }
 
+    /// A live channel is opening. A catch-up programme sets `live` false
+    /// straight after.
     fn opening(&mut self, stream_id: i64) {
         self.dto.at_live_edge = true;
         self.following_live = true;
@@ -204,6 +219,10 @@ impl Machine {
         self.dto.state = PlaybackState::Opening;
         self.dto.stream_id = Some(stream_id);
         self.dto.error = None;
+        self.dto.ending = None;
+        self.live = true;
+        self.shown = false;
+        self.clues = Clues::default();
         // The previous stream's measurements are not this stream's. Clearing
         // them is what makes the quality readout honest across a zap.
         self.dto.width = None;
@@ -230,6 +249,8 @@ impl Machine {
             PlaybackState::Playing
         };
         self.dto.error = None;
+        self.dto.ending = None;
+        self.shown = true;
         // Only on the way out of Opening: a later reconfigure (a resolution
         // change mid-stream) is not a new connection and has no burst.
         if self.opened_at.is_some() {
@@ -246,10 +267,13 @@ impl Machine {
         }
     }
 
+    /// Failed, with words but no account of why: the open itself could not
+    /// be sent. [`Machine::ended_with`] is the failure mpv reports.
     fn failed(&mut self, why: impl Into<String>) {
         self.following_live = false;
         self.dto.state = PlaybackState::Failed;
         self.dto.error = Some(why.into());
+        self.dto.ending = None;
         self.opened_at = None;
     }
 
@@ -259,22 +283,57 @@ impl Machine {
         self.dto.state = PlaybackState::Stopped;
         self.dto.stream_id = None;
         self.dto.error = None;
+        self.dto.ending = None;
         self.dto.behind_live = 0.0;
         self.dto.buffered_back = 0.0;
         self.opened_at = None;
         self.dto.live_jump = None;
     }
 
-    /// mpv ended the file on its own. Before a first frame that is a failure,
-    /// not a tidy stop.
+    /// mpv ended the file on its own, without being asked to.
     fn ended(&mut self) {
+        self.ended_with(How::Eof);
+    }
+
+    /// The stream stopped by itself: say why, and stay stopped.
+    ///
+    /// Failed rather than stopped, even for a live stream that played for an
+    /// hour, so the interface has something to show: a picture that silently
+    /// vanished is what "I got kicked off and it didn't tell me" was. The
+    /// stream id is kept, so Retry knows what to tune. Nothing here tunes it
+    /// again — see `ipc::ending` for why that must only ever be a person's
+    /// decision.
+    ///
+    /// A catch-up programme that reached its end is the exception: it is
+    /// over, and stopping is the right answer.
+    fn ended_with(&mut self, how: How) {
+        // Past the first-frame deadline mpv is still trying, and when it
+        // gives up its reason is better than "no video".
+        let refining = self.dto.state == PlaybackState::Failed
+            && how != How::Deadline
+            && self.dto.ending.is_some_and(|e| e.kind == ending::EndingKind::NoVideo);
+        if !refining
+            && !matches!(
+                self.dto.state,
+                PlaybackState::Opening | PlaybackState::Playing | PlaybackState::Paused
+            )
+        {
+            return;
+        }
         self.dto.at_live_edge = true;
         self.following_live = false;
-        match self.dto.state {
-            PlaybackState::Opening => self.failed("the stream ended before a frame arrived"),
-            PlaybackState::Playing | PlaybackState::Paused => self.stopped(),
-            _ => {}
+        if how == How::Eof && self.shown && !self.live {
+            self.stopped();
+            return;
         }
+        let why = match how {
+            How::Error(code) => ending::error_text(code),
+            How::Eof if self.shown => "the stream ended".to_owned(),
+            How::Eof => "the stream ended before a frame arrived".to_owned(),
+            How::Deadline => format!("no video within {}s", FIRST_FRAME_DEADLINE.as_secs()),
+        };
+        self.failed(why);
+        self.dto.ending = Some(ending::classify(how, self.shown, self.clues));
     }
 
     /// Playback is being taken `by` seconds forward to live, by the app
@@ -330,7 +389,7 @@ impl Machine {
                 .opened_at
                 .is_some_and(|t| t.elapsed() >= FIRST_FRAME_DEADLINE)
         {
-            self.failed("no video within 8s");
+            self.ended_with(How::Deadline);
         }
     }
 
@@ -465,7 +524,7 @@ fn tick(app: &AppHandle, p: &Player) {
                             .map_or_else(|| "software (no hardware decoder)".into(), |h| format!("hardware ({h})"))
                     );
                 }
-                Signal::EndFile { error: Some(e), .. } => m.failed(e.clone()),
+                Signal::EndFile { error: Some(code), .. } => m.ended_with(How::Error(*code)),
                 // A file ended because we replaced it is the *previous*
                 // stream's obituary arriving after the new one opened.
                 // Acting on it would knock a healthy zap back to Stopped.
@@ -477,12 +536,26 @@ fn tick(app: &AppHandle, p: &Player) {
                         m.ended();
                     }
                 }
+                // Evidence for why it might end; see `ipc::ending`. Only while
+                // a stream is current: once it has stopped there is nothing
+                // left to explain.
+                Signal::Log(text) => {
+                    if matches!(
+                        m.dto.state,
+                        PlaybackState::Opening | PlaybackState::Playing | PlaybackState::Paused
+                    ) {
+                        m.clues.observe(text);
+                    }
+                }
                 Signal::StartFile | Signal::FileLoaded | Signal::Tracks(_) => {}
             }
         }
         m.apply(&probe);
         m.check_deadline();
-        newly_failed = if !was_failed && m.dto.state == PlaybackState::Failed {
+        // Only a stream that never showed a picture: the tuner is asked again,
+        // which is a connection, and one that ended mid-play is not a busy
+        // tuner to explain but a stream to leave alone.
+        newly_failed = if !was_failed && m.dto.state == PlaybackState::Failed && !m.shown {
             m.dto.stream_id
         } else {
             None
@@ -604,6 +677,9 @@ fn explain_failure(app: &AppHandle, stream_id: i64) {
         commit(&app, |m| {
             if m.dto.stream_id == Some(stream_id) && m.dto.state == PlaybackState::Failed {
                 m.dto.error = Some(why);
+                // The tuner's own words name the cause and the fix; a
+                // general guess about providers would only talk over them.
+                m.dto.ending = None;
             }
         });
     });
@@ -695,7 +771,7 @@ pub async fn play(app: AppHandle, stream_id: i64) -> Result<(), String> {
             .live(stream_id)
             .map_err(|e| crate::catalog::sync_engine::scrub(&e.to_string()))?,
     };
-    open(&app, stream_id, target).await
+    open(&app, stream_id, target, true).await
 }
 
 /// Replays a past programme on an archive-enabled channel.
@@ -733,7 +809,7 @@ pub async fn play_catchup(
             return Err("this account has no catch-up".to_owned());
         }
     };
-    open(&app, stream_id, target).await
+    open(&app, stream_id, target, false).await
 }
 
 /// Whether the last stream opened set its own HTTP headers. See
@@ -769,14 +845,17 @@ fn apply_http_headers(p: &Player, target: &Playable) {
 }
 
 /// Shared by live and catchup: state first, then the one connection.
-async fn open(app: &AppHandle, stream_id: i64, target: Playable) -> Result<(), String> {
+async fn open(app: &AppHandle, stream_id: i64, target: Playable, live: bool) -> Result<(), String> {
     ensure_ticker(app);
     // The scrollback previews describe a buffer that is about to be closed.
     // Keeping them would put the previous channel's picture under the cursor.
     crate::surface::trickplay::clear();
     // Same reasoning, for the same reason: the graphs describe one stream.
     crate::ipc::health::clear();
-    commit(app, |m| m.opening(stream_id));
+    commit(app, |m| {
+        m.opening(stream_id);
+        m.live = live;
+    });
     let r = on_player(app, move |p| {
         apply_http_headers(p, &target);
         reset_track_choice(p);
@@ -1554,6 +1633,80 @@ mod tests {
             PlaybackState::Failed,
             "a genuine end during Opening is a failure"
         );
+    }
+
+    #[test]
+    fn a_live_stream_that_ends_mid_play_says_so_and_keeps_its_channel() {
+        let mut m = Machine::new();
+        m.opening(42);
+        m.playing();
+        m.ended();
+        assert_eq!(m.dto.state, PlaybackState::Failed);
+        assert_eq!(m.dto.stream_id, Some(42), "Retry needs to know what to tune");
+        let e = m.dto.ending.expect("an explanation");
+        assert_eq!(e.kind, ending::EndingKind::Dropped);
+    }
+
+    #[test]
+    fn a_catch_up_programme_that_reaches_its_end_just_stops() {
+        let mut m = Machine::new();
+        m.opening(42);
+        m.live = false;
+        m.playing();
+        m.ended();
+        assert_eq!(m.dto.state, PlaybackState::Stopped);
+        assert!(m.dto.ending.is_none());
+    }
+
+    #[test]
+    fn a_refusal_carries_the_status_mpv_logged() {
+        let mut m = Machine::new();
+        m.opening(42);
+        m.clues.observe("http: HTTP error 509 Max Connections Reached");
+        m.ended_with(How::Error(-13));
+        assert_eq!(m.dto.state, PlaybackState::Failed);
+        assert_eq!(m.dto.error.as_deref(), Some("the stream could not be opened"));
+        let e = m.dto.ending.unwrap();
+        assert_eq!((e.kind, e.status, e.limit), (ending::EndingKind::Refused, Some(509), true));
+    }
+
+    #[test]
+    fn a_new_channel_forgets_the_last_ones_ending() {
+        let mut m = Machine::new();
+        m.opening(1);
+        m.clues.observe("HTTP error 403 Forbidden");
+        m.ended_with(How::Error(-13));
+        m.opening(2);
+        assert!(m.dto.ending.is_none());
+        assert_eq!(m.clues, Clues::default(), "the evidence was about the other stream");
+        m.playing();
+        m.ended();
+        assert_eq!(m.dto.ending.unwrap().status, None);
+    }
+
+    #[test]
+    fn mpvs_reason_refines_the_deadline_but_nothing_else_is_overwritten() {
+        let mut m = Machine::new();
+        m.opening(1);
+        m.ended_with(How::Deadline);
+        assert_eq!(m.dto.ending.unwrap().kind, ending::EndingKind::NoVideo);
+        m.clues.observe("HTTP error 403 Forbidden");
+        m.ended_with(How::Error(-13));
+        assert_eq!(m.dto.ending.unwrap().kind, ending::EndingKind::Refused);
+        // A failure already explained stays explained.
+        m.ended();
+        assert_eq!(m.dto.ending.unwrap().kind, ending::EndingKind::Refused);
+    }
+
+    #[test]
+    fn stopping_clears_the_explanation() {
+        let mut m = Machine::new();
+        m.opening(1);
+        m.playing();
+        m.ended();
+        m.stopped();
+        assert!(m.dto.ending.is_none());
+        assert!(m.dto.error.is_none());
     }
 
     #[test]

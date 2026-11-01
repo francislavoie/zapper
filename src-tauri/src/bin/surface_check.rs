@@ -2,9 +2,11 @@
 //!
 //! Usage: `ZAPPER_STREAM_URL=<url> cargo run --bin surface_check -- [seconds]`
 //!
-//! The URL arrives by environment variable on purpose: an Xtream live URL
-//! embeds the account username and password, and a command line is world
-//! readable through `/proc` and lands verbatim in crash dumps.
+//! The URL defaults to the fixture server's `sample1080.ts`, and one off this
+//! machine is refused unless `ZAPPER_ALLOW_REAL_ACCOUNT=1` (see
+//! `zapper_lib::harness`). It arrives by environment variable on purpose: an
+//! Xtream live URL embeds the account username and password, and a command
+//! line is world readable through `/proc` and lands verbatim in crash dumps.
 //!
 //! Audio is disabled outright (`ao=null`), not muted: this runs unattended and
 //! must never make noise.
@@ -47,9 +49,15 @@ fn main() {
 
     tracing_subscriber::fmt::init();
 
-    let Ok(url) = std::env::var("ZAPPER_STREAM_URL") else {
-        eprintln!("set ZAPPER_STREAM_URL; the URL carries credentials and must not be an argv");
-        std::process::exit(2);
+    let url = match zapper_lib::harness::stream_url(
+        "surface_check",
+        std::env::var("ZAPPER_STREAM_URL").ok(),
+    ) {
+        Ok(u) => u,
+        Err(e) => {
+            eprintln!("FAIL: {e}");
+            std::process::exit(2);
+        }
     };
     // How long to give the stream before judging it. Live HLS/TS over a slow
     // link needs more than a couple of seconds to produce a first frame.

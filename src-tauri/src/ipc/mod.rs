@@ -9,6 +9,7 @@
 
 pub mod backup_cmds;
 pub mod catalog_cmds;
+pub mod ending;
 pub mod health;
 pub mod player_cmds;
 pub mod tracks;

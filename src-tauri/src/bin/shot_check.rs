@@ -30,9 +30,17 @@ fn main() {
 
     tracing_subscriber::fmt::init();
 
-    let Ok(url) = std::env::var("ZAPPER_STREAM_URL") else {
-        eprintln!("set ZAPPER_STREAM_URL; the URL carries credentials and must not be an argv");
-        std::process::exit(2);
+    // The fixture server's sample unless told otherwise; a URL off this
+    // machine only with ZAPPER_ALLOW_REAL_ACCOUNT=1 (see zapper_lib::harness).
+    let url = match zapper_lib::harness::stream_url(
+        "shot_check",
+        std::env::var("ZAPPER_STREAM_URL").ok(),
+    ) {
+        Ok(u) => u,
+        Err(e) => {
+            eprintln!("FAIL: {e}");
+            std::process::exit(2);
+        }
     };
     let out = std::env::args().nth(1).unwrap_or_else(|| "/tmp/zapper-shot.png".into());
     let seconds: u32 = std::env::args().nth(2).and_then(|s| s.parse().ok()).unwrap_or(12);

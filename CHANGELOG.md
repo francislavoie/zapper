@@ -27,3 +27,7 @@ The first release.
   installs it from the menu's Check for updates, after checking it against the release's
   published checksums.
 - Settings → About lists the third-party licenses zapper ships under.
+- When a stream stops by itself, the picture says why: your provider ended it (often because
+  another device is using your connection), refused it, sent something other than video, or
+  could not be reached. Retry tunes it again; nothing reconnects without you asking, so a
+  second device is never knocked off in return.

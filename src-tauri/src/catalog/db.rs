@@ -93,14 +93,13 @@ mod tests {
     use super::*;
 
     #[test]
-    #[cfg(target_os = "linux")]
-    fn db_path_lands_under_the_xdg_data_dir() {
-        let p = db_path();
-        assert!(
-            p.ends_with(".local/share/zapper/zapper.db"),
-            "unexpected database path: {}",
-            p.display()
-        );
+    fn db_path_lands_under_the_data_dir() {
+        // Where the data directory is on each platform is `paths`' to test;
+        // under test it is a sandbox, which is the point: were any test to
+        // reach `with_db` before `install_test_db`, it would open a scratch
+        // file rather than the catalogue on the machine running the tests.
+        assert_eq!(db_path(), crate::paths::data_dir().join("zapper.db"));
+        assert!(db_path().starts_with(std::env::temp_dir()));
     }
 
     #[test]

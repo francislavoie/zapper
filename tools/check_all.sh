@@ -3,11 +3,16 @@
 #
 # The unit suites prove pieces in isolation; the harnesses prove the real
 # ones work together — GL compositing, mpv decode and transport, and the
-# catalogue commands over the local mirror (a synced database in
-# ~/.local/share/zapper). Video comes from a local fixture
-# (tools/make_fixtures.sh, served by tools/fake_stream.py), never a provider.
+# catalogue commands over a large fixture catalogue. Video comes from a local
+# fixture (tools/make_fixtures.sh, served by tools/fake_stream.py), never a
+# provider.
 #
-#   tools/check_all.sh            # tests, lint, build, and the real mirror
+# Nothing here reads the account or the catalogue on this machine: every
+# harness and the app itself run with ZAPPER_HOME pointed at a scratch
+# directory, which has neither. (A run against the real ones needs
+# ZAPPER_ALLOW_REAL_ACCOUNT=1, and this script never sets it.)
+#
+#   tools/check_all.sh            # tests, lint, build, the fixture catalogue
 #   tools/check_all.sh --windowed # also the GL and playback harnesses
 #
 # The windowed harnesses open real windows and play video, which interrupts
@@ -17,6 +22,8 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 export PATH="$HOME/.local/bin:$PATH"
+# An opt-in left exported in the calling shell is not consent for this run.
+unset ZAPPER_ALLOW_REAL_ACCOUNT
 
 WINDOWED=0
 case "${1:-}" in
@@ -51,6 +58,12 @@ front_checks(){
   return $rc
 }
 ipc_check()   { (cd src-tauri && cargo run -q --features harness --bin ipc_check 2>&1 | grep -E '^(PASS|FAIL|  FAIL)'); }
+# A provider ending and refusing streams, imitated by fake_stream.py (which it
+# starts itself), each one explained and none reopened behind the viewer.
+ending_check(){
+  (cd src-tauri && ./target/debug/ending_check 2>&1 | grep -E '^(PASS|FAIL|  FAIL)'
+   exit "${PIPESTATUS[0]}")
+}
 
 # --- windowed harnesses -----------------------------------------------------
 
@@ -66,6 +79,10 @@ start_fixtures() {
 }
 stop_fixtures() { [[ -n "$SRV" ]] && kill "$SRV" 2>/dev/null; SRV=""; }
 TMP=$(mktemp -d)
+# Config, data and cache for every harness and the app: empty, and gone with
+# $TMP when this script exits. See src-tauri/src/paths.rs.
+export ZAPPER_HOME="$TMP/home"
+mkdir -p "$ZAPPER_HOME"
 # The session's Wayland socket, with the usual defaults for a shell that wasn't
 # started inside the session (an SSH login, say).
 WL=${WAYLAND_DISPLAY:-wayland-0}
@@ -129,7 +146,7 @@ step "rust clippy"          rust_clippy
 step "frontend build"       front_build
 step "frontend checks"      front_checks
 step "release scripts"      scripts/test-scripts.sh
-step "catalogue over the local mirror" ipc_check
+step "catalogue over a fixture mirror" ipc_check
 
 if [[ $WINDOWED -eq 1 ]]; then
   (cd src-tauri && cargo build -q --bins --features harness 2>&1 | tail -2)
@@ -137,6 +154,8 @@ if [[ $WINDOWED -eq 1 ]]; then
   step "the app starts"        app_starts
   step "surface: GL + decode"  run_windowed surface_check 40
   step "player: transport"     run_windowed player_check 70
+  # No window and no sound, but it plays: here with the rest that do.
+  step "player: endings"       ending_check
 fi
 
 printf '\n\033[1m%d passed, %d failed\033[0m' "$PASS" "$FAIL"

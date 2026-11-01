@@ -29,6 +29,47 @@ thread_local! {
     static PENDING: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
+/// FFmpeg's HTTP options that would open a stream again by themselves.
+///
+/// mpv turns `reconnect` on for every HTTP stream, and FFmpeg then quietly
+/// reconnects when a seekable response — a catch-up programme, say — is cut
+/// off. When the provider cut it off because another device took the
+/// account's connection, that reconnect ends the other device's stream in
+/// turn, and the two take it from each other until somebody gives up. A
+/// stream the provider ended stays ended; the interface says so and offers
+/// Retry (see `ipc::ending`). The other two are off by default in FFmpeg and
+/// are named so that stays true whatever a build's defaults are.
+///
+/// Measured against a server that cuts a seekable response off a third of
+/// the way through: mpv's defaults made 80 requests before giving up; with
+/// these, 3 — the open, and the two seeks any seekable file costs.
+///
+/// `ytdl` is switched off in [`Player::new`] for the same reason, and it was
+/// the worse of the two. mpv's built-in youtube-dl hook runs whenever a
+/// stream fails to open, and where `yt-dlp` is installed it asks the server
+/// for the same URL again, as a browser — so every refused open was two
+/// requests, the second a fresh connection to a provider that had just said
+/// no. Measured with `ending_check`, which counts them. Live TV has no use
+/// for the hook in the first place.
+pub const NO_RECONNECT: &str = "reconnect=0,reconnect_streamed=0,reconnect_at_eof=0";
+
+/// Asks mpv for its warnings and errors as events.
+///
+/// The only place mpv reports the HTTP status that refused a stream is its
+/// log — FFmpeg's `HTTP error 509 Max Connections Reached` — and the
+/// `end-file` that follows carries nothing but "loading failed". Warnings
+/// rather than everything: the lines that matter are warnings, and below
+/// that the decoder chatters on every frame. Not exposed by the safe
+/// wrapper, so through libmpv2-sys.
+pub fn request_warnings(mpv: &Mpv) {
+    // SAFETY: the handle is live for the call, and the level is a static
+    // NUL-terminated string mpv copies.
+    let rc = unsafe { libmpv2_sys::mpv_request_log_messages(mpv.ctx.as_ptr(), c"warn".as_ptr()) };
+    if rc < 0 {
+        tracing::warn!("mpv will not report its warnings ({rc}); stream refusals will be less specific");
+    }
+}
+
 /// A handle to the process-wide mpv instance.
 ///
 /// Zero-sized: the real state is the static above, plus whatever the
@@ -73,10 +114,13 @@ impl Player {
             // accepted.
             init.set_property("user-agent", "VLC/3.0.20 LibVLC/3.0.20".to_owned())?;
             init.set_property("network-timeout", 8i64)?;
+            init.set_property("stream-lavf-o", NO_RECONNECT.to_owned())?;
+            init.set_property("ytdl", false)?;
             video_out(&init)?;
             Ok(())
         })
         .context("initialising mpv")?;
+        request_warnings(&mpv);
 
         // The track list is pushed rather than polled: it changes once per
         // channel, or when a multiplex announces a track late, and also when
@@ -221,8 +265,9 @@ pub enum Signal {
     VideoReconfig,
     /// Playback of a file ended.
     EndFile {
-        /// Set when mpv called it a failure rather than an ending.
-        error: Option<String>,
+        /// mpv's error code, when it called it a failure rather than an
+        /// ending.
+        error: Option<i32>,
         /// True when it ended only because something else was loaded over it.
         /// The obituary of the *previous* stream arrives after the next one
         /// has already opened, and acting on it would knock a healthy channel
@@ -231,6 +276,54 @@ pub enum Signal {
     },
     /// mpv's `track-list`, as JSON, after it changed.
     Tracks(String),
+    /// A warning or error mpv logged. Only ever read for the clues in
+    /// `ipc::ending`, and never logged or shown: the text can carry the
+    /// stream URL, and with it the account.
+    Log(String),
+}
+
+/// One mpv event as a [`Signal`], or `None` for the ones nothing reads.
+///
+/// Separate from [`Player::pump`] so that a harness running its own mpv
+/// reads events exactly as the app does.
+pub fn signal_of(ev: libmpv2::Result<libmpv2::events::Event<'_>>) -> Option<Signal> {
+    use libmpv2::events::Event;
+    match ev {
+        Ok(Event::StartFile) => Some(Signal::StartFile),
+        Ok(Event::FileLoaded) => Some(Signal::FileLoaded),
+        Ok(Event::VideoReconfig) => Some(Signal::VideoReconfig),
+        Ok(Event::EndFile(reason)) => Some(Signal::EndFile {
+            error: None,
+            replaced: matches!(
+                reason,
+                libmpv2::mpv_end_file_reason::Stop
+                    | libmpv2::mpv_end_file_reason::Redirect
+                    | libmpv2::mpv_end_file_reason::Quit
+            ),
+        }),
+        Ok(Event::PropertyChange {
+            name: "track-list",
+            change: libmpv2::events::PropertyData::Str(json),
+            ..
+        }) => Some(Signal::Tracks(json.to_owned())),
+        Ok(Event::LogMessage { text, .. }) => Some(Signal::Log(text.to_owned())),
+        Ok(Event::QueueOverflow) => {
+            tracing::warn!("mpv event queue overflowed; some state changes were lost");
+            None
+        }
+        Ok(_) => None,
+        // libmpv2 folds a failed `end-file` into `Err`, so this is the only
+        // place a playback failure is reported.
+        Err(e) => Some(Signal::EndFile {
+            error: Some(match e {
+                libmpv2::Error::Raw(code) => code,
+                // Not mpv's: bad UTF-8 in an event. Generic, rather than
+                // pretending to know which failure it was.
+                _ => -20,
+            }),
+            replaced: false,
+        }),
+    }
 }
 
 /// A one-shot reading for the diagnostics panel.
@@ -339,35 +432,7 @@ impl Player {
         // 0.0 polls rather than waits; this runs on the main thread and must
         // never block it.
         while let Some(ev) = mpv.wait_event(0.0) {
-            match ev {
-                Ok(libmpv2::events::Event::StartFile) => out.push(Signal::StartFile),
-                Ok(libmpv2::events::Event::FileLoaded) => out.push(Signal::FileLoaded),
-                Ok(libmpv2::events::Event::VideoReconfig) => out.push(Signal::VideoReconfig),
-                Ok(libmpv2::events::Event::EndFile(reason)) => out.push(Signal::EndFile {
-                    error: None,
-                    replaced: matches!(
-                        reason,
-                        libmpv2::mpv_end_file_reason::Stop
-                            | libmpv2::mpv_end_file_reason::Redirect
-                            | libmpv2::mpv_end_file_reason::Quit
-                    ),
-                }),
-                Ok(libmpv2::events::Event::PropertyChange {
-                    name: "track-list",
-                    change: libmpv2::events::PropertyData::Str(json),
-                    ..
-                }) => out.push(Signal::Tracks(json.to_owned())),
-                Ok(libmpv2::events::Event::QueueOverflow) => {
-                    tracing::warn!("mpv event queue overflowed; some state changes were lost");
-                }
-                Ok(_) => {}
-                // libmpv2 folds a failed `end-file` into `Err`, so this is the
-                // only place a playback failure is reported.
-                Err(e) => out.push(Signal::EndFile {
-                    error: Some(e.to_string()),
-                    replaced: false,
-                }),
-            }
+            out.extend(signal_of(ev));
         }
         out
     }

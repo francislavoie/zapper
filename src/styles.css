@@ -3810,6 +3810,75 @@ textarea.field {
   cursor: pointer;
 }
 
+/* ---------------------------------------------------- stream ended */
+
+/* Over the picture, centred: the stream has stopped, so there is no video
+   under it to hide, and this is the one thing worth looking at. Opaque for
+   the same reason the stats panel is — it is chrome. Above the player's
+   controls, so the bar fading in under the pointer cannot cover it. */
+.stream-ended {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 3;
+  width: min(30rem, calc(100% - 2rem));
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: var(--bg-2);
+  text-align: center;
+  cursor: auto;
+}
+
+.stream-ended-title {
+  margin: 0;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.stream-ended-detail {
+  margin: 0.375rem 0 0;
+  font-size: 0.8125rem;
+  color: var(--dim);
+}
+
+/* The server's own answer, small: for whoever asks "what did it say". */
+.stream-ended-code {
+  margin: 0.25rem 0 0;
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--dimmer);
+}
+
+.stream-ended-actions {
+  display: flex;
+  justify-content: center;
+  gap: 0.5rem;
+  margin-top: 0.875rem;
+}
+
+.stream-ended .ctl.retry {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* The docked picture is a few rem tall: the headline and the two buttons,
+   with the detail beside the picture in the band instead. */
+.stream-ended.compact {
+  width: calc(100% - 1rem);
+  padding: 0.5rem 0.625rem;
+}
+
+.stream-ended.compact .stream-ended-title {
+  font-size: 0.75rem;
+}
+
+.stream-ended.compact .stream-ended-actions {
+  margin-top: 0.5rem;
+}
+
 /* --------------------------------------------------- stats for nerds */
 
 /* Over the picture, top-left, where it does not fight the measured readout

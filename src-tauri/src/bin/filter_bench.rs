@@ -108,9 +108,14 @@ fn longest_stall(mpv: &libmpv2::Mpv, window: Duration) -> (Duration, Duration) {
 }
 
 fn main() {
-    let Some(url) = std::env::args().nth(1) else {
-        eprintln!("usage: filter_bench <url>   (start tools/fake_stream.py first)");
-        std::process::exit(2);
+    // The fixture server's sample by default; a URL off this machine only
+    // with ZAPPER_ALLOW_REAL_ACCOUNT=1 (see zapper_lib::harness).
+    let url = match zapper_lib::harness::stream_url("filter_bench", std::env::args().nth(1)) {
+        Ok(u) => u,
+        Err(e) => {
+            eprintln!("filter_bench: {e}");
+            std::process::exit(2);
+        }
     };
 
     let mpv = match libmpv2::Mpv::with_initializer(|init| {

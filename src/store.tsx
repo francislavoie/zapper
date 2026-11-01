@@ -272,6 +272,7 @@ export const initialPlayer: PlayerStateDto = {
   compressor: false,
   error: null,
   liveJump: null,
+  ending: null,
 };
 
 /** Until the backend answers: nothing known, nothing to show. */

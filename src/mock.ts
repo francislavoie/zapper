@@ -511,6 +511,7 @@ const playerEmitter = new Emitter<PlayerStateDto>({
   compressor: false,
   error: null,
   liveJump: null,
+  ending: null,
 });
 
 const optionsEmitter = new Emitter<PlayerOptionsDto>({
@@ -686,6 +687,23 @@ function patchPlayer(p: Partial<PlayerStateDto>) {
   playerEmitter.emit({ ...playerEmitter.last, ...p });
 }
 
+/** A driver's way to end the current stream as a provider would:
+ *  `__mockEnd("dropped")`, `__mockEnd("refused", 509, true)`. The real
+ *  backend's reasons are in `ipc::ending`. */
+(globalThis as Record<string, unknown>).__mockEnd = (
+  kind: NonNullable<PlayerStateDto["ending"]>["kind"],
+  status: number | null = null,
+  limit = false,
+) => {
+  patchPlayer({
+    state: "failed",
+    error: "the stream ended",
+    ending: { kind, status, limit },
+    bufferedBack: 0,
+    behindLive: 0,
+  });
+};
+
 /** The buffer only grows while something is playing; the scrubber's archive
  *  seam has to move for its geometry to be worth checking. */
 function startBufferClock() {
@@ -710,6 +728,7 @@ async function openStream(streamId: number, quality: Partial<PlayerStateDto>) {
     state: "opening",
     streamId,
     error: null,
+    ending: null,
     bufferedBack: 0,
     behindLive: 0,
     liveJump: null,
@@ -926,6 +945,8 @@ export const mockApi = {
     patchPlayer({
       state: "stopped",
       streamId: null,
+      error: null,
+      ending: null,
       bufferedBack: 0,
       behindLive: 0,
       liveJump: null,

@@ -88,6 +88,9 @@ export interface PlayerStateDto {
    *  after a tune-in's connect burst, or after stalls — or null. Cleared by
    *  the next open. */
   liveJump: LiveJumpDto | null;
+  /** Why a stream that stopped by itself stopped, while `state` is
+   *  "failed" because of it. `null` otherwise. See `ipc::ending`. */
+  ending: StreamEnding | null;
 }
 
 /** One automatic catch-up to live. */
@@ -134,6 +137,25 @@ export interface PlayerOptionsDto {
   subtitles: TrackDto[];
   aspect: AspectMode;
   deinterlace: DeinterlaceMode;
+}
+
+/** Mirrors `EndingKind` in `src-tauri/src/ipc/ending.rs`. */
+export type EndingKind =
+  | "dropped"
+  | "refused"
+  | "notVideo"
+  | "unavailable"
+  | "serverError"
+  | "network"
+  | "noVideo"
+  | "other";
+
+export interface StreamEnding {
+  kind: EndingKind;
+  /** The HTTP status the server answered with, when it said one. */
+  status: number | null;
+  /** The server said in words that it was a connection limit. */
+  limit: boolean;
 }
 
 /** Normalised window coordinates. Video is not a DOM element; the frontend

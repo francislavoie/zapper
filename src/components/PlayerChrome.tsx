@@ -17,6 +17,7 @@
 import { useRef } from "react";
 import { backend } from "../backend";
 import { toggleFullscreen } from "../fullscreen";
+import { endedMessage } from "../logic/ending";
 import { measuredLine } from "../logic/format";
 import { atScreenEdge } from "../logic/fade";
 import { volumeAfterWheel } from "../logic/volume";
@@ -26,6 +27,7 @@ import { useCanStack } from "../hooks/useCanStack";
 import { useFade } from "../hooks/useFade";
 import { refreshFullscreen, useFullscreen } from "../hooks/useFullscreen";
 import { useVideoGestures } from "../hooks/useVideoGestures";
+import { StreamEnded } from "./StreamEnded";
 import { TransportBar } from "./TransportBar";
 import { VideoFeedback } from "./VideoFeedback";
 import { PictureCorner } from "./PictureCorner";
@@ -43,6 +45,7 @@ export function PlayerChrome() {
   volumeRef.current = player.volume;
 
   const measured = measuredLine(player);
+  const ended = endedMessage(player);
 
   const toggle = () =>
     void toggleFullscreen()
@@ -106,6 +109,9 @@ export function PlayerChrome() {
     >
       <VideoFeedback feedback={gestures.feedback} />
       <PictureCorner />
+      {/* Why the picture went away, and the way back. Dismissing leaves the
+          player, as stopping does. */}
+      <StreamEnded onDismissed={() => dispatch({ type: "mode", mode: "browse" })} />
       <div className="chrome-top">
         {/* Top-left, where the way out of a full-screen thing lives on every
             device anybody owns. It leaves the player without stopping the
@@ -127,8 +133,8 @@ export function PlayerChrome() {
           <p>
             {player.state === "opening"
               ? "Opening…"
-              : player.state === "failed"
-                ? (player.error ?? "Stream failed")
+              : ended
+                ? ended.title
                 : (nowChannel?.nowPlaying?.title ?? "no guide data")}
           </p>
         </div>
