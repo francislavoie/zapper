@@ -38,6 +38,7 @@ import { loadVideoWidth } from "./videoSize";
 import { loadRailWidth } from "./railWidth";
 import { clampRailWidth } from "./logic/railWidth";
 import { clampVideoWidth } from "./logic/videoSize";
+import { syncChangedCatalogue } from "./logic/catalogueRefresh";
 import { setHidden, setPinned, type CategorySort } from "./logic/categoryOrder";
 import { loadCategoryHidden, loadCategoryPins, loadCategorySort } from "./categoryPrefs";
 import type { ZapView } from "./logic/zap";
@@ -187,6 +188,11 @@ export interface State {
   update: UpdateStatusDto;
   updateOpen: boolean;
   sync: SyncStatusDto;
+  /** Counts the syncs that may have changed the catalogue under the lists
+   *  that show it. Everything that keeps catalogue data — the categories,
+   *  the channel pages — reads again when it moves; see
+   *  logic/catalogueRefresh.ts. */
+  catalogueRev: number;
   player: PlayerStateDto;
   /** Optimistic: set the instant a row is clicked so the row highlights before
    *  the backend has opened anything. */
@@ -348,6 +354,7 @@ export const initialState: State = {
   update: initialUpdate,
   updateOpen: false,
   sync: initialSync,
+  catalogueRev: 0,
   player: initialPlayer,
   pendingStreamId: null,
   nowChannel: null,
@@ -619,7 +626,17 @@ export function reducer(state: State, action: Action): State {
         categoryOptions: null,
       };
     case "sync":
-      return { ...state, sync: action.value };
+      return {
+        ...state,
+        sync: action.value,
+        // Not for the first status after launch: the placeholder it replaces
+        // describes nothing, and the lists are loading for the first time
+        // anyway.
+        catalogueRev:
+          state.sync !== initialSync && syncChangedCatalogue(state.sync, action.value)
+            ? state.catalogueRev + 1
+            : state.catalogueRev,
+      };
     case "channelQuality":
       return {
         ...state,

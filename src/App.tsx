@@ -275,6 +275,15 @@ export function App() {
     if (categoriesStatus === "idle") void loadCategories(dispatch);
   }, [categoriesStatus, dispatch]);
 
+  // And again whenever a sync has rewritten it. Loaded once and kept, the
+  // list from before the sync stayed up until a restart — on a first run,
+  // "No categories yet" over a catalogue that had just arrived. Not on the
+  // first render: the load above is already under way.
+  const catalogueRev = state.catalogueRev;
+  useEffect(() => {
+    if (catalogueRev > 0) void loadCategories(dispatch, true);
+  }, [catalogueRev, dispatch]);
+
   // Only browse has a slot to dock into. The guide covers the stage with an
   // opaque grid, so the video goes back to filling the stage underneath it —
   // mpv draws below the webview, and covered is covered.

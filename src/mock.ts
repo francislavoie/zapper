@@ -456,7 +456,18 @@ function separatorRow(streamId: number, name: string, categoryId: string): Chann
 }
 
 let catalog: MockCatalog | null = null;
-const getCatalog = (): MockCatalog => (catalog ??= buildCatalog());
+
+/** `?catalogue=empty` opens on the first-run mirror: no categories, no
+ *  channels, never synced. The catalogue arrives when a sync's channels
+ *  phase ends, part-way through the pass, as the real one does — which is
+ *  what the lists have to notice without a restart. */
+const START_EMPTY =
+  typeof location !== "undefined" && /(^|[?&])catalogue=empty(&|$)/.test(location.search);
+let catalogueLanded = !START_EMPTY;
+const EMPTY_CATALOG: MockCatalog = { categories: [], rows: [], span: new Map() };
+
+const getCatalog = (): MockCatalog =>
+  catalogueLanded ? (catalog ??= buildCatalog()) : EMPTY_CATALOG;
 
 // ------------------------------------------------------------- favourites
 
@@ -646,8 +657,8 @@ function patchOptions(p: Partial<PlayerOptionsDto>): PlayerOptionsDto {
 const syncEmitter = new Emitter<SyncStatusDto>({
   phase: "idle",
   message: "",
-  channelsTotal: CHANNEL_TOTAL,
-  lastSynced: Math.floor(Date.now() / 1000) - 3600,
+  channelsTotal: START_EMPTY ? 0 : CHANNEL_TOTAL,
+  lastSynced: START_EMPTY ? null : Math.floor(Date.now() / 1000) - 3600,
 });
 
 let mockDropped = 0;
@@ -1393,9 +1404,17 @@ export const mockApi = {
   syncNow: async () => {
     syncEmitter.emit({ ...syncEmitter.last, phase: "categories", message: "fetching categories" });
     await delay(600);
-    syncEmitter.emit({ ...syncEmitter.last, phase: "channels", message: "60,000 channels" });
+    syncEmitter.emit({ ...syncEmitter.last, phase: "channels", message: "fetching channels" });
     await delay(900);
-    syncEmitter.emit({ ...syncEmitter.last, phase: "epg", message: "guide data" });
+    // Landed as the phase ends, so the guide phase that follows reports the
+    // new count the way the backend's next status would.
+    catalogueLanded = true;
+    syncEmitter.emit({
+      ...syncEmitter.last,
+      phase: "epg",
+      message: "guide data",
+      channelsTotal: CHANNEL_TOTAL,
+    });
     await delay(700);
     syncEmitter.emit({
       phase: "idle",
