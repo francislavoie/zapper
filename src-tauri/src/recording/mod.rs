@@ -6,7 +6,8 @@
 //! account has a connection to spare), [`fallback`] (when to switch
 //! between a channel's main and backup feeds), [`schedule`] (what to start,
 //! stop or give up on at a given moment), [`clock`] (the wall-clock subtitle
-//! track). [`api`] is the HTTP contract shared by the service and the app's
+//! track), [`lifecycle`] (when the service stops or restarts itself).
+//! [`api`] is the HTTP contract shared by the service and the app's
 //! [`client`]; [`config`] is where both find the port and the token;
 //! [`service`] installs the service as a systemd user unit.
 //!
@@ -21,6 +22,7 @@ pub mod client;
 pub mod clock;
 pub mod config;
 pub mod fallback;
+pub mod lifecycle;
 pub mod naming;
 pub mod schedule;
 pub mod service;

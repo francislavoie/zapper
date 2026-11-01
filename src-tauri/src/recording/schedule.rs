@@ -73,6 +73,59 @@ pub fn sleep_for(now: i64, next: Option<i64>) -> i64 {
     next.map_or(MAX_SLEEP_SECS, |n| (n - now).clamp(0, MAX_SLEEP_SECS))
 }
 
+/// How close a recording's padded start may be for the service still to
+/// count as idle: enough for a restart, or an installer, to be done first.
+pub const IDLE_MARGIN_SECS: i64 = 5 * 60;
+
+/// Whether the service can be stopped without spoiling a recording, and if
+/// not, when it can.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Busy {
+    /// Nothing is being recorded, and nothing starts within
+    /// [`IDLE_MARGIN_SECS`].
+    pub idle: bool,
+    /// When it next will be: the end of what is recording, and of whatever
+    /// starts too soon after that to wait for. None when idle now.
+    pub idle_at: Option<i64>,
+    /// The next padded start of a recording not yet begun.
+    pub next_start: Option<i64>,
+}
+
+/// What [`Busy`] is at `now`. A recording counts as being recorded when it
+/// is captured (`active`), and also when it was mid-capture and its window
+/// is still open: the service resumes those at once.
+pub fn busy(now: i64, slots: &[Slot], active: &HashSet<i64>) -> Busy {
+    let live = |s: &Slot| {
+        s.until > now
+            && (active.contains(&s.id) || (s.state == RecordingState::Recording && s.from <= now))
+    };
+    let pending = |s: &Slot| s.state == RecordingState::Scheduled && !active.contains(&s.id) && s.until > now;
+    let next_start = slots.iter().filter(|s| pending(s)).map(|s| s.from).min();
+    // From the end of what records now, take in every recording that
+    // starts within the margin of that end, until one leaves a gap.
+    let mut at = slots.iter().filter(|s| live(s)).map(|s| s.until).max();
+    let mut t = at.unwrap_or(now);
+    loop {
+        let soon = slots
+            .iter()
+            .filter(|s| pending(s) && s.from <= t + IDLE_MARGIN_SECS && s.until > t)
+            .map(|s| s.until)
+            .max();
+        match soon {
+            Some(u) => {
+                t = u;
+                at = Some(u);
+            }
+            None => break,
+        }
+    }
+    Busy {
+        idle: at.is_none(),
+        idle_at: at,
+        next_start,
+    }
+}
+
 /// A recording's window, padding included.
 pub fn window(start: i64, stop: i64, pad_before: i64, pad_after: i64) -> (i64, i64) {
     (start - pad_before.max(0), stop + pad_after.max(0))
@@ -144,6 +197,47 @@ mod tests {
                 ..Default::default()
             }
         );
+    }
+
+    #[test]
+    fn idle_is_nothing_recording_and_nothing_about_to() {
+        let none = HashSet::new();
+        let slots = [slot(1, Scheduled, 10_000, 12_000)];
+        let b = busy(1_000, &slots, &none);
+        assert_eq!((b.idle, b.idle_at, b.next_start), (true, None, Some(10_000)));
+        // Within the margin of its start, it is as good as recording.
+        let b = busy(10_000 - IDLE_MARGIN_SECS, &slots, &none);
+        assert_eq!((b.idle, b.idle_at), (false, Some(12_000)));
+        assert!(busy(9_000 - IDLE_MARGIN_SECS, &slots, &none).idle);
+        // Recording: busy until its padded end, then idle.
+        let active = HashSet::from([1]);
+        assert_eq!(busy(11_000, &slots, &active).idle_at, Some(12_000));
+        assert!(busy(12_000, &[slot(1, Done, 10_000, 12_000)], &none).idle);
+    }
+
+    #[test]
+    fn a_capture_that_will_resume_counts_as_recording() {
+        // Mid-capture when the service stopped, window still open: it starts
+        // again at the next look, so stopping now would spoil it.
+        let b = busy(1_500, &[slot(1, Recording, 1_000, 2_000)], &HashSet::new());
+        assert_eq!((b.idle, b.idle_at), (false, Some(2_000)));
+        // Its window over, it is only finished, which a restart also does.
+        assert!(busy(2_000, &[slot(1, Recording, 1_000, 2_000)], &HashSet::new()).idle);
+    }
+
+    #[test]
+    fn back_to_back_recordings_are_waited_out_together() {
+        let active = HashSet::from([1]);
+        let slots = [
+            slot(1, Recording, 1_000, 2_000),
+            // Starts within the margin of 1's end: no time to stop between.
+            slot(2, Scheduled, 2_000 + IDLE_MARGIN_SECS - 1, 4_000),
+            // Starts well after 2's end: a gap to stop in.
+            slot(3, Scheduled, 4_000 + IDLE_MARGIN_SECS + 1, 9_000),
+        ];
+        let b = busy(1_500, &slots, &active);
+        assert_eq!((b.idle, b.idle_at), (false, Some(4_000)));
+        assert_eq!(b.next_start, Some(2_000 + IDLE_MARGIN_SECS - 1));
     }
 
     #[test]

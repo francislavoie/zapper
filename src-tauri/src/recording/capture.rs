@@ -388,9 +388,59 @@ pub async fn finish(server: &Arc<Server>, id: i64) {
     }
 }
 
+/// Closes a recording the service stops in the middle of (lifecycle): the
+/// parts captured so far are finished into their files as [`finish`] does,
+/// so what was recorded plays, but while its window is open the recording
+/// stays `recording`, and the next start of the service carries on in a new
+/// part. Its window over, it is simply finished.
+pub async fn suspend(server: &Arc<Server>, id: i64) {
+    let me = Arc::clone(server);
+    let r = tokio::task::spawn_blocking(move || -> Result<bool> {
+        let Some(rec) = me.db(|c| store::get(c, id))? else {
+            return Ok(false);
+        };
+        if now() >= rec.stop + rec.pad_after {
+            finish_blocking(&me, id)?;
+            return Ok(false);
+        }
+        let parts = remux_parts(&me, id, true)?;
+        me.db(|c| store::set_parts(c, id, &parts))?;
+        Ok(true)
+    })
+    .await;
+    match r {
+        Ok(Ok(true)) => server.note(
+            id,
+            "the recording service stopped: what was recorded so far is saved, and recording carries on in a new part if it starts again before the programme ends",
+        ),
+        Ok(Ok(false)) => {}
+        Ok(Err(e)) => server.note(id, &format!("saving what was recorded failed: {e:#}")),
+        Err(e) => tracing::error!("recording {id}: the finishing thread failed: {e}"),
+    }
+}
+
 fn finish_blocking(server: &Server, id: i64) -> Result<()> {
+    let done = remux_parts(server, id, false)?;
+    server.db(|c| store::set_parts(c, id, &done))?;
+    if done.is_empty() {
+        let why = server
+            .db(|c| store::get(c, id))?
+            .and_then(|r| r.error)
+            .unwrap_or_else(|| "no feed delivered anything".to_string());
+        server.db(|c| store::set_state(c, id, RecordingState::Failed, Some(&why)))?;
+    } else {
+        server.db(|c| store::set_state(c, id, RecordingState::Done, None))?;
+    }
+    Ok(())
+}
+
+/// Remuxes each captured part not finished yet into its file and returns
+/// every part. `more`: parts may follow (the recording is only suspended),
+/// so even a lone part is named as a part (`… - part1.mkv`), as the next
+/// will be.
+fn remux_parts(server: &Server, id: i64, more: bool) -> Result<Vec<PartDto>> {
     let Some(rec) = server.db(|c| store::get(c, id))? else {
-        return Ok(());
+        return Ok(Vec::new());
     };
     let info = server.db(|c| store::capture_info(c, id))?;
     let folder = PathBuf::from(&rec.folder);
@@ -404,7 +454,7 @@ fn finish_blocking(server: &Server, id: i64) -> Result<()> {
         let _ = std::fs::remove_file(&p.path);
         let _ = std::fs::remove_file(log_path(Path::new(&p.path)));
     }
-    let total = keep.len();
+    let total = keep.len() + usize::from(more);
     for (i, mut part) in keep.into_iter().enumerate() {
         let src = PathBuf::from(&part.path);
         if src.extension().is_some_and(|e| e != "ts")
@@ -451,17 +501,7 @@ fn finish_blocking(server: &Server, id: i64) -> Result<()> {
         }
         done.push(part);
     }
-    server.db(|c| store::set_parts(c, id, &done))?;
-    if done.is_empty() {
-        let why = server
-            .db(|c| store::get(c, id))?
-            .and_then(|r| r.error)
-            .unwrap_or_else(|| "no feed delivered anything".to_string());
-        server.db(|c| store::set_state(c, id, RecordingState::Failed, Some(&why)))?;
-    } else {
-        server.db(|c| store::set_state(c, id, RecordingState::Done, None))?;
-    }
-    Ok(())
+    Ok(done)
 }
 
 /// Remuxes one part, with the clock track drawn from its arrival log.

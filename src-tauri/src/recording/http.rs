@@ -23,7 +23,7 @@ use serde::Deserialize;
 use super::access::{self, Caller, LoginError, Peer, Refusal};
 use super::api::{
     ErrorDto, LoginRequest, NetworkSettingsDto, PasswordRequest, RecordingSettingsDto,
-    ScheduleRequest, VersionDto, API_VERSION,
+    ScheduleRequest, ShutdownRequest, VersionDto, API_VERSION,
 };
 use super::now;
 use super::server::Server;
@@ -175,6 +175,14 @@ async fn set_settings(
     s.set_settings(new).map(Json).map_err(bad)
 }
 
+/// Stop or restart, now or once idle (lifecycle). It answers first, with
+/// its status; the app's alone, like everything that changes the service
+/// itself.
+async fn shutdown(State(s): State<Shared>, Json(r): Json<ShutdownRequest>) -> impl IntoResponse {
+    s.request_shutdown(r);
+    Json(s.status())
+}
+
 // ------------------------------------------------------------- network
 
 async fn network(State(s): State<Shared>) -> impl IntoResponse {
@@ -280,6 +288,7 @@ pub fn router(server: Shared) -> Router {
         .route("/api/network/password", put(set_password))
         .route("/api/devices", get(devices))
         .route("/api/devices/{id}", delete_route(revoke))
+        .route("/api/shutdown", post(shutdown))
         .route_layer(middleware::from_fn_with_state(server.clone(), app_only));
     Router::new()
         .route("/api/version", get(version))
@@ -405,6 +414,24 @@ mod tests {
                 .0,
             StatusCode::UNAUTHORIZED
         );
+    }
+
+    #[tokio::test]
+    async fn only_the_app_here_may_stop_the_service() {
+        let s = server("shutdown");
+        enable(&s, true).await;
+        let body = || Some(serde_json::json!({"when": "idle", "restart": true}));
+        let (st, _) = call(&s, req_body("POST", "/api/shutdown", HOME, false, None, body())).await;
+        assert_eq!(st, StatusCode::UNAUTHORIZED);
+        let (st, _) = call(&s, req_body("POST", "/api/shutdown", LAN, true, Some(APP), body())).await;
+        assert_eq!(st, StatusCode::UNAUTHORIZED);
+        assert_eq!(s.requested_shutdown(), None);
+        let (st, reply) = call(&s, req_body("POST", "/api/shutdown", HOME, false, Some(APP), body())).await;
+        assert_eq!(st, StatusCode::OK);
+        // It answers with its status: idle, with nothing scheduled.
+        assert_eq!(reply["idle"], true);
+        let r = s.requested_shutdown().unwrap();
+        assert_eq!((r.when, r.restart), (crate::recording::api::ShutdownWhen::Idle, true));
     }
 
     #[tokio::test]

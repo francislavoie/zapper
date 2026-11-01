@@ -3,7 +3,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -14,14 +14,14 @@ use tokio::sync::{watch, Notify};
 use super::access::Access;
 use super::api::{
     ActiveDto, NetworkDto, NetworkSettingsDto, RecordingDto, RecordingSettingsDto, RecordingState,
-    ScheduleRequest, StatusDto, API_VERSION,
+    ScheduleRequest, ShutdownRequest, StatusDto, API_VERSION,
 };
 use super::budget::Budget;
 use super::config::{self, NetworkConfig, ServerConfig};
 use super::listen::{self, Listening};
 use super::naming::{self, Programme};
-use super::schedule::{plan, sleep_for};
-use super::{capture, http, now, store, tls};
+use super::schedule::{busy, plan, sleep_for, Busy};
+use super::{capture, http, lifecycle, now, store, tls};
 use crate::localtime::Civil;
 
 /// A capture's live state, for status and for stopping it.
@@ -31,6 +31,8 @@ pub struct Live {
     pub bytes: u64,
     pub since: i64,
     pub waiting: Option<String>,
+    /// The end of its window, padding included.
+    pub until: i64,
     pub stop: watch::Sender<bool>,
 }
 
@@ -51,6 +53,12 @@ pub struct Server {
     listening: tokio::sync::Mutex<Option<Open>>,
     /// Why network access is not on as set, when it is not.
     listen_error: Mutex<Option<String>>,
+    /// A stop or restart asked for through the API (lifecycle).
+    shutdown: Mutex<Option<ShutdownRequest>>,
+    /// Told when one is asked for.
+    pub shutdown_asked: Notify,
+    /// Stopping: start nothing more, and leave what stops resumable.
+    stopping: AtomicBool,
 }
 
 impl Server {
@@ -79,6 +87,9 @@ impl Server {
             budget,
             listening: tokio::sync::Mutex::new(None),
             listen_error: Mutex::new(None),
+            shutdown: Mutex::new(None),
+            shutdown_asked: Notify::new(),
+            stopping: AtomicBool::new(false),
         })
     }
 
@@ -140,7 +151,12 @@ impl Server {
                 }
             };
             let active: HashSet<i64> = self.live(|m| m.keys().copied().collect());
-            let p = plan(t, &slots, &active);
+            let mut p = plan(t, &slots, &active);
+            if self.stopping.load(Ordering::SeqCst) {
+                // What is due now starts when the service runs again.
+                p.start.clear();
+                p.finish.clear();
+            }
             for id in p.missed {
                 let _ = self.db(|c| {
                     store::set_state(
@@ -184,6 +200,7 @@ impl Server {
                     bytes: 0,
                     since: now(),
                     waiting: None,
+                    until: rec.stop + rec.pad_after,
                     stop: tx,
                 },
             )
@@ -193,9 +210,57 @@ impl Server {
             if capture {
                 capture::run(&me, id, rx).await;
             }
-            capture::finish(&me, id).await;
+            if me.stopping.load(Ordering::SeqCst) {
+                capture::suspend(&me, id).await;
+            } else {
+                capture::finish(&me, id).await;
+            }
             me.live(|m| m.remove(&id));
         });
+    }
+
+    // ------------------------------------------------------------ stopping
+
+    /// Whether the service can stop without spoiling a recording, and when
+    /// it can if not (schedule::busy).
+    pub fn busy(&self) -> Busy {
+        let slots = self.db(store::slots).unwrap_or_default();
+        let active: HashSet<i64> = self.live(|m| m.keys().copied().collect());
+        busy(now(), &slots, &active)
+    }
+
+    /// Asks the service to stop or restart (lifecycle::decide says when).
+    pub fn request_shutdown(&self, r: ShutdownRequest) {
+        let mut s = self.shutdown.lock().unwrap_or_else(|e| e.into_inner());
+        let merged = lifecycle::merge(*s, r);
+        tracing::info!("asked to {} {:?}", if merged.restart { "restart" } else { "stop" }, merged.when);
+        *s = Some(merged);
+        drop(s);
+        self.shutdown_asked.notify_one();
+    }
+
+    pub fn requested_shutdown(&self) -> Option<ShutdownRequest> {
+        *self.shutdown.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Stops every capture, each closing its part and finishing it into a
+    /// playable file, resumable if the service runs again in time
+    /// (capture::suspend), and waits for them, up to `limit`.
+    pub async fn stop_captures(&self, limit: Duration) {
+        self.stopping.store(true, Ordering::SeqCst);
+        let n = self.live(|m| {
+            for l in m.values() {
+                let _ = l.stop.send(true);
+            }
+            m.len()
+        });
+        if n > 0 {
+            tracing::info!("stopping: closing {n} recording(s)");
+        }
+        let until = tokio::time::Instant::now() + limit;
+        while self.live(|m| !m.is_empty()) && tokio::time::Instant::now() < until {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
     }
 
     // ------------------------------------------------------------- requests
@@ -336,6 +401,7 @@ impl Server {
     pub fn status(&self) -> StatusDto {
         let cfg = self.config();
         let (free, total) = disk_space(Path::new(&cfg.output_dir));
+        let b = self.busy();
         let active = self.live(|m| {
             let mut v: Vec<ActiveDto> = m
                 .iter()
@@ -346,6 +412,7 @@ impl Server {
                     bytes: l.bytes,
                     since: l.since,
                     waiting: l.waiting.clone(),
+                    until: l.until,
                 })
                 .collect();
             v.sort_by_key(|a| a.id);
@@ -359,6 +426,9 @@ impl Server {
             disk_free: free,
             disk_total: total,
             now: now(),
+            idle: b.idle,
+            idle_at: b.idle_at,
+            next_start: b.next_start,
         }
     }
 

@@ -8,11 +8,21 @@
 //! ```text
 //! zapper-server [--port N] [--no-sync] [--home DIR]
 //! zapper-server --install-service | --remove-service [--home DIR]
+//! zapper-server --busy | --stop-for-setup [--ask] [--home DIR]
 //! ```
 //!
 //! `--install-service` and `--remove-service` do what Settings › Recording's
 //! Install and Remove do (recording::service), for a computer without the
-//! app's window, or a script.
+//! app's window, or a script. `--busy` and `--stop-for-setup` are the
+//! installers' (packaging/windows/): whether the service on this computer is
+//! recording, and stopping it cleanly before files are replaced, asking
+//! first with `--ask` when it is.
+//!
+//! It stops or restarts itself without spoiling a recording
+//! (recording::lifecycle): asked through the API, now or once idle; on
+//! SIGTERM or Ctrl+C, at once but finishing what it recorded into playable
+//! files; and, on Linux, restarting into a newer version of itself once one
+//! has been installed over it and it is idle.
 //!
 //! `--no-sync` leaves the catalogue to whoever else keeps it (the app on the
 //! same machine, or a harness that wrote one). `--home` keeps everything in
@@ -25,12 +35,17 @@
 //! nowhere to print, it logs to `zapper-server.log` in the data folder.
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
+use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use zapper_lib::catalog::sync_engine::{self, StatusSink};
 use zapper_lib::ipc::types::SyncStatusDto;
 use zapper_lib::recording::budget::SourceBudget;
+use zapper_lib::recording::api::{ShutdownRequest, ShutdownWhen};
+use zapper_lib::recording::client::Client;
+use zapper_lib::recording::lifecycle::{self, Exit, FileId};
 use zapper_lib::recording::{config, server::Server, store};
 
 /// The sync's progress, to the log: nobody is watching a toolbar.
@@ -53,6 +68,8 @@ fn args() -> Result<Option<Args>> {
         sync: true,
     };
     let mut service: Option<bool> = None;
+    let mut setup: Option<Setup> = None;
+    let mut ask = false;
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
         match arg.as_str() {
@@ -63,6 +80,9 @@ fn args() -> Result<Option<Args>> {
             "--no-sync" => a.sync = false,
             "--install-service" => service = Some(true),
             "--remove-service" => service = Some(false),
+            "--busy" => setup = Some(Setup::Busy),
+            "--stop-for-setup" => setup = Some(Setup::Stop),
+            "--ask" => ask = true,
             "--home" => {
                 let v = it.next().context("--home needs a folder")?;
                 // Before anything has read a path, and before any thread
@@ -82,7 +102,9 @@ fn args() -> Result<Option<Args>> {
                      --no-sync           do not keep the catalogue current from here\n  \
                      --home DIR          keep settings, catalogue and recordings' data in DIR\n  \
                      --install-service   run this zapper-server for you from now on, and now\n  \
-                     --remove-service    stop it and undo that (recordings are kept)\n\n\
+                     --remove-service    stop it and undo that (recordings are kept)\n  \
+                     --busy              say whether the running service is recording (exit 3 if so)\n  \
+                     --stop-for-setup    stop it cleanly for an installer; with --ask, ask first if it records\n\n\
                      Settings: {}\nAPI token: {}",
                     env!("CARGO_PKG_VERSION"),
                     config::DEFAULT_PORT,
@@ -98,7 +120,94 @@ fn args() -> Result<Option<Args>> {
         manage_service(install)?;
         return Ok(None);
     }
+    if let Some(what) = setup {
+        let code = for_setup(what, ask)?;
+        std::process::exit(code);
+    }
     Ok(Some(a))
+}
+
+#[derive(Clone, Copy)]
+enum Setup {
+    Busy,
+    Stop,
+}
+
+/// `--busy`: exit 0 when no service runs here or it is idle, 3 when it is
+/// recording (or about to), printing until when. `--stop-for-setup`: stops
+/// it cleanly, now (lifecycle), and waits for it to be gone; with `ask` and a
+/// recording in progress, asks first, and exits 2 if the answer is no.
+fn for_setup(what: Setup, ask: bool) -> Result<i32> {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    rt.block_on(async {
+        let Ok(c) = Client::local() else { return Ok(0) };
+        let Ok(st) = c.status().await else {
+            println!("not running");
+            return Ok(0);
+        };
+        let until = st.idle_at.or(st.active.iter().map(|a| a.until).max());
+        let line = match (st.busy(), until) {
+            (true, Some(t)) => format!("recording until {}", hhmm(t)),
+            (true, None) => "recording".to_string(),
+            (false, _) => "idle".to_string(),
+        };
+        // No line break after it: the NSIS installer puts it in a sentence.
+        print!("{line}");
+        let _ = std::io::Write::flush(&mut std::io::stdout());
+        if let Setup::Busy = what {
+            return Ok(if st.busy() { 3 } else { 0 });
+        }
+        if st.busy() && ask && !confirm(&line) {
+            return Ok(2);
+        }
+        c.shutdown(&ShutdownRequest {
+            when: ShutdownWhen::Now,
+            restart: false,
+        })
+        .await?;
+        // Gone once it no longer answers: it closes its listeners last.
+        for _ in 0..240 {
+            if c.version().await.is_err() {
+                println!("\nstopped");
+                return Ok(0);
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+        anyhow::bail!("the recording service did not stop within two minutes")
+    })
+}
+
+fn hhmm(t: i64) -> String {
+    let c = zapper_lib::localtime::Civil::local(t);
+    format!("{:02}:{:02}", c.hour, c.minute)
+}
+
+/// Asks whether to stop a recording in progress: a message box on Windows,
+/// whose installers ask this way (the MSI cannot ask itself); elsewhere
+/// nobody is asked.
+fn confirm(line: &str) -> bool {
+    #[cfg(windows)]
+    {
+        use windows::core::HSTRING;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            MessageBoxW, IDYES, MB_ICONWARNING, MB_SETFOREGROUND, MB_YESNO,
+        };
+        let text = HSTRING::from(format!(
+            "zapper's recording service is {line}.\n\nStop it now and continue? What was recorded so far is kept."
+        ));
+        let title = HSTRING::from("zapper");
+        let answer = unsafe {
+            MessageBoxW(None, &text, &title, MB_YESNO | MB_ICONWARNING | MB_SETFOREGROUND)
+        };
+        answer == IDYES
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = line;
+        true
+    }
 }
 
 /// `--install-service` / `--remove-service`: the systemd user unit or the
@@ -169,7 +278,7 @@ fn main() -> Result<()> {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
-    rt.block_on(async move {
+    let exit = rt.block_on(async move {
         if args.sync {
             tokio::spawn(sync_engine::periodic(LogSink));
         }
@@ -177,12 +286,68 @@ fn main() -> Result<()> {
         // On 127.0.0.1, and on the network too when Settings says so; a
         // change there replaces the listeners while this keeps running.
         server.listen().await?;
-        shutdown().await;
-        // Captures in progress keep their parts and their state: the next
-        // start resumes or finishes them.
-        tracing::info!("stopping");
+        let exe = std::env::current_exe().ok();
+        let at_start = exe.as_deref().and_then(lifecycle::file_id);
+        let exit = supervise(&server, exe.as_deref(), at_start).await;
+        // What is recording closes its part and finishes it into a playable
+        // file, resumed in a new part by the next start while it is on.
+        server.stop_captures(Duration::from_secs(120)).await;
+        tracing::info!("stopped");
+        Ok::<_, anyhow::Error>((exit, exe))
+    });
+    let (exit, exe) = exit?;
+    rt.shutdown_timeout(Duration::from_secs(5));
+    match (exit, exe) {
+        (Exit::Restart, Some(exe)) => restart(&exe),
+        _ => Ok(()),
+    }
+}
+
+/// Waits until the service should stop or restart (lifecycle::decide):
+/// asked through the API, signalled, or its program replaced on disk.
+async fn supervise(server: &Arc<Server>, exe: Option<&Path>, at_start: Option<FileId>) -> Exit {
+    let signal = signalled();
+    tokio::pin!(signal);
+    let mut signalled = false;
+    loop {
+        let replaced = exe.is_some_and(|p| lifecycle::replaced(at_start, lifecycle::file_id(p)));
+        let asked = server.requested_shutdown();
+        // Reading the schedule only when it matters.
+        let idle = (asked.is_some() || replaced) && server.busy().idle;
+        if let Some(e) = lifecycle::decide(asked, signalled, replaced, idle) {
+            let why = if signalled {
+                "signalled"
+            } else if asked.is_some() {
+                "asked"
+            } else {
+                "a newer version was installed"
+            };
+            tracing::info!("{} ({why})", if e == Exit::Restart { "restarting" } else { "stopping" });
+            return e;
+        }
+        tokio::select! {
+            _ = &mut signal => signalled = true,
+            _ = server.shutdown_asked.notified() => {}
+            _ = tokio::time::sleep(Duration::from_secs(20)) => {}
+        }
+    }
+}
+
+/// Runs the program at `exe` again with the same arguments: in this process
+/// on Unix, so a systemd unit keeps its process; as a new one on Windows.
+fn restart(exe: &Path) -> Result<()> {
+    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        let e = std::process::Command::new(exe).args(&args).exec();
+        Err(anyhow::anyhow!("restarting {}: {e}", exe.display()))
+    }
+    #[cfg(not(unix))]
+    {
+        std::process::Command::new(exe).args(&args).spawn()?;
         Ok(())
-    })
+    }
 }
 
 /// `zapper-server.log` in the data folder, for a service with no console
@@ -266,7 +431,7 @@ mod console {
     }
 }
 
-async fn shutdown() {
+async fn signalled() {
     #[cfg(unix)]
     {
         use tokio::signal::unix::{signal, SignalKind};

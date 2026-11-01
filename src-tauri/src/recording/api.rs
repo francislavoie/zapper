@@ -167,6 +167,9 @@ pub struct ActiveDto {
     /// Why it is not capturing right now, if it is not.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub waiting: Option<String>,
+    /// Unix seconds when it stops: the programme's end plus the padding.
+    #[serde(default)]
+    pub until: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -183,6 +186,52 @@ pub struct StatusDto {
     /// Unix seconds, the service's clock: a wrong clock on a box records at
     /// the wrong times, so it is worth showing.
     pub now: i64,
+    /// Nothing is recording and nothing starts within five minutes
+    /// (schedule::busy): the service can be stopped or restarted without
+    /// spoiling anything. A service too old to say leaves it true; `active`
+    /// still tells.
+    #[serde(default = "yes")]
+    pub idle: bool,
+    /// When it next will be idle, if it is not now.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idle_at: Option<i64>,
+    /// The next padded start of a recording not yet begun.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_start: Option<i64>,
+}
+
+fn yes() -> bool {
+    true
+}
+
+impl StatusDto {
+    /// Stopping it now would cut a recording short (or one about to begin).
+    pub fn busy(&self) -> bool {
+        !self.idle || !self.active.is_empty()
+    }
+}
+
+/// When `POST /api/shutdown` stops the service.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ShutdownWhen {
+    /// Carry on with the schedule, and stop at the first idle moment.
+    Idle,
+    /// Now: what is recording is closed and finished into a playable file
+    /// first, and resumed (in a new part) if the service runs again while
+    /// its programme is still on.
+    Now,
+}
+
+/// `POST /api/shutdown`: the app's alone (this computer, its token).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShutdownRequest {
+    pub when: ShutdownWhen,
+    /// Start again once stopped: the same program, with the same arguments
+    /// (so a replaced one runs its new version).
+    #[serde(default)]
+    pub restart: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
