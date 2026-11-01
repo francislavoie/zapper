@@ -8,6 +8,11 @@
 //!   service alone (the app changes settings through the API), read by both.
 //! - `server-token`: the shared secret every API request carries, made by
 //!   the service on its first start, readable by this user only.
+//!
+//! Other devices on the network sign in with a password. What the service
+//! keeps for that (the password's hash, the devices it let in, the HTTPS
+//! certificate's key) has files of its own beside these, readable by this
+//! user only, so `server.json` holds no secret (see `recording::access`).
 
 use std::path::{Path, PathBuf};
 
@@ -21,11 +26,18 @@ use super::naming::{self, Naming};
 /// fixture server (8788).
 pub const DEFAULT_PORT: u16 = 8796;
 
+/// The lowest port Settings offers: below it a Unix system wants root to
+/// listen at all.
+pub const MIN_PORT: u16 = 1024;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ServerConfig {
-    /// On 127.0.0.1 only, for now.
+    /// Where the service listens: on 127.0.0.1 for the app, and on every
+    /// interface too while `network.enabled`. One port for both, so the app
+    /// finds the service at the same address either way.
     pub port: u16,
+    pub network: NetworkConfig,
     pub output_dir: String,
     pub pad_before: i64,
     pub pad_after: i64,
@@ -38,6 +50,7 @@ impl Default for ServerConfig {
     fn default() -> Self {
         Self {
             port: DEFAULT_PORT,
+            network: NetworkConfig::default(),
             output_dir: default_output_dir().to_string_lossy().into_owned(),
             pad_before: 60,
             pad_after: 5 * 60,
@@ -46,6 +59,36 @@ impl Default for ServerConfig {
             naming_pattern: String::new(),
         }
     }
+}
+
+/// Whether, and how, other devices on the network reach the service.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct NetworkConfig {
+    /// Listen on every interface rather than 127.0.0.1 only. Off unless
+    /// turned on, and only with a sign-in password set.
+    pub enabled: bool,
+    /// Other devices are served HTTPS, with the service's own certificate.
+    /// Off means plain HTTP on the network, which anyone on it can read.
+    /// This computer's own requests (127.0.0.1) may be plain HTTP either way.
+    pub https: bool,
+}
+
+impl Default for NetworkConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            https: true,
+        }
+    }
+}
+
+/// A port Settings may choose: one a user may listen on without root.
+pub fn validate_port(port: u16) -> Result<(), String> {
+    if port < MIN_PORT {
+        return Err(format!("the port must be between {MIN_PORT} and 65535"));
+    }
+    Ok(())
 }
 
 impl ServerConfig {
@@ -161,13 +204,22 @@ pub fn read_token_from(path: &Path) -> Option<String> {
 }
 
 /// Writes `token` readable and writable by this user alone.
-///
-/// Created with that mode rather than chmod-ed after, so it is never
-/// readable by others, even for a moment.
 pub fn write_token(path: &Path, token: &str) -> Result<()> {
+    write_private(path, token.as_bytes())
+}
+
+/// Writes a file readable and writable by this user alone, whole: through a
+/// temporary file beside it, so a reader never sees half of it.
+///
+/// The temporary file is created with that mode rather than chmod-ed after,
+/// so its contents are never readable by others, even for a moment.
+pub fn write_private(path: &Path, contents: &[u8]) -> Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     }
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    let tmp = PathBuf::from(tmp);
     let mut opts = std::fs::OpenOptions::new();
     opts.write(true).create(true).truncate(true);
     #[cfg(unix)]
@@ -177,15 +229,19 @@ pub fn write_token(path: &Path, token: &str) -> Result<()> {
     }
     use std::io::Write;
     let mut f = opts
-        .open(path)
-        .with_context(|| format!("creating {}", path.display()))?;
-    f.write_all(token.as_bytes())?;
+        .open(&tmp)
+        .with_context(|| format!("creating {}", tmp.display()))?;
     #[cfg(unix)]
     {
-        // An existing file keeps its old mode through `open`; make sure.
+        // One left by an interrupted write keeps its old mode through
+        // `open`; make sure before anything goes into it.
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+        f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
     }
+    f.write_all(contents)?;
+    f.sync_all()?;
+    drop(f);
+    std::fs::rename(&tmp, path).with_context(|| format!("replacing {}", path.display()))?;
     Ok(())
 }
 
@@ -225,6 +281,23 @@ mod tests {
         std::fs::write(&p, r#"{"port": 9100}"#).unwrap();
         let c = load_from(&p);
         assert_eq!((c.port, c.pad_after, c.clock_track), (9100, 300, true));
+        assert_eq!(
+            (c.network.enabled, c.network.https),
+            (false, true),
+            "network access is off, and HTTPS when it is on, unless chosen"
+        );
+        std::fs::write(&p, r#"{"network": {"enabled": true}}"#).unwrap();
+        let n = load_from(&p).network;
+        assert_eq!((n.enabled, n.https), (true, true));
+    }
+
+    #[test]
+    fn ports_below_1024_are_refused() {
+        assert!(validate_port(80).is_err());
+        assert!(validate_port(1023).is_err());
+        assert!(validate_port(1024).is_ok());
+        assert!(validate_port(DEFAULT_PORT).is_ok());
+        assert!(validate_port(65535).is_ok());
     }
 
     #[test]
@@ -284,6 +357,9 @@ mod tests {
         let p = d.join("server-token");
         write_token(&p, "abc123").unwrap();
         assert_eq!(read_token_from(&p).as_deref(), Some("abc123"));
+        write_token(&p, "def456").unwrap();
+        assert_eq!(read_token_from(&p).as_deref(), Some("def456"));
+        assert!(!d.join("server-token.tmp").exists());
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;

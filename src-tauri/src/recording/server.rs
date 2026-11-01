@@ -7,19 +7,21 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use rusqlite::{Connection, OptionalExtension};
 use tokio::sync::{watch, Notify};
 
+use super::access::Access;
 use super::api::{
-    ActiveDto, RecordingDto, RecordingSettingsDto, RecordingState, ScheduleRequest, StatusDto,
-    API_VERSION,
+    ActiveDto, NetworkDto, NetworkSettingsDto, RecordingDto, RecordingSettingsDto, RecordingState,
+    ScheduleRequest, StatusDto, API_VERSION,
 };
 use super::budget::Budget;
-use super::config::{self, ServerConfig};
+use super::config::{self, NetworkConfig, ServerConfig};
+use super::listen::{self, Listening};
 use super::naming::{self, Programme};
 use super::schedule::{plan, sleep_for};
-use super::{capture, now, store};
+use super::{capture, http, now, store, tls};
 use crate::localtime::Civil;
 
 /// A capture's live state, for status and for stopping it.
@@ -42,9 +44,18 @@ pub struct Server {
     pub streams_open: AtomicUsize,
     wake: Notify,
     pub budget: Box<dyn Budget>,
+    /// The sign-in password, the devices signed in, failed sign-ins.
+    pub access: Access,
+    /// The listeners, while the API is served; one change of network
+    /// settings at a time.
+    listening: tokio::sync::Mutex<Option<Open>>,
+    /// Why network access is not on as set, when it is not.
+    listen_error: Mutex<Option<String>>,
 }
 
 impl Server {
+    /// The password, devices and certificate are read from beside
+    /// `config_path`.
     pub fn new(
         db: Connection,
         config: ServerConfig,
@@ -52,16 +63,31 @@ impl Server {
         token: String,
         budget: Box<dyn Budget>,
     ) -> Arc<Self> {
+        let dir = config_path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_default();
         Arc::new(Self {
             db: Mutex::new(db),
             config: Mutex::new(config),
+            access: Access::load(&dir),
             config_path,
             token,
             live: Mutex::new(HashMap::new()),
             streams_open: AtomicUsize::new(0),
             wake: Notify::new(),
             budget,
+            listening: tokio::sync::Mutex::new(None),
+            listen_error: Mutex::new(None),
         })
+    }
+
+    /// Where the password, devices and certificate are kept.
+    fn dir(&self) -> PathBuf {
+        self.config_path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_default()
     }
 
     /// Runs `f` on the recordings database.
@@ -339,6 +365,218 @@ impl Server {
     pub fn open_streams(&self) -> usize {
         self.streams_open.load(Ordering::SeqCst)
     }
+
+    // ------------------------------------------------------------ listening
+
+    /// Starts serving the API as the settings say. Network access that
+    /// cannot be had (no password, the port taken, no certificate) falls
+    /// back to 127.0.0.1, with the reason kept for Settings to show; only
+    /// that failing too is an error.
+    pub async fn listen(self: &Arc<Self>) -> Result<()> {
+        let cfg = self.config();
+        let mut net = cfg.network;
+        let mut error = None;
+        if net.enabled && !self.access.password_set() {
+            net.enabled = false;
+            error = Some("network access is off: no sign-in password is set".to_string());
+        }
+        let mut slot = self.listening.lock().await;
+        let open = match self.open(net, cfg.port) {
+            Ok(l) => l,
+            Err(e) if net.enabled => {
+                tracing::error!("network access: {e:#}");
+                error = Some(format!("network access is off: {e:#}"));
+                net.enabled = false;
+                self.open(net, cfg.port)?
+            }
+            Err(e) => return Err(e),
+        };
+        *slot = Some(open);
+        *self.listen_error.lock().unwrap_or_else(|e| e.into_inner()) = error;
+        Ok(())
+    }
+
+    /// Where the API is served now, ports resolved.
+    pub async fn listening_on(&self) -> Vec<std::net::SocketAddr> {
+        self.listening
+            .lock()
+            .await
+            .as_ref()
+            .map(|o| o.listening.addrs.clone())
+            .unwrap_or_default()
+    }
+
+    /// Binds and serves as `net` says, on `port`.
+    fn open(self: &Arc<Self>, net: NetworkConfig, port: u16) -> Result<Open> {
+        let acceptor = if net.enabled && net.https {
+            let id = tls::load_or_create(&self.dir(), &tls::names_for(&listen::interface_ips()))
+                .context("the HTTPS certificate")?;
+            Some(tls::acceptor(&id)?)
+        } else {
+            None
+        };
+        let listeners = listen::bind(&listen::wanted(net.enabled, port))?;
+        let listening = listen::start(listeners, http::router(Arc::clone(self)), acceptor);
+        for a in &listening.addrs {
+            let scheme = if listening.tls { "http(s)" } else { "http" };
+            tracing::info!("recording service API on {scheme}://{a}");
+        }
+        Ok(Open { listening, net })
+    }
+
+    /// Network access as Settings shows it.
+    pub fn network(&self) -> NetworkDto {
+        let cfg = self.config();
+        NetworkDto {
+            enabled: cfg.network.enabled,
+            port: cfg.port,
+            https: cfg.network.https,
+            password_set: self.access.password_set(),
+            fingerprint: tls::load(&self.dir()).map(|i| i.fingerprint()),
+            addresses: listen::addresses(cfg.port, cfg.network.https),
+            error: self
+                .listen_error
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone(),
+            devices: self.access.devices(|d| d.list()),
+        }
+    }
+
+    /// Changes where and how the API is served, without restarting the
+    /// service: the listeners are replaced, connections already open finish
+    /// their request (this one included), and recordings carry on. When the
+    /// new settings cannot be served (the port is taken), the old ones stay,
+    /// and the reason is the error.
+    pub async fn set_network(self: &Arc<Self>, s: NetworkSettingsDto) -> Result<NetworkDto> {
+        config::validate_port(s.port).map_err(|e| anyhow!(e))?;
+        if s.enabled && !self.access.password_set() {
+            bail!("set a sign-in password before turning on network access");
+        }
+        let mut slot = self.listening.lock().await;
+        let old = self.config();
+        let net = NetworkConfig {
+            enabled: s.enabled,
+            https: s.https,
+        };
+        let mut cfg = old.clone();
+        cfg.port = s.port;
+        cfg.network = net;
+        let had_error = self
+            .listen_error
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_some();
+        let effective = slot.as_ref().map(|o| o.net);
+        let listening_changes = s.port != old.port
+            || effective
+                .is_none_or(|e| e.enabled != net.enabled || (net.enabled && e.https != net.https))
+            || had_error;
+        // The new rules apply from now, before the new listeners are up: a
+        // request in between is judged by them, never by the more open of
+        // the two.
+        *self.config.lock().unwrap_or_else(|e| e.into_inner()) = cfg.clone();
+        if listening_changes {
+            match self.reopen(slot.take(), old.port, net, s.port).await {
+                Ok(open) => {
+                    *slot = Some(open);
+                    *self.listen_error.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                }
+                Err((back, e)) => {
+                    *slot = back;
+                    *self.config.lock().unwrap_or_else(|e| e.into_inner()) = old;
+                    return Err(e);
+                }
+            }
+        }
+        config::save_to(&self.config_path, &cfg)?;
+        drop(slot);
+        Ok(self.network())
+    }
+
+    /// Replaces `current` with listeners for `net` on `port`. On failure,
+    /// what is listening then comes back with the error: `current` itself,
+    /// or the same reopened.
+    async fn reopen(
+        self: &Arc<Self>,
+        current: Option<Open>,
+        old_port: u16,
+        net: NetworkConfig,
+        port: u16,
+    ) -> std::result::Result<Open, (Option<Open>, anyhow::Error)> {
+        let Some(current) = current else {
+            return self.open(net, port).map_err(|e| (None, e));
+        };
+        if port != old_port {
+            // Another port: bound before the old one closes, so a port that
+            // is taken changes nothing.
+            return match self.open(net, port) {
+                Ok(new) => {
+                    current.listening.stop().await;
+                    Ok(new)
+                }
+                Err(e) => Err((Some(current), e)),
+            };
+        }
+        // The same port: the old sockets must close before it can be bound
+        // with other addresses.
+        let was = current.net;
+        current.listening.stop().await;
+        match self.open(net, port) {
+            Ok(new) => Ok(new),
+            Err(e) => {
+                let back = self.open(was, port).or_else(|_| {
+                    self.open(
+                        NetworkConfig {
+                            enabled: false,
+                            ..was
+                        },
+                        port,
+                    )
+                });
+                match back {
+                    Ok(b) => Err((Some(b), e)),
+                    Err(e2) => {
+                        tracing::error!("the API is not served: {e2:#}");
+                        Err((None, e))
+                    }
+                }
+            }
+        }
+    }
+
+    /// Sets the sign-in password for other devices, which signs every
+    /// device out.
+    pub async fn set_password(&self, pw: &str) -> Result<NetworkDto> {
+        self.access.set_password(pw).await?;
+        tracing::info!("the sign-in password was changed; every device is signed out");
+        Ok(self.network())
+    }
+
+    /// Settings as given, for tests of the rules that read them.
+    #[cfg(test)]
+    pub fn replace_config(&self, cfg: ServerConfig) {
+        *self.config.lock().unwrap_or_else(|e| e.into_inner()) = cfg;
+    }
+
+    #[cfg(test)]
+    pub fn dir_for_test(&self) -> PathBuf {
+        self.dir()
+    }
+
+    pub fn revoke_device(&self, id: &str) -> Result<NetworkDto> {
+        if !self.access.devices(|d| d.revoke(id))? {
+            bail!("no such device");
+        }
+        Ok(self.network())
+    }
+}
+
+/// Listeners, and the network settings they were opened with (network
+/// access may be off while the settings say on, when it could not be had).
+struct Open {
+    listening: Listening,
+    net: NetworkConfig,
 }
 
 fn remove_if_present(p: &Path) -> Result<()> {

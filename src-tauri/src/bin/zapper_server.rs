@@ -2,7 +2,8 @@
 //!
 //! Headless: no window, no webview, no libmpv. It keeps the catalogue and
 //! guide current like the app does, wakes to record what was scheduled, and
-//! answers the app (and, later, a browser) over HTTP on 127.0.0.1.
+//! answers the app over HTTP on 127.0.0.1 (and other devices on the network,
+//! when Settings › Recording allows them).
 //!
 //! ```text
 //! zapper-server [--port N] [--no-sync]
@@ -17,7 +18,7 @@ use anyhow::{Context, Result};
 use zapper_lib::catalog::sync_engine::{self, StatusSink};
 use zapper_lib::ipc::types::SyncStatusDto;
 use zapper_lib::recording::budget::SourceBudget;
-use zapper_lib::recording::{config, http, server::Server, store};
+use zapper_lib::recording::{config, server::Server, store};
 
 /// The sync's progress, to the log: nobody is watching a toolbar.
 struct LogSink;
@@ -54,7 +55,7 @@ fn args() -> Result<Option<Args>> {
                 println!(
                     "zapper-server {}: zapper's recording service\n\n\
                      Usage: zapper-server [--port N] [--no-sync]\n\n  \
-                     --port N    listen on 127.0.0.1:N (default: server.json's, else {})\n  \
+                     --port N    listen on port N (default: server.json's, else {})\n  \
                      --no-sync   do not keep the catalogue current from here\n\n\
                      Settings: {}\nAPI token: {}",
                     env!("CARGO_PKG_VERSION"),
@@ -98,7 +99,7 @@ fn main() -> Result<()> {
     }
     let token = token()?;
     let db = store::open(&zapper_lib::paths::data_dir().join("recordings.db"))?;
-    let port = cfg.port;
+
     // How many streams a playlist allows is the app's setting, read from
     // the catalogue the two share; see `recording::budget`.
     let budget = Box::new(SourceBudget);
@@ -112,15 +113,14 @@ fn main() -> Result<()> {
             tokio::spawn(sync_engine::periodic(LogSink));
         }
         tokio::spawn(Arc::clone(&server).run_scheduler());
-        tokio::select! {
-            r = http::serve(server, port) => r,
-            _ = shutdown() => {
-                // Captures in progress keep their parts and their state: the
-                // next start resumes or finishes them.
-                tracing::info!("stopping");
-                Ok(())
-            }
-        }
+        // On 127.0.0.1, and on the network too when Settings says so; a
+        // change there replaces the listeners while this keeps running.
+        server.listen().await?;
+        shutdown().await;
+        // Captures in progress keep their parts and their state: the next
+        // start resumes or finishes them.
+        tracing::info!("stopping");
+        Ok(())
     })
 }
 

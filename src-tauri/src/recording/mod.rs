@@ -11,8 +11,9 @@
 //! [`service`] installs the service as a systemd user unit.
 //!
 //! The service itself — the store of recordings, the capture loop, the
-//! remuxer and the HTTP server — is in the `server` feature, so the app links
-//! none of it.
+//! remuxer, the HTTP server with its listeners ([`listen`]), who may use it
+//! ([`access`]) and its HTTPS certificate ([`tls`]) — is in the `server`
+//! feature, so the app links none of it.
 
 pub mod api;
 pub mod budget;
@@ -26,13 +27,19 @@ pub mod service;
 pub mod store;
 
 #[cfg(feature = "server")]
+pub mod access;
+#[cfg(feature = "server")]
 pub mod capture;
 #[cfg(feature = "server")]
 pub mod http;
 #[cfg(feature = "server")]
+pub mod listen;
+#[cfg(feature = "server")]
 pub mod remux;
 #[cfg(feature = "server")]
 pub mod server;
+#[cfg(feature = "server")]
+pub mod tls;
 
 /// Unix seconds now.
 pub fn now() -> i64 {

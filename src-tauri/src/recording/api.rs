@@ -192,6 +192,87 @@ pub struct VersionDto {
     pub api_version: u32,
 }
 
+/// `PUT /api/network`: whether other devices on the network may reach the
+/// service, and how. The app's alone (this computer, its token).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkSettingsDto {
+    /// Listen on every interface, not only 127.0.0.1. Needs a password set.
+    pub enabled: bool,
+    /// 1024–65535: the app's and the network's alike.
+    pub port: u16,
+    /// Other devices are served HTTPS; off means plain HTTP on the network.
+    pub https: bool,
+}
+
+/// `GET /api/network`: the settings, and what follows from them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkDto {
+    pub enabled: bool,
+    pub port: u16,
+    pub https: bool,
+    /// A sign-in password is set (the password itself never leaves the
+    /// service, and only its hash is kept).
+    pub password_set: bool,
+    /// The HTTPS certificate's SHA-256 fingerprint, `AB:CD:…`, once one was
+    /// made: what a browser's certificate warning can be checked against.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fingerprint: Option<String>,
+    /// Where another device reaches the service while network access is on:
+    /// `https://192.168.1.20:8796`, one per address of this computer's
+    /// network interfaces.
+    pub addresses: Vec<String>,
+    /// Why network access is not working as set, such as a port another
+    /// program holds when the service started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// The devices signed in, most recently used first.
+    pub devices: Vec<DeviceDto>,
+}
+
+/// A device signed in with the password.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceDto {
+    pub id: String,
+    /// What it called itself, or what its browser says it is ("Firefox on
+    /// Android").
+    pub name: String,
+    pub user_agent: String,
+    /// Unix seconds.
+    pub created: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_used: Option<i64>,
+    /// Where it was last seen from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+}
+
+/// `PUT /api/network/password`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PasswordRequest {
+    pub password: String,
+}
+
+/// `POST /api/login`, from another device.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LoginRequest {
+    pub password: String,
+    /// What to call the device in Settings; its browser's name otherwise.
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+/// `POST /api/login`'s answer: the device's token, sent as
+/// `Authorization: Bearer <token>` from then on. Shown this once; the
+/// service keeps only its hash.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LoginDto {
+    pub token: String,
+    pub device: DeviceDto,
+}
+
 /// Every error reply's body.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ErrorDto {
