@@ -5544,6 +5544,85 @@ textarea.field {
   color: var(--bad);
 }
 
+/* Settings › Recording › File names: the presets, a custom pattern with its
+   tokens under it, and the paths two example programmes would get. Paths
+   wrap anywhere rather than being cut, since the end of one (the date, the
+   episode) is the part worth seeing. */
+.naming {
+  display: grid;
+  gap: 0.5rem;
+  width: 100%;
+  min-width: 0;
+}
+
+.naming .segmented {
+  justify-self: start;
+}
+
+.naming-custom {
+  display: grid;
+  gap: 0.375rem;
+}
+
+.naming-pattern,
+.naming-token,
+.naming-preview {
+  font-family: ui-monospace, "DejaVu Sans Mono", monospace;
+}
+
+.naming-pattern {
+  font-size: 0.75rem;
+}
+
+.naming-pattern[aria-invalid] {
+  border-color: #6a3036;
+}
+
+.naming-tokens {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.naming-token {
+  padding: 0.0625rem 0.375rem;
+  border: 1px solid var(--line);
+  border-radius: 0.25rem;
+  background: var(--bg-3);
+  color: var(--dim);
+  font-size: 0.6875rem;
+}
+
+.naming-token:hover {
+  color: var(--text);
+  border-color: var(--track-edge);
+}
+
+.naming-hint {
+  margin-left: 0.25rem;
+  color: var(--dimmer);
+  font-size: 0.6875rem;
+}
+
+.naming-preview {
+  margin: 0;
+  padding: 0.375rem 0.5625rem;
+  list-style: none;
+  border: 1px solid var(--line);
+  border-radius: 0.375rem;
+  background: var(--bg);
+  color: var(--dim);
+  font-size: 0.6875rem;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.naming-why {
+  font-size: 0.75rem;
+  color: #ffc9c9;
+}
+
 /* The Recordings dialog: a scrolling list of rows grouped by state. */
 .about.recordings {
   width: min(42rem, 100%);

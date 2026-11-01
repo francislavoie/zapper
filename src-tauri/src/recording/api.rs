@@ -6,6 +6,8 @@
 
 use serde::{Deserialize, Serialize};
 
+pub use super::naming::Naming;
+
 /// Bumped when a request or a reply changes shape incompatibly.
 pub const API_VERSION: u32 = 1;
 
@@ -88,7 +90,8 @@ pub struct RecordingDto {
     /// Why it failed, when it did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
-    /// Where its files go: `<output folder>/<Show>`.
+    /// Where its files go: `<output folder>/<Show>` by default; the output
+    /// folder itself for a flat layout.
     pub folder: String,
     /// While recording: why it is not capturing right now, such as
     /// "waiting for a free connection".
@@ -127,8 +130,17 @@ pub struct ScheduleRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecordingSettingsDto {
-    /// Where recordings go; each show gets a folder inside.
+    /// Where recordings go; `naming` lays them out inside.
     pub output_dir: String,
+    /// How files are named and grouped in folders: a preset, or `custom`
+    /// for `naming_pattern`. Omitted by an older client: the default.
+    #[serde(default)]
+    pub naming: Naming,
+    /// The custom pattern (`{show}/{show} - {date} {time}`; see
+    /// docs/recording.md). Kept while a preset is chosen, so going back to
+    /// custom finds it again. Empty, or one `naming::validate` accepts.
+    #[serde(default)]
+    pub naming_pattern: String,
     /// Seconds before the programme's start and after its end.
     pub pad_before: i64,
     pub pad_after: i64,

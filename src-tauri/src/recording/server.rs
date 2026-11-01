@@ -222,11 +222,19 @@ impl Server {
         };
         let programme = Programme {
             title: &req.title,
+            episode_title: req.episode_title.as_deref(),
+            channel: &channel_name,
             season: req.season,
             episode: req.episode,
         };
-        let folder = Path::new(&cfg.output_dir).join(naming::folder(&programme));
-        let base = naming::base(&programme, Civil::local(req.start));
+        // Decided now and kept with the recording, so a change of settings
+        // never splits one recording across two places.
+        let place = naming::place(cfg.pattern(), &programme, Civil::local(req.start));
+        let folder = place
+            .folders
+            .iter()
+            .fold(PathBuf::from(&cfg.output_dir), |p, f| p.join(f));
+        let base = place.base;
         let id = self.db(|c| {
             store::insert(
                 c,
@@ -274,8 +282,14 @@ impl Server {
                 remove_if_present(Path::new(&p.path))?;
                 remove_if_present(&capture::log_path(Path::new(&p.path)))?;
             }
-            // The show's folder goes too once nothing else is in it.
-            let _ = std::fs::remove_dir(&rec.folder);
+            // Its folders go too once nothing else is in them, up to the
+            // output folder, which stays.
+            let output = PathBuf::from(&self.config().output_dir);
+            for dir in empty_folders(Path::new(&rec.folder), &output) {
+                if std::fs::remove_dir(dir).is_err() {
+                    break;
+                }
+            }
         }
         self.db(|c| store::delete(c, id))?;
         Ok(())
@@ -333,6 +347,23 @@ fn remove_if_present(p: &Path) -> Result<()> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(anyhow!("removing {}: {e}", p.display())),
     }
+}
+
+/// The folders worth removing, innermost first, once a recording's files are
+/// deleted: `folder` and those around it, up to but never including the
+/// output folder. A recording made under an earlier output folder gets its
+/// own folder looked at, and nothing above it.
+fn empty_folders<'a>(folder: &'a Path, output: &Path) -> Vec<&'a Path> {
+    if folder == output {
+        return Vec::new();
+    }
+    if !folder.starts_with(output) {
+        return vec![folder];
+    }
+    folder
+        .ancestors()
+        .take_while(|d| *d != output && d.starts_with(output))
+        .collect()
 }
 
 /// Another live channel carrying the same guide channel: the same programme
@@ -416,5 +447,23 @@ mod tests {
         assert_eq!(backup_in(&c, 2).unwrap(), Some(1));
         assert_eq!(backup_in(&c, 4).unwrap(), None);
         assert_eq!(backup_in(&c, 5).unwrap(), None);
+    }
+
+    #[test]
+    fn deleting_tidies_folders_up_to_the_output_folder() {
+        fn got(f: &'static str) -> Vec<&'static Path> {
+            empty_folders(Path::new(f), Path::new("/v"))
+        }
+        assert_eq!(got("/v/News"), [Path::new("/v/News")]);
+        assert_eq!(
+            got("/v/Northwind One/Harbour Lights/Season 02"),
+            [
+                Path::new("/v/Northwind One/Harbour Lights/Season 02"),
+                Path::new("/v/Northwind One/Harbour Lights"),
+                Path::new("/v/Northwind One"),
+            ]
+        );
+        assert!(got("/v").is_empty(), "a flat layout keeps the output folder");
+        assert_eq!(got("/old/News"), [Path::new("/old/News")]);
     }
 }

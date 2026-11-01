@@ -106,9 +106,9 @@ Download the package for your system from the
 
 - **Record from the guide:** right-click a programme. A background service, zapper-server, wakes
   to record it with zapper closed, copying the stream into a Matroska file named the way Jellyfin
-  and Plex expect, with an optional wall-clock subtitle track. It switches to a backup feed if
-  the channel's fails, and never takes a connection someone is watching on. Linux only for now;
-  see [docs/recording.md](docs/recording.md).
+  and Plex expect (or by channel, by date, or a pattern of your own), with an optional wall-clock
+  subtitle track. It switches to a backup feed if the channel's fails, and never takes a
+  connection someone is watching on. Linux only for now; see [docs/recording.md](docs/recording.md).
 
 ## Performance
 

@@ -15,6 +15,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use super::api::RecordingSettingsDto;
+use super::naming::{self, Naming};
 
 /// Chosen to stay clear of the common development ports and of zapper's own
 /// fixture server (8788).
@@ -29,6 +30,8 @@ pub struct ServerConfig {
     pub pad_before: i64,
     pub pad_after: i64,
     pub clock_track: bool,
+    pub naming: Naming,
+    pub naming_pattern: String,
 }
 
 impl Default for ServerConfig {
@@ -39,6 +42,8 @@ impl Default for ServerConfig {
             pad_before: 60,
             pad_after: 5 * 60,
             clock_track: true,
+            naming: Naming::default(),
+            naming_pattern: String::new(),
         }
     }
 }
@@ -50,6 +55,8 @@ impl ServerConfig {
             pad_before: self.pad_before,
             pad_after: self.pad_after,
             clock_track: self.clock_track,
+            naming: self.naming,
+            naming_pattern: self.naming_pattern.clone(),
             default_output_dir: default_output_dir().to_string_lossy().into_owned(),
         }
     }
@@ -69,11 +76,24 @@ impl ServerConfig {
         if !(0..=MAX_PAD).contains(&s.pad_before) || !(0..=MAX_PAD).contains(&s.pad_after) {
             return Err("padding must be between 0 and 6 hours".into());
         }
+        // A custom pattern is checked even while a preset is chosen, so the
+        // one on file is always one that can be switched to.
+        let pattern = s.naming_pattern.trim();
+        if s.naming == Naming::Custom || !pattern.is_empty() {
+            naming::validate(pattern).map_err(|e| format!("file name pattern: {e}"))?;
+        }
         self.output_dir = dir.to_string();
         self.pad_before = s.pad_before;
         self.pad_after = s.pad_after;
         self.clock_track = s.clock_track;
+        self.naming = s.naming;
+        self.naming_pattern = pattern.to_string();
         Ok(())
+    }
+
+    /// The pattern new recordings are named by.
+    pub fn pattern(&self) -> &str {
+        naming::pattern_for(self.naming, &self.naming_pattern)
     }
 }
 
@@ -222,6 +242,40 @@ mod tests {
         s.output_dir = String::new();
         c.apply(s).unwrap();
         assert_eq!(c.output_dir, c.settings().default_output_dir, "empty is the default");
+    }
+
+    #[test]
+    fn a_naming_pattern_is_saved_only_when_it_works() {
+        let mut c = ServerConfig::default();
+        assert_eq!(c.pattern(), naming::MEDIA_SERVER);
+        let mut s = c.settings();
+        s.naming = Naming::Custom;
+        s.naming_pattern = "../{show}".into();
+        let err = c.apply(s.clone()).unwrap_err();
+        assert!(err.starts_with("file name pattern: "), "{err}");
+        assert!(err.contains("output folder"), "{err}");
+        s.naming_pattern = String::new();
+        assert!(c.apply(s.clone()).unwrap_err().contains("empty"));
+        s.naming_pattern = " {channel}/{show} {date} ".into();
+        c.apply(s.clone()).unwrap();
+        assert_eq!(c.naming_pattern, "{channel}/{show} {date}");
+        assert_eq!(c.pattern(), "{channel}/{show} {date}");
+        // A preset leaves the custom pattern on file for later.
+        s.naming = Naming::ByDate;
+        c.apply(s.clone()).unwrap();
+        assert_eq!(c.pattern(), Naming::ByDate.preset().unwrap());
+        assert_eq!(c.settings().naming_pattern, "{channel}/{show} {date}");
+        // But not a broken one, even then.
+        s.naming_pattern = "{nope}".into();
+        assert!(c.apply(s).is_err());
+        // A broken one edited into the file by hand is not followed.
+        let d = scratch("pat");
+        let p = d.join("server.json");
+        std::fs::write(&p, r#"{"naming": "custom", "namingPattern": "/etc/{show}"}"#).unwrap();
+        let c = load_from(&p);
+        assert_eq!((c.naming, c.pattern()), (Naming::Custom, naming::MEDIA_SERVER));
+        std::fs::write(&p, r#"{"naming": "flat"}"#).unwrap();
+        assert_eq!(load_from(&p).pattern(), Naming::Flat.preset().unwrap());
     }
 
     #[test]

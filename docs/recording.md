@@ -17,18 +17,64 @@ schedules recordings from the guide and shows them; the service does the recordi
 3. **Recordings** (in the menu and the command palette) lists what is recording, scheduled,
    recorded and failed, with *Open folder*, *Cancel*/*Stop* and *Delete*.
 
-Settings → Recording also sets the folder, how early to start and how late to stop (1 and 5
-minutes by default), whether to add the clock track, and — for playlists, which cannot say — how
-many streams the account allows at once.
+Settings → Recording also sets the folder, how files are named, how early to start and how late
+to stop (1 and 5 minutes by default), whether to add the clock track, and — for playlists, which
+cannot say — how many streams the account allows at once.
 
 ### Files
+
+By default, laid out the way Jellyfin, Plex and Emby read a TV library:
 
 ```text
 <folder>/<Show>/<Show> - 2026-11-03 20.00.mkv
 <folder>/<Show>/<Show> - S02E05 - 2026-11-03 20.00.mkv        when the guide gives the episode
 <folder>/<Show>/<Show> - 2026-11-03 20.00 - part1.mkv         when it switched feeds
 <folder>/<Show>/<Show> - 2026-11-03 20.00 - part2.mkv
+<folder>/<Show>/<Show> - 2026-11-03 20.00 (2).mkv             when the name was taken
 ```
+
+**File names** in Settings → Recording chooses another layout, with a preview of the paths two
+example programmes would get:
+
+| Choice | Pattern | Gives |
+|---|---|---|
+| Media server (default) | `{show}/{show} - {se} - {date} {time}` | `Harbour Lights/Harbour Lights - S02E04 - 2026-11-03 20.00.mkv` |
+| By channel | `{channel}/{show} - {date} {time}` | `Northwind One HD/Harbour Lights - 2026-11-03 20.00.mkv` |
+| By date | `{date}/{time} {channel} - {show}` | `2026-11-03/20.00 Northwind One HD - Harbour Lights.mkv` |
+| Flat | `{show} - {channel} - {date} {time}` | `Harbour Lights - Northwind One HD - 2026-11-03 20.00.mkv` |
+| Custom | your own | |
+
+A custom pattern is text with these tokens; `/` (or `\`) makes a folder:
+
+| Token | Gives |
+|---|---|
+| `{show}` | the programme's title |
+| `{title}` | the episode's title, when the guide has one |
+| `{channel}` | the channel's name |
+| `{date}` | `2026-11-03`: the programme's start, in this computer's time zone |
+| `{time}` | `20.00`, likewise (24-hour; `:` is not allowed in Windows names) |
+| `{year}` | `2026` |
+| `{season}`, `{episode}` | `02`, `04`, when known |
+| `{se}` | `S02E04`; `E04` with no season; nothing without an episode |
+
+A token with nothing to give takes what only made sense beside it: brackets right around it
+(`({year})`), then the separators (spaces, `-`, `_`, `.`, `,`, dashes) just before it — or, at the
+start of a name, just after it. So `{show} - {se} - {date}` is `The Evening News - 2026-11-03`
+for a programme without an episode number, `{show} ({title})` is `The Evening News`, and a folder
+that comes out empty is left out (`{show}/{season}/…` puts a show without seasons straight in its
+own folder).
+Letters are never taken: `{season}x{episode}` with no season is `x04`. A file name that comes out
+empty (`{title}` alone, for a programme without one) becomes `{show} - {date} {time}`.
+
+The service always adds the extension, ` - partN` when there are several parts and ` (2)` rather
+than replace a file; a pattern never does. Nothing can lead outside the folder: a pattern
+starting with `/`, `\` or a drive, with a `..` folder, a reserved Windows name (`CON`, `NUL`,
+`COM1`…) or a character Windows forbids (`<>:"|?*`), with an empty folder name, or with no token in
+the file name is refused with the reason. Titles from the guide are cleaned the same way whatever
+the pattern: `/`, `\` and `:` become `-`, the other forbidden characters and leading dots go, a
+reserved name gets a `_`, and each value is cut to 100 bytes and each folder or file name to 180,
+so the whole stays under the 255 bytes file systems allow. Where a recording goes is decided when
+it is scheduled, so changing the layout leaves recordings already scheduled where they were.
 
 The date and time are the programme's start in this computer's time zone. Nothing is
 re-encoded: the provider's video and audio are copied into the file as they came. While
@@ -89,7 +135,7 @@ on Linux; `ZAPPER_HOME` moves both):
 
 | File | What |
 |---|---|
-| `server.json` | port, folder, padding, clock track, simultaneous streams |
+| `server.json` | port, folder, file names, padding, clock track |
 | `server-token` | the API token, readable by you alone; made on first start |
 | `recordings.db` | the recordings (SQLite) |
 
@@ -138,21 +184,21 @@ times are Unix seconds; errors are `{"error": "…"}` with a 4xx status.
 | `POST /api/recordings` | schedule: body `{streamId, title, start, stop, backupStreamId?, channelName?, episodeTitle?, season?, episode?, padBefore?, padAfter?}` → `201 Recording`; the same channel and start again returns the existing one |
 | `POST /api/recordings/{id}/cancel` | a scheduled one is removed (`{id, cancelled: true}`); one recording stops and keeps what it has (`Recording`) |
 | `DELETE /api/recordings/{id}?files=true` | forgets a finished recording; `files=true` deletes its files too. Refused while recording |
-| `GET /api/settings` | `{outputDir, padBefore, padAfter, clockTrack, simultaneousStreams, defaultOutputDir}` (padding in seconds) |
-| `PUT /api/settings` | the same fields (`defaultOutputDir` is ignored; an empty `outputDir` means the default); returns what was saved |
+| `GET /api/settings` | `{outputDir, naming, namingPattern, padBefore, padAfter, clockTrack, defaultOutputDir}` (padding in seconds; `naming` is `mediaServer`, `byChannel`, `byDate`, `flat` or `custom`, which uses `namingPattern`) |
+| `PUT /api/settings` | the same fields (`defaultOutputDir` is ignored; an empty `outputDir` means the default; omitted naming fields mean the default layout). A `namingPattern` that cannot be used is refused with `400 {"error": "file name pattern: …"}`, even while a preset is chosen; returns what was saved |
 
 `Recording`:
 
 ```json
 {
   "id": 3, "streamId": 1201, "backupStreamId": 1305, "channelName": "One HD",
-  "title": "The News", "season": 2, "episode": 5,
+  "title": "The Evening News", "season": 2, "episode": 5,
   "start": 1793736000, "stop": 1793737800, "padBefore": 60, "padAfter": 300,
   "state": "done",
-  "parts": [{"path": "/home/me/Videos/zapper/The News/The News - S02E05 - 2026-11-03 15.00.mkv",
+  "parts": [{"path": "/home/me/Videos/zapper/The Evening News/The Evening News - S02E05 - 2026-11-03 15.00.mkv",
              "streamId": 1201, "bytes": 1210000000, "started": 1793735940, "ended": 1793738100}],
   "notes": ["switched from the main feed to the backup: no data for 10 s"],
-  "folder": "/home/me/Videos/zapper/The News"
+  "folder": "/home/me/Videos/zapper/The Evening News"
 }
 ```
 

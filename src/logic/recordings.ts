@@ -9,6 +9,7 @@
 
 import type {
   ChannelDto,
+  Naming,
   ProgrammeDto,
   RecordingDto,
   RecordingState,
@@ -117,6 +118,7 @@ export function bytes(n: number): string {
  *  beside each of Settings › Recording's rows. The folder's default comes
  *  from the service itself, since it depends on the machine. */
 export const RECORDING_DEFAULTS = {
+  naming: "mediaServer" as Naming,
   padBefore: 60,
   padAfter: 300,
   clockTrack: true,

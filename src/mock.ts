@@ -9,6 +9,7 @@
 
 import { auditLightSurfaces, auditOverVideo } from "./audit";
 import { alternatives } from "./logic/searchQuery";
+import { patternFor, place, validatePattern } from "./logic/naming";
 import type {
   AccountDto,
   ActivityRowDto,
@@ -934,6 +935,8 @@ let mockRecordings: RecordingDto[] | null = null;
 let mockRecordingId = 100;
 const mockRecordingSettings: RecordingSettingsDto = {
   outputDir: "/home/viewer/Videos/zapper",
+  naming: "mediaServer",
+  namingPattern: "",
   padBefore: 60,
   padAfter: 300,
   clockTrack: true,
@@ -956,7 +959,20 @@ function mockRecording(
   state: RecordingDto["state"],
   extra: Partial<RecordingDto> = {},
 ): RecordingDto {
-  const folder = `${mockRecordingSettings.outputDir}/${p.title}`;
+  const s = mockRecordingSettings;
+  const at = new Date(p.start * 1000);
+  const { folders } = place(
+    patternFor(s.naming, s.namingPattern),
+    { title: p.title, channel: ch.cleanName },
+    {
+      year: at.getFullYear(),
+      month: at.getMonth() + 1,
+      day: at.getDate(),
+      hour: at.getHours(),
+      minute: at.getMinutes(),
+    },
+  );
+  const folder = [s.outputDir, ...folders].join("/");
   return {
     id: mockRecordingId++,
     streamId: ch.streamId,
@@ -1077,8 +1093,14 @@ const mockRecordingApi = {
     recordingsOrRefuse();
     const outputDir = next.outputDir.trim() || mockRecordingSettings.defaultOutputDir;
     if (!outputDir.startsWith("/")) throw "the output folder must be a full path";
+    const namingPattern = (next.namingPattern ?? "").trim();
+    if (next.naming === "custom" || namingPattern) {
+      const why = validatePattern(namingPattern);
+      if (why) throw `file name pattern: ${why}`;
+    }
     Object.assign(mockRecordingSettings, next, {
       outputDir,
+      namingPattern,
       defaultOutputDir: mockRecordingSettings.defaultOutputDir,
     });
     return { ...mockRecordingSettings };

@@ -2,7 +2,7 @@
 //! to talk to it. See docs/recording.md.
 //!
 //! The pure parts are in every build and unit-tested on their own:
-//! [`naming`] (Jellyfin-friendly file names), [`budget`] (whether the
+//! [`naming`] (file names from a pattern), [`budget`] (whether the
 //! account has a connection to spare), [`fallback`] (when to switch
 //! between a channel's main and backup feeds), [`schedule`] (what to start,
 //! stop or give up on at a given moment), [`clock`] (the wall-clock subtitle

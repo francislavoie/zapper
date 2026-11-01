@@ -607,8 +607,15 @@ export interface ScheduleRequest {
   padAfter?: number | null;
 }
 
+/** How recordings are named and grouped in folders (src/logic/naming.ts). */
+export type Naming = "mediaServer" | "byChannel" | "byDate" | "flat" | "custom";
+
 export interface RecordingSettingsDto {
   outputDir: string;
+  naming: Naming;
+  /** The custom pattern, kept while a preset is chosen. Empty, or one the
+   *  service accepts. */
+  namingPattern: string;
   /** Seconds. */
   padBefore: number;
   padAfter: number;

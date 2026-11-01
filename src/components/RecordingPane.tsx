@@ -1,6 +1,7 @@
 // Settings › Recording: the recording service on this computer (install,
 // remove, whether it keeps running after logging out) and what it does with
-// every recording (where, how much padding, the clock track).
+// every recording (where, what its files are called, how much padding, the
+// clock track).
 //
 // The settings are the service's own, read and written through its API, so
 // they can only be changed while it is running — all but "Simultaneous
@@ -14,11 +15,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { refreshRecordings } from "../actions";
 import { backend } from "../backend";
 import { errorMessage } from "../logic/async";
+import { presetLabel } from "../logic/naming";
 import { RECORDING_DEFAULTS, bytes, padMinutes, padSeconds } from "../logic/recordings";
 import { DEFAULT_SETTINGS, STREAMS_MAX, STREAMS_MIN } from "../logic/settings";
 import type { SettingsControl } from "../hooks/useSettings";
 import { useDispatch } from "../store";
 import type { RecordingSettingsDto, RecordingStatusDto, ServiceStatusDto } from "../types";
+import { NamingField } from "./NamingField";
 import { RangeField, SettingRow, SettingsGroup } from "./SettingsParts";
 import { Switch } from "./Switch";
 
@@ -31,7 +34,10 @@ export function RecordingPane({ s }: { s: SettingsControl }) {
   const [service, setService] = useState<ServiceStatusDto | null>(null);
   const [status, setStatus] = useState<RecordingStatusDto | null>(null);
   const [settings, setSettings] = useState<RecordingSettingsDto | null>(null);
-  const [folder, setFolder] = useState("");
+  /** The folder as typed, while it is being edited: the field shows this
+   *  rather than the service's value, so the refresh below cannot replace
+   *  what is being typed. Null when not editing. */
+  const [folderDraft, setFolderDraft] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [linger, setLinger] = useState(false);
@@ -51,10 +57,7 @@ export function RecordingPane({ s }: { s: SettingsControl }) {
     try {
       const [st, set] = await Promise.all([backend.recordingStatus(), backend.recordingSettings()]);
       setStatus(st);
-      if (!pending.current) {
-        setSettings(set);
-        setFolder(set.outputDir);
-      }
+      if (!pending.current) setSettings(set);
     } catch {
       setStatus(null);
       setSettings(null);
@@ -77,7 +80,6 @@ export function RecordingPane({ s }: { s: SettingsControl }) {
       if (pending.current === next) {
         pending.current = null;
         setSettings(saved);
-        setFolder(saved.outputDir);
       }
       setError(null);
     } catch (e) {
@@ -103,6 +105,12 @@ export function RecordingPane({ s }: { s: SettingsControl }) {
     setSettings(next);
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => void flush(), SAVE_AFTER_MS);
+  };
+
+  const commitFolder = () => {
+    if (folderDraft === null) return;
+    if (settings && folderDraft !== settings.outputDir) patch({ outputDir: folderDraft });
+    setFolderDraft(null);
   };
 
   const act = async (what: () => Promise<ServiceStatusDto>) => {
@@ -207,27 +215,43 @@ export function RecordingPane({ s }: { s: SettingsControl }) {
               layout="form"
               description={
                 <>
-                  Each show gets a folder inside, and each airing a file named for it and its start,
-                  the way Jellyfin and Plex expect.
+                  Where recordings go.
                   {status.diskFree != null ? ` ${bytes(status.diskFree)} free on that disk.` : ""}
                 </>
               }
               modified={settings.outputDir !== settings.defaultOutputDir}
-              onReset={() => patch({ outputDir: "" })}
+              onReset={() => {
+                setFolderDraft(null);
+                patch({ outputDir: settings.defaultOutputDir });
+              }}
               resetTo={settings.defaultOutputDir}
             >
               <input
                 id="rec-folder"
                 className="field"
-                value={folder}
+                value={folderDraft ?? settings.outputDir}
                 spellCheck={false}
                 autoComplete="off"
-                onChange={(e) => setFolder(e.target.value)}
-                onBlur={() => folder !== settings.outputDir && patch({ outputDir: folder })}
+                onChange={(e) => setFolderDraft(e.target.value)}
+                // Sent when the field is left or Enter is pressed (through
+                // patch, a moment later like every change here). From then
+                // the field shows the settings again, which hold the typed
+                // folder until the service answers with what it saved.
+                onBlur={() => commitFolder()}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter") patch({ outputDir: folder });
+                  if (e.key === "Enter") commitFolder();
                 }}
               />
+            </SettingRow>
+            <SettingRow
+              label="File names"
+              layout="stack"
+              description="How each recording is named, and the folders it goes in. A recording that switched feeds is numbered part1, part2; a name already taken gets (2) rather than replace a file."
+              modified={(settings.naming ?? d.naming) !== d.naming}
+              onReset={() => patch({ naming: d.naming })}
+              resetTo={presetLabel(d.naming)}
+            >
+              <NamingField settings={settings} patch={patch} />
             </SettingRow>
             <SettingRow
               label="Start early"

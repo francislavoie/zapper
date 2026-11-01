@@ -1,0 +1,37 @@
+{
+  "render": [
+    {"pattern": "{show}/{show} - {se} - {date} {time}", "programme": {"title": "Harbour Lights", "episodeTitle": "The Lamp Keeper", "channel": "Northwind One HD", "season": 2, "episode": 4}, "start": [2026, 11, 3, 20, 0], "path": "Harbour Lights/Harbour Lights - S02E04 - 2026-11-03 20.00"},
+    {"pattern": "{show}/{show} - {se} - {date} {time}", "programme": {"title": "The Evening News", "channel": "Meridian 24"}, "start": [2026, 11, 3, 18, 0], "path": "The Evening News/The Evening News - 2026-11-03 18.00"},
+    {"pattern": "{show}/{show} - {se} - {date} {time}", "programme": {"title": "Serial", "episode": 12}, "start": [2026, 1, 9, 9, 5], "path": "Serial/Serial - E12 - 2026-01-09 09.05"},
+    {"pattern": "{channel}/{show} - {date} {time}", "programme": {"title": "Harbour Lights", "channel": "Northwind One HD", "season": 2, "episode": 4}, "start": [2026, 11, 3, 20, 0], "path": "Northwind One HD/Harbour Lights - 2026-11-03 20.00"},
+    {"pattern": "{date}/{time} {channel} - {show}", "programme": {"title": "The Evening News", "channel": "Meridian 24"}, "start": [2026, 11, 3, 18, 0], "path": "2026-11-03/18.00 Meridian 24 - The Evening News"},
+    {"pattern": "{show} - {channel} - {date} {time}", "programme": {"title": "The Evening News", "channel": "Meridian 24"}, "start": [2026, 11, 3, 18, 0], "path": "The Evening News - Meridian 24 - 2026-11-03 18.00"},
+    {"pattern": "{show}/Season {season}/{show} {se} {title}", "programme": {"title": "Harbour Lights", "episodeTitle": "The Lamp Keeper", "season": 2, "episode": 4}, "start": [2026, 11, 3, 20, 0], "path": "Harbour Lights/Season 02/Harbour Lights S02E04 The Lamp Keeper"},
+    {"pattern": "{show}/{season}/{show} - {date}", "programme": {"title": "The Evening News"}, "start": [2026, 11, 3, 20, 0], "path": "The Evening News/The Evening News - 2026-11-03"},
+    {"pattern": "{year}\\{show} - {season} - {episode} - {date}", "programme": {"title": "The Evening News"}, "start": [2026, 11, 3, 20, 0], "path": "2026/The Evening News - 2026-11-03"},
+    {"pattern": "{se} - {show} ({title}) [{se}]", "programme": {"title": "The Evening News"}, "start": [2026, 11, 3, 20, 0], "path": "The Evening News"},
+    {"pattern": "{season}x{episode} {show}", "programme": {"title": "The Evening News"}, "start": [2026, 11, 3, 20, 0], "path": "x The Evening News"},
+    {"pattern": "{show}_{se}_{date}", "programme": {"title": "The Evening News"}, "start": [2026, 11, 3, 20, 0], "path": "The Evening News_2026-11-03"},
+    {"pattern": "{title}", "programme": {"title": "The Evening News"}, "start": [2026, 11, 3, 20, 0], "path": "The Evening News - 2026-11-03 20.00"},
+    {"pattern": "{channel}/{show}/{title} {date}", "programme": {"title": "../../etc/passwd", "channel": "..", "episodeTitle": "C:\\Windows"}, "start": [2026, 11, 3, 20, 0], "path": "-..-etc-passwd/C--Windows 2026-11-03"},
+    {"pattern": "{channel}/{show} {date}", "programme": {"title": "...", "channel": "con"}, "start": [2026, 11, 3, 20, 0], "path": "con_/Recording 2026-11-03"},
+    {"pattern": "{show} - {title}", "programme": {"title": "News: 24/7  <Live>?", "episodeTitle": "Part.  "}, "start": [2026, 11, 3, 20, 0], "path": "News - 24-7 Live - Part"},
+    {"pattern": "../{show}", "programme": {"title": "The Evening News"}, "start": [2026, 11, 3, 20, 0], "path": "The Evening News/The Evening News - 2026-11-03 20.00"},
+    {"pattern": "{show} {date}", "programme": {"title": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"}, "start": [2026, 11, 3, 20, 0], "path": "éééééééééééééééééééééééééééééééééééééééééééééééééé 2026-11-03"}
+  ],
+  "validate": [
+    {"pattern": "{show}/{show} - {se} - {date} {time}", "error": null},
+    {"pattern": "CONTENT/{show}", "error": null},
+    {"pattern": "", "error": "the pattern is empty"},
+    {"pattern": "{show", "error": "a { is not closed with }"},
+    {"pattern": "show}", "error": "a } has no { before it"},
+    {"pattern": "{name}", "error": "{name} is not a token; the tokens are {show} {title} {channel} {date} {time} {year} {season} {episode} {se}"},
+    {"pattern": "{show}/fixed", "error": "the file name needs a token, such as {date} {time}, or every recording gets the same name"},
+    {"pattern": "{show}//{date}", "error": "a folder name is empty (two / in a row, or one at the end)"},
+    {"pattern": "../{show}", "error": "“..” cannot be a folder: recordings stay inside the output folder"},
+    {"pattern": "/etc/{show}", "error": "the pattern cannot start with /: it names a place inside the output folder"},
+    {"pattern": "C:\\{show}", "error": "the pattern cannot start with a drive: it names a place inside the output folder"},
+    {"pattern": "Con/{show}", "error": "“Con” is a reserved name on Windows"},
+    {"pattern": "{show}: {date}", "error": "names cannot contain : (Windows does not allow it)"}
+  ]
+}
