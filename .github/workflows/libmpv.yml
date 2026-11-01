@@ -30,8 +30,13 @@ on:
         type: boolean
         required: false
         default: true
+      macos:
+        description: 'Also build macOS arm64. zapper does not run on macOS yet, so it is off by default and its archive is optional in the manifest.'
+        type: boolean
+        required: false
+        default: false
       macos_x86_64:
-        description: 'Also build macOS x86_64 (Intel).'
+        description: 'Also build macOS x86_64 (Intel); needs macOS ticked too.'
         type: boolean
         required: false
         default: false
@@ -63,6 +68,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           REVISION: ${{ inputs.revision }}
+          MAC: ${{ inputs.macos }}
           MAC_INTEL: ${{ inputs.macos_x86_64 }}
           PUBLISH: ${{ inputs.publish }}
         run: |
@@ -74,8 +80,11 @@ jobs:
             echo "::error::$tag is already released; bump the revision to rebuild."
             exit 1
           fi
-          platforms='[{"platform":"linux-x86_64","os":"ubuntu-24.04"},{"platform":"windows-x86_64","os":"ubuntu-24.04"},{"platform":"macos-arm64","os":"macos-15"}'
-          [ "$MAC_INTEL" = true ] && platforms+=',{"platform":"macos-x86_64","os":"macos-15-intel"}'
+          platforms='[{"platform":"linux-x86_64","os":"ubuntu-24.04"},{"platform":"windows-x86_64","os":"ubuntu-24.04"}'
+          if [ "$MAC" = true ]; then
+            platforms+=',{"platform":"macos-arm64","os":"macos-15"}'
+            [ "$MAC_INTEL" = true ] && platforms+=',{"platform":"macos-x86_64","os":"macos-15-intel"}'
+          fi
           platforms+=']'
           echo "tag=$tag"
           { echo "tag=$tag"; echo "platforms=$platforms"; } >> "$GITHUB_OUTPUT"
