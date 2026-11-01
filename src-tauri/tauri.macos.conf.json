@@ -10,7 +10,7 @@
         "decorations": true,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
-        "trafficLightPosition": { "x": 14, "y": 12 },
+        "trafficLightPosition": { "x": 14, "y": 17 },
         "resizable": true,
         "minWidth": 900,
         "minHeight": 560
