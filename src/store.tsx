@@ -21,6 +21,7 @@ import type {
   PlayerStateDto,
   ProgrammeDto,
   QualityDto,
+  RecordingDto,
   SettingsDto,
   SyncStatusDto,
   UpdateStatusDto,
@@ -256,6 +257,25 @@ export interface State {
    *  a portrait monitor and a laptop want different answers. */
   stacked: boolean;
   toasts: Toast[];
+  /** The recording service's recordings, as last fetched; `null` while it
+   *  has not answered (not installed, not running). See RecordingsWatcher. */
+  recordings: RecordingDto[] | null;
+  /** Why the last fetch failed, when it did. */
+  recordingsError: string | null;
+  /** The menu over a programme in the guide or the programme results. */
+  programmeMenu: ProgrammeMenu | null;
+  recordingsOpen: boolean;
+}
+
+/** An open context menu over a programme: record it, or cancel its
+ *  recording. In the store, like the others, so Escape unwinds it in
+ *  useGlobalKeys. */
+export interface ProgrammeMenu {
+  channel: ChannelDto;
+  programme: ProgrammeDto;
+  x: number;
+  y: number;
+  keyboard: boolean;
 }
 
 export const initialSync: SyncStatusDto = {
@@ -346,9 +366,17 @@ export const initialState: State = {
   railWidthRem: loadRailWidth(),
   stacked: loadStacked(),
   toasts: [],
+  recordings: null,
+  recordingsError: null,
+  programmeMenu: null,
+  recordingsOpen: false,
 };
 
 export type Action =
+  /** A fetch of the recordings: the list, or why there is none. */
+  | { type: "recordings"; list: RecordingDto[] | null; error?: string | null }
+  | { type: "programmeMenu"; menu: ProgrammeMenu | null }
+  | { type: "recordingsDialog"; open: boolean }
   | { type: "categories"; value: Async<CategoryDto[]> }
   | { type: "selectCategory"; id: string }
   | { type: "categoryFilter"; text: string }
@@ -561,6 +589,13 @@ export function reducer(state: State, action: Action): State {
       };
     case "menu":
       return { ...state, menuOpen: action.open };
+    case "recordings":
+      return { ...state, recordings: action.list, recordingsError: action.error ?? null };
+    case "programmeMenu":
+      return { ...state, programmeMenu: action.menu };
+    case "recordingsDialog":
+      // Like About: chosen from the menu, which has done its job.
+      return { ...state, recordingsOpen: action.open, menuOpen: false, programmeMenu: null };
     case "about":
       // Opening a dialog from the menu closes the menu: leaving it hanging
       // over its own result is how you end up with two things to dismiss.

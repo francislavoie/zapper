@@ -38,6 +38,7 @@ import { useClock } from "../hooks/useClock";
 import { useEasedTime } from "../hooks/useEasedTime";
 import { useGuideRows } from "../hooks/useGuideRows";
 import { timeRange, timeTick } from "../logic/format";
+import { markKey, marks as recordingMarks } from "../logic/recordings";
 import {
   GUIDE_FUTURE_HOURS,
   GUIDE_PAST_HOURS,
@@ -66,7 +67,9 @@ import {
 import { centredScrollTop } from "../logic/programmes";
 import { OVERSCAN, computeWindow } from "../logic/virtual";
 import { ALL_CATEGORIES, useApp, useDispatch } from "../store";
-import type { ChannelDto, ProgrammeDto } from "../types";
+import type { ChannelDto, ProgrammeDto, RecordingDto } from "../types";
+import { programmeMenuProps, type ProgrammeMenuOpener } from "../programmeMenu";
+import { RecDot } from "./RecDot";
 import { RailExpand } from "./Rail";
 import { ViewSwitch } from "./ViewSwitch";
 
@@ -225,6 +228,13 @@ export function GuideGrid({ besideRail = false }: { besideRail?: boolean }) {
       void playCatchupProgramme(dispatch, channel, p),
     [dispatch],
   );
+  // Right-click (or the menu key) on a programme: record it, or cancel.
+  const onMenu = useCallback<ProgrammeMenuOpener>(
+    (channel, p, at, keyboard) =>
+      dispatch({ type: "programmeMenu", menu: { channel, programme: p, ...at, keyboard } }),
+    [dispatch],
+  );
+  const recorded = useMemo(() => recordingMarks(state.recordings ?? []), [state.recordings]);
 
   const nowX = nowLineX(now, win, trackWidth);
   const marks = ticks(win);
@@ -348,6 +358,8 @@ export function GuideGrid({ besideRail = false }: { besideRail?: boolean }) {
                 focused={focus?.streamId === channel.streamId}
                 onPlay={onPlay}
                 onCatchup={onCatchup}
+                onMenu={onMenu}
+                recorded={recorded}
               />
             );
           })}
@@ -508,6 +520,8 @@ function GuideRow({
   focused,
   onPlay,
   onCatchup,
+  onMenu,
+  recorded,
 }: {
   channel: ChannelDto;
   top: number;
@@ -520,6 +534,8 @@ function GuideRow({
   focused: boolean;
   onPlay: (c: ChannelDto, p: ProgrammeDto) => void;
   onCatchup: (c: ChannelDto, p: ProgrammeDto) => void;
+  onMenu: ProgrammeMenuOpener;
+  recorded: Map<string, RecordingDto>;
 }) {
   const style = { top, height: GUIDE_ROW_HEIGHT };
 
@@ -559,6 +575,8 @@ function GuideRow({
               now={now}
               onPlay={onPlay}
               onCatchup={onCatchup}
+              onMenu={onMenu}
+              recording={recorded.get(markKey(channel.streamId, p.start))}
             />
           ))
         )}
@@ -575,6 +593,8 @@ function Programme({
   now,
   onPlay,
   onCatchup,
+  onMenu,
+  recording,
 }: {
   channel: ChannelDto;
   programme: ProgrammeDto;
@@ -583,6 +603,8 @@ function Programme({
   now: number;
   onPlay: (c: ChannelDto, p: ProgrammeDto) => void;
   onCatchup: (c: ChannelDto, p: ProgrammeDto) => void;
+  onMenu: ProgrammeMenuOpener;
+  recording: RecordingDto | undefined;
 }) {
   const span = programmeSpan(programme, win, width);
   // Outside the window, or a zero-length entry the guide data carried: nothing to
@@ -604,9 +626,20 @@ function Programme({
     act === "inert" ? "inert" : "",
     span.clippedStart ? "clip-start" : "",
     span.clippedEnd ? "clip-end" : "",
+    recording ? "rec" : "",
   ]
     .filter(Boolean)
     .join(" ");
+
+  // The menu, from a right-click or the keyboard's menu key, on any
+  // programme: one not on yet is exactly what gets recorded.
+  const menuProps = programmeMenuProps(channel, programme, onMenu);
+  const dot = recording ? <RecDot recording={recording} /> : null;
+  const recTip = recording
+    ? recording.state === "recording"
+      ? " · recording"
+      : " · will be recorded"
+    : "";
 
   if (act === "inert") {
     const why =
@@ -616,7 +649,14 @@ function Programme({
           ? `Older than the ${channel.archiveDays ?? "?"}-day archive`
           : "Already finished, and this channel has no catchup";
     return (
-      <div className={classes} style={style} data-tip={`${time}  ${programme.title} — ${why}`}>
+      <div
+        className={classes}
+        style={style}
+        data-tip={`${time}  ${programme.title} — ${why}${recTip}`}
+        tabIndex={status === "future" ? 0 : undefined}
+        {...menuProps}
+      >
+        {dot}
         <span className="prog-title">{label}</span>
       </div>
     );
@@ -626,9 +666,11 @@ function Programme({
     <button
       className={classes}
       style={style}
-      data-tip={`${time}  ${programme.title} — ${act === "play" ? "on now: play" : "play from the archive"}`}
+      data-tip={`${time}  ${programme.title} — ${act === "play" ? "on now: play" : "play from the archive"}${recTip}`}
       onClick={() => (act === "play" ? onPlay(channel, programme) : onCatchup(channel, programme))}
+      {...menuProps}
     >
+      {dot}
       <span className="prog-title">{label}</span>
       {span.width >= TIME_MIN_PX ? <span className="prog-time">{time}</span> : null}
     </button>

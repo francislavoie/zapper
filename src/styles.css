@@ -5427,3 +5427,134 @@ textarea.field {
   border-color: var(--line);
   box-shadow: 0 0.5rem 1.5rem rgba(0, 0, 0, 0.45);
 }
+
+/* ------------------------------------------------------------- recording */
+
+/* The red dot on a programme that will be recorded; it pulses while the
+   recording service is capturing it. */
+.rec-dot {
+  display: inline-block;
+  flex: 0 0 auto;
+  width: 0.4375rem;
+  height: 0.4375rem;
+  margin-right: 0.375rem;
+  border-radius: 50%;
+  background: var(--bad);
+  vertical-align: 0.0625rem;
+}
+
+.rec-dot.live {
+  animation: rec-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes rec-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rec-dot.live {
+    animation: none;
+  }
+}
+
+/* In the guide the dot sits before the title, and the block's left edge
+   says the same at a glance when it is too narrow for a title. */
+.prog.rec {
+  border-left: 2px solid var(--bad);
+}
+
+.prog .rec-dot {
+  margin-right: -0.125rem;
+}
+
+.ctl.danger {
+  border-color: var(--bad);
+  color: var(--bad);
+}
+
+.pane-note.bad {
+  color: var(--bad);
+}
+
+/* The Recordings dialog: a scrolling list of rows grouped by state. */
+.about.recordings {
+  width: min(42rem, 100%);
+  max-height: min(36rem, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.rec-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.rec-group h4 {
+  margin: 0.5rem 0 0.25rem;
+  font-size: 0.625rem;
+  color: var(--dimmer);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.rec-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.rec-main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.rec-title {
+  font-size: 0.8125rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rec-sub {
+  display: flex;
+  gap: 0.625rem;
+  margin-top: 0.125rem;
+  font-size: 0.6875rem;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.rec-chan {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 12rem;
+}
+
+.rec-status.bad {
+  color: var(--bad);
+}
+
+.rec-notes-toggle {
+  margin-top: 0.25rem;
+  font-size: 0.6875rem;
+}
+
+.rec-notes {
+  margin: 0.25rem 0 0;
+  padding-left: 1rem;
+  font-size: 0.6875rem;
+  color: var(--dim);
+}
+
+.rec-actions {
+  display: flex;
+  gap: 0.375rem;
+  flex: 0 0 auto;
+}

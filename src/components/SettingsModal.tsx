@@ -39,6 +39,7 @@ import { run, useApp, useDispatch } from "../store";
 import { AboutPane } from "./AboutPane";
 import { AccountPane } from "./AccountPane";
 import { BackupPane } from "./BackupPane";
+import { RecordingPane } from "./RecordingPane";
 import { RangeField, Segmented, SettingRow, SettingsGroup, SettingsPage } from "./SettingsParts";
 import { Switch } from "./Switch";
 import { VolumeControl } from "./VolumeControl";
@@ -50,6 +51,7 @@ const SECTIONS = [
   "Audio",
   "Subtitles",
   "Guide",
+  "Recording",
   "Data",
   "Updates",
   "Keyboard",
@@ -65,6 +67,7 @@ const SUMMARY: Record<Section, string> = {
   Audio: "The volume and the compressor, for whatever is playing.",
   Subtitles: "How subtitles look. mpv draws them under this window; the preview stands in.",
   Guide: "The guide's width, how times are written, and how often the catalogue refreshes.",
+  Recording: "The recording service on this computer, and what it does with each recording.",
   Data: "The catalogue, and backups of your settings and favourites.",
   Updates: "Whether zapper looks for new versions, and which one is installed.",
   Keyboard: "Every shortcut and mouse gesture, grouped by where it works.",
@@ -152,6 +155,7 @@ export function SettingsModal() {
             {section === "Audio" ? <AudioPage /> : null}
             {section === "Subtitles" ? <SubtitlesPage s={s} /> : null}
             {section === "Guide" ? <GuidePage s={s} /> : null}
+            {section === "Recording" ? <RecordingPane /> : null}
             {section === "Data" ? <DataPage s={s} /> : null}
             {section === "Updates" ? <UpdatesPage s={s} /> : null}
             {section === "Keyboard" ? <KeyboardPane /> : null}

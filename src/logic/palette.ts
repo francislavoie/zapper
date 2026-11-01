@@ -37,6 +37,7 @@ export const ACTION_IDS = [
   "sleepProgramme",
   "sleepOff",
   "sync",
+  "recordings",
   "settings",
   "updates",
   "about",
@@ -150,6 +151,9 @@ export const ACTIONS: PaletteAction[] = [
     sleep: null,
   },
   { id: "sync", label: "Refresh data from the provider", hint: "sync", group: "data" },
+  // What the recording service has scheduled and recorded. "record" and
+  // "dvr" are what people type looking for it.
+  { id: "recordings", label: "Recordings", hint: "record · dvr", group: "data" },
   { id: "settings", label: "Open settings", hint: "⚙", group: "app" },
   // "upgrade" and "version" are what people type looking for this one.
   { id: "updates", label: "Check for updates", hint: "upgrade · version", group: "app" },

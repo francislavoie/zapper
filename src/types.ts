@@ -493,3 +493,106 @@ export interface AccountDto {
   tvheadendUsername: string;
   tvheadendHasPassword: boolean;
 }
+
+// ------------------------------------------------------------- recording
+// Mirror of src-tauri/src/recording/api.rs and recording/service.rs: what the
+// recording service (zapper-server) answers, passed through the app's Rust
+// side unchanged.
+
+export type RecordingState = "scheduled" | "recording" | "done" | "failed";
+
+export interface PartDto {
+  /** Absolute path: a `.ts` while capturing, the `.mkv` once finished. */
+  path: string;
+  /** The feed it came from: the main channel or the backup. */
+  streamId: number;
+  bytes: number;
+  started: number;
+  ended: number | null;
+}
+
+export interface RecordingDto {
+  id: number;
+  streamId: number;
+  backupStreamId: number | null;
+  channelName: string;
+  title: string;
+  episodeTitle?: string;
+  season?: number;
+  episode?: number;
+  /** The programme, Unix seconds. */
+  start: number;
+  stop: number;
+  /** Seconds recorded before the start and after the end. */
+  padBefore: number;
+  padAfter: number;
+  state: RecordingState;
+  parts: PartDto[];
+  notes: string[];
+  error?: string;
+  folder: string;
+  /** While recording: why it is not capturing right now. */
+  waiting?: string;
+}
+
+export interface ScheduleRequest {
+  streamId: number;
+  /** Omitted: the service picks another channel with the same guide channel. */
+  backupStreamId?: number | null;
+  channelName?: string | null;
+  title: string;
+  episodeTitle?: string | null;
+  season?: number | null;
+  episode?: number | null;
+  start: number;
+  stop: number;
+  padBefore?: number | null;
+  padAfter?: number | null;
+}
+
+export interface RecordingSettingsDto {
+  outputDir: string;
+  /** Seconds. */
+  padBefore: number;
+  padAfter: number;
+  clockTrack: boolean;
+  /** For playlists, which cannot say how many streams the account allows. */
+  simultaneousStreams: number;
+  /** The folder used when none is chosen; an empty `outputDir` sent back
+   *  means this one. */
+  defaultOutputDir: string;
+}
+
+export interface ActiveRecordingDto {
+  id: number;
+  title: string;
+  streamId: number;
+  bytes: number;
+  since: number;
+  waiting?: string;
+}
+
+export interface RecordingStatusDto {
+  version: string;
+  apiVersion: number;
+  active: ActiveRecordingDto[];
+  outputDir: string;
+  diskFree: number | null;
+  diskTotal: number | null;
+  now: number;
+}
+
+export interface ServiceStatusDto {
+  supported: boolean;
+  unsupportedReason?: string;
+  installed: boolean;
+  /** systemd's word: active, inactive, failed… */
+  state?: string;
+  /** Keeps running after logging out. */
+  linger: boolean;
+  binary?: string;
+  /** Set when the service answered on its API. */
+  version?: string;
+  address: string;
+  versionMismatch: boolean;
+}

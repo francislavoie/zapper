@@ -27,7 +27,10 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
         // One press, one dismissal, in the order things were stacked up. The
         // toolbar's menu is the most recent thing anyone opened whenever it is
         // open — it cannot be opened from behind a modal — so it unwinds first.
-        if (state.favouriteMenu) {
+        if (state.programmeMenu) {
+          // The guide's menu over a programme: a context menu, opened last.
+          dispatch({ type: "programmeMenu", menu: null });
+        } else if (state.favouriteMenu) {
           // A context menu is always the most recent thing on screen: it
           // cannot be opened from behind anything.
           dispatch({ type: "favouriteMenu", menu: null });
@@ -46,6 +49,8 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
           dispatch({ type: "menu", open: false });
         } else if (state.aboutOpen) {
           dispatch({ type: "about", open: false });
+        } else if (state.recordingsOpen) {
+          dispatch({ type: "recordingsDialog", open: false });
         } else if (state.updateOpen) {
           // Above settings: the settings pane's "Check now" opens it there.
           dispatch({ type: "updateDialog", open: false });
@@ -192,6 +197,8 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
     state.aboutOpen,
     state.updateOpen,
     state.favouriteMenu,
+    state.programmeMenu,
+    state.recordingsOpen,
     state.categoryMenu,
     state.categoryOptions,
     state.videoMenu,

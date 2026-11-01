@@ -31,6 +31,11 @@ import {
   type MediaSessionDto,
   type UpdateStatusDto,
   type VideoRect,
+  type RecordingDto,
+  type RecordingSettingsDto,
+  type RecordingStatusDto,
+  type ScheduleRequest,
+  type ServiceStatusDto,
 } from "./types";
 
 export const api = {
@@ -141,6 +146,26 @@ export const api = {
   updateInstall: () => invoke<InstallOutcomeDto>("update_install"),
   updateRestart: () => invoke<void>("update_restart"),
   updateOpenPage: () => invoke<void>("update_open_page"),
+
+  // The recording service, asked through the Rust side (which holds its
+  // token). Each rejects with the service's words, or "The recording service
+  // is not running." when nothing answers.
+  recordings: () => invoke<RecordingDto[]>("recordings"),
+  recordProgramme: (request: ScheduleRequest) =>
+    invoke<RecordingDto>("record_programme", { request }),
+  cancelRecording: (id: number) => invoke<void>("cancel_recording", { id }),
+  deleteRecording: (id: number, files: boolean) =>
+    invoke<void>("delete_recording", { id, files }),
+  recordingStatus: () => invoke<RecordingStatusDto>("recording_status"),
+  recordingSettings: () => invoke<RecordingSettingsDto>("recording_settings"),
+  setRecordingSettings: (settings: RecordingSettingsDto) =>
+    invoke<RecordingSettingsDto>("set_recording_settings", { settings }),
+  recordingService: () => invoke<ServiceStatusDto>("recording_service"),
+  installRecordingService: (linger: boolean) =>
+    invoke<ServiceStatusDto>("install_recording_service", { linger }),
+  removeRecordingService: () => invoke<ServiceStatusDto>("remove_recording_service"),
+  setRecordingLinger: (on: boolean) => invoke<ServiceStatusDto>("set_recording_linger", { on }),
+  openRecordingFolder: (id: number) => invoke<void>("open_recording_folder", { id }),
 };
 
 export const onSyncStatus = (f: (s: SyncStatusDto) => void): Promise<UnlistenFn> =>

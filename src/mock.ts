@@ -28,6 +28,11 @@ import type {
   DeinterlaceMode,
   ProgrammeHitDto,
   QualityDto,
+  RecordingDto,
+  RecordingSettingsDto,
+  RecordingStatusDto,
+  ScheduleRequest,
+  ServiceStatusDto,
   SettingsDto,
   SubtitleStyleDto,
   SyncStatusDto,
@@ -879,6 +884,195 @@ async function openStream(
   });
 }
 
+// ------------------------------------------------------------- recording
+
+/** The recording service, faked: installed and running, with a recording in
+ *  progress, a couple scheduled on channels the guide shows, and one each of
+ *  done and failed, so every state of the list and the guide's dots can be
+ *  seen. `?recording=off` makes it not answer, as when it is not installed. */
+const RECORDING_OFF =
+  typeof location !== "undefined" &&
+  new URLSearchParams(location.search).get("recording") === "off";
+
+let mockRecordings: RecordingDto[] | null = null;
+let mockRecordingId = 100;
+const mockRecordingSettings: RecordingSettingsDto = {
+  outputDir: "/home/viewer/Videos/zapper",
+  padBefore: 60,
+  padAfter: 300,
+  clockTrack: true,
+  simultaneousStreams: 1,
+  defaultOutputDir: "/home/viewer/Videos/zapper",
+};
+let mockService: ServiceStatusDto = {
+  supported: true,
+  installed: true,
+  state: "active",
+  linger: false,
+  binary: "/usr/bin/zapper-server",
+  version: "0.1.0",
+  address: "http://127.0.0.1:8796",
+  versionMismatch: false,
+};
+
+function mockRecording(
+  ch: ChannelDto,
+  p: ProgrammeDto,
+  state: RecordingDto["state"],
+  extra: Partial<RecordingDto> = {},
+): RecordingDto {
+  const folder = `${mockRecordingSettings.outputDir}/${p.title}`;
+  return {
+    id: mockRecordingId++,
+    streamId: ch.streamId,
+    backupStreamId: null,
+    channelName: ch.cleanName,
+    title: p.title,
+    start: p.start,
+    stop: p.stop,
+    padBefore: mockRecordingSettings.padBefore,
+    padAfter: mockRecordingSettings.padAfter,
+    state,
+    parts: [],
+    notes: [],
+    folder,
+    ...extra,
+  };
+}
+
+function seedRecordings(): RecordingDto[] {
+  const now = Math.floor(Date.now() / 1000);
+  const withGuide = getCatalog().rows.filter((r) => r.nowPlaying && !r.isSeparator).slice(0, 3);
+  const out: RecordingDto[] = [];
+  const [a, b, c] = withGuide;
+  if (a) {
+    const [on, next] = schedule(a, now, now + 6 * 3600);
+    if (on) {
+      out.push(
+        mockRecording(a, on, "recording", {
+          parts: [
+            { path: `/home/viewer/Videos/zapper/${on.title}/.part1.ts`, streamId: a.streamId, bytes: 412e6, started: on.start - 60, ended: null },
+          ],
+        }),
+      );
+    }
+    if (next) out.push(mockRecording(a, next, "scheduled"));
+  }
+  if (b) {
+    const later = schedule(b, now + 3600, now + 8 * 3600)[1];
+    if (later) out.push(mockRecording(b, later, "scheduled"));
+  }
+  if (c) {
+    const yesterday = { start: now - 86_400, stop: now - 86_400 + 3600, title: "The Late Film", description: null };
+    out.push(
+      mockRecording(c, yesterday, "done", {
+        parts: [
+          { path: "/home/viewer/Videos/zapper/The Late Film/The Late Film - part1.mkv", streamId: c.streamId, bytes: 1.21e9, started: yesterday.start - 60, ended: yesterday.start + 1500 },
+          { path: "/home/viewer/Videos/zapper/The Late Film/The Late Film - part2.mkv", streamId: c.streamId + 1, bytes: 1.4e9, started: yesterday.start + 1500, ended: yesterday.stop + 300 },
+        ],
+        notes: ["switched from the main feed to the backup: no data for 10 s"],
+      }),
+    );
+    const missed = { start: now - 2 * 86_400, stop: now - 2 * 86_400 + 1800, title: "Morning News", description: null };
+    out.push(mockRecording(c, missed, "failed", { error: "missed: the recording service was not running" }));
+  }
+  return out;
+}
+
+function recordingsOrRefuse(): RecordingDto[] {
+  if (RECORDING_OFF || mockService.state !== "active") throw "The recording service is not running.";
+  return (mockRecordings ??= seedRecordings());
+}
+
+const mockRecordingApi = {
+  recordings: async (): Promise<RecordingDto[]> => {
+    await delay(30);
+    return recordingsOrRefuse().map((r) => ({ ...r }));
+  },
+  recordProgramme: async (req: ScheduleRequest): Promise<RecordingDto> => {
+    await delay(60);
+    const list = recordingsOrRefuse();
+    const same = list.find((r) => r.streamId === req.streamId && r.start === req.start);
+    if (same) return same;
+    const ch = getCatalog().rows.find((r) => r.streamId === req.streamId);
+    if (!ch) throw "no such channel";
+    const now = Math.floor(Date.now() / 1000);
+    const rec = mockRecording(
+      ch,
+      { start: req.start, stop: req.stop, title: req.title, description: null },
+      req.start - mockRecordingSettings.padBefore <= now ? "recording" : "scheduled",
+    );
+    list.push(rec);
+    return rec;
+  },
+  cancelRecording: async (id: number) => {
+    await delay(40);
+    const list = recordingsOrRefuse();
+    const r = list.find((x) => x.id === id);
+    if (!r) throw "no such recording";
+    if (r.state === "scheduled") mockRecordings = list.filter((x) => x.id !== id);
+    else if (r.state === "recording") {
+      r.state = "done";
+      r.notes = [...r.notes, "stopped before its end"];
+    }
+  },
+  deleteRecording: async (id: number, _files: boolean) => {
+    await delay(40);
+    mockRecordings = recordingsOrRefuse().filter((x) => x.id !== id);
+  },
+  recordingStatus: async (): Promise<RecordingStatusDto> => {
+    const list = recordingsOrRefuse();
+    return {
+      version: "0.1.0",
+      apiVersion: 1,
+      active: list
+        .filter((r) => r.state === "recording")
+        .map((r) => ({ id: r.id, title: r.title, streamId: r.streamId, bytes: r.parts[0]?.bytes ?? 0, since: r.start })),
+      outputDir: mockRecordingSettings.outputDir,
+      diskFree: 412e9,
+      diskTotal: 1e12,
+      now: Math.floor(Date.now() / 1000),
+    };
+  },
+  recordingSettings: async (): Promise<RecordingSettingsDto> => {
+    recordingsOrRefuse();
+    return { ...mockRecordingSettings };
+  },
+  setRecordingSettings: async (next: RecordingSettingsDto): Promise<RecordingSettingsDto> => {
+    recordingsOrRefuse();
+    const outputDir = next.outputDir.trim() || mockRecordingSettings.defaultOutputDir;
+    if (!outputDir.startsWith("/")) throw "the output folder must be a full path";
+    Object.assign(mockRecordingSettings, next, {
+      outputDir,
+      defaultOutputDir: mockRecordingSettings.defaultOutputDir,
+    });
+    return { ...mockRecordingSettings };
+  },
+  recordingService: async (): Promise<ServiceStatusDto> => {
+    await delay(30);
+    return RECORDING_OFF
+      ? { ...mockService, installed: false, state: undefined, version: undefined }
+      : { ...mockService };
+  },
+  installRecordingService: async (linger: boolean): Promise<ServiceStatusDto> => {
+    await delay(300);
+    mockService = { ...mockService, installed: true, state: "active", linger, version: "0.1.0" };
+    return { ...mockService };
+  },
+  removeRecordingService: async (): Promise<ServiceStatusDto> => {
+    await delay(200);
+    mockService = { ...mockService, installed: false, state: undefined, version: undefined };
+    return { ...mockService };
+  },
+  setRecordingLinger: async (on: boolean): Promise<ServiceStatusDto> => {
+    mockService = { ...mockService, linger: on };
+    return { ...mockService };
+  },
+  openRecordingFolder: async (id: number) => {
+    (globalThis as Record<string, unknown>).__mockOpenedFolder = id;
+  },
+};
+
 export const mockApi = {
   categories: async () => {
     await delay(120);
@@ -1589,6 +1783,8 @@ export const mockApi = {
     }
     (globalThis as Record<string, unknown>).__mockOpenedPage = MOCK_RELEASE.url;
   },
+
+  ...mockRecordingApi,
 };
 
 // ------------------------------------------------------------------ window

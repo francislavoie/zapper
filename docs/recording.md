@@ -138,8 +138,8 @@ times are Unix seconds; errors are `{"error": "…"}` with a 4xx status.
 | `POST /api/recordings` | schedule: body `{streamId, title, start, stop, backupStreamId?, channelName?, episodeTitle?, season?, episode?, padBefore?, padAfter?}` → `201 Recording`; the same channel and start again returns the existing one |
 | `POST /api/recordings/{id}/cancel` | a scheduled one is removed (`{id, cancelled: true}`); one recording stops and keeps what it has (`Recording`) |
 | `DELETE /api/recordings/{id}?files=true` | forgets a finished recording; `files=true` deletes its files too. Refused while recording |
-| `GET /api/settings` | `{outputDir, padBefore, padAfter, clockTrack, simultaneousStreams}` (padding in seconds) |
-| `PUT /api/settings` | the same, all fields; returns what was saved |
+| `GET /api/settings` | `{outputDir, padBefore, padAfter, clockTrack, simultaneousStreams, defaultOutputDir}` (padding in seconds) |
+| `PUT /api/settings` | the same fields (`defaultOutputDir` is ignored; an empty `outputDir` means the default); returns what was saved |
 
 `Recording`:
 

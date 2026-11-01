@@ -53,13 +53,19 @@ impl ServerConfig {
             pad_after: self.pad_after,
             clock_track: self.clock_track,
             simultaneous_streams: self.simultaneous_streams,
+            default_output_dir: default_output_dir().to_string_lossy().into_owned(),
         }
     }
 
-    /// Takes new settings, refusing ones that cannot work.
+    /// Takes new settings, refusing ones that cannot work. An empty folder
+    /// means the default one.
     pub fn apply(&mut self, s: RecordingSettingsDto) -> Result<(), String> {
-        let dir = s.output_dir.trim();
-        if dir.is_empty() || !Path::new(dir).is_absolute() {
+        let default = default_output_dir().to_string_lossy().into_owned();
+        let dir = match s.output_dir.trim() {
+            "" => default.as_str(),
+            d => d,
+        };
+        if !Path::new(dir).is_absolute() {
             return Err("the output folder must be a full path".into());
         }
         const MAX_PAD: i64 = 6 * 3600;
@@ -215,8 +221,11 @@ mod tests {
         s.pad_after = -1;
         assert!(c.apply(s.clone()).is_err());
         s.pad_after = 600;
-        c.apply(s).unwrap();
+        c.apply(s.clone()).unwrap();
         assert_eq!((c.output_dir.as_str(), c.pad_after), ("/srv/tv", 600));
+        s.output_dir = String::new();
+        c.apply(s).unwrap();
+        assert_eq!(c.output_dir, c.settings().default_output_dir, "empty is the default");
     }
 
     #[test]

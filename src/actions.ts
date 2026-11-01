@@ -11,7 +11,14 @@ import type { ActionId } from "./logic/palette";
 import type { SleepRequest } from "./logic/sleep";
 import { refreshFullscreen } from "./hooks/useFullscreen";
 import { ALL_CATEGORIES, run, type Action, type Mode } from "./store";
-import type { ChannelDto, PlayerStateDto, ProgrammeDto, ProgrammeHitDto } from "./types";
+import type {
+  ChannelDto,
+  PlayerStateDto,
+  ProgrammeDto,
+  ProgrammeHitDto,
+  RecordingDto,
+} from "./types";
+import { recordingWhen, scheduleRequest } from "./logic/recordings";
 
 export interface PlayOptions {
   /** Take over the window as well as starting the stream. Off by default:
@@ -126,6 +133,7 @@ const HANDLERS: Record<ActionId, (ctx: ActionContext) => void> = {
   sleepProgramme: ({ dispatch }) => setSleep(dispatch, "programme"),
   sleepOff: ({ dispatch }) => setSleep(dispatch, null),
   sync: ({ dispatch }) => void run(dispatch, "sync", backend.syncNow()),
+  recordings: ({ dispatch }) => dispatch({ type: "recordingsDialog", open: true }),
   settings: ({ dispatch }) => dispatch({ type: "settings", open: true }),
   updates: ({ dispatch }) => {
     dispatch({ type: "updateDialog", open: true });
@@ -245,4 +253,60 @@ export async function loadCategories(dispatch: Dispatch<Action>) {
   } catch (e) {
     dispatch({ type: "categories", value: failed(errorMessage(e)) });
   }
+}
+
+// ------------------------------------------------------------- recording
+
+/** Asks the recording service for its recordings. A service that does not
+ *  answer is not an error to shout about: it is simply not running, which
+ *  the guide shows by having no red dots and the menu by saying so. */
+export async function refreshRecordings(dispatch: Dispatch<Action>): Promise<void> {
+  try {
+    dispatch({ type: "recordings", list: await backend.recordings() });
+  } catch (e) {
+    dispatch({ type: "recordings", list: null, error: errorMessage(e) });
+  }
+}
+
+/** Schedules a programme with the recording service. */
+export async function recordProgramme(
+  dispatch: Dispatch<Action>,
+  ch: ChannelDto,
+  p: ProgrammeDto,
+): Promise<void> {
+  dispatch({ type: "programmeMenu", menu: null });
+  try {
+    const rec = await backend.recordProgramme(scheduleRequest(ch, p));
+    const now = Math.floor(Date.now() / 1000);
+    dispatch({
+      type: "toast",
+      kind: "info",
+      text: `Recording “${rec.title}”, ${recordingWhen(rec, now)}`,
+    });
+  } catch (e) {
+    dispatch({ type: "toast", text: `Record: ${errorMessage(e)}` });
+  }
+  await refreshRecordings(dispatch);
+}
+
+/** Cancels a scheduled recording, or stops one being recorded (which keeps
+ *  what it has). */
+export async function cancelRecording(dispatch: Dispatch<Action>, rec: RecordingDto): Promise<void> {
+  dispatch({ type: "programmeMenu", menu: null });
+  try {
+    await backend.cancelRecording(rec.id);
+  } catch (e) {
+    dispatch({ type: "toast", text: `Cancel recording: ${errorMessage(e)}` });
+  }
+  await refreshRecordings(dispatch);
+}
+
+/** Forgets a finished recording and deletes its files. */
+export async function deleteRecording(dispatch: Dispatch<Action>, rec: RecordingDto): Promise<void> {
+  try {
+    await backend.deleteRecording(rec.id, true);
+  } catch (e) {
+    dispatch({ type: "toast", text: `Delete recording: ${errorMessage(e)}` });
+  }
+  await refreshRecordings(dispatch);
 }

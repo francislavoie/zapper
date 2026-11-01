@@ -34,6 +34,9 @@ import { applyRailWidth, saveRailWidth } from "./railWidth";
 import { saveStacked } from "./stacked";
 import { saveCategoryHidden, saveCategoryPins, saveCategorySort } from "./categoryPrefs";
 import { AboutModal } from "./components/AboutModal";
+import { ProgrammeMenu } from "./components/ProgrammeMenu";
+import { RecordingsModal } from "./components/RecordingsModal";
+import { RecordingsWatcher } from "./components/RecordingsWatcher";
 import { Rail } from "./components/Rail";
 import { ChannelList } from "./components/ChannelList";
 import { CommandPalette } from "./components/CommandPalette";
@@ -483,6 +486,11 @@ export function App() {
         {state.settingsOpen ? <SettingsModal /> : null}
       </Boundary>
       <Boundary what="About">{state.aboutOpen ? <AboutModal /> : null}</Boundary>
+      <Boundary what="Recordings">
+        {state.recordingsOpen ? <RecordingsModal /> : null}
+        <ProgrammeMenu />
+        <RecordingsWatcher />
+      </Boundary>
       <Boundary what="Updates">{state.updateOpen ? <UpdateModal /> : null}</Boundary>
 
       {/* While browsing, a channel number being typed floats over the views;

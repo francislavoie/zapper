@@ -138,6 +138,10 @@ pub struct RecordingSettingsDto {
     /// How many streams the account allows at once, for accounts that cannot
     /// be asked (playlists). Xtream accounts report their own.
     pub simultaneous_streams: u32,
+    /// The folder used when none is chosen, so a client can offer to go back
+    /// to it. Ignored when settings are written.
+    #[serde(default)]
+    pub default_output_dir: String,
 }
 
 /// A capture in progress, for `GET /api/status`.
