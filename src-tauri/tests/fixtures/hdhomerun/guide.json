@@ -1,10 +1,10 @@
 [
-{"GuideNumber":"4.1","GuideName":"KXMO-HD","Affiliate":"AXC","ImageURL":"https://img.hdhomerun.com/channels/US28297.png","Guide":[
- {"StartTime":1761980400,"EndTime":1761982200,"Title":"KXMO 4 News","EpisodeTitle":"Saturday Morning","Synopsis":"Local news & weather.","OriginalAirdate":1761955200,"SeriesID":"C184165ENGKEOK","Filter":["News"]},
- {"StartTime":1761982200,"EndTime":1761984000,"Title":"Good Morning America","SeriesID":"C185305ENGU7OL"}
+{"GuideNumber":"4.1","GuideName":"KXYZ-HD","Affiliate":"Northwind","ImageURL":"https://img.example.invalid/channels/US00001.png","Guide":[
+ {"StartTime":1761980400,"EndTime":1761982200,"Title":"KXYZ 4 News","EpisodeTitle":"Saturday Morning","Synopsis":"Local news & weather.","OriginalAirdate":1761955200,"SeriesID":"C000101ENGAAAA","Filter":["News"]},
+ {"StartTime":1761982200,"EndTime":1761984000,"Title":"Morning Harbour","SeriesID":"C000102ENGBBBB"}
 ]},
-{"GuideNumber":"5.1","GuideName":"KXNG-HD","Affiliate":"NXC","Guide":[
- {"StartTime":1761980400,"EndTime":1761987600,"Title":"College Football","Synopsis":"Huskies at Ducks."}
+{"GuideNumber":"5.1","GuideName":"KWVU-HD","Affiliate":"Harbour","Guide":[
+ {"StartTime":1761980400,"EndTime":1761987600,"Title":"College Rowing","Synopsis":"Otters at Herons."}
 ]},
 {"GuideNumber":"99.1","GuideName":"ELSEWHERE","Guide":[
  {"StartTime":1761980400,"EndTime":1761984000,"Title":"Not in this lineup"}

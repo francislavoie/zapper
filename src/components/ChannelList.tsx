@@ -179,9 +179,7 @@ export function ChannelList() {
     <main className="list-pane">
       {/* Two rows, matching the rail's beside it row for row: a heading the
           height of the rail's tabs, then the search box the height of the
-          rail's filter box, so the two inputs sit on one line. A full-width search box above a
-          count line would put the search level with the rail's tabs and the
-          filter a row lower. */}
+          rail's filter box, so the two inputs sit on one line. */}
       <ListHead
         heading={searching ? "Search results" : categoryName}
         total={source.total}

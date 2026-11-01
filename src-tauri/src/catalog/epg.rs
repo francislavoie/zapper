@@ -208,11 +208,11 @@ mod tests {
 
     const SAMPLE: &str = r#"<?xml version="1.0"?>
 <tv>
-  <programme start="20260908010000 +0000" stop="20260908020000 +0000" channel="nwn1.uk">
+  <programme start="20260908010000 +0000" stop="20260908020000 +0000" channel="nw1.uk">
     <title>Breakfast</title>
     <desc>Morning news.</desc>
   </programme>
-  <programme start="20260908020000 +0000" stop="20260908030000 +0000" channel="nwn1.uk">
+  <programme start="20260908020000 +0000" stop="20260908030000 +0000" channel="nw1.uk">
     <title>Bargain Hunt</title>
   </programme>
 </tv>"#;
@@ -224,7 +224,7 @@ mod tests {
         assert_eq!(n, 2);
         let t: String = c
             .query_row(
-                "SELECT title FROM epg WHERE channel_ref='nwn1.uk' ORDER BY start LIMIT 1",
+                "SELECT title FROM epg WHERE channel_ref='nw1.uk' ORDER BY start LIMIT 1",
                 [],
                 |r| r.get(0),
             )
@@ -262,13 +262,13 @@ mod tests {
         // quick-xml reports `&amp;` as a separate event, so a title split
         // around one must be reassembled rather than truncated.
         let xml = r#"<tv><programme start="20260908010000 +0000" stop="20260908020000 +0000" channel="c">
-            <title>Bread &amp; Butter</title></programme></tv>"#;
+            <title>Court &amp; Council</title></programme></tv>"#;
         let c = open_in_memory().unwrap();
         parse_xmltv(xml.as_bytes(), &c).unwrap();
         let t: String = c
             .query_row("SELECT title FROM epg", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(t, "Bread & Butter");
+        assert_eq!(t, "Court & Council");
     }
 
     /// Parses a real slice of a provider's guide. Fixtures cannot cover what
@@ -306,16 +306,17 @@ mod tests {
             .unwrap();
         assert_eq!(truncated, 0, "{truncated} titles end at an entity ref");
 
-        // Round-trip two real titles: &amp; mid-title and &apos; mid-word.
-        for expected in ["Cats & Dogs", "Gosh! It's the Wilsons"] {
+        // Both entities decoded somewhere in the sample: &amp; mid-title and
+        // &apos; mid-word.
+        for pattern in ["% & %", "%_'_%"] {
             let n: i64 = c
                 .query_row(
-                    "SELECT COUNT(*) FROM epg WHERE title = ?1",
-                    [expected],
+                    "SELECT COUNT(*) FROM epg WHERE title LIKE ?1",
+                    [pattern],
                     |r| r.get(0),
                 )
                 .unwrap();
-            assert!(n > 0, "entity-bearing title did not round-trip: {expected:?}");
+            assert!(n > 0, "no decoded entity in any title matching {pattern:?}");
         }
 
         let sample: Vec<String> = c
@@ -329,10 +330,10 @@ mod tests {
     }
 
     const WITH_CHANNELS: &str = r#"<tv>
-  <channel id="nwn1.uk"><display-name lang="en">NWN One</display-name>
-    <display-name>NWN 1 London</display-name><icon src="x"/></channel>
-  <channel id="r24.fr"><display-name>Riviera 24 &amp; Co</display-name></channel>
-  <programme start="20260908010000 +0000" stop="20260908020000 +0000" channel="nwn1.uk">
+  <channel id="nw1.uk"><display-name lang="en">Northwind One</display-name>
+    <display-name>Northwind 1 London</display-name><icon src="x"/></channel>
+  <channel id="m24.fr"><display-name>Meridian 24 &amp; Co</display-name></channel>
+  <programme start="20260908010000 +0000" stop="20260908020000 +0000" channel="nw1.uk">
     <title>Breakfast</title>
   </programme>
 </tv>"#;
@@ -359,16 +360,16 @@ mod tests {
         assert_eq!(
             names(&c),
             [
-                ("nwn1.uk".to_owned(), "NWN 1 London".to_owned()),
-                ("nwn1.uk".to_owned(), "NWN One".to_owned()),
-                ("r24.fr".to_owned(), "Riviera 24 & Co".to_owned()),
+                ("m24.fr".to_owned(), "Meridian 24 & Co".to_owned()),
+                ("nw1.uk".to_owned(), "Northwind 1 London".to_owned()),
+                ("nw1.uk".to_owned(), "Northwind One".to_owned()),
             ]
         );
     }
 
     #[test]
-    fn a_panels_guide_stores_no_names() {
-        // The Xtream path is unchanged: channels are read past, not stored.
+    fn an_xtream_guide_stores_no_names() {
+        // The Xtream path reads channels past rather than storing them.
         let c = open_in_memory().unwrap();
         assert_eq!(parse_xmltv(WITH_CHANNELS.as_bytes(), &c).unwrap(), 1);
         assert!(names(&c).is_empty());

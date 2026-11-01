@@ -7,8 +7,6 @@ src-tauri/Cargo.toml and zapper's own entry in src-tauri/Cargo.lock (what the up
 against: CARGO_PKG_VERSION), package.json, and package-lock.json's two copies. Each file is
 parsed again afterwards and must differ from the original only in those versions. Errors exit
 with status 2 before any file is written.
-
-zapper is a single crate.
 """
 import json
 import os

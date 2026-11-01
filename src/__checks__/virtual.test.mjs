@@ -134,11 +134,11 @@ test("no header before the first separator", () => {
   assert.equal(stickyIndex(() => false, 30), null);
 });
 
-test("the sticky scan is bounded rather than walking 50k rows", () => {
+test("the sticky scan is bounded rather than walking 60k rows", () => {
   let visits = 0;
   stickyIndex(() => {
     visits++;
     return false;
-  }, 50_000, 400);
+  }, 60_000, 400);
   assert.ok(visits <= 401, `scanned ${visits} rows`);
 });

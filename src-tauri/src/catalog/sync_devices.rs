@@ -379,11 +379,11 @@ mod tests {
                 let end = start + 12 * 3600;
                 Reply::ok(
                     serde_json::json!([
-                        {"GuideNumber": "4.1", "GuideName": "KXMO-HD", "Guide": [
+                        {"GuideNumber": "4.1", "GuideName": "KXYZ-HD", "Guide": [
                             {"StartTime": start, "EndTime": start + 3600, "Title": "News", "Synopsis": "Local."},
                             {"StartTime": start + 3600, "EndTime": end, "Title": "Movie"}
                         ]},
-                        {"GuideNumber": "5.1", "GuideName": "KXNG-HD", "Guide": [
+                        {"GuideNumber": "5.1", "GuideName": "KWVU-HD", "Guide": [
                             {"StartTime": start, "EndTime": end, "Title": "Sport"}
                         ]}
                     ])
@@ -394,8 +394,8 @@ mod tests {
                 Reply::new(503, "").header("X-HDHomeRun-Error", "805 All Tuners In Use")
             }
             "/guide.xml" => Reply::ok(
-                r#"<tv><channel id="KXMO.us"><display-name>KXMO-HD</display-name></channel>
-                   <programme start="20251101180000 +0000" stop="20251101190000 +0000" channel="KXMO.us"><title>From XMLTV</title></programme></tv>"#,
+                r#"<tv><channel id="KXYZ.us"><display-name>KXYZ-HD</display-name></channel>
+                   <programme start="20251101180000 +0000" stop="20251101190000 +0000" channel="KXYZ.us"><title>From XMLTV</title></programme></tv>"#,
             ),
             _ => Reply::new(404, ""),
         })
@@ -447,7 +447,7 @@ mod tests {
         // Programmes meet their channels without matching.
         let titles = mirror.rows::<String>(
             "SELECT e.title FROM epg e JOIN channels c ON c.epg_channel_id = e.channel_ref
-             WHERE c.name = 'KXMO-HD' ORDER BY e.start LIMIT 2",
+             WHERE c.name = 'KXYZ-HD' ORDER BY e.start LIMIT 2",
         );
         assert_eq!(titles, ["News", "Movie"]);
         // A day ahead takes more than one twelve-hour window, and each
@@ -508,13 +508,13 @@ mod tests {
         );
         assert!(!server.requests().iter().any(|r| r.route() == "/api/guide"));
         assert_eq!(
-            mirror.rows::<String>("SELECT epg_channel_id FROM channels WHERE name = 'KXMO-HD'"),
-            ["KXMO.us"]
+            mirror.rows::<String>("SELECT epg_channel_id FROM channels WHERE name = 'KXYZ-HD'"),
+            ["KXYZ.us"]
         );
         // Back to SiliconDust: the channel points at its own guide again.
         run_hdhomerun_pass(&Recorder::default(), &tuner_at(&server, vec![]), mirror.clone()).await;
         assert_eq!(
-            mirror.rows::<String>("SELECT epg_channel_id FROM channels WHERE name = 'KXMO-HD'"),
+            mirror.rows::<String>("SELECT epg_channel_id FROM channels WHERE name = 'KXYZ-HD'"),
             ["hdhr:4.1"]
         );
     }
@@ -693,12 +693,12 @@ mod tests {
         assert_eq!(urls.len(), 4);
         assert!(urls.iter().all(|u| u.contains(&format!("?auth={AUTH_CODE}&profile=pass"))), "{urls:?}");
         assert_eq!(
-            mirror.rows::<String>("SELECT num_label FROM channels WHERE name = 'KXMO-HD'"),
+            mirror.rows::<String>("SELECT num_label FROM channels WHERE name = 'KXYZ-HD'"),
             ["5.1"]
         );
         // Guide channels are the UUIDs, matched directly.
         assert_eq!(
-            mirror.rows::<String>("SELECT epg_channel_id FROM channels WHERE name = 'Radio Talk'"),
+            mirror.rows::<String>("SELECT epg_channel_id FROM channels WHERE name = 'Northwind Radio'"),
             ["c0ffee0000000000000000000000c004"]
         );
         // Every request after a challenge answered it.
@@ -724,7 +724,7 @@ mod tests {
         let mut tags = Tags::default();
         tags.by_channel.insert("c0ffee0000000000000000000000c001".into(), "News".into());
         tags.order.push("News".into());
-        let s = land_tvheadend_playlist(&c, body(base.replace("NWN One HD", "NWN One")), &tags).unwrap();
+        let s = land_tvheadend_playlist(&c, body(base.replace("Northwind One HD", "Northwind One")), &tags).unwrap();
         assert_eq!((s.channels.inserted, s.channels.deleted), (0, 0));
         assert_eq!(ids(&c), before);
     }

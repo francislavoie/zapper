@@ -569,7 +569,7 @@ pub async fn set_account(
         password,
     })
     .map_err(|e| e.to_string())?;
-    crate::ipc::player_cmds::forget_panel();
+    crate::ipc::player_cmds::forget_source();
     // New credentials are the thing a refused sync was waiting for.
     sync_engine::request_now();
     Ok(())
@@ -592,7 +592,7 @@ pub async fn set_m3u_account(
     let existing = credentials::on_file().m3u;
     let account = resolve_m3u_form(existing, playlist, epg_urls, user_agent)?;
     credentials::save_m3u(&account).map_err(|e| e.to_string())?;
-    crate::ipc::player_cmds::forget_panel();
+    crate::ipc::player_cmds::forget_source();
     sync_engine::request_now();
     Ok(())
 }
@@ -611,7 +611,7 @@ pub async fn set_hdhomerun_account(
     let existing = credentials::on_file().hdhomerun;
     let account = resolve_hdhomerun_form(existing, device, epg_urls)?;
     credentials::save_hdhomerun(&account).map_err(|e| e.to_string())?;
-    crate::ipc::player_cmds::forget_panel();
+    crate::ipc::player_cmds::forget_source();
     sync_engine::request_now();
     Ok(())
 }
@@ -653,7 +653,7 @@ pub async fn set_tvheadend_account(
     let existing = credentials::on_file().tvheadend;
     let account = resolve_tvheadend_form(existing, url, username, password)?;
     credentials::save_tvheadend(&account).map_err(|e| e.to_string())?;
-    crate::ipc::player_cmds::forget_panel();
+    crate::ipc::player_cmds::forget_source();
     sync_engine::request_now();
     Ok(())
 }
@@ -733,8 +733,8 @@ fn resolve_m3u_form(
 pub async fn test_account() -> Result<String, String> {
     use crate::source::Source;
     let scrubbed = |e: anyhow::Error| crate::catalog::sync_engine::scrub(&format!("{e:#}"));
-    let panel = match crate::ipc::player_cmds::source()? {
-        Source::Xtream(panel) => panel,
+    let server = match crate::ipc::player_cmds::source()? {
+        Source::Xtream(server) => server,
         // A playlist has nobody to ask "who am I"; the honest test is
         // whether it can be fetched and parsed, and whether its guide answers.
         Source::M3u(m) => return m.probe().await.map_err(scrubbed),
@@ -753,7 +753,7 @@ pub async fn test_account() -> Result<String, String> {
             })
         }
     };
-    let info = panel
+    let info = server
         .login()
         .await
         .map_err(|e| crate::catalog::sync_engine::scrub(&format!("{e:#}")))?;
@@ -765,7 +765,7 @@ pub async fn test_account() -> Result<String, String> {
         } else {
             info.status.clone()
         };
-        return Err(format!("the panel rejected these credentials ({status})"));
+        return Err(format!("the server rejected these credentials ({status})"));
     }
     let conns = match (info.active_cons, info.max_connections) {
         (Some(a), Some(m)) => format!(" · {a} of {m} connections in use"),

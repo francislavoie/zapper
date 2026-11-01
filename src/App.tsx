@@ -343,11 +343,11 @@ export function App() {
             still be moved, resized and closed. */}
         <Boundary what="This view">
         {/* Browse and the guide share one band, mounted once, and each view
-            below it is kept alive while the other is shown. As two separate trees, each
-            with its own band, switching views would throw the band away and
-            fetch now/next again, and coming back to the list would re-fetch
-            its pages and lose the scroll:
-            every toggle a visible reload. A hidden <Activity> keeps state and DOM and only
+            below it is kept alive while the other is shown. As two separate
+            trees, each with its own band, switching views would throw the
+            band away and fetch now/next again, and coming back to the list
+            would re-fetch its pages and lose the scroll — every toggle a
+            visible reload. A hidden <Activity> keeps state and DOM and only
             pauses effects. The whole thing is hidden, not unmounted, while
             watching full size, so the round trip through the player costs
             nothing either.

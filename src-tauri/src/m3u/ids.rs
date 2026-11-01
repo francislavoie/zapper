@@ -206,8 +206,8 @@ mod tests {
 
     #[test]
     fn ids_are_stable_and_in_range() {
-        let a = stream_id("n\u{0}nwn one\u{0}uk", 0);
-        assert_eq!(a, stream_id("n\u{0}nwn one\u{0}uk", 0));
+        let a = stream_id("n\u{0}northwind one\u{0}uk", 0);
+        assert_eq!(a, stream_id("n\u{0}northwind one\u{0}uk", 0));
         for id in [a, stream_id("x", 0), stream_id("", 7)] {
             assert!((ID_FLOOR..ID_CEILING).contains(&id), "{id} out of range");
         }
@@ -276,25 +276,25 @@ mod tests {
     #[test]
     fn identity_prefers_tvg_id_then_name_then_url() {
         let with_id = entry(
-            "NWN One HD",
+            "Northwind One HD",
             true,
-            Some("nwn1.uk"),
+            Some("nw1.uk"),
             Some("UK"),
             "http://s/1?token=a",
         );
         let rotated = entry(
-            "NWN One HD",
+            "Northwind One HD",
             true,
-            Some("nwn1.uk"),
+            Some("nw1.uk"),
             Some("UK"),
             "http://s/9?token=b",
         );
         // The URL plays no part once there is a name.
         assert_eq!(identity(&with_id), identity(&rotated));
         let sd = entry(
-            "NWN One SD",
+            "Northwind One SD",
             true,
-            Some("nwn1.uk"),
+            Some("nw1.uk"),
             Some("UK"),
             "http://s/1",
         );
@@ -304,16 +304,16 @@ mod tests {
             "SD and HD are two channels"
         );
         let other_group = entry(
-            "NWN One HD",
+            "Northwind One HD",
             true,
-            Some("nwn1.uk"),
+            Some("nw1.uk"),
             Some("Backup"),
             "http://s/1",
         );
         assert_ne!(identity(&with_id), identity(&other_group));
 
-        let no_id = entry("nwn-one  hd", true, None, Some("uk"), "http://s/1");
-        assert!(identity(&no_id).starts_with("n\u{0}nwn one hd"));
+        let no_id = entry("northwind-one  hd", true, None, Some("uk"), "http://s/1");
+        assert!(identity(&no_id).starts_with("n\u{0}northwind one hd"));
 
         let unnamed_a = entry("1", false, None, None, "http://p/live/u/p/1.ts?token=a");
         let unnamed_b = entry("1", false, None, None, "http://p/live/u/p/1.ts?token=b");
@@ -322,7 +322,7 @@ mod tests {
     }
 
     #[test]
-    fn category_ids_never_look_like_a_panels() {
+    fn category_ids_never_look_like_xtream_ones() {
         let id = category_id("Sports");
         assert!(id.starts_with("m3u-"));
         assert_eq!(id, category_id("Sports"));

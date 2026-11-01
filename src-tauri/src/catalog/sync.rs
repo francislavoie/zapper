@@ -222,7 +222,7 @@ mod tests {
     #[test]
     fn separators_are_flagged_on_write() {
         let c = open_in_memory().unwrap();
-        sync_channels(&c, &[ch(1, "###### SPORTS ######"), ch(2, "NWN One")]).unwrap();
+        sync_channels(&c, &[ch(1, "###### SPORTS ######"), ch(2, "Northwind One")]).unwrap();
         let f: i64 = c
             .query_row("SELECT is_separator FROM channels WHERE stream_id=1", [], |r| {
                 r.get(0)
@@ -240,7 +240,7 @@ mod tests {
     fn clean_name_strips_decorative_tags() {
         // Servers bury country pipes, quality brackets and parenthesised
         // notes in names; the picker should see none of them.
-        assert_eq!(clean_name("|CA| CRC  [FHD] (Backup)"), "CRC");
-        assert_eq!(clean_name("NWN One"), "NWN One");
+        assert_eq!(clean_name("|CA| NWB  [FHD] (Backup)"), "NWB");
+        assert_eq!(clean_name("Northwind One"), "Northwind One");
     }
 }

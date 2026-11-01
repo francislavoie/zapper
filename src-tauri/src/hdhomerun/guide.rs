@@ -232,6 +232,6 @@ mod tests {
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .unwrap();
-        assert_eq!((count, desc.as_deref()), (1, Some("Huskies at Ducks.")));
+        assert_eq!((count, desc.as_deref()), (1, Some("Otters at Herons.")));
     }
 }

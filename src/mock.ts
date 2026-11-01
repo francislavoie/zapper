@@ -28,8 +28,8 @@ import type {
 } from "./types";
 
 const CHANNEL_TOTAL = 60000;
-const CATEGORY_TOTAL = 768;
-/** Roughly one row in sixty is a panel-injected divider. */
+const CATEGORY_TOTAL = 800;
+/** Roughly one row in sixty is a provider-injected divider. */
 const SEPARATOR_EVERY = 60;
 
 // ---------------------------------------------------------------- randomness
@@ -79,8 +79,8 @@ const TOPICS = [
   "LIFESTYLE",
   "RELIGIOUS",
   "LOCAL",
-  "EVENTS",
-  "ALL DAY SHOWS",
+  "TRAVEL",
+  "SERIES",
   "RADIO",
   "WEATHER",
   "SHOPPING",
@@ -88,74 +88,74 @@ const TOPICS = [
 ] as const;
 
 const NETWORKS = [
-  "HARBOUR SPORTS ONE",
-  "HSN",
-  "CRC",
-  "CVT",
-  "GLOBAL",
-  "NWN ONE",
-  "NWN TWO",
-  "BRT",
-  "CHANNEL 4",
-  "SUMMIT SPORTS MAIN",
-  "XSPN",
-  "VIXEN SPORTS",
-  "WNN",
-  "WSNBC",
-  "LEDGER",
-  "EXPLORER",
-  "CHRONICLE",
-  "ATLAS EXPLORER",
-  "AMV",
-  "TNX",
-  "CBO",
-  "SHOWCASE",
-  "STARLIT",
-  "REELHOUSE",
-  "FABLE",
-  "DOODLE NETWORK",
-  "NICKELPLAY",
-  "MXV",
-  "VJ1",
-  "CHUCKLE CENTRAL",
-  "KITCHEN NETWORK",
-  "HMTV",
-  "TLV",
-  "SCIFY",
-  "UNION NETWORK",
-  "PARAGON",
-  "ARTO",
-  "NOVA+",
-  "RVL",
-  "PRO8",
-  "LA NOVENA",
-  "RAX 1",
-  "TVX",
-  "NPX 1",
-  "SVS 6",
-  "GLOBA",
-  "TELEMAR",
-  "NOVA PLUS",
-  "CONTINENTAL SPORT",
-  "DZNA",
+  "NORTHWIND NEWS",
+  "HARBOUR SPORTS 1",
+  "HARBOUR SPORTS 2",
+  "LUMEN KIDS",
+  "COBALT MOVIES",
+  "COBALT MOVIES 2",
+  "MERIDIAN ONE",
+  "MERIDIAN TWO",
+  "SILVERLINE",
+  "CHANNEL 9 NORTH",
+  "PEAK SPORTS MAIN EVENT",
+  "ORBIT SPORTS",
+  "FIELDHOUSE",
+  "NORTHWIND BUSINESS",
+  "LEDGER TV",
+  "DEEP FIELD",
+  "ANNALS",
+  "WILD ATLAS",
+  "AMBER CLASSICS",
+  "TIDE",
+  "VELVET",
+  "SATIN CINEMA",
+  "STARLING",
+  "EMBER MOVIES",
+  "PEBBLE",
+  "DOODLE",
+  "SPROUT TOWN",
+  "PULSE",
+  "ECHO HITS",
+  "CHUCKLE",
+  "SIMMER",
+  "HEARTH & HOME",
+  "LIFELINE",
+  "NEBULA",
+  "CROSSROADS",
+  "SUMMIT",
+  "AURORA",
+  "CANAL VERT",
+  "RHEIN EINS",
+  "WELLE 7",
+  "LA ONDA",
+  "TERRA UNO",
+  "MAREA",
+  "KANAAL ZUID",
+  "BRUG 6",
+  "SOLARIS",
+  "CORAZÓN",
+  "SITARA",
+  "ALPINE SPORT",
+  "ARENA PLUS",
 ] as const;
 
 const SUFFIXES = ["", "", "", "", " HD", " FHD", " 4K", " RAW", " EAST", " WEST"];
 
 const PROGRAMMES = [
   "Evening News",
-  "Top Flight: Live",
-  "The Night Desk",
+  "Harbour League: Live",
+  "Tonight with Sam Avery",
   "Documentary: Deep Ocean",
   "Movie: The Long Road",
   "Local Weather",
   "Morning Show",
   "Classic Match Replay",
   "Wildlife Rescue",
-  "Home Rescue",
+  "Kitchen Rescue",
   "Top 40 Countdown",
   "Grand Prix: Practice 2",
-  "NIHL: Third Period",
+  "Hockey: Third Period",
   "Breaking News Special",
 ] as const;
 
@@ -170,9 +170,9 @@ export interface MockCatalog {
 }
 
 function makeQuality(name: string): QualityDto | null {
-  // A "4K" in the name means nothing; this is the case worth checking, so
-  // the mock reproduces it verbatim for the badge to be checked against.
-  if (name === "CA: HARBOUR SPORTS ONE 4K") {
+  // A "4K" in the name means nothing, so the mock carries one channel that
+  // claims it and delivers 720p, for the badge to be checked against.
+  if (name === "CA: HARBOUR SPORTS 1 4K") {
     return {
       codec: "h264",
       width: 1280,
@@ -208,7 +208,7 @@ function makeProgramme(nowSec: number): ProgrammeDto {
     title: pick(PROGRAMMES),
     description:
       rand() < 0.6
-        ? "A description the panel supplied, of roughly the length these actually run to in the wild."
+        ? "A description the provider supplied, of roughly the length these actually run to in the wild."
         : null,
   };
 }
@@ -319,9 +319,9 @@ function buildCatalog(): MockCatalog {
   // One guaranteed specimen of the lying-name case, near the top of the list.
   const liar = rows.find((r) => !r.isSeparator);
   if (liar) {
-    liar.name = "CA: HARBOUR SPORTS ONE 4K";
-    liar.cleanName = "HARBOUR SPORTS ONE 4K";
-    liar.quality = makeQuality("CA: HARBOUR SPORTS ONE 4K");
+    liar.name = "CA: HARBOUR SPORTS 1 4K";
+    liar.cleanName = "HARBOUR SPORTS 1 4K";
+    liar.quality = makeQuality("CA: HARBOUR SPORTS 1 4K");
     liar.hasArchive = true;
     liar.archiveDays = 3;
     liar.nowPlaying = makeProgramme(nowSec);
@@ -499,7 +499,7 @@ let mockDropped = 0;
  *  src/logic/stats.ts, so the graphs are drawn full. */
 const MOCK_HISTORY = 120;
 let mockAccount: AccountDto = {
-  host: "http://panel.example.com:8080",
+  host: "http://tv.example.com:8080",
   username: "demo",
   hasPassword: true,
   source: "zapper",
@@ -507,7 +507,7 @@ let mockAccount: AccountDto = {
   kind: "xtream",
   // A provider-style playlist on file, so the redacted-field path is what
   // the mock shows when switched to M3U.
-  playlist: "http://panel.example.com:8080/get.php?username=<redacted>&password=<redacted>&type=m3u_plus",
+  playlist: "http://tv.example.com:8080/get.php?username=<redacted>&password=<redacted>&type=m3u_plus",
   playlistRedacted: true,
   epgUrls: [],
   epgRedacted: false,
@@ -569,7 +569,7 @@ const MOCK_RELEASE: UpdateReleaseDto = {
   name: "zapper 0.2.0",
   notes:
     "### Added\n- Check for updates, and install them from inside the app.\n\n### Fixed\n- The guide no longer jumps when a programme ends.",
-  url: "https://github.com/OWNER/zapper/releases/tag/v0.2.0",
+  url: "https://github.com/francislavoie/zapper/releases/tag/v0.2.0",
   prerelease: false,
   publishedAt: "2026-10-30T12:00:00Z",
   asset:
@@ -957,8 +957,8 @@ export const mockApi = {
         mockAccount.epgUrls.length === 0 ? "no guide configured" : `${mockAccount.epgUrls.length} guides OK`;
       return `Playlist OK: 412 channels in the first 600 lines of 24 MB · ${guide}`;
     }
-    if (!mockAccount.hasPassword) throw "the panel rejected these credentials (no password)";
-    return "Active · 1 of 1 connections in use";
+    if (!mockAccount.hasPassword) throw "the server rejected these credentials (no password)";
+    return "Active · 1 of 2 connections in use";
   },
 
   settings: async () => {

@@ -9,8 +9,7 @@ Subcommands (errors go to stderr with exit status 2):
   copyright <LICENSE> <out>     the .deb's /usr/share/doc/zapper/copyright, in Debian's
                                 machine-readable format (DEP-5), with LICENSE's text
 
-Writes the notice files: zapper has no browser
-engine of its own to credit (the system's WebKitGTK, WebView2 or WKWebView draws its window).
+zapper has no browser engine of its own to credit (the system's WebKitGTK, WebView2 or WKWebView draws its window).
 """
 import json
 import os
@@ -19,7 +18,7 @@ import sys
 
 # Where zapper's source is: the repository the updater takes its releases from (RELEASES_REPO in
 # src-tauri/src/updates/mod.rs), which scripts/licenses.sh reads through scripts/releases-repo.sh.
-REPO = f"https://github.com/{os.environ.get('ZAPPER_REPO', 'OWNER/zapper')}"
+REPO = f"https://github.com/{os.environ.get('ZAPPER_REPO', 'francislavoie/zapper')}"
 
 
 class Fail(Exception):

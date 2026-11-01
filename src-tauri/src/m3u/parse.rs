@@ -478,17 +478,17 @@ mod tests {
     #[test]
     fn attributes_are_read_whatever_their_quoting() {
         let (v, _) = all(
-            "#EXTM3U\n#EXTINF:-1 tvg-id=\"nwn1.uk\" tvg-name='NWN One' tvg-logo=http://l/x.png \
-             group-title=\"UK;Entertainment\" tvg-chno=\"101\",NWN One HD\nhttp://s/1.ts\n",
+            "#EXTM3U\n#EXTINF:-1 tvg-id=\"nw1.uk\" tvg-name='Northwind One' tvg-logo=http://l/x.png \
+             group-title=\"UK;Entertainment\" tvg-chno=\"101\",Northwind One HD\nhttp://s/1.ts\n",
         );
         let e = &v[0];
-        assert_eq!(e.tvg_id.as_deref(), Some("nwn1.uk"));
-        assert_eq!(e.tvg_name.as_deref(), Some("NWN One"));
+        assert_eq!(e.tvg_id.as_deref(), Some("nw1.uk"));
+        assert_eq!(e.tvg_name.as_deref(), Some("Northwind One"));
         assert_eq!(e.logo.as_deref(), Some("http://l/x.png"));
         // `;`-separated groups: the first is the category.
         assert_eq!(e.group.as_deref(), Some("UK"));
         assert_eq!(e.chno, Some(101));
-        assert_eq!(e.name, "NWN One HD");
+        assert_eq!(e.name, "Northwind One HD");
         assert_eq!(e.url, "http://s/1.ts");
     }
 
@@ -503,17 +503,17 @@ mod tests {
         for bad in ["", "five", "5.1.2", "5.", "5.1000", "-3.1"] {
             assert_eq!(channel_number(bad), None, "{bad:?}");
         }
-        let (v, _) = all("#EXTM3U\n#EXTINF:-1 tvg-chno=\"7.2\",KXMO D2\nhttp://s/7.ts\n");
+        let (v, _) = all("#EXTM3U\n#EXTINF:-1 tvg-chno=\"7.2\",KXYZ D2\nhttp://s/7.ts\n");
         assert_eq!((v[0].chno, v[0].chno_label.as_deref()), (Some(7002), Some("7.2")));
     }
 
     #[test]
     fn commas_in_names_and_in_quoted_attributes_survive() {
         let (v, _) = all(
-            "#EXTM3U\n#EXTINF:-1 group-title=\"News, Weather\",Summit News, Live, 24/7\nhttp://s/2\n",
+            "#EXTM3U\n#EXTINF:-1 group-title=\"News, Weather\",Cobalt News, Live, Today\nhttp://s/2\n",
         );
         assert_eq!(v[0].group.as_deref(), Some("News, Weather"));
-        assert_eq!(v[0].name, "Summit News, Live, 24/7");
+        assert_eq!(v[0].name, "Cobalt News, Live, Today");
     }
 
     #[test]

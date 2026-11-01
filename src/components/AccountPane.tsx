@@ -201,10 +201,10 @@ export function AccountPane() {
       {kind === "xtream" ? (
         <div className="account-form">
           <div className="row-field">
-            {/* "Xtream URL", not "panel address": it is the address of an
-                Xtream Codes panel, and that is the phrase printed on the email
-                a subscription arrives in. Somebody pasting a value in should
-                be able to recognise which value it is being asked for. */}
+            {/* "Xtream URL": it is the address of an Xtream Codes server, and
+                that is how providers usually label it when they hand it out.
+                Somebody pasting a value in should be able to recognise which
+                value it is being asked for. */}
             <label htmlFor="acct-host">Xtream URL</label>
             <input
               id="acct-host"
@@ -212,7 +212,7 @@ export function AccountPane() {
               value={host}
               spellCheck={false}
               autoComplete="off"
-              placeholder="http://panel.example.com:8080"
+              placeholder="http://tv.example.com:8080"
               onChange={(e) => setHost(e.target.value)}
             />
           </div>

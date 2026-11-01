@@ -132,7 +132,8 @@ export function PlayerChrome() {
         </div>
 
         {/* The honest numbers, in the corner of the picture. The channel name
-            is not evidence of anything — "HARBOUR SPORTS ONE 4K" is 720p. */}
+            is not evidence of anything — "HARBOUR SPORTS 1 4K" may well be
+            720p. */}
         <div className={`measured ${measured ? "" : "show"}`}>
           {measured || "resolution unknown"}
         </div>

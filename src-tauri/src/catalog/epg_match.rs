@@ -143,21 +143,21 @@ mod tests {
     #[test]
     fn decorations_quality_and_country_prefixes_are_ignored() {
         for raw in [
-            "NWN One",
-            "UK: NWN One FHD",
-            "NWN One [HD]",
-            "|UK| NWN ONE 1080p",
-            "nwn-one hevc",
+            "Northwind One",
+            "UK: Northwind One FHD",
+            "Northwind One [HD]",
+            "|UK| NORTHWIND ONE 1080p",
+            "northwind-one hevc",
         ] {
-            assert_eq!(normalise(raw), "nwnone", "{raw}");
+            assert_eq!(normalise(raw), "northwindone", "{raw}");
         }
     }
 
     #[test]
     fn plus_and_ampersand_are_words_not_punctuation() {
-        assert_ne!(normalise("Nova+"), normalise("Nova"));
-        assert_eq!(normalise("Nova+ HD"), normalise("nova plus"));
-        assert_eq!(normalise("AT&T Harbour Sports"), normalise("AT and T Harbour Sports"));
+        assert_ne!(normalise("Lumen+"), normalise("Lumen"));
+        assert_eq!(normalise("Lumen+ HD"), normalise("lumen plus"));
+        assert_eq!(normalise("Bay & Bridge Sports"), normalise("Bay and Bridge Sports"));
     }
 
     #[test]
@@ -167,22 +167,22 @@ mod tests {
 
     #[test]
     fn longer_prefixes_are_part_of_the_name() {
-        // "XSPN: The Ocho" is not a country code.
-        assert_eq!(normalise("XSPN: The Ocho"), "xspntheocho");
+        // "Harbour: Extra" is not a country code.
+        assert_eq!(normalise("Harbour: Extra"), "harbourextra");
     }
 
     #[test]
     fn non_latin_names_keep_their_letters() {
-        assert_eq!(normalise("Первый канал HD"), "первыйканал");
+        assert_eq!(normalise("Северный ветер HD"), "северныйветер");
     }
 
     fn matcher() -> Matcher {
         Matcher::new(
             ["orphan.id".to_owned()],
             [
-                ("NWN1.uk".to_owned(), "NWN One".to_owned()),
-                ("nwn1.london".to_owned(), "NWN One".to_owned()),
-                ("r24.fr".to_owned(), "Riviera 24".to_owned()),
+                ("NW1.uk".to_owned(), "Northwind One".to_owned()),
+                ("nw1.london".to_owned(), "Northwind One".to_owned()),
+                ("m24.fr".to_owned(), "Meridian 24".to_owned()),
             ],
         )
     }
@@ -191,13 +191,13 @@ mod tests {
     fn tvg_id_wins_then_tvg_name_then_name() {
         let m = matcher();
         assert_eq!(
-            m.resolve(Some("r24.fr"), Some("NWN One"), "x").as_deref(),
-            Some("r24.fr")
+            m.resolve(Some("m24.fr"), Some("Northwind One"), "x").as_deref(),
+            Some("m24.fr")
         );
         // Same id, different case.
         assert_eq!(
-            m.resolve(Some("nwn1.UK"), None, "x").as_deref(),
-            Some("NWN1.uk")
+            m.resolve(Some("nw1.UK"), None, "x").as_deref(),
+            Some("NW1.uk")
         );
         // An id the guide declares only through programmes.
         assert_eq!(
@@ -205,13 +205,13 @@ mod tests {
             Some("orphan.id")
         );
         assert_eq!(
-            m.resolve(Some("nope"), Some("Riviera 24 HD"), "x")
+            m.resolve(Some("nope"), Some("Meridian 24 HD"), "x")
                 .as_deref(),
-            Some("r24.fr")
+            Some("m24.fr")
         );
         assert_eq!(
-            m.resolve(None, None, "FR: Riviera 24 [FHD]").as_deref(),
-            Some("r24.fr")
+            m.resolve(None, None, "FR: Meridian 24 [FHD]").as_deref(),
+            Some("m24.fr")
         );
         assert_eq!(m.resolve(Some("nope"), None, "Unknown Channel"), None);
     }
@@ -219,8 +219,8 @@ mod tests {
     #[test]
     fn the_first_guide_channel_wins_a_shared_name() {
         assert_eq!(
-            matcher().resolve(None, None, "NWN One HD").as_deref(),
-            Some("NWN1.uk")
+            matcher().resolve(None, None, "Northwind One HD").as_deref(),
+            Some("NW1.uk")
         );
     }
 }

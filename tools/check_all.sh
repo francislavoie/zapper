@@ -7,7 +7,7 @@
 # ~/.local/share/zapper). Video comes from a local fixture
 # (tools/make_fixtures.sh, served by tools/fake_stream.py), never a provider.
 #
-#   tools/check_all.sh            # tests, lint, build, and the local mirror
+#   tools/check_all.sh            # tests, lint, build, and the real mirror
 #   tools/check_all.sh --windowed # also the GL and playback harnesses
 #
 # The windowed harnesses open real windows and play video, which interrupts
@@ -35,9 +35,11 @@ step() {
 
 rust_tests()  { (cd src-tauri && cargo test --lib -q 2>&1 | tail -3); }
 rust_clippy() { (cd src-tauri && cargo clippy --lib --bins -q -- -D warnings 2>&1 | tail -3); }
-front_build() { . "$HOME/.nvm/nvm.sh" && nvm use >/dev/null 2>&1 && npm run build 2>&1 | tail -2; }
+# The Node in .nvmrc, through nvm when it is installed; otherwise whatever is on PATH.
+use_node()    { [[ -s "$HOME/.nvm/nvm.sh" ]] || return 0; . "$HOME/.nvm/nvm.sh" && nvm use >/dev/null 2>&1; }
+front_build() { use_node && npm run build 2>&1 | tail -2; }
 front_checks(){
-  . "$HOME/.nvm/nvm.sh" && nvm use >/dev/null 2>&1
+  use_node
   # Globbed rather than handed the directory: `node --test <dir>` needs a
   # recent Node, and on an older one it is read as a module path and fails
   # with MODULE_NOT_FOUND - which looks like a broken suite, not a wrong Node.
@@ -54,7 +56,7 @@ ipc_check()   { (cd src-tauri && cargo run -q --features harness --bin ipc_check
 
 SRV=""
 start_fixtures() {
-  python3 tools/fake_stream.py --port 8788 >/tmp/zapper-fixtures.log 2>&1 &
+  python3 tools/fake_stream.py --port 8788 >"$TMP/fixtures.log" 2>&1 &
   SRV=$!
   sleep 2
   # Probe the index, not a fixture: the fixture endpoint is an endless chunked
@@ -63,18 +65,23 @@ start_fixtures() {
   curl -sf --max-time 5 http://127.0.0.1:8788/ | grep -q '\.ts' 
 }
 stop_fixtures() { [[ -n "$SRV" ]] && kill "$SRV" 2>/dev/null; SRV=""; }
-trap stop_fixtures EXIT
+TMP=$(mktemp -d)
+# The session's Wayland socket, with the usual defaults for a shell that wasn't
+# started inside the session (an SSH login, say).
+WL=${WAYLAND_DISPLAY:-wayland-0}
+XRD=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
+trap 'stop_fixtures; rm -rf "$TMP"' EXIT
 
 # Not `timeout`: uutils' implementation aborts on its kill path, which throws
 # a desktop crash dialog. Poll, then kill by PID.
 run_windowed() {
   local bin="$1" secs="$2" log; log=$(mktemp)
-  ( cd src-tauri && WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run/user/1000 \
+  ( cd src-tauri && WAYLAND_DISPLAY=$WL XDG_RUNTIME_DIR=$XRD \
       GDK_BACKEND=wayland ZAPPER_HARNESS=1 ZAPPER_FIXTURE_BASE=http://127.0.0.1:8788 \
       ZAPPER_FIXTURE_NAME=sample1080.ts ZAPPER_STREAM_ID=1 \
       ZAPPER_STREAM_URL=http://127.0.0.1:8788/sample1080.ts \
-      ./target/debug/"$bin" >"$log" 2>&1 & echo $! >/tmp/zapper-win.pid )
-  local pid; pid=$(cat /tmp/zapper-win.pid)
+      ./target/debug/"$bin" >"$log" 2>&1 & echo $! >"$TMP/win.pid" )
+  local pid; pid=$(cat "$TMP/win.pid")
   for _ in $(seq 1 "$secs"); do
     sleep 1
     grep -qE '^(PASS|FAIL)' "$log" && break
@@ -98,9 +105,9 @@ run_windowed() {
 # and no panic on the way, is the entire question.
 app_starts() {
   local log; log=$(mktemp)
-  ( cd src-tauri && WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run/user/1000 \
-      GDK_BACKEND=wayland ZAPPER_HARNESS=1 ./target/debug/zapper >"$log" 2>&1 & echo $! >/tmp/zapper-app.pid )
-  local pid; pid=$(cat /tmp/zapper-app.pid)
+  ( cd src-tauri && WAYLAND_DISPLAY=$WL XDG_RUNTIME_DIR=$XRD \
+      GDK_BACKEND=wayland ZAPPER_HARNESS=1 ./target/debug/zapper >"$log" 2>&1 & echo $! >"$TMP/app.pid" )
+  local pid; pid=$(cat "$TMP/app.pid")
   sleep 6
   local alive=0
   kill -0 "$pid" 2>/dev/null && alive=1

@@ -2007,13 +2007,12 @@ button.prog:hover {
   pointer-events: none;
 }
 
-/* No scrim. These were full-width gradients running a long way into the
-   picture, and what they dimmed was mostly picture: the top and bottom edges
-   of the frame were permanently darker than the middle, whether or not
-   anything was written over them. Each bar is now a panel that hugs its own
-   contents, inset from the edges so the frame stays clean, and carries its
-   own translucent background — legible over anything, and only where there is
-   something to read. */
+/* No scrim. Full-width gradients running a long way into the picture would
+   dim mostly picture: the top and bottom edges of the frame would be
+   permanently darker than the middle, whether or not anything was written
+   over them. Each bar is a panel that hugs its own contents, inset from the
+   edges so the frame stays clean, and carries its own translucent background
+   — legible over anything, and only where there is something to read. */
 .chrome-bottom {
   position: absolute;
   left: 0.75rem;
@@ -2088,8 +2087,8 @@ button.prog:hover {
 
 /* The honest numbers, revealed on hover — channel names lie about these. It
    is an overlay in the top-right corner of the picture, not a control in the
-   row: it is a readout, and it was taking a control's worth of width from a
-   row that already has to wrap at high zoom. */
+   row: it is a readout, and as a control it would take a control's worth of
+   width from a row that already has to wrap at high zoom. */
 .measured {
   flex: 0 0 auto;
   /* The title does not grow to fill the bar, so this is what holds the
@@ -2126,7 +2125,7 @@ button.prog:hover {
    At 200% zoom in a small window the row runs out of width; the alternatives
    were squashing the controls until the icons touch their own edges, or
    letting the row overflow, which pushes the right-most control — fullscreen,
-   which must always be right-most — off the screen entirely. A
+   which always stays right-most — off the screen entirely. A
    second line keeps every control its own size and keeps all of them
    reachable. */
 .ctl-row {
@@ -3788,8 +3787,8 @@ textarea.field {
 
 /* Shown by the same fade rules as the player's bar (src/hooks/useFade.ts),
    and while a control in it has keyboard focus. Only keyboard focus: a
-   button keeps focus after it is clicked, and :focus-within kept the panel
-   over the picture long after the pointer had gone. */
+   button keeps focus after it is clicked, and :focus-within would keep the
+   panel over the picture long after the pointer had gone. */
 .mini-chrome.shown .mini-controls,
 .mini-controls:has(:focus-visible) {
   opacity: 1;

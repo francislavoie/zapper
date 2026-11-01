@@ -60,7 +60,7 @@ test("the cards are honest about what a playlist does not get", () => {
   assert.equal(limit(/XMLTV/)?.ok, false, "guide needs an XMLTV link");
   assert.equal(limit(/catch-up/i)?.ok, false, "catch-up only where marked");
   assert.equal(limit(/status/i)?.ok, false, "no account status");
-  assert.ok(kindInfo("xtream").points.every((p) => p.ok), "a panel has no listed limits");
+  assert.ok(kindInfo("xtream").points.every((p) => p.ok), "an Xtream server has no listed limits");
 });
 
 test("the tuner and server cards say what they cannot do", () => {
@@ -74,7 +74,7 @@ test("the tuner and server cards say what they cannot do", () => {
   assert.equal(find(tvh, /recordings/i)?.ok, false, "no DVR");
 });
 
-test("an unknown or missing kind reads as a panel", () => {
+test("an unknown or missing kind reads as Xtream", () => {
   assert.equal(asKind("m3u"), "m3u");
   assert.equal(asKind("hdhomerun"), "hdhomerun");
   assert.equal(asKind("tvheadend"), "tvheadend");

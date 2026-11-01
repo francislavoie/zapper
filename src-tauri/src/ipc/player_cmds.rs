@@ -1,6 +1,6 @@
 //! Playback control.
 //!
-//! Many accounts allow only a single connection, so every path here
+//! Many accounts allow only ONE concurrent connection, so every path here
 //! must tear down before it opens. Never hold two streams, even briefly.
 //! `loadfile ... replace` satisfies that by construction: mpv closes the
 //! current demuxer before opening the next.
@@ -579,7 +579,7 @@ fn explain_failure(app: &AppHandle, stream_id: i64) {
 
 /// Development override pointing playback at a locally served fixture.
 ///
-/// Many accounts allow only a single connection and real streams are
+/// Many accounts allow only one concurrent connection and real streams are
 /// non-deterministic, so tests replay a recording instead (see
 /// `tools/fake_stream.py`). Set `ZAPPER_FIXTURE_BASE` to that server's root;
 /// unset - as in any real run - this returns `None` and the server is used.
@@ -604,7 +604,7 @@ static CLIENT: std::sync::RwLock<Option<&'static Source>> = std::sync::RwLock::n
 
 /// Drops the cached client so the next call builds one from whatever is on
 /// file now. Called when the account changes.
-pub fn forget_panel() {
+pub fn forget_source() {
     if let Ok(mut slot) = CLIENT.write() {
         *slot = None;
     }
@@ -616,11 +616,11 @@ pub fn forget_panel() {
 /// Public so the verification harness can resolve a channel to play without
 /// a second copy of the credential loader - and without a stream URL ever
 /// reaching a command line, where it would be world-readable through `/proc`.
-pub fn panel() -> Result<&'static XtreamClient, String> {
+pub fn xtream() -> Result<&'static XtreamClient, String> {
     match source()? {
         Source::Xtream(c) => Ok(c),
         other => Err(format!(
-            "the account is {}, not an Xtream panel",
+            "the account is {}, not an Xtream server",
             other.kind().label()
         )),
     }
@@ -672,11 +672,12 @@ pub async fn play_catchup(
     duration_minutes: u32,
 ) -> Result<(), String> {
     let target = match source()? {
-        Source::Xtream(panel) => {
-            // The panel reads the timestamp in its own wall clock, which is the
-            // machine's: sending UTC replays the wrong hour for most of the world.
+        Source::Xtream(server) => {
+            // The server reads the timestamp in its own wall clock, which is
+            // the machine's: sending UTC replays the wrong hour for most of
+            // the world.
             let stamp = timeshift_stamp(start, local_utc_offset(start));
-            Playable::plain(panel.timeshift_url(stream_id, &stamp, duration_minutes))
+            Playable::plain(server.timeshift_url(stream_id, &stamp, duration_minutes))
         }
         // A playlist's archive is whatever its entry's template says; the
         // local offset is there for templates written in wall-clock time.

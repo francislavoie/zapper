@@ -64,7 +64,9 @@ use version::Version;
 /// **The one place to set it.** A fork that publishes its own releases
 /// changes it here; the release workflow refuses to build while it does not
 /// match the repository it runs in (docs/releasing.md, "One-time setup").
-pub const RELEASES_REPO: &str = "OWNER/zapper";
+/// While it is still the `OWNER/…` placeholder the updater makes no network
+/// request and reports "not configured" (see [`repo_configured`]).
+pub const RELEASES_REPO: &str = "francislavoie/zapper";
 
 /// The automatic check runs this often.
 pub const CHECK_EVERY_SECS: i64 = 24 * 60 * 60;

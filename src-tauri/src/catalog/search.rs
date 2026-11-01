@@ -55,29 +55,29 @@ mod tests {
 
     fn idx() -> SearchIndex {
         SearchIndex::new(vec![
-            (1, "CA: CBO 1".into()),
-            (2, "CA: CBO 2".into()),
-            (3, "UK: NWN ONE LONDON".into()),
-            (4, "US: XSPN+ EVENTS".into()),
+            (1, "CA: PRISM 1".into()),
+            (2, "CA: PRISM 2".into()),
+            (3, "UK: NORTHWIND ONE LONDON".into()),
+            (4, "US: HARBOUR+ EVENTS".into()),
             (5, "CA: CHRONICLE".into()),
         ])
     }
 
     #[test]
     fn exact_substring_matches() {
-        assert_eq!(idx().query("CBO", 10).len(), 2);
+        assert_eq!(idx().query("PRISM", 10).len(), 2);
     }
 
     #[test]
     fn subsequence_matches_like_fzf() {
-        // "nwnone" is not a substring of "UK: NWN ONE LONDON" (there is a space)
-        let hits = idx().query("nwnone", 10);
-        assert!(hits.contains(&3), "expected NWN ONE, got {hits:?}");
+        // "northwindone" is not a substring of "UK: NORTHWIND ONE LONDON" (there is a space)
+        let hits = idx().query("northwindone", 10);
+        assert!(hits.contains(&3), "expected NORTHWIND ONE, got {hits:?}");
     }
 
     #[test]
     fn matching_is_case_insensitive() {
-        assert!(idx().query("cbo", 10).contains(&1));
+        assert!(idx().query("prism", 10).contains(&1));
     }
 
     #[test]

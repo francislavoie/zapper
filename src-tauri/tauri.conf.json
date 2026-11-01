@@ -38,8 +38,8 @@
     "category": "Video",
     "license": "MIT",
     "copyright": "© 2026 Francis Lavoie",
-    "shortDescription": "A fast Xtream live-TV client",
-    "longDescription": "A live-TV client for Xtream Codes panels: instant channel switching, a full guide, catch-up, and a picture that keeps playing while you browse.",
+    "shortDescription": "A fast live-TV client",
+    "longDescription": "A live-TV client for Xtream Codes servers, M3U playlists, HDHomeRun tuners and Tvheadend: instant channel switching, a full guide, catch-up, and a picture that keeps playing while you browse.",
     "linux": {
       "deb": {
         "desktopTemplate": "../packaging/zapper.desktop.hbs",

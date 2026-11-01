@@ -383,8 +383,8 @@ export function SettingsModal() {
               </div>
               <p>
                 Boost above 100% is mpv’s <code>volume-max</code>; the
-                compressor is <code>af=acompressor</code> with the published
-                parameters.
+                compressor is ffmpeg’s <code>speechnorm</code> followed by a
+                limiter.
               </p>
             </>
           ) : null}
@@ -502,7 +502,7 @@ function UpdatesPane({ s }: { s: SettingsControl }) {
       </div>
       <p>
         A minute after zapper starts, and once a day while it runs, it asks
-        GitHub for its list of releases. Nothing about you, your panel or what
+        GitHub for its list of releases. Nothing about you, your provider or what
         you watch is sent — only zapper’s version, in the request’s user agent.
         An update is downloaded only when you choose to install it, and only
         installed if it matches the checksum published with the release.

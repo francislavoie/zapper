@@ -8,14 +8,13 @@ GitHub release. You review the draft and publish it. Nothing is published automa
 Installed copies of zapper find a published release by themselves (the updater, below), so
 publishing is the moment a release reaches people: everything before it is reversible.
 
-The process is cut down to what zapper needs today: Linux packages only, no Arch
-package, no AppImage, no signing. Windows and macOS are wired in but disabled
+Releases carry Linux packages only: no Arch package, no AppImage, no signing. Windows and macOS
+are wired in but disabled
 ([Windows and macOS](#windows-and-macos)).
 
 ## One-time setup
 
-None of this exists yet. Until it does, `just release` refuses to run, and the updater in any
-build reports "Updates aren't configured" and never makes a request.
+Until this is done, `just release` refuses to run, and the updater in any build reports "Updates aren't configured" and never makes a request.
 
 1. **Create the GitHub repository** and push main to it:
 
@@ -203,7 +202,7 @@ writes the `~` form into the `.rpm`. `scripts/test-scripts.sh` checks the order 
    is a dry run.
 2. **Linux** (`ubuntu-24.04`, read-only): checks the tag against `tauri.conf.json`'s version and
    `RELEASES_REPO` against the repository, extracts the release notes, installs
-   The Linux build dependencies (README.md), stable Rust, Node from `.nvmrc` and `just`, then runs
+   the Linux build dependencies (README.md), stable Rust, Node from `.nvmrc` and `just`, then runs
    `just package` with `ZAPPER_RELEASE_VERSION` set: the frontend build, the release binary, the
    `.deb` and `.rpm`, `fix-deb.sh` and `check-deb.sh`. Writes `SHA256SUMS` and keeps everything as
    a workflow artifact for 3 days.
@@ -232,14 +231,14 @@ surface. What is in place:
   Windows and macOS** ticked. A tag push skips them. The macOS one fails until that port
   exists, and a failure holds that run's draft back.
 
-The Windows installers have been built once, by hand (`just package-windows`), and neither has been
-installed yet; the macOS packaging has never run. Things to settle when the port lands:
+Neither Windows installer has been tested end to end, and the macOS packaging is untested.
+Things to settle when the port lands:
 
 - an MSI needs a numeric version: a pre-release needs `bundle.windows.wix.version` set
-  (every build of `X.Y.Z` maps to `X.Y.Z.0`);
+  (for example, every build of `X.Y.Z` mapped to `X.Y.Z.0`);
 - the installers are unsigned (SmartScreen warns), and the `.app` is ad-hoc signed and not
-  notarized (Gatekeeper asks once); a fuller setup would add a signing hook and the
-  self-signed certificate setup to copy;
+  notarized (Gatekeeper asks once): code signing needs a certificate and a signing hook in the
+  bundle config;
 - turn the jobs on for tags: drop `inputs.windows_macos == true` from their `if:`.
 
 ## Dry run

@@ -80,7 +80,7 @@ export const ACTIONS: PaletteAction[] = [
   },
   // A view, not a player control: it opens with nothing playing too.
   { id: "stats", label: "Stats for nerds", hint: "S", group: "view" },
-  { id: "sync", label: "Refresh data from the panel", hint: "sync", group: "data" },
+  { id: "sync", label: "Refresh data from the provider", hint: "sync", group: "data" },
   { id: "settings", label: "Open settings", hint: "⚙", group: "app" },
   // "upgrade" and "version" are what people type looking for this one.
   { id: "updates", label: "Check for updates", hint: "upgrade · version", group: "app" },

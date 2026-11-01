@@ -24,7 +24,7 @@ macro_rules! check {
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     match run().await {
-        Ok(()) => println!("PASS: catalogue commands answer from the local mirror"),
+        Ok(()) => println!("PASS: catalogue commands answer from the real mirror"),
         Err(e) => {
             eprintln!("FAIL: {e}");
             std::process::exit(1);
@@ -66,8 +66,8 @@ async fn run() -> Result<(), String> {
         .count();
     check!("the second page is disjoint", overlap == 0);
 
-    let hits = cmd::search("nwn one".into(), 20).await?;
-    println!("search 'nwn one': {} hits", hits.len());
+    let hits = cmd::search("northwind one".into(), 20).await?;
+    println!("search 'northwind one': {} hits", hits.len());
     check!("fuzzy search finds something", !hits.is_empty());
     check!(
         "search never returns separators",
@@ -75,7 +75,7 @@ async fn run() -> Result<(), String> {
     );
 
     // Typo tolerance is the whole reason for nucleo over FTS5.
-    let fuzzy = cmd::search("nwnone".into(), 20).await?;
+    let fuzzy = cmd::search("northwindone".into(), 20).await?;
     check!("subsequence matching works", !fuzzy.is_empty());
 
     let archived: Vec<_> = page.iter().filter(|c| c.has_archive).collect();

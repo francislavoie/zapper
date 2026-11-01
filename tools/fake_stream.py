@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
-"""Serve a recorded segment as an endless live stream, for testing.
+"""Serve a short MPEG-TS segment as an endless live stream, for testing.
 
-Many providers allow a single connection, which concurrent runs wouldfight over, and real streams are slow to open and non-deterministic. This
-replays a recorded fixture over HTTP forever, so tests exercise the same
-path — HTTP, MPEG-TS, mpv's cache — with none of those problems.
+Real streams are slow to open, change from minute to minute, and many
+providers allow a single connection at a time. This replays a local fixture
+(tools/make_fixtures.sh generates them) over HTTP forever, so tests exercise
+the same path — HTTP, MPEG-TS, mpv's cache — with none of those problems.
 
   tools/fake_stream.py                       # serves every fixture on :8788
   tools/fake_stream.py --port 9000 --rate 2  # burst at 2x realtime
   tools/fake_stream.py --gap-every 4         # 1.5s gaps, then a burst
-  tools/fake_stream.py --burst 20            # open with 20s at once, as a panel does
+  tools/fake_stream.py --burst 20            # open with 20s at once, as many servers do
 
 Then point the player at:  http://127.0.0.1:8788/sample1080.ts
 """
 import argparse
+import os
 import pathlib
 import socketserver
 import sys
@@ -20,7 +22,8 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler
 
-FIXTURES = pathlib.Path("~/.cache/zapper/fixtures").expanduser()
+FIXTURES = pathlib.Path(
+    os.environ.get("ZAPPER_FIXTURES") or "~/.cache/zapper/fixtures").expanduser()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -125,13 +128,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8788)
     ap.add_argument("--rate", type=float, default=1.0,
-                    help="playback rate multiplier; 2.0 mimics the panel's burst")
+                    help="playback rate multiplier; 2.0 mimics a server's burst")
     ap.add_argument("--gap-every", type=float, default=0.0, metavar="SECONDS",
-                    help="go quiet every SECONDS of delivery, like a live server")
+                    help="go quiet every SECONDS of delivery, like a real server")
     ap.add_argument("--gap-for", type=float, default=1.5, metavar="SECONDS",
                     help="how long each gap lasts; the backlog follows in a burst")
     ap.add_argument("--burst", type=float, default=0.0, metavar="SECONDS",
-                    help="open each connection with SECONDS of video at once, like a panel")
+                    help="open each connection with SECONDS of video at once, like a server")
     ap.add_argument("--verbose", action="store_true")
     a = ap.parse_args()
     Handler.burst = a.burst

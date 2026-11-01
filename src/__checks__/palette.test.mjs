@@ -39,9 +39,9 @@ test("action filtering is subsequence, not just prefix", () => {
 });
 
 test("the hint is searchable, because that is the word people type", () => {
-  // "sync" is nowhere in "Refresh data from the panel", but it is the hint.
-  assert.ok(!actionMatches("Refresh data from the panel", "sync"));
-  assert.ok(actionMatches("Refresh data from the panel", "sync", "sync"));
+  // "sync" is nowhere in "Refresh data from the provider", but it is the hint.
+  assert.ok(!actionMatches("Refresh data from the provider", "sync"));
+  assert.ok(actionMatches("Refresh data from the provider", "sync", "sync"));
   assert.equal(filterActions(ACTIONS, "sync").length, 1);
   assert.equal(filterActions(ACTIONS, "sync")[0].id, "sync");
 });
@@ -59,13 +59,13 @@ test("player-only actions are hidden when nothing is playing", () => {
 });
 
 test("actions come before channels", () => {
-  const items = paletteItems(filterActions(ACTIONS, "s"), [chan(1, "SKY")]);
+  const items = paletteItems(filterActions(ACTIONS, "s"), [chan(1, "MERIDIAN")]);
   assert.equal(items[0].kind, "action");
   assert.equal(items[items.length - 1].kind, "channel");
 });
 
 test("separators never reach the palette", () => {
-  const items = paletteItems([], [chan(1, "SKY"), chan(2, "SPORTS", true), chan(3, "HSN")]);
+  const items = paletteItems([], [chan(1, "MERIDIAN"), chan(2, "SPORTS", true), chan(3, "SILVERLINE")]);
   assert.equal(items.length, 2);
   assert.ok(items.every((i) => i.kind === "channel" && !i.channel.isSeparator));
 });

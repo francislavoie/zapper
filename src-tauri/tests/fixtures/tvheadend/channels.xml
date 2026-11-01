@@ -2,26 +2,26 @@
 <!DOCTYPE tv SYSTEM "xmltv.dtd">
 <tv generator-info-name="TVHeadend-4.3-2183~g1b5b5ca" source-info-name="tvh-Tvheadend">
 <channel id="c0ffee0000000000000000000000c001">
-  <display-name>NWN One HD</display-name>
+  <display-name>Northwind One HD</display-name>
   <lcn>1</lcn>
 </channel>
 <channel id="c0ffee0000000000000000000000c002">
-  <display-name>NWN Two</display-name>
+  <display-name>Northwind Two</display-name>
   <lcn>2</lcn>
 </channel>
 <channel id="c0ffee0000000000000000000000c004">
-  <display-name>Radio Talk</display-name>
+  <display-name>Northwind Radio</display-name>
   <lcn>101</lcn>
 </channel>
 <programme start="20251101180000 +0000" stop="20251101183000 +0000" channel="c0ffee0000000000000000000000c001">
-  <title>NWN News at Seven</title>
+  <title>Northwind News at Six</title>
   <desc>The latest national and international news.</desc>
 </programme>
 <programme start="20251101183000 +0000" stop="20251101190000 +0000" channel="c0ffee0000000000000000000000c001">
   <title>The Evening Hour</title>
 </programme>
 <programme start="20251101180000 +0000" stop="20251101190000 +0000" channel="c0ffee0000000000000000000000c002">
-  <title>Gardeners&apos; Hour</title>
+  <title>Growers&apos; Corner</title>
 </programme>
 <programme start="20251101180000 +0000" stop="20251101190000 +0000" channel="c0ffee0000000000000000000000c004">
   <title>PM</title>

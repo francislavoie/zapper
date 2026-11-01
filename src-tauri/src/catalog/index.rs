@@ -76,8 +76,8 @@ mod tests {
     fn db() -> Connection {
         let c = open_in_memory().unwrap();
         for (id, name, sep) in [
-            (1, "UK: NWN ONE LONDON", 0),
-            (2, "CA: CBO 1", 0),
+            (1, "UK: NORTHWIND ONE LONDON", 0),
+            (2, "CA: PRISM 1", 0),
             (3, "###### SPORTS ######", 1),
         ] {
             c.execute(
@@ -94,7 +94,7 @@ mod tests {
     fn query_before_rebuild_is_empty_not_a_panic() {
         let slot = Slot::new();
         assert!(!slot.is_built());
-        assert!(slot.query("nwn", 10).is_empty());
+        assert!(slot.query("northwind", 10).is_empty());
     }
 
     #[test]
@@ -102,7 +102,7 @@ mod tests {
         let slot = Slot::new();
         // The separator is excluded by `channel_names`, so two, not three.
         assert_eq!(slot.rebuild(&db()).unwrap(), 2);
-        assert_eq!(slot.query("nwnone", 10), vec![1]);
+        assert_eq!(slot.query("northwindone", 10), vec![1]);
     }
 
     #[test]
@@ -113,7 +113,7 @@ mod tests {
         c.execute("UPDATE channels SET deleted_at = 1 WHERE stream_id = 1", [])
             .unwrap();
         assert_eq!(slot.rebuild(&c).unwrap(), 1);
-        assert!(slot.query("nwnone", 10).is_empty());
+        assert!(slot.query("northwindone", 10).is_empty());
     }
 
     // The free functions over `INDEX` are covered end-to-end by the `search`

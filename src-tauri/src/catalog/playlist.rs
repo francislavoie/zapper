@@ -370,7 +370,7 @@ mod tests {
             .unwrap()
             .map(Result::unwrap)
             .collect();
-        assert_eq!(cats, ["UK", "News", "Panel", "Music", "Radio"]);
+        assert_eq!(cats, ["UK", "News", "Xtream", "Music", "Radio"]);
     }
 
     #[test]
@@ -404,7 +404,7 @@ mod tests {
         let c = open_in_memory().unwrap();
         write(&c, FIXTURE).unwrap();
         assert_eq!(
-            count(&c, "SELECT COUNT(*) FROM channels WHERE tvg_id = 'nwn1.uk'"),
+            count(&c, "SELECT COUNT(*) FROM channels WHERE tvg_id = 'nw1.uk'"),
             2
         );
     }
@@ -437,9 +437,9 @@ mod tests {
     fn tokened(token: &str) -> String {
         format!(
             "#EXTM3U\n\
-             #EXTINF:-1 tvg-id=\"nwn1.uk\" group-title=\"UK\",NWN One HD\n\
-             http://cdn.example/nwn1/index.m3u8?token={token}&e=1700000000\n\
-             #EXTINF:-1 group-title=\"News\",Continent News\n\
+             #EXTINF:-1 tvg-id=\"nw1.uk\" group-title=\"UK\",Northwind One HD\n\
+             http://cdn.example/nw1/index.m3u8?token={token}&e=1700000000\n\
+             #EXTINF:-1 group-title=\"News\",Eurowire\n\
              http://p.example:8080/live/user-{token}/pass-{token}/77.ts\n\
              http://cdn.example/unnamed/feed.ts?sig={token}\n"
         )
@@ -456,7 +456,7 @@ mod tests {
         // And the new URL is what plays.
         let url: String = c
             .query_row(
-                "SELECT stream_url FROM channels WHERE name = 'Continent News'",
+                "SELECT stream_url FROM channels WHERE name = 'Eurowire'",
                 [],
                 |r| r.get(0),
             )
@@ -481,22 +481,22 @@ mod tests {
     fn same_named_duplicates_get_distinct_ids_that_stay_put() {
         let text = |t: &str| {
             format!(
-                "#EXTM3U\n#EXTINF:-1 group-title=\"Sport\",Summit Sports\nhttp://s/main?token={t}\n\
+                "#EXTM3U\n#EXTINF:-1 group-title=\"Sport\",Cobalt Sports\nhttp://s/main?token={t}\n\
                  #EXTINF:-1 group-title=\"Sport\",Other\nhttp://s/o\n\
-                 #EXTINF:-1 group-title=\"Sport\",Summit Sports\nhttp://s/backup?token={t}\n"
+                 #EXTINF:-1 group-title=\"Sport\",Cobalt Sports\nhttp://s/backup?token={t}\n"
             )
         };
         let c = open_in_memory().unwrap();
         let s = write(&c, &text("one")).unwrap();
         assert_eq!(s.channels.inserted, 3);
         let first = ids_by_name(&c);
-        let sky: Vec<i64> = first
+        let cobalt: Vec<i64> = first
             .iter()
-            .filter(|(n, _)| n == "Summit Sports")
+            .filter(|(n, _)| n == "Cobalt Sports")
             .map(|(_, id)| *id)
             .collect();
-        assert_eq!(sky.len(), 2);
-        assert_ne!(sky[0], sky[1]);
+        assert_eq!(cobalt.len(), 2);
+        assert_ne!(cobalt[0], cobalt[1]);
         write(&c, &text("two")).unwrap();
         assert_eq!(ids_by_name(&c), first);
         // The first-listed copy keeps the first ordinal: it is the main feed
@@ -509,7 +509,7 @@ mod tests {
             )
             .unwrap();
         let ident = crate::m3u::ids::identity(&crate::m3u::Entry {
-            name: "Summit Sports".into(),
+            name: "Cobalt Sports".into(),
             named: true,
             group: Some("Sport".into()),
             ..Default::default()
@@ -526,7 +526,7 @@ mod tests {
         assert_eq!(s.with_catchup, 3);
         let (archive, days, mode): (i64, Option<i64>, Option<String>) = c
             .query_row(
-                "SELECT has_archive, archive_days, catchup_mode FROM channels WHERE name = 'Riviera 24'",
+                "SELECT has_archive, archive_days, catchup_mode FROM channels WHERE name = 'Meridian 24'",
                 [],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
@@ -552,15 +552,15 @@ mod tests {
         write(&c, FIXTURE).unwrap();
         let id: i64 = c
             .query_row(
-                "SELECT stream_id FROM channels WHERE name = 'Riviera 24'",
+                "SELECT stream_id FROM channels WHERE name = 'Meridian 24'",
                 [],
                 |r| r.get(0),
             )
             .unwrap();
         let row = stream_row(&c, id).unwrap().unwrap();
-        assert_eq!(row.url, "http://stream.example/f24/index.m3u8");
+        assert_eq!(row.url, "http://stream.example/m24/index.m3u8");
         assert_eq!(row.user_agent.as_deref(), Some("Mozilla/5.0 zapper-test"));
-        assert_eq!(row.referrer.as_deref(), Some("https://riviera24.example/"));
+        assert_eq!(row.referrer.as_deref(), Some("https://meridian24.example/"));
         assert_eq!(stream_row(&c, 1).unwrap(), None);
     }
 
@@ -572,8 +572,8 @@ mod tests {
         // group, so the same channel) and nothing else.
         let s = write(
             &c,
-            "#EXTM3U\n#EXTINF:-1 tvg-id=\"nwn1.uk\" group-title=\"UK\",NWN One HD\n\
-             http://stream.example/live/nwn1.m3u8\n",
+            "#EXTM3U\n#EXTINF:-1 tvg-id=\"nw1.uk\" group-title=\"UK\",Northwind One HD\n\
+             http://stream.example/live/nw1.m3u8\n",
         )
         .unwrap();
         assert_eq!((s.channels.updated, s.channels.deleted), (1, 7));
@@ -610,9 +610,9 @@ mod tests {
         let c = open_in_memory().unwrap();
         write(&c, FIXTURE).unwrap();
         c.execute_batch(
-            "INSERT INTO epg_channel_names VALUES ('NWN1.uk', 'NWN One');
-             INSERT INTO epg_channel_names VALUES ('riviera24.fr', 'Riviera 24');
-             INSERT INTO epg_channel_names VALUES ('continent news.eu', 'Continent News, English');",
+            "INSERT INTO epg_channel_names VALUES ('NW1.uk', 'Northwind One');
+             INSERT INTO epg_channel_names VALUES ('meridian24.fr', 'Meridian 24');
+             INSERT INTO epg_channel_names VALUES ('eurowire.eu', 'Eurowire, English');",
         )
         .unwrap();
         let (matched, total) = match_epg(&c).unwrap();
@@ -627,15 +627,15 @@ mod tests {
             )
             .unwrap()
         };
-        assert_eq!(epg("NWN One HD").as_deref(), Some("NWN1.uk"));
-        assert_eq!(epg("Riviera 24").as_deref(), Some("riviera24.fr"));
+        assert_eq!(epg("Northwind One HD").as_deref(), Some("NW1.uk"));
+        assert_eq!(epg("Meridian 24").as_deref(), Some("meridian24.fr"));
         assert_eq!(epg("Radio Uno"), None);
 
         // A refresh with nothing changed keeps the match rather than falling
         // back to the raw tvg-id until the guide phase runs again.
         write(&c, FIXTURE).unwrap();
-        assert_eq!(epg("NWN One HD").as_deref(), Some("NWN1.uk"));
-        assert_eq!(epg("Riviera 24").as_deref(), Some("riviera24.fr"));
+        assert_eq!(epg("Northwind One HD").as_deref(), Some("NW1.uk"));
+        assert_eq!(epg("Meridian 24").as_deref(), Some("meridian24.fr"));
     }
 
     #[test]
@@ -646,11 +646,11 @@ mod tests {
         assert_eq!((matched, total), (0, 8));
         let id: Option<String> = c
             .query_row(
-                "SELECT epg_channel_id FROM channels WHERE name = 'NWN One HD'",
+                "SELECT epg_channel_id FROM channels WHERE name = 'Northwind One HD'",
                 [],
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(id.as_deref(), Some("nwn1.uk"));
+        assert_eq!(id.as_deref(), Some("nw1.uk"));
     }
 }

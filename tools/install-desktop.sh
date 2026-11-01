@@ -61,7 +61,7 @@ if packaged && [[ $force -eq 0 ]]; then
   echo "instead. Development windows already get their icon from the package." >&2
   if [[ -e "$entry" ]]; then
     echo >&2
-    echo "A per-user entry from an earlier run is shadowing the package now:" >&2
+    echo "A per-user entry is shadowing the package now:" >&2
     echo "  $entry -> $(sed -n 's/^Exec=//p' "$entry")" >&2
     echo "Remove it with: tools/install-desktop.sh --uninstall" >&2
   fi

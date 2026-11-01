@@ -156,8 +156,7 @@ export function WatchBand({ videoRef }: WatchBandProps) {
       </div>
 
       {/* Beside the picture, not over it. Inside the slot it would be a
-          control drawn on top of the video — and the video is
-          the one surface in this app that nothing may be drawn on, because
+          control drawn on top of the video — and the video is the one surface in this app that nothing may be drawn on, because
           mpv is underneath and anything here is a hole punched in it.
 
           A separator rather than a button: it sets a value along an axis,

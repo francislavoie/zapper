@@ -146,7 +146,7 @@ impl Kind {
     /// What the kind is called where a person will read it.
     pub fn label(self) -> &'static str {
         match self {
-            Kind::Xtream => "an Xtream panel",
+            Kind::Xtream => "an Xtream server",
             Kind::M3u => "an M3U playlist",
             Kind::HdHomeRun => "an HDHomeRun tuner",
             Kind::Tvheadend => "a Tvheadend server",
@@ -222,7 +222,7 @@ pub fn load() -> Result<Credentials> {
     match load_account()? {
         Account::Xtream(c) => Ok(c),
         other => Err(anyhow!(
-            "the account is {}, not an Xtream panel",
+            "the account is {}, not an Xtream server",
             other.kind().label()
         )),
     }
@@ -373,7 +373,7 @@ mod tests {
     use super::*;
 
     /// Each test gets its own config root, so none of them can read — or
-    /// write over — the live account file on the machine running them.
+    /// write over — the real account file on the machine running them.
     fn in_temp_config<T>(f: impl FnOnce() -> T) -> T {
         use std::sync::Mutex;
         // `set_var` is process-wide; two of these at once would see each
@@ -411,7 +411,7 @@ mod tests {
 
     fn creds() -> Credentials {
         Credentials {
-            host: "http://panel.example:8080".into(),
+            host: "http://xtream.example:8080".into(),
             username: "user".into(),
             password: "secret".into(),
         }
@@ -438,7 +438,7 @@ mod tests {
         in_temp_config(|| {
             save(&creds()).expect("saving");
             let c = load_stored().expect("reading").expect("present");
-            assert_eq!(c.host, "http://panel.example:8080");
+            assert_eq!(c.host, "http://xtream.example:8080");
             assert_eq!(c.username, "user");
             assert_eq!(c.password, "secret");
             assert_eq!(summary().1, Source::Zapper);
@@ -516,7 +516,7 @@ mod tests {
     }
 
     #[test]
-    fn a_file_from_before_playlists_still_loads_as_a_panel() {
+    fn a_file_from_before_playlists_still_loads_as_xtream() {
         // Exactly what the first release wrote: no `kind`, no playlist fields.
         in_temp_config(|| {
             write_raw(r#"{"host":"http://old.example","username":"me","password":"pw"}"#);
@@ -525,7 +525,7 @@ mod tests {
                     assert_eq!((c.host.as_str(), c.username.as_str()), ("http://old.example", "me"));
                     assert_eq!(c.password, "pw");
                 }
-                _ => panic!("an old file is a panel account"),
+                _ => panic!("an old file is an Xtream account"),
             }
             assert_eq!(load().unwrap().username, "me");
             assert_eq!(on_file().kind, Kind::Xtream);

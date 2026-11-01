@@ -14,12 +14,16 @@ The first release.
 
 ### Added
 
-- Live TV from an Xtream Codes panel: the whole catalogue mirrored locally, so browsing and
-  search never wait on the network.
-- Playback through mpv: HDR tone-mapping, hardware decoding, live rewind, and an audio
-  compressor for loud adverts.
-- A programme guide, catch-up on channels that archive, and favourites earned from what you
-  actually watch.
+- Four kinds of source: an Xtream Codes server, an M3U playlist with an XMLTV guide, an
+  HDHomeRun tuner, or a Tvheadend server. The whole catalogue is mirrored locally, so browsing
+  and search never wait on the network.
+- Playback through libmpv: hardware decoding, HDR tone-mapping, a rewind buffer for live TV, and
+  an audio compressor for loud adverts.
+- A programme guide, catch-up on channels that archive, favourites, and categories that can be
+  pinned, sorted or hidden.
+- A picture that keeps playing in a corner while you browse, with its own transport controls.
+- Keyboard control throughout, a command palette, and a stats overlay for drops and stalls.
 - Updates: zapper checks for a new release once a day (Settings → Updates turns it off), and
   installs it from the menu's Check for updates, after checking it against the release's
   published checksums.
+- Settings → About lists the third-party licenses zapper ships under.

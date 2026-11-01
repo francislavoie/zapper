@@ -173,10 +173,10 @@ mod tests {
     fn separator_rows_are_detected() {
         let s: Channel =
             // Not a raw string: `"######` would close any `r#…"` delimiter.
-            serde_json::from_str("{\"stream_id\":1,\"name\":\"###### HORSE RACING ######\"}")
+            serde_json::from_str("{\"stream_id\":1,\"name\":\"###### DOCUMENTARY ######\"}")
                 .unwrap();
         assert!(s.is_separator());
-        let n: Channel = serde_json::from_str(r#"{"stream_id":2,"name":"CA: CBO 1"}"#).unwrap();
+        let n: Channel = serde_json::from_str(r#"{"stream_id":2,"name":"CA: PRISM 1"}"#).unwrap();
         assert!(!n.is_separator());
     }
 }

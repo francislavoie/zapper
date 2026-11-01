@@ -84,7 +84,7 @@ test("an unsorted list still resolves, because XMLTV order is not a promise", ()
   assert.equal(s.next.title, "c");
 });
 
-test("no programmes at all is not an error — it is 85% of channels", () => {
+test("no programmes at all is not an error — it is most channels", () => {
   assert.deepEqual(splitNowNext([], 150), { now: null, next: null });
 });
 

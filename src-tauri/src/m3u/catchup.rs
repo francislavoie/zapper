@@ -420,7 +420,7 @@ mod tests {
     }
 
     #[test]
-    fn xc_mode_builds_the_panel_timeshift_path() {
+    fn xc_mode_builds_the_xtream_timeshift_path() {
         let u = url(
             Mode::Xc,
             None,

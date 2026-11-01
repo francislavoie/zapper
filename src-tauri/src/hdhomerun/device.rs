@@ -339,18 +339,18 @@ mod tests {
         // Seven entries, one copy-protected.
         assert_eq!((l.entries.len(), l.protected), (6, 1));
         let (first, ident) = &l.entries[0];
-        assert_eq!(first.name, "KXMO-HD");
+        assert_eq!(first.name, "KXYZ-HD");
         assert_eq!(first.url, "http://192.168.1.50:5004/auto/v4.1");
         assert_eq!((first.chno, first.chno_label.as_deref()), (Some(4001), Some("4.1")));
         assert_eq!(first.tvg_id.as_deref(), Some("hdhr:4.1"));
         // Upper-cased, so a DeviceID typed either way is one tuner.
         assert_eq!(ident, "hdhr\u{0}10ABCDEF\u{0}4.1");
         // A whole number in a lineup with subchannels is on the same scale.
-        let whole = l.entries.iter().find(|(e, _)| e.name == "KXHL").unwrap();
+        let whole = l.entries.iter().find(|(e, _)| e.name == "WHOLE").unwrap();
         assert_eq!((whole.0.chno, whole.0.chno_label.as_deref()), (Some(9000), Some("9")));
         // 4.2 before 4.10.
         let num = |n: &str| l.entries.iter().find(|(e, _)| e.name == n).unwrap().0.chno;
-        assert!(num("KXMO-D2") < num("KXMO-D10"));
+        assert!(num("KXYZ-D2") < num("KXYZ-D10"));
     }
 
     #[test]
@@ -366,16 +366,16 @@ mod tests {
                 .clone()
                 .unwrap()
         };
-        assert_eq!(group("KXNG-HD"), FAVOURITES, "a favourite HD channel is a favourite");
-        assert_eq!(group("KXMO-HD"), HD);
-        assert_eq!(group("KXMO-D2"), SD);
+        assert_eq!(group("KWVU-HD"), FAVOURITES, "a favourite HD channel is a favourite");
+        assert_eq!(group("KXYZ-HD"), HD);
+        assert_eq!(group("KXYZ-D2"), SD);
     }
 
     #[test]
     fn a_cable_lineup_keeps_plain_numbers() {
         let cable: Vec<LineupEntry> = serde_json::from_str(
-            r#"[{"GuideNumber":"702","GuideName":"XSPN","URL":"http://h:5004/auto/v702"},
-                {"GuideNumber":703,"GuideName":"WNN","URL":"http://h:5004/auto/v703"}]"#,
+            r#"[{"GuideNumber":"702","GuideName":"HARBOUR SPORTS","URL":"http://h:5004/auto/v702"},
+                {"GuideNumber":703,"GuideName":"NEWSWIRE","URL":"http://h:5004/auto/v703"}]"#,
         )
         .unwrap();
         let l = entries("1", &cable);
@@ -386,7 +386,7 @@ mod tests {
     #[test]
     fn ids_belong_to_the_device_and_the_number_not_the_name() {
         let renamed: Vec<LineupEntry> = serde_json::from_str(
-            r#"[{"GuideNumber":"4.1","GuideName":"KXMO","URL":"http://192.168.1.50:5004/auto/v4.1"}]"#,
+            r#"[{"GuideNumber":"4.1","GuideName":"KXYZ","URL":"http://192.168.1.50:5004/auto/v4.1"}]"#,
         )
         .unwrap();
         let before = &entries("10ABCDEF", &lineup()).entries[0].1;

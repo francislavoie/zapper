@@ -155,7 +155,7 @@ pub(crate) fn failure_message(e: &anyhow::Error) -> String {
     }
     match http_status(e) {
         Some(code @ (401 | 403)) => {
-            format!("The panel refused this account (HTTP {code}). Check Settings → Account.")
+            format!("The server refused this account (HTTP {code}). Check Settings → Account.")
         }
         _ => scrub(&format!("{e:#}")),
     }
@@ -843,11 +843,11 @@ mod tests {
     #[test]
     fn credentials_never_reach_a_status_message() {
         let raw = "error sending request for url \
-                   (http://panel.example/xmltv.php?username=bob&password=hunter2): timed out";
+                   (http://xtream.example/xmltv.php?username=bob&password=hunter2): timed out";
         let safe = scrub(raw);
         assert!(!safe.contains("bob"), "username leaked: {safe}");
         assert!(!safe.contains("hunter2"), "password leaked: {safe}");
-        assert!(safe.contains("panel.example"), "host is useful, keep it: {safe}");
+        assert!(safe.contains("xtream.example"), "host is useful, keep it: {safe}");
         assert!(safe.contains("timed out"), "reason is useful, keep it: {safe}");
     }
 
@@ -928,16 +928,16 @@ mod tests {
         (cats, chans)
     }
 
-    /// One panel pass, through the same functions `run_once` uses.
-    fn panel_pass(c: &rusqlite::Connection, from: &str) {
+    /// One Xtream pass, through the same functions `run_once` uses.
+    fn xtream_pass(c: &rusqlite::Connection, from: &str) {
         let cats: Vec<crate::xtream::Category> = serde_json::from_str(
             r#"[{"category_id":"1","category_name":"News"},
                 {"category_id":"2","category_name":"Sport"}]"#,
         )
         .unwrap();
         let chans: Vec<crate::xtream::Channel> = serde_json::from_str(
-            r#"[{"stream_id":101,"name":"NWN News","category_id":"1"},
-                {"stream_id":102,"name":"Summit Sports","category_id":"2"}]"#,
+            r#"[{"stream_id":101,"name":"Northwind News","category_id":"1"},
+                {"stream_id":102,"name":"Cobalt Sports","category_id":"2"}]"#,
         )
         .unwrap();
         let switched = origin::changed(c, from).unwrap();
@@ -955,17 +955,17 @@ mod tests {
     }
 
     #[test]
-    fn panel_to_playlist_to_panel_leaves_nothing_of_the_playlist_behind() {
+    fn xtream_to_playlist_to_xtream_leaves_nothing_of_the_playlist_behind() {
         let c = crate::catalog::open_in_memory().unwrap();
-        let panel = origin::of_xtream(&crate::xtream::Credentials {
+        let server = origin::of_xtream(&crate::xtream::Credentials {
             host: "http://p.example".into(),
             username: "me".into(),
             password: "pw".into(),
         });
 
-        panel_pass(&c, &panel);
-        let panel_mirror = mirror(&c);
-        assert_eq!(panel_mirror, (vec!["1".into(), "2".into()], vec![101, 102]));
+        xtream_pass(&c, &server);
+        let xtream_mirror = mirror(&c);
+        assert_eq!(xtream_mirror, (vec!["1".into(), "2".into()], vec![101, 102]));
         crate::catalog::store::record_activity(&c, 101, 7200, true, 1_000).unwrap();
 
         playlist_pass(&c, "http://cdn.example/list.m3u?token=a");
@@ -976,28 +976,28 @@ mod tests {
         let watched = crate::catalog::store::watched(&c).unwrap();
         assert!(!watched.iter().any(|f| f.channel.stream_id == 101));
 
-        panel_pass(&c, &panel);
+        xtream_pass(&c, &server);
         // …and nothing of the playlist is left: no empty groups in the rail.
-        assert_eq!(mirror(&c), panel_mirror);
+        assert_eq!(mirror(&c), xtream_mirror);
         // The history was kept, not forgotten, and comes back with the channel.
         let watched = crate::catalog::store::watched(&c).unwrap();
-        let nwn = watched.iter().find(|f| f.channel.stream_id == 101).unwrap();
-        assert_eq!(nwn.watch_seconds, 7200);
+        let news = watched.iter().find(|f| f.channel.stream_id == 101).unwrap();
+        assert_eq!(news.watch_seconds, 7200);
     }
 
     #[test]
-    fn a_panel_that_filled_the_mirror_all_along_is_synced_as_before() {
-        // No pruning on an unchanged origin: a category the panel stopped
+    fn a_server_that_filled_the_mirror_all_along_is_synced_as_before() {
+        // No pruning on an unchanged origin: a category the server stopped
         // listing stays, exactly as `sync_categories` always left it.
         let c = crate::catalog::open_in_memory().unwrap();
-        let panel = "xtream:0000000000000001";
-        panel_pass(&c, panel);
+        let server = "xtream:0000000000000001";
+        xtream_pass(&c, server);
         c.execute("INSERT INTO categories (id, name) VALUES ('9', 'Legacy')", [])
             .unwrap();
-        panel_pass(&c, panel);
+        xtream_pass(&c, server);
         assert!(mirror(&c).0.contains(&"9".to_owned()));
-        // A different panel is a different catalogue.
-        panel_pass(&c, "xtream:0000000000000002");
+        // A different server is a different catalogue.
+        xtream_pass(&c, "xtream:0000000000000002");
         assert!(!mirror(&c).0.contains(&"9".to_owned()));
     }
 
@@ -1053,10 +1053,10 @@ mod tests {
             SyncPhase::Epg,
             SyncPhase::Failed,
         ] {
-            let s = dto(phase, "working", 50_414, Some(1_757_000_000));
+            let s = dto(phase, "working", 60_000, Some(1_757_000_000));
             assert_eq!(s.phase, phase);
             assert_eq!(s.message, "working");
-            assert_eq!(s.channels_total, 50_414);
+            assert_eq!(s.channels_total, 60_000);
             assert_eq!(s.last_synced, Some(1_757_000_000));
         }
     }

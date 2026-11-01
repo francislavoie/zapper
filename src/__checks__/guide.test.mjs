@@ -218,7 +218,7 @@ test("an archive that does not reach back that far cannot be asked to", () => {
 // ------------------------------------------------------------ virtual rows
 
 test("the guide virtualizes on the same arithmetic as the channel list", () => {
-  const total = 50_414;
+  const total = 60_000;
   const w = computeWindow(0, 800, GUIDE_ROW_HEIGHT, total, 8);
   assert.equal(w.totalHeight, total * GUIDE_ROW_HEIGHT);
   // A screen of rows plus overscan, not sixty thousand.

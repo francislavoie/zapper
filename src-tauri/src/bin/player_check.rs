@@ -15,7 +15,7 @@
 //! Audio is disabled outright (`ao=null`) before anything is loaded, not
 //! muted: this runs unattended and must never make noise.
 //!
-//! Many accounts allow only a single connection, so this opens one
+//! Many accounts allow only ONE concurrent connection, so this opens one
 //! stream, keeps it for the duration, and exits.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
@@ -326,19 +326,19 @@ async fn resolve_stream_id() -> Result<i64, String> {
             .parse()
             .map_err(|_| format!("ZAPPER_STREAM_ID is not a number: {id}"));
     }
-    let channels = zapper_lib::ipc::player_cmds::panel()?
+    let channels = zapper_lib::ipc::player_cmds::xtream()?
         .channels()
         .await
-        .map_err(|e| format!("asking the panel for a channel: {e}"))?;
-    // A named channel by preference. The first entry in a 50k listing is as
+        .map_err(|e| format!("asking the server for a channel: {e}"))?;
+    // A named channel by preference. The first entry in a huge listing is as
     // likely to be a dead novelty feed as anything, and a verification run
     // that fails on a bad channel says nothing about the code.
-    let want = std::env::var("ZAPPER_STREAM_NAME").unwrap_or_else(|_| "NWN ONE".to_owned());
+    let want = std::env::var("ZAPPER_STREAM_NAME").unwrap_or_else(|_| "NEWS".to_owned());
     let want = want.to_uppercase();
     let playable = || channels.iter().filter(|c| !c.is_separator());
     playable()
         .find(|c| c.name.to_uppercase().contains(&want))
         .or_else(|| playable().next())
         .map(|c| c.stream_id)
-        .ok_or_else(|| "the panel listed no playable channels".into())
+        .ok_or_else(|| "the server listed no playable channels".into())
 }

@@ -102,7 +102,7 @@ impl XtreamClient {
             .await
             .context("fetching the guide")?
             .error_for_status()
-            .context("the panel refused the guide")
+            .context("the server refused the guide")
     }
 
     pub async fn login(&self) -> Result<UserInfo> {

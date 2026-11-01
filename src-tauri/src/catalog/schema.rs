@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS categories (
     sort        INTEGER NOT NULL DEFAULT 0
 );
 
--- stream_id is INTEGER (64-bit). Panels issue ids above 2^31.
+-- stream_id is INTEGER (64-bit). Xtream servers issue ids above 2^31.
 CREATE TABLE IF NOT EXISTS channels (
     stream_id       INTEGER PRIMARY KEY,
     category_id     TEXT,
@@ -69,7 +69,7 @@ CREATE TABLE IF NOT EXISTS activity (
 
 -- The names an XMLTV guide gives its channels, for matching playlist entries
 -- whose tvg-id does not say which guide channel they are. Filled only for
--- M3U accounts: a panel names its guide channels itself.
+-- M3U accounts: an Xtream server names its guide channels itself.
 CREATE TABLE IF NOT EXISTS epg_channel_names (
     channel_id TEXT NOT NULL,
     name       TEXT NOT NULL,

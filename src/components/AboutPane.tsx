@@ -43,7 +43,7 @@ export function AboutPane({ onLicenses }: { onLicenses?: (open: boolean) => void
         {update.current ? <span className="about-version">version {update.current}</span> : null}
       </div>
       <p>
-        A live-TV player for IPTV: Xtream Codes panels, M3U playlists, HDHomeRun and Tvheadend.
+        A live-TV player for IPTV: Xtream Codes servers, M3U playlists, HDHomeRun and Tvheadend.
       </p>
       <p className="about-license">MIT License · © 2026 Francis Lavoie</p>
       <p>

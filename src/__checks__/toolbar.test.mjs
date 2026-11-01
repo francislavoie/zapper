@@ -57,9 +57,9 @@ test("the backend's message rides along while working, and is not the headline",
 });
 
 test("a failure promotes the backend's reason and offers no false calm", () => {
-  const s = statusLine(sync({ phase: "failed", message: "panel refused: 403" }), 0);
+  const s = statusLine(sync({ phase: "failed", message: "server refused: 403" }), 0);
   assert.equal(s.tone, "bad");
-  assert.equal(s.text, "panel refused: 403");
+  assert.equal(s.text, "server refused: 403");
   // A failure with nothing to say still says something.
   assert.equal(statusLine(sync({ phase: "failed" }), 0).text, "Sync failed");
 });

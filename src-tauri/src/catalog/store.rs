@@ -554,13 +554,13 @@ mod tests {
     #[test]
     fn programmes_include_straddling_and_exclude_outside() {
         let c = open_in_memory().unwrap();
-        chan(&c, 1, "NWN", Some("1"), Some(1));
-        with_epg_id(&c, 1, "nwn.uk");
-        epg_row(&c, "nwn.uk", 50, 150, "straddles the start");
-        epg_row(&c, "nwn.uk", 150, 250, "inside");
-        epg_row(&c, "nwn.uk", 250, 350, "straddles the end");
-        epg_row(&c, "nwn.uk", 400, 500, "wholly after");
-        epg_row(&c, "nwn.uk", 0, 40, "wholly before");
+        chan(&c, 1, "Northwind", Some("1"), Some(1));
+        with_epg_id(&c, 1, "northwind.uk");
+        epg_row(&c, "northwind.uk", 50, 150, "straddles the start");
+        epg_row(&c, "northwind.uk", 150, 250, "inside");
+        epg_row(&c, "northwind.uk", 250, 350, "straddles the end");
+        epg_row(&c, "northwind.uk", 400, 500, "wholly after");
+        epg_row(&c, "northwind.uk", 0, 40, "wholly before");
 
         let got = programmes(&c, &[1], 100, 300).unwrap();
         assert_eq!(got.len(), 1);
@@ -587,11 +587,11 @@ mod tests {
     #[test]
     fn now_playing_picks_the_containing_programme() {
         let c = open_in_memory().unwrap();
-        chan(&c, 1, "NWN", Some("1"), Some(1));
-        with_epg_id(&c, 1, "nwn.uk");
-        epg_row(&c, "nwn.uk", 0, 100, "earlier");
-        epg_row(&c, "nwn.uk", 100, 200, "now");
-        epg_row(&c, "nwn.uk", 200, 300, "next");
+        chan(&c, 1, "Northwind", Some("1"), Some(1));
+        with_epg_id(&c, 1, "northwind.uk");
+        epg_row(&c, "northwind.uk", 0, 100, "earlier");
+        epg_row(&c, "northwind.uk", 100, 200, "now");
+        epg_row(&c, "northwind.uk", 200, 300, "next");
 
         let np = now_playing(&c, &[1], 150).unwrap();
         assert_eq!(np.get(&1).map(|p| p.title.as_str()), Some("now"));
@@ -639,17 +639,17 @@ mod tests {
     #[test]
     fn guide_rows_clip_to_the_window_and_keep_the_straddlers() {
         let c = open_in_memory().unwrap();
-        chan(&c, 1, "NWN", Some("1"), Some(1));
-        with_epg_id(&c, 1, "nwn.uk");
-        epg_row(&c, "nwn.uk", 0, 40, "wholly before");
-        epg_row(&c, "nwn.uk", 50, 150, "straddles the start");
-        epg_row(&c, "nwn.uk", 150, 250, "inside");
-        epg_row(&c, "nwn.uk", 250, 350, "straddles the end");
-        epg_row(&c, "nwn.uk", 400, 500, "wholly after");
+        chan(&c, 1, "Northwind", Some("1"), Some(1));
+        with_epg_id(&c, 1, "northwind.uk");
+        epg_row(&c, "northwind.uk", 0, 40, "wholly before");
+        epg_row(&c, "northwind.uk", 50, 150, "straddles the start");
+        epg_row(&c, "northwind.uk", 150, 250, "inside");
+        epg_row(&c, "northwind.uk", 250, 350, "straddles the end");
+        epg_row(&c, "northwind.uk", 400, 500, "wholly after");
         // Abutting either edge is outside: the window is half open, and a
         // programme that ends as it opens is not in it.
-        epg_row(&c, "nwn.uk", 20, 100, "ends at the start");
-        epg_row(&c, "nwn.uk", 300, 400, "begins at the end");
+        epg_row(&c, "northwind.uk", 20, 100, "ends at the start");
+        epg_row(&c, "northwind.uk", 300, 400, "begins at the end");
 
         let got = guide_rows(&c, &[1], 100, 300).unwrap();
         let titles: Vec<&str> = got[0].programmes.iter().map(|p| p.title.as_str()).collect();
@@ -665,13 +665,13 @@ mod tests {
         c.execute(
             "INSERT INTO channels (stream_id, category_id, name, clean_name, num,
                                    logo_url, has_archive, archive_days)
-             VALUES (1,'1','NWN One','NWN One',1,'http://logo/1.png',1,7)",
+             VALUES (1,'1','Northwind One','Northwind One',1,'http://logo/1.png',1,7)",
             [],
         )
         .unwrap();
 
         let got = guide_rows(&c, &[1], 0, 1000).unwrap();
-        assert_eq!(got[0].name, "NWN One");
+        assert_eq!(got[0].name, "Northwind One");
         assert_eq!(got[0].logo_url.as_deref(), Some("http://logo/1.png"));
         assert!(got[0].has_archive);
         assert_eq!(got[0].archive_days, Some(7));
@@ -690,13 +690,13 @@ mod tests {
     #[test]
     fn watched_carries_the_channel_and_its_totals() {
         let c = open_in_memory().unwrap();
-        chan(&c, 1, "NWN One", Some("1"), Some(1));
+        chan(&c, 1, "Northwind One", Some("1"), Some(1));
         record_activity(&c, 1, 600, true, 1_000).unwrap();
         record_activity(&c, 1, 300, false, 2_000).unwrap();
 
         let got = watched(&c).unwrap();
         assert_eq!(got.len(), 1);
-        assert_eq!(got[0].channel.name, "NWN One");
+        assert_eq!(got[0].channel.name, "Northwind One");
         // Accumulated, not replaced.
         assert_eq!(got[0].watch_seconds, 900);
         assert_eq!(got[0].last_watched, Some(2_000));
