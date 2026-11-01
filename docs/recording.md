@@ -100,8 +100,8 @@ recording has a gap (a reconnect, a switch of feed). Turn it off in Settings →
 ## Network access
 
 Off by default: the service listens on `127.0.0.1` only, for the app on the same computer.
-**Settings → Recording → Network access** lets other devices on your network reach it — today
-its API, and the web client once there is one.
+**Settings → Recording → Network access** lets other devices on your network reach it: zapper's
+interface in a browser ([Web access](#web-access)), and its API.
 
 1. Under **Other devices**, set a **sign-in password** (at least 8 characters, typed twice).
    Network access cannot be turned on without one.
@@ -139,8 +139,11 @@ only on a network you trust.
   from another machine.
 - **Another device** signs in with the password (`POST /api/login`) and gets a token of its own:
   256 random bits, shown to it once. From then on it can do what the app does with recordings
-  and their settings, but never change network access, the password or the devices: those are the
-  app's alone.
+  and their settings, and read the channels and the guide, but never change network access, the
+  password or the devices: those are the app's alone.
+- **A browser** signs in the same way and gets the same kind of token, in a cookie its page cannot
+  read ([Web access](#web-access)). The cookie only ever stands for a device: the app's token in
+  one is refused.
 - From another machine, nothing at all is answered while network access is off, and nothing over
   plain HTTP while HTTPS is on (a `403` saying to use `https://`).
 - Nothing secret is kept as given. The password is kept only as an Argon2id hash
@@ -158,6 +161,56 @@ only on a network you trust.
 Android"), where it was last seen from, when it was last used and when it signed in. **Revoke**
 signs one out; its token stops working at once. **Changing the password** signs every device out.
 A device can also sign itself out (`POST /api/logout`).
+
+## Web access
+
+With network access on, opening one of the addresses Settings lists (`https://192.168.1.20:8796`)
+in a browser shows zapper's own interface, after a sign-in page asking for the password. On the
+service's own computer, `http://127.0.0.1:8796` works too, once a password is set.
+
+What a browser can do there:
+
+- browse the categories and channels, the guide and the favourites, and search channels (`a|b`
+  matches either) and programmes;
+- schedule a recording from the guide's or the search results' right-click menu, and see, cancel
+  and delete recordings (**Recordings** in the menu);
+- change what the service does with recordings (Settings → Recording), as the app can;
+- set the guide's hours per screen and how times are written, which that browser keeps for itself;
+- refresh the catalogue, and sign out.
+
+Watching is not there yet: choosing a channel says so. What belongs to the computer the app runs
+on is left out rather than shown and refused: the player and its settings, the window, the media
+keys, the updater, the provider account, backups, installing the service, opening a folder, and
+network access, the password and the devices.
+
+The interface is the app's, built into `zapper-server` (`src-tauri/build.rs`): the same version as
+the service, nothing installed beside it. Its files under `/assets/` are named by their contents
+and kept by the browser for a year; the page itself is asked for again each time.
+
+### How a browser is kept safe
+
+- **Signing in** (`POST /api/login` with `"cookie": true`) sets the device's token as a cookie
+  marked `HttpOnly` (the page's scripts cannot read it), `SameSite=Strict` (the browser sends it
+  only with requests from the service's own pages), `Path=/`, and `Secure` when signed in over
+  HTTPS. The answer carries the device, never the token. The browser is listed under **Other
+  devices** in the app's Settings like any other device, named after it ("Chrome on Android"), and
+  **Revoke** there signs it out; so does **Sign out** in the page, which also clears the cookie.
+  Wrong passwords are slowed down as for any device.
+- **Requests that change something** (anything but `GET` and `HEAD`) are refused (`403`) when
+  they rely on the cookie without the `X-Zapper: 1` header, which a page on another site cannot
+  add; when their `Origin` is not the address they were sent to; or when the browser says
+  (`Sec-Fetch-Site`) they came from another site. A request with a bearer token needs no header:
+  no page can attach one for it. Reading changes nothing.
+- **Every answer** carries a content security policy that runs only the service's own scripts and
+  styles (no inline script anywhere), loads images and data only from the service, and lets no
+  page frame it (`frame-ancestors 'none'`); and `X-Content-Type-Options: nosniff`,
+  `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`. Still no CORS headers.
+- **Provider addresses stay in the service.** A channel's logo is fetched by the service and served
+  as `/api/logo/{streamId}` (an image only, up to 1 MB, under a policy that runs nothing if opened
+  on its own), so the browser never sees the provider's URL, and stream addresses, which carry the
+  account's password, are never sent.
+- A browser that asks for a page over plain HTTP while HTTPS is on is sent to the same page over
+  HTTPS; the API is refused there, as before.
 
 ## How it behaves
 
@@ -260,9 +313,14 @@ Logs go to standard error: `journalctl --user -u zapper-server` when installed f
 ### Building it
 
 ```sh
+npm run build          # the interface it serves to browsers, compiled in
 cd src-tauri
 cargo build --release --no-default-features --features server --bin zapper-server
 ```
+
+The web interface is the frontend's build in `dist/`, compiled into the binary by `build.rs`: a
+release build refuses without it, and a debug build without it serves a page saying it was not
+built.
 
 `--no-default-features` leaves out the `gui` feature, so nothing of Tauri, WebKit, GTK or libmpv
 is linked; the server needs only `libavformat`, `libavcodec` and `libavutil`. It takes them from
@@ -306,8 +364,10 @@ already.
 
 HTTP with JSON bodies: on `127.0.0.1`, and on the network too while network access is on (HTTPS
 there, unless plain HTTP was chosen; see [Network access](#network-access)). Every request except
-`GET /api/version` and `POST /api/login` needs `Authorization: Bearer <token>`: the contents of
-`server-token` from this computer, or a device's token. Field names are camelCase; times are Unix
+`GET /api/version`, `GET /api/session` and `POST /api/login` needs `Authorization: Bearer <token>`:
+the contents of `server-token` from this computer, or a device's token; or, from a browser, the
+cookie signing in set (see [Web access](#web-access) for what requests relying on it must also
+carry). Field names are camelCase; times are Unix
 seconds; errors are `{"error": "…"}` with a 4xx status (`401` for a missing, wrong or revoked
 token, or the app's token from another machine; `403` for what no token changes).
 
@@ -327,14 +387,33 @@ Network access and devices:
 
 | Request | Who | Answer |
 |---|---|---|
-| `POST /api/login` | anyone | body `{password, name?}` → `201 {token, device: Device}`; `401` wrong password, `429` (with `Retry-After`) after too many, `403` when no password is set. `name` defaults to the browser's ("Firefox on Android") |
-| `POST /api/logout` | a device | signs the device presenting the token out |
+| `POST /api/login` | anyone | body `{password, name?, cookie?}` → `201 {token, device: Device}`; `401` wrong password, `429` (with `Retry-After`) after too many, `403` when no password is set. `name` defaults to the browser's ("Firefox on Android"). With `cookie: true` (and the `X-Zapper: 1` header) the token is set as the session cookie instead and the answer is `{device}` |
+| `GET /api/session` | anyone | `{signedIn: true, device}` for a signed-in device, `{signedIn: false}` otherwise, `{app: true}` for the app |
+| `POST /api/logout` | a device | signs the device presenting the token out, and clears a browser's cookie |
 | `GET /api/network` | the app | `{enabled, port, https, passwordSet, fingerprint?, addresses, error?, devices: [Device]}` |
 | `PUT /api/network` | the app | body `{enabled, port, https}`: moves the listeners at once and returns the same as `GET`. `400` for a port outside 1024–65535 or turning on without a password, `409` for a port in use (nothing changes) |
 | `PUT /api/network/password` | the app | body `{password}` (at least 8 characters): sets it, signs every device out, returns the same as `GET` |
 | `GET /api/devices` | the app | `[Device]`, most recently used first |
 | `DELETE /api/devices/{id}` | the app | signs that device out; returns the same as `GET /api/network` |
 | `POST /api/shutdown` | the app | body `{when: "idle" \| "now", restart?}`: stops (or with `restart` runs itself again) at the first idle moment, or now, finishing what it records into playable files. Answers first, with `GET /api/status` |
+
+The catalogue, for the web interface (the app or a device); channels come as the app's own
+`ChannelDto`, with `logoUrl` pointing at `/api/logo/{streamId}` rather than at the provider:
+
+| Request | Answer |
+|---|---|
+| `GET /api/categories` | `[{id, name, channelCount}]` |
+| `GET /api/channels?category=&offset=&limit=` | a page of a category's channels (no `category`: every channel), each with what is on now; `limit` at most 1000 |
+| `GET /api/channels/by-id?ids=1,2` | those channels, the ones that still exist |
+| `GET /api/channels/numbers` | `[[number, streamId]]`, in list order |
+| `GET /api/channels/search?q=&limit=` | channels matching `q` (`a\|b` matches either) |
+| `GET /api/channels/{id}/index?category=` | where the channel sits in that listing, or `null` |
+| `GET /api/programmes/search?q=&offset=&limit=` | airings whose title matches: on now, upcoming, then catch-up |
+| `GET /api/guide?ids=&from=&to=` | `[[streamId, [Programme]]]` overlapping the window (at most 500 channels) |
+| `GET /api/guide/rows?ids=&from=&to=` | the guide's rows: each channel's name, logo and programmes |
+| `GET /api/favourites?limit=` | the most watched channels; `DELETE /api/favourites/{id}` forgets one |
+| `GET /api/sync` | `{phase, message, channelsTotal, lastSynced}`; `POST /api/sync` asks for a refresh (`202`) |
+| `GET /api/logo/{id}` | the channel's logo, fetched by the service |
 
 "The app" is the `server-token` from a loopback address; a device's token is refused there
 (`403`). `Device` is `{id, name, userAgent, created, lastUsed?, address?}`; `fingerprint` is the
@@ -362,8 +441,9 @@ a recording is not capturing, such as "waiting for a free connection (1 of 1 in 
 
 ## Not yet
 
-- A web client: the app's interface in a browser, served by the service over network access
-  (streams proxied, so provider credentials never reach the browser).
+- Watching in the browser: the service proxying streams to it (so provider credentials never
+  reach the browser), sharing one connection between a recording and its viewers, and audio the
+  browser cannot play turned into audio it can.
 - Installing the service on macOS (a LaunchAgent); waking the computer from suspend to record
   (on Windows, a task per recording with a wake timer); recording on Windows while nobody is
   signed in.
