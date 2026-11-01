@@ -36,6 +36,7 @@ import {
 } from "../logic/format";
 import {
   VIDEO_WIDTH_DEFAULT,
+  fittedVideoWidth,
   isDefaultVideoWidth,
   widthAfterDrag,
 } from "../logic/videoSize";
@@ -50,7 +51,11 @@ export interface WatchBandProps {
 }
 
 export function WatchBand({ videoRef }: WatchBandProps) {
-  const { nowChannel, player, videoWidthRem } = useApp();
+  const app = useApp();
+  const { nowChannel, player } = app;
+  // The width on screen, not the one remembered: a drag starts from what
+  // the pointer is on, and the slot's pixels-per-rem is measured against it.
+  const videoWidthRem = fittedVideoWidth(app.videoWidthRem, app.videoRoomRem);
   const dispatch = useDispatch();
   const now = useClock();
   const { now: onNow, next } = useNowNext(nowChannel, now);
@@ -171,7 +176,7 @@ export function WatchBand({ videoRef }: WatchBandProps) {
         onPointerMove={onGripMove}
         onPointerUp={endGrip}
         onPointerCancel={endGrip}
-        onDoubleClick={() => dispatch({ type: "videoWidth", rem: VIDEO_WIDTH_DEFAULT })}
+        onDoubleClick={() => dispatch({ type: "videoWidth", rem: VIDEO_WIDTH_DEFAULT, reset: true })}
         onKeyDown={(e) => {
           // The same axis as the drag: left is bigger, because the slot
           // grows leftwards from a fixed right edge.
@@ -184,7 +189,7 @@ export function WatchBand({ videoRef }: WatchBandProps) {
             dispatch({ type: "videoWidth", rem: videoWidthRem - step });
           } else if (e.key === "Home") {
             e.preventDefault();
-            dispatch({ type: "videoWidth", rem: VIDEO_WIDTH_DEFAULT });
+            dispatch({ type: "videoWidth", rem: VIDEO_WIDTH_DEFAULT, reset: true });
           }
         }}
       >

@@ -275,6 +275,7 @@ pub fn install(window: &tauri::WebviewWindow) -> Result<Overlay> {
                 overlay.add(&container);
                 overlay.add_overlay(&webview);
                 win.add(&overlay);
+                drop_native_edge_resize(&webview);
                 escape_hatch(&win);
                 survive_a_failed_interface(&webview, &win);
             }
@@ -325,6 +326,46 @@ pub fn install(window: &tauri::WebviewWindow) -> Result<Overlay> {
         .with(|b| b.borrow_mut().take())
         .ok_or_else(|| anyhow!("with_webview did not run; not a GTK platform?"))?
         .map_err(|e| anyhow!(e))
+}
+
+/// Removes tauri-runtime-wry's undecorated-resize handler from the webview.
+///
+/// The page draws its own edge handles (`ResizeEdges.tsx`) and asks for
+/// resizes through `startResizeDragging`. Tauri's native handler, attached to
+/// the webview's `button-press-event` and `touch-event`, did the same job
+/// worse, and the two together would issue competing resize requests:
+///
+/// - it covers only the outer 5px, and WebKit owns the cursor, so nothing
+///   ever showed that an edge was grabbable;
+/// - it returns `Proceed`, so WebKit processes the same press after the
+///   resize has been handed to the compositor. Observed under a headless
+///   mutter: the grab started (configure events followed) but never tracked
+///   the pointer, and input stayed wedged until the next press.
+///
+/// Only *connected* handlers are removed. WebKit's own input handling is the
+/// class closure for these signals, which a disconnect cannot touch, and
+/// nothing else in wry or this app connects to them before this runs.
+fn drop_native_edge_resize(webview: &webkit2gtk::WebView) {
+    use glib::translate::{IntoGlib, ToGlibPtr};
+    for signal in ["button-press-event", "touch-event"] {
+        let Some(id) = glib::subclass::SignalId::lookup(signal, gtk::Widget::static_type()) else {
+            continue;
+        };
+        let instance: *mut glib::gobject_ffi::GObject =
+            webview.upcast_ref::<glib::Object>().to_glib_none().0;
+        let removed = unsafe {
+            glib::gobject_ffi::g_signal_handlers_disconnect_matched(
+                instance as *mut _,
+                glib::gobject_ffi::G_SIGNAL_MATCH_ID,
+                id.into_glib(),
+                0,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        tracing::debug!("removed {removed} native {signal} handler(s) from the webview");
+    }
 }
 
 /// Paints the toplevel black, because the theme's colour is not black.

@@ -5,6 +5,8 @@ dist-app/
 *.mp4
 *.ts
 !src/**/*.ts
+# `*.ts` is for MPEG-TS streams; config files are TypeScript too.
+!/vite.config.ts
 .env
 /dist
 

@@ -258,7 +258,11 @@ select option {
   display: flex;
   align-items: stretch;
   gap: 0.375rem;
-  padding: var(--edge-inset) var(--edge-inset) 0;
+  /* The bottom matches the top less the 1px border, so the controls sit on
+     the bar's visual centre. With no bottom inset they centred in the space
+     below the top ring and sat 3px low. 38 - 6 - 5 - 1 leaves exactly the
+     26px a .tb-btn is tall. */
+  padding: var(--edge-inset) var(--edge-inset) calc(var(--edge-inset) - 1px);
   background: var(--bg-2);
   border-bottom: 1px solid var(--line);
 }
@@ -314,8 +318,10 @@ select option {
   position: absolute;
   left: 50%;
   transform: translateX(-50%);
-  top: var(--edge-inset);
-  height: calc(var(--toolbar-h) - var(--edge-inset));
+  /* Centred on the whole bar, not below the resize ring: it takes no pointer
+     events, so it has no reason to keep clear of the edge. */
+  top: 0;
+  height: calc(var(--toolbar-h) - 1px);
   display: flex;
   align-items: center;
   pointer-events: none;
@@ -2911,3 +2917,47 @@ button.prog:hover {
   user-select: text;
   -webkit-user-select: text;
 }
+
+/* Window resize handles — see ResizeEdges.tsx. Invisible, above everything,
+   and no wider than --edge-inset so they never cover a control: the toolbar
+   keeps every button inside that ring. Corners are larger than edges because
+   a diagonal grab is aimed at a point, not a line. */
+.resize-edges {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1000;
+}
+.resize-edge {
+  position: absolute;
+  pointer-events: auto;
+}
+.resize-n,
+.resize-s {
+  left: 12px;
+  right: 12px;
+  height: var(--edge-inset);
+  cursor: ns-resize;
+}
+.resize-n { top: 0; }
+.resize-s { bottom: 0; }
+.resize-e,
+.resize-w {
+  top: 12px;
+  bottom: 12px;
+  width: var(--edge-inset);
+  cursor: ew-resize;
+}
+.resize-e { right: 0; }
+.resize-w { left: 0; }
+.resize-ne,
+.resize-nw,
+.resize-se,
+.resize-sw {
+  width: 12px;
+  height: 12px;
+}
+.resize-ne { top: 0; right: 0; cursor: nesw-resize; }
+.resize-sw { bottom: 0; left: 0; cursor: nesw-resize; }
+.resize-nw { top: 0; left: 0; cursor: nwse-resize; }
+.resize-se { bottom: 0; right: 0; cursor: nwse-resize; }

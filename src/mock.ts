@@ -884,6 +884,9 @@ export const mockWindow = {
   startDragging: async () => {
     recordWindowCall("startDragging");
   },
+  startResizeDragging: async (direction: string) => {
+    recordWindowCall(`startResizeDragging:${direction}`);
+  },
   minimise: async () => {
     recordWindowCall("minimise");
   },

@@ -61,6 +61,39 @@ export function widthAfterDrag(
   return clampVideoWidth(startRem - deltaPx / pxPerRem);
 }
 
+/** The most of the stage's height the band may take. Past half, the list
+ *  under it is the thing that has been squeezed out. */
+export const VIDEO_BAND_SHARE = 0.5;
+
+/** What has to stay beside the picture for the channel's name and programme
+ *  to be readable, in rem. */
+export const VIDEO_INFO_MIN = 18;
+
+/** The widest picture this stage has room for, in rem, or `Infinity` when the
+ *  stage has not been measured yet.
+ *
+ *  This is a ceiling on what is *drawn*, never on what is *remembered*. The
+ *  stored width is the size somebody chose; a window opened smaller than last
+ *  time draws less of it, and the full size comes back as soon as there is
+ *  room again. Clamping the stored value instead meant one launch in a small
+ *  window quietly threw the chosen size away. */
+export function videoRoomRem(stageWidthRem: number, stageHeightRem: number): number {
+  if (!(stageWidthRem > 0) || !(stageHeightRem > 0)) return Infinity;
+  const byHeight = (stageHeightRem * VIDEO_BAND_SHARE * 16) / 9;
+  const byWidth = stageWidthRem - VIDEO_INFO_MIN;
+  // Down to the quarter: rounding up could hand back a width that does not
+  // fit, and a value that moves in quarter steps re-renders only when it
+  // has actually changed.
+  return Math.floor(Math.min(byHeight, byWidth) * 4) / 4;
+}
+
+/** The width actually drawn: the chosen one, unless the stage cannot hold
+ *  it. Never below the minimum, even in a window too small for that — a
+ *  picture too small to see is not a smaller picture, it is a broken one. */
+export function fittedVideoWidth(preferredRem: number, roomRem: number): number {
+  return clampVideoWidth(Math.min(clampVideoWidth(preferredRem), roomRem));
+}
+
 /** Whether a width is the default, for the reset affordance. Not an equality
  *  test: the value round-trips through a string. */
 export function isDefaultVideoWidth(rem: number): boolean {

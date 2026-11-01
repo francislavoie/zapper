@@ -116,8 +116,10 @@ pub async fn sync_status() -> Result<SyncStatusDto, String> {
 ///
 /// `app` is injected by Tauri and does not appear in the JS argument list.
 #[tauri::command]
-pub async fn sync_now(app: tauri::AppHandle) -> Result<(), String> {
-    sync_engine::spawn(app);
+pub async fn sync_now() -> Result<(), String> {
+    // Through the periodic loop, not a pass of its own: one schedule, one
+    // pass at a time, and a retry resets the failure backoff.
+    sync_engine::request_now();
     Ok(())
 }
 
@@ -463,6 +465,8 @@ pub async fn set_account(
     })
     .map_err(|e| e.to_string())?;
     crate::ipc::player_cmds::forget_panel();
+    // New credentials are the thing a refused sync was waiting for.
+    sync_engine::request_now();
     Ok(())
 }
 

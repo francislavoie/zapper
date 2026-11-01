@@ -28,6 +28,7 @@ fn set_app_id() {}
 pub mod catalog;
 pub mod ipc;
 pub mod surface;
+pub mod window_state;
 pub mod xtream;
 
 /// The name the desktop matches this window to.
@@ -86,6 +87,9 @@ pub fn run() {
             let window = app
                 .get_webview_window("main")
                 .ok_or("no main window")?;
+            // Before anything is drawn: the event loop has not run yet, so the
+            // window opens at the remembered size rather than jumping to it.
+            window_state::install(&window);
             // Video lives beneath the webview, not in it. Failing here is
             // fatal: a running app with no surface is worse than no app.
             let overlay = surface::overlay::install(&window)?;

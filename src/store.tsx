@@ -114,6 +114,10 @@ export interface State {
    *  rather than in a component because resizing it moves the slot the video
    *  rect is measured from, so mpv has to be told. */
   videoWidthRem: number;
+  /** The widest picture the stage has room for, in rem; `Infinity` until
+   *  measured. What is drawn is the chosen width capped by this — see
+   *  `fittedVideoWidth` — so a smaller window never overwrites the choice. */
+  videoRoomRem: number;
   /** How wide the category/favourites rail is, in rem. Local like zoom. */
   railWidthRem: number;
   /** Whether watching should put the picture across the top with the guide
@@ -182,6 +186,7 @@ export const initialState: State = {
   // rather than at 100% for a frame.
   zoom: loadZoom(),
   videoWidthRem: loadVideoWidth(),
+  videoRoomRem: Infinity,
   railWidthRem: loadRailWidth(),
   stacked: loadStacked(),
   toasts: [],
@@ -215,7 +220,11 @@ export type Action =
   | { type: "settingsSaveError"; message: string | null }
   | { type: "zoom"; value: number }
   | { type: "zoomStep"; command: ZoomCommand }
-  | { type: "videoWidth"; rem: number }
+  /** A width somebody chose. Capped by the room there is, because a drag
+   *  can only show what fits; `reset` is the exception, since going back to
+   *  the default is a choice about any window, not this one. */
+  | { type: "videoWidth"; rem: number; reset?: boolean }
+  | { type: "videoRoom"; rem: number }
   | { type: "railWidth"; rem: number }
   | { type: "toast"; text: string; kind?: "error" | "info" }
   | { type: "dismissToast"; id: number };
@@ -314,7 +323,14 @@ export function reducer(state: State, action: Action): State {
       // you are doing now.
       return { ...state, nowChannel: action.channel };
     case "videoWidth":
-      return { ...state, videoWidthRem: clampVideoWidth(action.rem) };
+      return {
+        ...state,
+        videoWidthRem: clampVideoWidth(
+          action.reset ? action.rem : Math.min(action.rem, state.videoRoomRem),
+        ),
+      };
+    case "videoRoom":
+      return action.rem === state.videoRoomRem ? state : { ...state, videoRoomRem: action.rem };
     case "railWidth":
       return { ...state, railWidthRem: clampRailWidth(action.rem) };
     case "opening":

@@ -14,10 +14,23 @@
 import { inTauri } from "./backend";
 import { mockWindow } from "./mock";
 
+/** An edge or corner of the window, in Tauri's own spelling. */
+export type ResizeDirection =
+  | "North"
+  | "South"
+  | "East"
+  | "West"
+  | "NorthEast"
+  | "NorthWest"
+  | "SouthEast"
+  | "SouthWest";
+
 export interface WindowControls {
   /** Hand the drag to the compositor. The mouse-up that ends it is delivered
    *  to the window manager, not to us, so no click follows it. */
   startDragging(): Promise<void>;
+  /** The same hand-off, for resizing from an edge or corner. */
+  startResizeDragging(direction: ResizeDirection): Promise<void>;
   minimise(): Promise<void>;
   toggleMaximise(): Promise<void>;
   isMaximised(): Promise<boolean>;
@@ -30,6 +43,7 @@ const win = async () => (await import("@tauri-apps/api/window")).getCurrentWindo
 
 const tauriWindow: WindowControls = {
   startDragging: async () => (await win()).startDragging(),
+  startResizeDragging: async (direction) => (await win()).startResizeDragging(direction),
   minimise: async () => (await win()).minimize(),
   toggleMaximise: async () => (await win()).toggleMaximize(),
   isMaximised: async () => (await win()).isMaximized(),

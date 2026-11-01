@@ -12,6 +12,8 @@ import {
   VIDEO_WIDTH_MAX,
   VIDEO_WIDTH_MIN,
   clampVideoWidth,
+  fittedVideoWidth,
+  videoRoomRem,
   isDefaultVideoWidth,
   parseVideoWidth,
   widthAfterDrag,
@@ -80,4 +82,35 @@ test("the reset affordance knows when there is nothing to reset", () => {
   // Round-tripped through a string, which is how it comes back from storage.
   assert.equal(isDefaultVideoWidth(parseVideoWidth(String(VIDEO_WIDTH_DEFAULT))), true);
   assert.equal(isDefaultVideoWidth(VIDEO_WIDTH_DEFAULT + 2), false);
+});
+
+test("a smaller window draws less of the picture without forgetting its size", () => {
+  // Chosen big in a big window: 60rem.
+  const chosen = 60;
+  // Reopened in a ~900x560 window: about 56rem x 33rem of stage.
+  const room = videoRoomRem(56, 33);
+  const shown = fittedVideoWidth(chosen, room);
+  assert.ok(shown < chosen, "the oversized picture was drawn anyway");
+  // Never more than half the stage's height...
+  assert.ok((shown * 9) / 16 <= 33 * 0.5 + 1e-9, `band too tall: ${shown}`);
+  // ...and the information beside it keeps its column.
+  assert.ok(56 - shown >= 18 - 1e-9, `info column crushed: ${shown}`);
+  // The chosen width is untouched: back in a big window it all comes back.
+  assert.equal(fittedVideoWidth(chosen, videoRoomRem(150, 90)), chosen);
+});
+
+test("an unmeasured stage puts no ceiling on the picture", () => {
+  assert.equal(videoRoomRem(0, 0), Infinity);
+  assert.equal(videoRoomRem(Number.NaN, 40), Infinity);
+  assert.equal(fittedVideoWidth(30, Infinity), 30);
+});
+
+test("a window too small for even the minimum still draws the minimum", () => {
+  assert.equal(fittedVideoWidth(30, videoRoomRem(20, 10)), VIDEO_WIDTH_MIN);
+});
+
+test("room is quantised down, so what is drawn always fits", () => {
+  const room = videoRoomRem(100, 33.3);
+  assert.equal(room * 4, Math.floor(room * 4));
+  assert.ok((room * 9) / 16 <= 33.3 * 0.5);
 });

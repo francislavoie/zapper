@@ -7,6 +7,8 @@ use anyhow::{Context, Result};
 use std::future::Future;
 use std::io::{BufReader, Read};
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use crate::catalog::{db, index, status, sync};
 use crate::ipc::types::{events, SyncPhase, SyncStatusDto};
@@ -87,13 +89,75 @@ fn publish<S: StatusSink>(sink: &S, phase: SyncPhase, message: impl Into<String>
 
 type Step<'a> = Pin<Box<dyn Future<Output = Result<String>> + Send + 'a>>;
 
-/// Runs every step, in order, whatever happens.
+/// The HTTP status a failure carries, if any layer of it came from the server.
+fn http_status(e: &anyhow::Error) -> Option<u16> {
+    e.chain()
+        .find_map(|c| c.downcast_ref::<reqwest::Error>())
+        .and_then(|r| r.status())
+        .map(|s| s.as_u16())
+        .or_else(|| e.chain().find_map(|c| c.downcast_ref::<HttpRefusal>()).map(|r| r.0))
+}
+
+/// A stand-in for a refusing response in tests, where building a real
+/// `reqwest::Error` with a status is not possible.
+#[derive(Debug)]
+pub struct HttpRefusal(pub u16);
+impl std::fmt::Display for HttpRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "HTTP status {}", self.0)
+    }
+}
+impl std::error::Error for HttpRefusal {}
+
+/// Whether the server refused us outright rather than failing to answer.
+///
+/// 401 and 403 are about the account, not the endpoint: every later phase
+/// sends the same credentials and will be refused the same way, so asking
+/// again only adds load on a server that has already said no — and some
+/// servers ban an address that keeps knocking.
+fn is_refusal(e: &anyhow::Error) -> bool {
+    matches!(http_status(e), Some(401 | 403))
+}
+
+/// What a person should read when a phase fails.
+fn failure_message(e: &anyhow::Error) -> String {
+    match http_status(e) {
+        Some(code @ (401 | 403)) => {
+            format!("The panel refused this account (HTTP {code}). Check Settings → Account.")
+        }
+        _ => scrub(&format!("{e:#}")),
+    }
+}
+
+/// How a pass went, which decides how long until the next one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PassOutcome {
+    /// At least one phase landed.
+    Refreshed,
+    /// Nothing landed, but nothing said no either: a timeout, a 5xx.
+    Failed,
+    /// The server refused the credentials.
+    Refused,
+}
+
+/// Runs the steps in order.
 ///
 /// A failing phase emits `Failed` and is logged, but the ones after it still
-/// run: a panel that will not serve the large guide should not also cost the
-/// channel list. Returns how many phases succeeded.
-async fn run_steps<'a, S: StatusSink>(sink: &S, steps: Vec<(SyncPhase, Step<'a>)>) -> usize {
+/// run: a server that will not serve the guide should not also cost the channel
+/// list. The exception is a refusal (401/403), which ends the pass:
+/// the same credentials go with every phase.
+///
+/// When nothing succeeded the pass ends on `Failed` rather than `Idle`.
+/// Ending on `Idle` would make a failing pass read as failure, then "Synced 3
+/// days ago", then failure again on the next try — the toolbar flickering
+/// between the two for as long as the server kept refusing.
+async fn run_steps<'a, S: StatusSink>(
+    sink: &S,
+    steps: Vec<(SyncPhase, Step<'a>)>,
+) -> PassOutcome {
+    let total = steps.len();
     let mut ok = 0;
+    let mut refused = false;
     for (phase, work) in steps {
         publish(sink, phase, format!("{phase:?}"));
         match work.await {
@@ -102,17 +166,24 @@ async fn run_steps<'a, S: StatusSink>(sink: &S, steps: Vec<(SyncPhase, Step<'a>)
                 publish(sink, phase, message);
             }
             Err(e) => {
-                let message = scrub(&format!("{e:#}"));
-                tracing::warn!("sync phase {phase:?} failed: {message}");
-                publish(sink, SyncPhase::Failed, message);
+                tracing::warn!("sync phase {phase:?} failed: {}", scrub(&format!("{e:#}")));
+                publish(sink, SyncPhase::Failed, failure_message(&e));
+                if is_refusal(&e) {
+                    refused = true;
+                    break;
+                }
             }
         }
     }
     if ok > 0 {
         status::mark_synced(now());
+        publish(sink, SyncPhase::Idle, format!("{ok} of {total} phases refreshed"));
+        PassOutcome::Refreshed
+    } else if refused {
+        PassOutcome::Refused
+    } else {
+        PassOutcome::Failed
     }
-    publish(sink, SyncPhase::Idle, format!("{ok} of 3 phases refreshed"));
-    ok
 }
 
 async fn step_categories(client: &XtreamClient) -> Result<String> {
@@ -195,8 +266,30 @@ async fn step_epg(client: &XtreamClient) -> Result<String> {
     Ok(format!("{programmes} programmes"))
 }
 
+/// One pass at a time, however it was asked for.
+///
+/// The periodic loop and the toolbar's retry each start passes, and without
+/// this a click during a pass would run two against the server at once.
+static RUNNING: AtomicBool = AtomicBool::new(false);
+
+/// Wakes the periodic loop early: a retry, or a changed account.
+static WAKE: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+struct RunningGuard;
+impl Drop for RunningGuard {
+    fn drop(&mut self) {
+        RUNNING.store(false, Ordering::SeqCst);
+    }
+}
+
 /// Categories, then channels (and the index), then the guide.
-pub async fn run_once(app: &tauri::AppHandle) -> Result<()> {
+///
+/// `None` when a pass was already running, so this one did not start.
+pub async fn run_once(app: &tauri::AppHandle) -> Result<Option<PassOutcome>> {
+    if RUNNING.swap(true, Ordering::SeqCst) {
+        return Ok(None);
+    }
+    let _running = RunningGuard;
     let creds = match crate::catalog::credentials::load() {
         Ok(c) => c,
         Err(e) => {
@@ -207,7 +300,7 @@ pub async fn run_once(app: &tauri::AppHandle) -> Result<()> {
         }
     };
     let client = XtreamClient::new(creds)?;
-    run_steps(
+    let outcome = run_steps(
         app,
         vec![
             (SyncPhase::Categories, Box::pin(step_categories(&client))),
@@ -216,10 +309,19 @@ pub async fn run_once(app: &tauri::AppHandle) -> Result<()> {
         ],
     )
     .await;
-    Ok(())
+    Ok(Some(outcome))
 }
 
-/// Fire and forget. Startup must never wait on this.
+/// Asks for a pass now, through the periodic loop.
+///
+/// Going through the loop rather than spawning a pass of its own keeps every
+/// pass on one schedule, so a retry also resets the backoff instead of
+/// racing it.
+pub fn request_now() {
+    WAKE.notify_one();
+}
+
+/// Fire and forget, for callers with no periodic loop (the harnesses).
 pub fn spawn(app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
         if let Err(e) = run_once(&app).await {
@@ -269,37 +371,85 @@ pub fn wait_before_next(
     interval.saturating_sub(age)
 }
 
-/// How long to wait before trying again after a failed pass.
+/// How long to wait after the `n`th consecutive failed pass (1-based).
 ///
-/// A failure leaves `last_synced` alone, so without this the loop would find
-/// the mirror still stale and retry immediately, forever, as fast as the
-/// panel could refuse it.
-const RETRY_AFTER_FAILURE: std::time::Duration = std::time::Duration::from_secs(300);
+/// A failure leaves `last_synced` alone, so without a wait the loop finds the
+/// mirror still stale and goes straight back to the server: a refusing
+/// server would be asked again as fast as it could answer, with the toolbar
+/// flickering through every phase each time.
+///
+/// Transient failures start at a minute and double to an hour. A refusal
+/// starts at fifteen minutes: the credentials will not fix themselves, and
+/// saving new ones or pressing retry wakes the loop at once anyway.
+pub fn backoff(consecutive_failures: u32, refused: bool) -> Duration {
+    let base: u64 = if refused { 15 * 60 } else { 60 };
+    let cap: u64 = 60 * 60;
+    let shift = consecutive_failures.saturating_sub(1).min(16);
+    Duration::from_secs(base.saturating_mul(1u64 << shift).min(cap))
+}
+
+/// Sleeps for `d`, or until someone asks for a pass. True if woken early.
+async fn wait_or_wake(d: Duration) -> bool {
+    tokio::select! {
+        _ = tokio::time::sleep(d) => false,
+        _ = WAKE.notified() => true,
+    }
+}
 
 /// Syncs when the mirror is due, then again on the configured interval.
 ///
 /// The interval is re-read each cycle rather than captured once, so changing
-/// it in settings takes effect without a restart.
+/// it in settings takes effect without a restart. Failed passes back off
+/// (see [`backoff`]); `request_now` cuts any wait short.
 pub fn spawn_periodic(app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
+        let mut failures: u32 = 0;
+        // Set when the loop was woken on purpose: run now, whatever the
+        // schedule says.
+        let mut forced = false;
         loop {
-            let hours = crate::catalog::settings::load_or_default().sync_interval_hours;
-            let interval = interval_from_settings(hours);
-            let wait = wait_before_next(crate::catalog::status::last_synced(), now(), interval);
-            if !wait.is_zero() {
-                tracing::info!(
-                    "mirror is current; next sync in {} minutes",
-                    wait.as_secs() / 60
-                );
-                tokio::time::sleep(wait).await;
-                continue;
+            if !forced && failures == 0 {
+                let hours = crate::catalog::settings::load_or_default().sync_interval_hours;
+                let interval = interval_from_settings(hours);
+                let wait = wait_before_next(crate::catalog::status::last_synced(), now(), interval);
+                if !wait.is_zero() {
+                    tracing::info!(
+                        "mirror is current; next sync in {} minutes",
+                        wait.as_secs() / 60
+                    );
+                    forced = wait_or_wake(wait).await;
+                    continue;
+                }
             }
+            forced = false;
 
-            if let Err(e) = run_once(&app).await {
-                tracing::warn!("sync aborted: {}", scrub(&format!("{e:#}")));
-                // `last_synced` is untouched by a failure, so the check above
-                // would send us straight back here.
-                tokio::time::sleep(RETRY_AFTER_FAILURE).await;
+            let refused = match run_once(&app).await {
+                Ok(Some(PassOutcome::Refreshed)) => {
+                    failures = 0;
+                    continue;
+                }
+                // A harness's pass is running; let it finish.
+                Ok(None) => {
+                    forced = wait_or_wake(Duration::from_secs(5)).await;
+                    continue;
+                }
+                Ok(Some(PassOutcome::Refused)) => true,
+                Ok(Some(PassOutcome::Failed)) => false,
+                Err(e) => {
+                    // No usable credentials at all. Nothing will change until
+                    // some are saved, which wakes the loop.
+                    tracing::warn!("sync aborted: {}", scrub(&format!("{e:#}")));
+                    true
+                }
+            };
+            failures = failures.saturating_add(1);
+            let wait = backoff(failures, refused);
+            tracing::info!("sync failed; retrying in {} minutes", wait.as_secs() / 60);
+            if wait_or_wake(wait).await {
+                // Asked for explicitly — a retry, or new credentials — so the
+                // slate is clean and the pass runs now.
+                failures = 0;
+                forced = true;
             }
         }
     });
@@ -392,7 +542,7 @@ mod tests {
         .await;
 
         assert_eq!(ran.load(Ordering::SeqCst), 3, "a failure aborted later phases");
-        assert_eq!(ok, 2);
+        assert_eq!(ok, PassOutcome::Refreshed);
         // Each phase announces itself before it runs — a large channel fetch
         // is slow enough that the UI needs to say so — and again with what it
         // did, or as Failed.
@@ -413,6 +563,71 @@ mod tests {
             "the failure reason was swallowed: {:?}",
             rec.messages()
         );
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn a_refusal_ends_the_pass_and_stays_on_screen() {
+        let _guard = status::test_lock();
+        db::install_test_db();
+        let ran = Arc::new(AtomicUsize::new(0));
+        let refuse = |r: Arc<AtomicUsize>| async move {
+            r.fetch_add(1, Ordering::SeqCst);
+            Err::<String, _>(anyhow::Error::new(HttpRefusal(403)).context("fetching categories"))
+        };
+
+        let rec = Recorder::default();
+        let outcome = run_steps(
+            &rec,
+            vec![
+                (SyncPhase::Categories, Box::pin(refuse(ran.clone()))),
+                (SyncPhase::Channels, Box::pin(refuse(ran.clone()))),
+                (SyncPhase::Epg, Box::pin(refuse(ran.clone()))),
+            ],
+        )
+        .await;
+
+        assert_eq!(outcome, PassOutcome::Refused);
+        // Same credentials for every phase: asking twice more is just load.
+        assert_eq!(ran.load(Ordering::SeqCst), 1, "kept knocking after a 403");
+        // Ends on Failed. A trailing Idle would flip the bar back to
+        // "Synced …" and make a refusing server flicker the toolbar on every
+        // retry.
+        assert_eq!(rec.phases(), [SyncPhase::Categories, SyncPhase::Failed]);
+        assert!(rec.messages().last().unwrap().contains("refused this account"));
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn a_pass_with_nothing_landed_is_a_failure() {
+        let _guard = status::test_lock();
+        db::install_test_db();
+        let rec = Recorder::default();
+        let outcome = run_steps(
+            &rec,
+            vec![(
+                SyncPhase::Categories,
+                Box::pin(async { Err::<String, _>(anyhow::anyhow!("timed out")) }),
+            )],
+        )
+        .await;
+        assert_eq!(outcome, PassOutcome::Failed);
+        assert_eq!(rec.phases().last(), Some(&SyncPhase::Failed));
+    }
+
+    #[test]
+    fn failed_passes_back_off_rather_than_retrying_at_once() {
+        // Transient: a minute, doubling, capped at an hour.
+        assert_eq!(backoff(1, false), Duration::from_secs(60));
+        assert_eq!(backoff(2, false), Duration::from_secs(120));
+        assert_eq!(backoff(3, false), Duration::from_secs(240));
+        assert_eq!(backoff(50, false), Duration::from_secs(3600));
+        // Refused: starts long, same cap.
+        assert_eq!(backoff(1, true), Duration::from_secs(15 * 60));
+        assert_eq!(backoff(2, true), Duration::from_secs(30 * 60));
+        assert_eq!(backoff(9, true), Duration::from_secs(3600));
+        // Never zero, whatever the count.
+        assert!(!backoff(0, false).is_zero());
     }
 
     #[tokio::test]

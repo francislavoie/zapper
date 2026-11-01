@@ -18,6 +18,8 @@ import { useCanStack } from "./hooks/useCanStack";
 import { useFullscreen } from "./hooks/useFullscreen";
 import { loadSession, saveSession, watchForExit } from "./session";
 import { applyVideoWidth, saveVideoWidth } from "./videoSize";
+import { fittedVideoWidth } from "./logic/videoSize";
+import { useVideoRoom } from "./hooks/useVideoRoom";
 import { applyRailWidth, saveRailWidth } from "./railWidth";
 import { saveStacked } from "./stacked";
 import { AboutModal } from "./components/AboutModal";
@@ -28,6 +30,7 @@ import { GuideGrid } from "./components/GuideGrid";
 import { PlayerChrome } from "./components/PlayerChrome";
 import { SettingsModal } from "./components/SettingsModal";
 import { Toolbar } from "./components/Toolbar";
+import { ResizeEdges } from "./components/ResizeEdges";
 import { ZoomBadge } from "./components/ZoomBadge";
 import { WatchBand } from "./components/WatchBand";
 import { Toasts } from "./components/Toasts";
@@ -152,9 +155,13 @@ export function App() {
 
   // Before paint for the same reason: this writes the custom property the
   // slot is sized from, and the rect is measured from the slot afterwards.
+  // What is drawn is the remembered width capped by the room the stage has;
+  // what is saved, below, is the remembered width alone.
+  useVideoRoom(stageRef, state.zoom, dispatch);
+  const videoWidthShown = fittedVideoWidth(state.videoWidthRem, state.videoRoomRem);
   useLayoutEffect(() => {
-    applyVideoWidth(state.videoWidthRem);
-  }, [state.videoWidthRem]);
+    applyVideoWidth(videoWidthShown);
+  }, [videoWidthShown]);
 
   useLayoutEffect(() => {
     applyRailWidth(state.railWidthRem);
@@ -208,7 +215,7 @@ export function App() {
     // Resizing the picture moves the slot it is measured from. Listed for
     // the same reason as `zoom`: it is not used in the arithmetic, but every
     // box it measures moves when it changes.
-    videoWidthRem: state.videoWidthRem,
+    videoWidthRem: videoWidthShown,
     // A fullscreen change resizes the stage, and that change is animated —
     // in both directions. Without it the way in animated (the mode often
     // changed too) and the way out snapped, which reads as a glitch rather
@@ -282,6 +289,7 @@ export function App() {
           close, move or resize the window. It has to survive whatever the
           content does. */}
       {fullscreen ? null : <Toolbar />}
+      <ResizeEdges fullscreen={fullscreen} />
 
       <div className="stage" ref={stageRef}>
         {/* Everything below the toolbar. If a pane throws, the window is
