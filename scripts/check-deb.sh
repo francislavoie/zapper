@@ -80,8 +80,13 @@ if command -v dpkg-shlibdeps >/dev/null; then
   # --ignore-missing-info; it wants a debian/control to exist.
   mkdir -p "$root/.shlibs/debian"
   printf 'Source: zapper\n\nPackage: zapper\nArchitecture: any\n' > "$root/.shlibs/debian/control"
-  shlibs=$(cd "$root/.shlibs" && dpkg-shlibdeps -O --ignore-missing-info -l"$root/usr/lib/zapper" \
-    -e"$root/usr/bin/zapper-server" "${bundled[@]/#/-e}" 2>/dev/null | sed -n 's/^shlibs:Depends=//p')
+  # Its complaints go to a file and are shown if it fails: a library it can't find (one this
+  # machine doesn't have installed) is otherwise a bare exit status with no reason.
+  shlibs_err="$root/.shlibs/stderr"
+  shlibs_out=$(cd "$root/.shlibs" && dpkg-shlibdeps -O --ignore-missing-info -l"$root/usr/lib/zapper" \
+    -e"$root/usr/bin/zapper-server" "${bundled[@]/#/-e}" 2>"$shlibs_err") ||
+    fail "dpkg-shlibdeps failed (are the Depends' libraries installed here?): $(tr '\n' ' ' < "$shlibs_err")"
+  shlibs=$(sed -n 's/^shlibs:Depends=//p' <<<"$shlibs_out")
   names() { tr ',|' '\n\n' | sed 's/(.*//; s/ //g' | sort -u; }
   named=$(names <<<"$deps")
   # It may map a bundled library to the system's package of the same soname (libavformat.so.62

@@ -45,7 +45,9 @@ grep -qx '## \[Unreleased\]' "$cl" || fail "changelog release: no fresh Unreleas
 [ "$(python3 "$here/changelog.py" notes 0.2.0 "$cl")" = $'### Added\n- A thing.' ] || fail "changelog notes"; ok
 ! python3 "$here/changelog.py" release 0.3.0 2026-11-01 "$cl" 2>/dev/null || fail "an empty Unreleased must be refused"; ok
 ! python3 "$here/changelog.py" notes 9.9.9 "$cl" 2>/dev/null || fail "a missing section must be refused"; ok
-python3 "$here/changelog.py" notes Unreleased "$root/CHANGELOG.md" >/dev/null || fail "CHANGELOG.md's Unreleased section is empty"; ok
+# The section must exist; it is empty right after a release, and `just release` is what refuses an
+# empty one.
+grep -qx '## \[Unreleased\]' "$root/CHANGELOG.md" || fail "CHANGELOG.md has no Unreleased section"; ok
 
 # --- set-version.py, on copies laid out like the repository
 copy=$tmp/repo
