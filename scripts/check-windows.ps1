@@ -181,16 +181,17 @@ if ($Install) {
     if ($p.ExitCode -ne 0) { throw "the NSIS installer failed with $($p.ExitCode)" }
     $fromNsis = Check-Installed "NSIS (installed)" $nsisDir "nsis"
 } else {
-    $7z = (Get-Command 7z.exe -ErrorAction SilentlyContinue).Source
-    if (-not $7z) { $7z = "$env:ProgramFiles\7-Zip\7z.exe" }
+    $7z = "$env:ProgramFiles\7-Zip\7z.exe"
+    if (-not (Test-Path $7z)) { $7z = (Get-Command 7z.exe -ErrorAction Stop).Source }
     & $7z x -y "-o$nsisDir" $nsis | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "7-Zip could not unpack $nsis" }
     $fromNsis = Check-Installed "NSIS (unpacked)" $nsisDir "msi"
 }
 
 if ($fromMsi -and $fromNsis) {
-    Step "the same programs and DLLs in both"
-    foreach ($f in $programs + $dlls) {
+    # Not zapper.exe: Tauri patches each installer's copy with its bundle type.
+    Step "the same zapper-server and DLLs in both"
+    foreach ($f in @("zapper-server.exe") + $dlls) {
         $a = Join-Path $fromMsi $f; $b = Join-Path $fromNsis $f
         if ((Test-Path $a) -and (Test-Path $b) -and (Get-FileHash $a).Hash -ne (Get-FileHash $b).Hash) { Fail "$f differs between the MSI and the NSIS installer" }
     }
