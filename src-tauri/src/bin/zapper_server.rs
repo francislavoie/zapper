@@ -7,7 +7,12 @@
 //!
 //! ```text
 //! zapper-server [--port N] [--no-sync] [--home DIR]
+//! zapper-server --install-service | --remove-service [--home DIR]
 //! ```
+//!
+//! `--install-service` and `--remove-service` do what Settings › Recording's
+//! Install and Remove do (recording::service), for a computer without the
+//! app's window, or a script.
 //!
 //! `--no-sync` leaves the catalogue to whoever else keeps it (the app on the
 //! same machine, or a harness that wrote one). `--home` keeps everything in
@@ -47,6 +52,7 @@ fn args() -> Result<Option<Args>> {
         port: None,
         sync: true,
     };
+    let mut service: Option<bool> = None;
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
         match arg.as_str() {
@@ -55,6 +61,8 @@ fn args() -> Result<Option<Args>> {
                 a.port = Some(v.parse().context("--port needs a number")?);
             }
             "--no-sync" => a.sync = false,
+            "--install-service" => service = Some(true),
+            "--remove-service" => service = Some(false),
             "--home" => {
                 let v = it.next().context("--home needs a folder")?;
                 // Before anything has read a path, and before any thread
@@ -68,10 +76,13 @@ fn args() -> Result<Option<Args>> {
             "--help" | "-h" => {
                 println!(
                     "zapper-server {}: zapper's recording service\n\n\
-                     Usage: zapper-server [--port N] [--no-sync] [--home DIR]\n\n  \
-                     --port N    listen on port N (default: server.json's, else {})\n  \
-                     --no-sync   do not keep the catalogue current from here\n  \
-                     --home DIR  keep settings, catalogue and recordings' data in DIR\n\n\
+                     Usage: zapper-server [--port N] [--no-sync] [--home DIR]\n       \
+                     zapper-server --install-service | --remove-service [--home DIR]\n\n  \
+                     --port N            listen on port N (default: server.json's, else {})\n  \
+                     --no-sync           do not keep the catalogue current from here\n  \
+                     --home DIR          keep settings, catalogue and recordings' data in DIR\n  \
+                     --install-service   run this zapper-server for you from now on, and now\n  \
+                     --remove-service    stop it and undo that (recordings are kept)\n\n\
                      Settings: {}\nAPI token: {}",
                     env!("CARGO_PKG_VERSION"),
                     config::DEFAULT_PORT,
@@ -83,7 +94,35 @@ fn args() -> Result<Option<Args>> {
             other => anyhow::bail!("unknown argument {other:?}; see --help"),
         }
     }
+    if let Some(install) = service {
+        manage_service(install)?;
+        return Ok(None);
+    }
     Ok(Some(a))
+}
+
+/// `--install-service` / `--remove-service`: the systemd user unit or the
+/// Windows sign-in task, with this executable, as Settings › Recording
+/// would set it up.
+fn manage_service(install: bool) -> Result<()> {
+    use zapper_lib::recording::service;
+    if install {
+        if std::env::var_os("ZAPPER_SERVER_BIN").is_none() {
+            // This one, wherever it is, rather than a search.
+            std::env::set_var("ZAPPER_SERVER_BIN", std::env::current_exe()?);
+        }
+        service::install(false)?;
+    } else {
+        service::remove()?;
+    }
+    let s = service::status();
+    println!(
+        "{}: {}{}",
+        s.kind.as_deref().unwrap_or("the recording service"),
+        if s.installed { "installed" } else { "not installed" },
+        s.state.map(|st| format!(", {st}")).unwrap_or_default()
+    );
+    Ok(())
 }
 
 /// The token on file, or a new one written there.
