@@ -70,6 +70,18 @@ impl HdhrSource {
         Ok(msg)
     }
 
+    /// How many tuners there are and how many are busy, for the connection
+    /// budget. Two small reads on the LAN; `None` if either fails.
+    pub async fn tuner_status(&self) -> Option<crate::connections::Status> {
+        let max = self.device.discover().await.ok()?.tuners()?;
+        let status = self.device.status().await.ok()?;
+        Some(crate::connections::Status {
+            max: Some(max),
+            active: Some(crate::connections::tuners_in_use(&status)),
+            expires: None,
+        })
+    }
+
     /// Why a channel that just failed to open failed, when the tuner can say.
     ///
     /// mpv reports a refused stream as "loading failed", which is true and

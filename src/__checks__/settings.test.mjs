@@ -9,6 +9,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   DEFAULT_SETTINGS,
+  LIVE_START_CHOICES,
   DEFAULT_SUBTITLE,
   REWIND_BITRATES,
   REWIND_MAX,
@@ -205,4 +206,50 @@ test("a setting at its default offers no reset; one moved does, for itself alone
 test("the backend's name for the default font counts as the default", () => {
   assert.equal(isDefault(settings({ subtitle: subtitle({ font: "sans-serif" }) }), "subtitle.font"), true);
   assert.equal(isDefault(settings({ subtitle: subtitle({ font: "Serif" }) }), "subtitle.font"), false);
+});
+
+// ------------------------------------------------------------- when a channel opens
+
+test("a channel plays at once and catches up, unless somebody chose otherwise", () => {
+  assert.equal(DEFAULT_SETTINGS.liveStart, "catchUp");
+  // A config from before the setting existed has no value: the default.
+  const older = { ...DEFAULT_SETTINGS };
+  delete older.liveStart;
+  assert.equal(clampSettings(older).liveStart, "catchUp");
+  // Nor does a value this build does not know.
+  assert.equal(clampSettings(settings({ liveStart: "sometimes" })).liveStart, "catchUp");
+  for (const v of ["stay", "catchUp", "wait"]) {
+    assert.equal(clampSettings(settings({ liveStart: v })).liveStart, v);
+  }
+});
+
+test("each way of opening a channel is named plainly and says what it trades", () => {
+  assert.deepEqual(LIVE_START_CHOICES.map((c) => c.value), ["stay", "catchUp", "wait"]);
+  for (const c of LIVE_START_CHOICES) {
+    assert.ok(c.label.length > 0 && c.note.length > 0, c.value);
+    assert.ok(!c.note.includes("\n"), `${c.value}: one line`);
+  }
+  const by = Object.fromEntries(LIVE_START_CHOICES.map((c) => [c.value, c]));
+  assert.match(by.stay.note, /never jumps/);
+  assert.match(by.catchUp.note, /jump/);
+  assert.match(by.wait.note, /no jump/);
+});
+
+test("changing how a channel opens reaches the player", () => {
+  // The backend reads it when a channel opens; it has to be told.
+  assert.deepEqual(planSave(DEFAULT_SETTINGS, settings({ liveStart: "wait" })), {
+    applyPlayback: true,
+    applySubtitle: false,
+  });
+});
+
+test("simultaneous streams is at least one, and one unless set", () => {
+  assert.equal(DEFAULT_SETTINGS.simultaneousStreams, 1);
+  const older = { ...DEFAULT_SETTINGS };
+  delete older.simultaneousStreams;
+  assert.equal(clampSettings(older).simultaneousStreams, 1);
+  assert.equal(clampSettings(settings({ simultaneousStreams: 0 })).simultaneousStreams, 1);
+  assert.equal(clampSettings(settings({ simultaneousStreams: 3.4 })).simultaneousStreams, 3);
+  // The backend reads it before reconnecting; it has to be told.
+  assert.equal(planSave(DEFAULT_SETTINGS, settings({ simultaneousStreams: 2 })).applyPlayback, true);
 });

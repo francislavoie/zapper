@@ -167,10 +167,50 @@ pub struct PlayerStateDto {
     /// asked for is reported the same way, because "how far was I behind?"
     /// is the obvious question after pressing Live.
     pub live_jump: Option<LiveJumpDto>,
+    /// A live channel is being started at live: its first frame is up,
+    /// held still, while the server's connect burst arrives, so that the
+    /// picture starts moving at live rather than twenty seconds in the past
+    /// and then jumping. The state stays `Opening` meanwhile; nothing is
+    /// playing yet. See `ipc::live_start::Join`.
+    pub joining_live: bool,
     /// Why a stream that stopped by itself stopped, when the state is
     /// `Failed` because of it: taken over by another device, refused, the
     /// network. `None` otherwise. See `ipc::ending`.
     pub ending: Option<crate::ipc::ending::Ending>,
+    /// Reconnecting by itself after the network failed. `None` otherwise —
+    /// and always after the provider ended or refused the stream, which is
+    /// never reconnected without a person asking. See `connections`.
+    pub reconnect: Option<ReconnectDto>,
+}
+
+/// One automatic reconnect, in progress or waiting its turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReconnectDto {
+    /// Which one, from 1.
+    pub attempt: u32,
+    /// Of how many before it gives up.
+    pub of: u32,
+    /// Asking the account whether a connection is free, before connecting.
+    pub checking: bool,
+}
+
+/// The account's connections, for Settings → Account.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionsDto {
+    /// Allowed: as the provider counts, or as "Simultaneous streams" says.
+    pub max: Option<u32>,
+    /// Open on every device, when the provider counts; `None` when nobody can.
+    pub active: Option<u32>,
+    /// Streams this app holds.
+    pub ours: u32,
+    /// The provider (or the tuner) counted.
+    pub counted: bool,
+    /// The account cannot be asked, so "Simultaneous streams" applies.
+    pub declared: bool,
+    /// When the account expires, Unix seconds, if the provider says.
+    pub expires: Option<i64>,
 }
 
 /// One jump forward to live, automatic or asked for. See
@@ -203,7 +243,9 @@ impl Default for PlayerStateDto {
             compressor: false,
             error: None,
             live_jump: None,
+            joining_live: false,
             ending: None,
+            reconnect: None,
         }
     }
 }
@@ -262,10 +304,12 @@ pub enum AspectMode {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum DeinterlaceMode {
+    /// What [`crate::surface::mpv::Player::new`] sets, so the player starts
+    /// here. Free on progressive video: mpv checks each frame's interlaced
+    /// flag and builds no filter for a frame without it.
+    #[default]
     Auto,
     On,
-    /// mpv's own default, so the player starts here.
-    #[default]
     Off,
 }
 
@@ -375,6 +419,13 @@ pub struct SettingsDto {
     /// newer build adds must not make this one throw the whole blob away
     /// (the frontend reads anything it does not know as `"auto"`).
     pub time_format: String,
+    /// What a live channel does about the server's connect burst, which
+    /// starts it twenty or thirty seconds in the past.
+    pub live_start: LiveStart,
+    /// How many streams the account allows at once, for an account that
+    /// cannot say (a playlist, a Tvheadend server). Reconnecting by itself
+    /// after a network failure is only safe with one to spare. Default 1.
+    pub simultaneous_streams: u32,
 }
 
 impl Default for SettingsDto {
@@ -390,6 +441,39 @@ impl Default for SettingsDto {
             check_for_updates: true,
             media_controls: false,
             time_format: "auto".to_owned(),
+            live_start: LiveStart::default(),
+            simultaneous_streams: 1,
+        }
+    }
+}
+
+/// What a live channel does about the connect burst a server opens it
+/// with — the last twenty or thirty seconds it holds, which mpv plays from
+/// the oldest. See `ipc::live_start`.
+///
+/// Read from any string, an unknown one being the default: a choice a newer
+/// build adds must not make this one throw the whole settings blob away.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", from = "String")]
+pub enum LiveStart {
+    /// Play from where the stream starts and stay there: never skip ahead
+    /// by itself. Live is a key (L) or a click away.
+    Stay,
+    /// Play at once, then skip ahead to live once the burst is in, saying
+    /// so. A picture soonest, and one jump.
+    #[default]
+    CatchUp,
+    /// Hold the first frame until the burst is in, then start at live: no
+    /// jump, at the cost of a second or more of still picture.
+    Wait,
+}
+
+impl From<String> for LiveStart {
+    fn from(s: String) -> Self {
+        match s.as_str() {
+            "stay" => LiveStart::Stay,
+            "wait" => LiveStart::Wait,
+            _ => LiveStart::CatchUp,
         }
     }
 }

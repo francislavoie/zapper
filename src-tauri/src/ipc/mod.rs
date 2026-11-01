@@ -19,6 +19,8 @@ pub mod catalog_cmds;
 pub mod ending;
 pub mod health;
 #[cfg(feature = "gui")]
+pub mod live_start;
+#[cfg(feature = "gui")]
 pub mod player_cmds;
 #[cfg(feature = "gui")]
 pub mod recording_cmds;

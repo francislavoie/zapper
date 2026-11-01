@@ -9,26 +9,29 @@
 //! connect: the recording waits ("waiting for a free connection"), asking
 //! again with back-off.
 //!
-//! How full the account is depends on the kind:
+//! How full the account is comes from [`crate::connections`], the one
+//! connection budget the app's player asks too, so the two can never
+//! disagree about an account:
 //!
-//! - **Xtream**: `player_api.php` with no action reports `active_cons` and
-//!   `max_connections`. That request is an API call, not a stream, so asking
-//!   costs no connection.
+//! - **Xtream**: `player_api.php` reports `active_cons` and
+//!   `max_connections` — every device's streams, this service's included.
+//!   An API call, not a stream, so asking costs no connection.
+//! - **HDHomeRun**: its tuner count and how many are busy.
 //! - **M3U**: no API, so the service counts its own captures against the
-//!   "simultaneous streams" setting (1 unless set). It cannot see another
-//!   device; the provider will refuse or drop, and the fallback rules treat a
-//!   limit refusal as the account's, never something to retry quickly.
-//! - **HDHomeRun, Tvheadend**: their own servers allot tuners and refuse when
-//!   none is free; unknown here, so allowed.
+//!   app's "Simultaneous streams" (Settings → Account, 1 unless set), read
+//!   from the catalogue the two share. It cannot see another device; the
+//!   provider will refuse or drop, and the fallback rules treat a limit
+//!   refusal as the account's, never something to retry quickly.
+//! - **Tvheadend**: its server allots tuners itself and refuses when none
+//!   is free, so a capture is allowed and the server answers.
 //!
 //! This is deliberately one function, [`check`], over a small [`Budget`]
-//! seam: a shared connection-budget module for the whole app (playback
-//! included) can replace [`SourceBudget`] without the capture changing.
+//! seam, so the capture never needs to know where the numbers came from.
 
 use std::future::Future;
 use std::pin::Pin;
 
-use crate::catalog::credentials::Kind;
+use crate::connections::{self, Limit};
 use crate::source::Source;
 
 /// The account's answer.
@@ -56,21 +59,22 @@ pub trait Budget: Send + Sync {
     fn check(&self, own_active: usize) -> Pin<Box<dyn Future<Output = Slots> + Send + '_>>;
 }
 
-/// The decision itself, apart from how the numbers were learnt.
+/// The decision itself, apart from how the numbers were learnt: the
+/// account's [`Limit`] and how many streams this service holds now, not
+/// counting the one about to open.
 ///
-/// `reported` is the provider's `(active, max)` when it has an API for it;
-/// `limit` is the configured number of simultaneous streams for kinds that
-/// do not.
-pub fn decide(kind: Kind, reported: Option<(i64, i64)>, own_active: usize, limit: u32) -> Slots {
-    match kind {
-        Kind::Xtream => match reported {
-            // `max_connections` of 0 is how some panels say "unlimited".
-            Some((active, max)) if max > 0 && active >= max => Slots::Full { active, max },
-            Some(_) => Slots::Free,
-            None => Slots::Unknown,
+/// A counted limit already includes this service's own streams in
+/// `active`; a declared one knows nothing of other devices, so it is only
+/// ever a ceiling on this service.
+pub fn decide(limit: Limit, own_active: usize) -> Slots {
+    match limit {
+        Limit::Counted(s) if s.free() => Slots::Free,
+        Limit::Counted(s) => Slots::Full {
+            active: i64::from(s.active),
+            max: i64::from(s.max),
         },
-        Kind::M3u => {
-            let max = i64::from(limit.max(1));
+        Limit::Declared(max) => {
+            let max = i64::from(max.max(1));
             let active = own_active as i64;
             if active >= max {
                 Slots::Full { active, max }
@@ -78,15 +82,13 @@ pub fn decide(kind: Kind, reported: Option<(i64, i64)>, own_active: usize, limit
                 Slots::Free
             }
         }
-        Kind::HdHomeRun | Kind::Tvheadend => Slots::Unknown,
+        Limit::Unknown => Slots::Unknown,
     }
 }
 
-/// The budget as the account's own source reports it.
-pub struct SourceBudget {
-    /// Simultaneous streams for accounts with no API to ask.
-    pub limit: u32,
-}
+/// The budget as the account's own source reports it, through
+/// [`crate::connections::look`].
+pub struct SourceBudget;
 
 impl Budget for SourceBudget {
     fn check(&self, own_active: usize) -> Pin<Box<dyn Future<Output = Slots> + Send + '_>> {
@@ -95,20 +97,13 @@ impl Budget for SourceBudget {
                 Ok(s) => s,
                 Err(_) => return Slots::Unknown,
             };
-            let reported = match &source {
-                Source::Xtream(c) => match c.login().await {
-                    Ok(info) => info.active_cons.zip(info.max_connections),
-                    Err(e) => {
-                        tracing::debug!(
-                            "could not ask the provider for its connection count: {}",
-                            crate::catalog::sync_engine::scrub(&format!("{e:#}"))
-                        );
-                        None
-                    }
-                },
-                _ => None,
-            };
-            decide(source.kind(), reported, own_active, self.limit)
+            if matches!(source, Source::Tvheadend(_)) {
+                return Slots::Unknown;
+            }
+            // Read each time: the setting is the app's, and can change while
+            // the service runs.
+            let declared = crate::catalog::settings::load_or_default().simultaneous_streams;
+            decide(connections::look(&source, declared).await.limit(), own_active)
         })
     }
 }
@@ -136,36 +131,30 @@ pub fn jitter() -> f64 {
 mod tests {
     use super::*;
 
+    use crate::connections::{Slots as Count, Status};
+
     #[test]
-    fn an_xtream_account_is_full_when_its_connections_are_all_in_use() {
-        assert_eq!(
-            decide(Kind::Xtream, Some((1, 1)), 0, 1),
-            Slots::Full { active: 1, max: 1 }
-        );
-        assert_eq!(decide(Kind::Xtream, Some((1, 2)), 0, 1), Slots::Free);
-        assert_eq!(
-            decide(Kind::Xtream, Some((5, 0)), 0, 1),
-            Slots::Free,
-            "0 means unlimited"
-        );
-        assert_eq!(decide(Kind::Xtream, None, 0, 1), Slots::Unknown);
+    fn an_account_that_counts_is_full_when_its_connections_are_all_in_use() {
+        let counted = |active, max| Limit::Counted(Count { max, active });
+        assert_eq!(decide(counted(1, 1), 0), Slots::Full { active: 1, max: 1 });
+        assert_eq!(decide(counted(1, 2), 0), Slots::Free);
+        // The provider's count already has this service's own streams in it.
+        assert_eq!(decide(counted(1, 2), 1), Slots::Free);
+    }
+
+    #[test]
+    fn xtreams_unlimited_and_silent_answers_do_not_hold_a_recording_back() {
+        // `max_connections` of 0 is how some panels say "unlimited".
+        assert_eq!(decide(connections::xtream_status(Some(0), Some(5), None).limit(), 0), Slots::Unknown);
+        assert_eq!(decide(Status::default().limit(), 0), Slots::Unknown);
     }
 
     #[test]
     fn a_playlist_counts_the_services_own_streams_against_the_setting() {
-        assert_eq!(decide(Kind::M3u, None, 0, 1), Slots::Free);
-        assert_eq!(
-            decide(Kind::M3u, None, 1, 1),
-            Slots::Full { active: 1, max: 1 }
-        );
-        assert_eq!(decide(Kind::M3u, None, 1, 2), Slots::Free);
-        assert_eq!(decide(Kind::M3u, None, 0, 0), Slots::Free, "0 is read as 1");
-    }
-
-    #[test]
-    fn tuners_allot_themselves() {
-        assert_eq!(decide(Kind::HdHomeRun, None, 9, 1), Slots::Unknown);
-        assert_eq!(decide(Kind::Tvheadend, None, 9, 1), Slots::Unknown);
+        assert_eq!(decide(Limit::Declared(1), 0), Slots::Free);
+        assert_eq!(decide(Limit::Declared(1), 1), Slots::Full { active: 1, max: 1 });
+        assert_eq!(decide(Limit::Declared(2), 1), Slots::Free);
+        assert_eq!(decide(Limit::Declared(0), 0), Slots::Free, "0 is read as 1");
     }
 
     #[test]

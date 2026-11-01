@@ -207,6 +207,14 @@ mod tests {
     }
 
     #[test]
+    fn the_menu_starts_where_the_player_does() {
+        // `Player::new` sets `deinterlace=auto`; the picture menu's first
+        // answer, before anything is chosen, has to say the same.
+        assert_eq!(DeinterlaceMode::default(), DeinterlaceMode::Auto);
+        assert_eq!(deinterlace_value(DeinterlaceMode::default()), "auto");
+    }
+
+    #[test]
     fn no_track_is_mpvs_no() {
         assert_eq!(track_value(Some(2)), "2");
         assert_eq!(track_value(None), "no");

@@ -17,7 +17,7 @@
 import { useRef } from "react";
 import { backend } from "../backend";
 import { toggleFullscreen } from "../fullscreen";
-import { endedMessage } from "../logic/ending";
+import { endedMessage, startingLine } from "../logic/ending";
 import { measuredLine } from "../logic/format";
 import { atScreenEdge } from "../logic/fade";
 import { volumeAfterWheel } from "../logic/volume";
@@ -46,6 +46,7 @@ export function PlayerChrome() {
 
   const measured = measuredLine(player);
   const ended = endedMessage(player);
+  const starting = startingLine(player);
 
   const toggle = () =>
     void toggleFullscreen()
@@ -131,8 +132,8 @@ export function PlayerChrome() {
             {nowChannel?.cleanName ?? "Nothing playing"}
           </h2>
           <p>
-            {player.state === "opening"
-              ? "Opening…"
+            {starting
+              ? starting
               : ended
                 ? ended.title
                 : (nowChannel?.nowPlaying?.title ?? "no guide data")}

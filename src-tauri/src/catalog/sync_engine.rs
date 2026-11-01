@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use crate::catalog::credentials::Account;
 use crate::catalog::playlist::{self, PlaylistStats, PlaylistWriter};
-use crate::catalog::{db, index, origin, status, sync};
+use crate::catalog::{db, index, origin, prune, status, sync};
 use crate::ipc::types::{SyncPhase, SyncStatusDto};
 use crate::m3u::fetch;
 use crate::source::{M3uSource, Refused};
@@ -312,7 +312,13 @@ async fn step_epg(client: &XtreamClient) -> Result<String> {
 
     let (tx, rx) = tokio::sync::mpsc::channel::<Vec<u8>>(8);
     let parsing = tokio::task::spawn_blocking(move || {
-        db::with_write_db(|conn| crate::catalog::epg::parse_xmltv(BufReader::new(ChunkReader::new(rx)), conn))
+        db::with_write_db(|conn| {
+            let n = crate::catalog::epg::parse_xmltv(BufReader::new(ChunkReader::new(rx)), conn)?;
+            // What the guide just landed on top of may be weeks old; see
+            // `catalog::prune`.
+            prune::prune_and_log(conn, now());
+            Ok(n)
+        })
     });
 
     while let Some(chunk) = resp.chunk().await.context("reading the guide")? {
@@ -580,6 +586,9 @@ pub(crate) async fn step_xmltv_guides<M: Mirror>(
         return Err(first_err.unwrap_or_else(|| anyhow::anyhow!("no guide loaded")));
     }
     let (matched, total) = mirror.write(playlist::match_epg)?;
+    // After matching: which channels use a guide channel decides how much
+    // of its past is kept.
+    prune_guide(mirror);
     let mut msg = format!("{programmes} programmes, guide for {matched} of {total} channels");
     if loaded < locations.len() {
         msg.push_str(&format!(" ({} of {} guides failed)", locations.len() - loaded, locations.len()));
@@ -615,6 +624,15 @@ pub(crate) fn guide_parser<M: Mirror>(
             crate::catalog::epg::parse_xmltv_into(r, conn, names)
         })
     }
+}
+
+/// Drops the past programmes nothing can play any more, once a guide has
+/// landed. Never fails the phase: see [`prune::prune_and_log`].
+pub(crate) fn prune_guide<M: Mirror>(mirror: &M) {
+    let _ = mirror.write(|conn| {
+        prune::prune_and_log(conn, now());
+        Ok(())
+    });
 }
 
 /// A [`ChunkReader`] that turns an abandoned download into a read error.
@@ -777,6 +795,12 @@ pub fn spawn_periodic(app: tauri::AppHandle) {
 /// The loop [`spawn_periodic`] runs, for a caller with its own runtime (the
 /// recording service).
 pub async fn periodic<S: StatusSink>(app: S) {
+    // Before the first pass, so a vacuum never meets a sync's writes; and
+    // whether or not one runs soon, so a mirror that last synced a month ago
+    // is not searched with a month of finished programmes.
+    if let Err(e) = tokio::task::spawn_blocking(|| prune::maintain(now())).await {
+        tracing::warn!("guide housekeeping did not finish: {e}");
+    }
     let mut failures: u32 = 0;
     // Set when the loop was woken on purpose: run now, whatever the
     // schedule says.

@@ -20,11 +20,13 @@ use tauri::{AppHandle, Emitter};
 
 use crate::catalog::activity::{self, Accumulator};
 use crate::catalog::store;
-use crate::ipc::ending::{self, Clues, How};
+use crate::connections::{self, Limit, Verdict};
+use crate::ipc::ending::{self, Clues, Ending, EndingKind, Flow, How};
+use crate::ipc::live_start::{Join, Settle};
 use crate::ipc::tracks;
 use crate::ipc::types::{
-    events, AspectMode, ChannelQualityDto, DeinterlaceMode, LiveJumpDto, PlaybackState,
-    PlayerOptionsDto, PlayerStateDto,
+    events, AspectMode, ChannelQualityDto, ConnectionsDto, DeinterlaceMode, LiveJumpDto,
+    LiveStart, PlaybackState, PlayerOptionsDto, PlayerStateDto, ReconnectDto,
 };
 use crate::surface::mpv::{self, Player, Probe, Signal};
 use crate::surface::VideoRect;
@@ -121,6 +123,12 @@ struct Machine {
     last_live_nudge: Option<Instant>,
     /// The one catch-up after a channel's connect burst; see [`Settle`].
     settle: Option<Settle>,
+    /// This open is being started at live: mpv was told to open paused, and
+    /// the picture is held on its first frame until the connect burst is in.
+    /// See [`Join`].
+    joining: bool,
+    /// The hold itself, from the first frame until it lets go.
+    join: Option<Join>,
     /// Automatic catch-ups so far this session, for [`LiveJumpDto::seq`].
     jumps: u64,
     /// Whether this stream is live rather than a catch-up programme. A
@@ -140,6 +148,26 @@ struct Machine {
     /// When to read this open's quality for the channel's record; `None`
     /// once read, and for anything but a live channel that reached a picture.
     measure_at: Option<Instant>,
+    /// When data last arrived and when its end was read, which tells a
+    /// stalled connection from one the provider closed; see `ipc::ending`.
+    flow: Flow,
+    /// Automatic reconnects made since a person last asked for this stream.
+    reconnects: u32,
+    /// When a reconnect last brought the picture back. A stream that has
+    /// played a while since starts with a fresh allowance: a network that
+    /// blips once an hour is not one that keeps failing.
+    reconnected_at: Option<Instant>,
+    /// A reconnect `ended_with` decided on, for the heartbeat to start.
+    reconnect_due: Option<Due>,
+    /// Whether the failure being reconnected from never reached the
+    /// provider; see `connections::reconnect_verdict`.
+    unreached: bool,
+    /// The ending that started the reconnects, to show again if they are
+    /// cancelled mid-attempt.
+    chain_ending: Option<Ending>,
+    /// Bumped by anything that makes a waiting reconnect stale: an open, a
+    /// stop, Cancel. A reconnect checks it before acting.
+    reconnect_token: u64,
 }
 
 /// What an open has shown about its channel that is worth keeping: see
@@ -155,70 +183,15 @@ enum Ledger {
     Measure(i64),
 }
 
-/// Brings a freshly tuned channel up to live once its connect burst is over.
-///
-/// A server answers a new connection with a burst of what it already holds,
-/// and mpv starts at the oldest frame of it: tuning in landed 20-odd seconds
-/// in the past and stayed there, because the automatic catch-up only answers
-/// time *lost* to stalls — deliberately, since chasing the edge while the
-/// burst was still arriving would seek, wait, and seek again: a
-/// stutter-jump-stutter at the start of every zap.
-///
-/// So this waits for the burst to finish — `behind_live` stops growing for
-/// [`SETTLE_QUIET`] — or for [`SETTLE_MAX`] if it never visibly does, and
-/// then makes one decision: jump to the live cushion if playback is more
-/// than [`SETTLE_SLACK`] past it, otherwise nothing. One seek, after the
-/// data has arrived, so there is nothing for it to stutter over.
-#[derive(Debug, Clone, Copy)]
-struct Settle {
-    /// Seconds since the first frame.
-    age: f64,
-    /// The furthest behind live seen so far.
-    peak: f64,
-    /// Seconds since `peak` last grew.
-    quiet: f64,
+/// A reconnect to make, after a wait.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Due {
+    delay: Duration,
+    unreached: bool,
 }
 
-/// How long `behind_live` must stop growing for the burst to count as over.
-const SETTLE_QUIET: f64 = 1.5;
-/// The longest to wait for that before deciding anyway.
-const SETTLE_MAX: f64 = 10.0;
-/// How far past the cushion is worth a seek. Less than this is the
-/// sawtooth of an ordinary live stream, not a burst's backlog.
-const SETTLE_SLACK: f64 = 2.0;
-/// Growth smaller than this is the seekable end ticking over, not the burst.
-const SETTLE_GROWTH: f64 = 0.5;
-
-impl Settle {
-    fn new() -> Self {
-        Self {
-            age: 0.0,
-            peak: 0.0,
-            quiet: 0.0,
-        }
-    }
-
-    /// Takes one heartbeat (`dt` seconds since the last) and the current
-    /// distance behind live. `None` while waiting; `Some(by)` once decided,
-    /// where `by` is the forward seek to make (zero: none needed).
-    fn observe(&mut self, dt: f64, behind: f64) -> Option<f64> {
-        self.age += dt;
-        if behind > self.peak + SETTLE_GROWTH {
-            self.peak = behind;
-            self.quiet = 0.0;
-        } else {
-            self.quiet += dt;
-        }
-        if self.quiet < SETTLE_QUIET && self.age < SETTLE_MAX {
-            return None;
-        }
-        Some(if behind > LIVE_CUSHION + SETTLE_SLACK {
-            behind - LIVE_CUSHION
-        } else {
-            0.0
-        })
-    }
-}
+/// How long a reconnected stream plays before its allowance is restored.
+const RECONNECT_FORGIVEN: Duration = Duration::from_secs(30);
 
 impl Machine {
     fn new() -> Self {
@@ -232,6 +205,8 @@ impl Machine {
             last_tick_at: None,
             last_live_nudge: None,
             settle: None,
+            joining: false,
+            join: None,
             jumps: 0,
             live: true,
             shown: false,
@@ -239,6 +214,13 @@ impl Machine {
             failed_since: None,
             noted: false,
             measure_at: None,
+            flow: Flow::default(),
+            reconnects: 0,
+            reconnected_at: None,
+            reconnect_due: None,
+            unreached: false,
+            chain_ending: None,
+            reconnect_token: 0,
         }
     }
 
@@ -301,6 +283,14 @@ impl Machine {
         self.failed_since = None;
         self.noted = false;
         self.measure_at = None;
+        self.flow = Flow::default();
+        // Whoever opens this decides whether it continues a run of
+        // reconnects (see `open_as`); anything waiting is stale.
+        self.reconnects = 0;
+        self.reconnected_at = None;
+        self.reconnect_due = None;
+        self.reconnect_token += 1;
+        self.dto.reconnect = None;
         // The previous stream's measurements are not this stream's. Clearing
         // them is what makes the quality readout honest across a zap.
         self.dto.width = None;
@@ -311,14 +301,44 @@ impl Machine {
         self.dto.buffered_back = 0.0;
         self.opened_at = Some(Instant::now());
         self.settle = None;
+        // Asked for by the caller, after this, for a live channel.
+        self.joining = false;
+        self.join = None;
+        self.dto.joining_live = false;
         // The last stream's catch-up is not news about this one.
         self.dto.live_jump = None;
+    }
+
+    /// How this open meets the connect burst, once `live` is set. A
+    /// catch-up programme has no burst: it starts where it was asked to,
+    /// whatever the setting.
+    fn starting(&mut self, mode: LiveStart) {
+        self.joining = self.live && mode == LiveStart::Wait;
+        // Staying put means nothing skips ahead by itself — neither the
+        // catch-up after the burst nor the one after a long stall. Asking
+        // for live (`seek_live`) turns following back on.
+        self.following_live = !(self.live && mode == LiveStart::Stay);
     }
 
     /// First frame decoded. The only honest "it works" edge: `file-loaded`
     /// fires on a stream that connects and then stalls.
     fn playing(&mut self) {
         if matches!(self.dto.state, PlaybackState::Stopped) {
+            return;
+        }
+        if self.joining {
+            // Held on the first frame: there is a picture, but it is not
+            // moving, so the stream is not playing yet. The deadline is
+            // disarmed — the stream works — and the hold begins.
+            if self.join.is_none() {
+                self.came_back();
+                self.shown = true;
+                self.opened_at = None;
+                self.dto.error = None;
+                self.dto.ending = None;
+                self.dto.joining_live = true;
+                self.join = Some(Join::new());
+            }
             return;
         }
         self.dto.state = if self.dto.paused_flag() {
@@ -328,6 +348,7 @@ impl Machine {
         };
         self.dto.error = None;
         self.dto.ending = None;
+        self.came_back();
         self.shown = true;
         // Only on the way out of Opening: a later reconfigure (a resolution
         // change mid-stream) is not a new connection and has no burst, and
@@ -337,6 +358,27 @@ impl Machine {
             self.measure_at = Some(Instant::now() + MEASURE_AFTER);
         }
         self.opened_at = None;
+    }
+
+    /// The hold on the first frame is over and the caller is starting
+    /// playback, at live or as near it as the burst allowed. [`Settle`]
+    /// still watches: a burst that outlasted the hold is caught up the old
+    /// way, and says so.
+    fn joined(&mut self) {
+        self.joining = false;
+        self.join = None;
+        self.dto.joining_live = false;
+        if self.dto.state == PlaybackState::Opening {
+            self.dto.state = PlaybackState::Playing;
+            self.settle = Some(Settle::new());
+        }
+    }
+
+    /// A picture, on an open that was a reconnect: it worked.
+    fn came_back(&mut self) {
+        if self.dto.reconnect.take().is_some() {
+            self.reconnected_at = Some(Instant::now());
+        }
     }
 
     fn set_paused(&mut self, paused: bool) {
@@ -354,6 +396,11 @@ impl Machine {
             self.failed_since = Some(Instant::now());
         }
         self.following_live = false;
+        self.reconnect_due = None;
+        self.dto.reconnect = None;
+        self.joining = false;
+        self.join = None;
+        self.dto.joining_live = false;
         self.dto.state = PlaybackState::Failed;
         self.dto.error = Some(why.into());
         self.dto.ending = None;
@@ -363,6 +410,15 @@ impl Machine {
     fn stopped(&mut self) {
         self.dto.at_live_edge = true;
         self.following_live = false;
+        self.reconnects = 0;
+        self.reconnected_at = None;
+        self.reconnect_due = None;
+        self.reconnect_token += 1;
+        self.chain_ending = None;
+        self.dto.reconnect = None;
+        self.joining = false;
+        self.join = None;
+        self.dto.joining_live = false;
         self.dto.state = PlaybackState::Stopped;
         self.dto.stream_id = None;
         self.dto.error = None;
@@ -416,7 +472,65 @@ impl Machine {
             How::Deadline => format!("no video within {}s", FIRST_FRAME_DEADLINE.as_secs()),
         };
         self.failed(why);
-        self.dto.ending = Some(ending::classify(how, self.shown, self.clues));
+        let mut clues = self.clues;
+        clues.stalled = self.flow.stalled();
+        let e = ending::classify(how, self.shown, clues);
+        self.dto.ending = Some(e);
+        self.plan_reconnect(e, clues.unreached && !self.shown);
+    }
+
+    /// Decides whether to reconnect by itself, and when: only after the
+    /// network failed, never after the provider ended or refused the stream
+    /// (see `ending::worth_reconnecting`), and only while the allowance
+    /// lasts. Whether a connection is free is asked when the wait is over.
+    fn plan_reconnect(&mut self, e: Ending, unreached: bool) {
+        self.reconnect_due = None;
+        self.dto.reconnect = None;
+        if !ending::worth_reconnecting(&e, self.live) {
+            return;
+        }
+        let attempt = self.reconnects + 1;
+        let Some(delay) = connections::backoff(attempt, connections::jitter()) else {
+            return;
+        };
+        self.unreached = unreached;
+        self.chain_ending.get_or_insert(e);
+        self.reconnect_due = Some(Due { delay, unreached });
+        self.dto.reconnect = Some(ReconnectDto {
+            attempt,
+            of: connections::BACKOFF.len() as u32,
+            checking: false,
+        });
+    }
+
+    /// The account could not be asked, so this attempt was not made. It
+    /// counts, and the next waits its turn.
+    fn reconnect_skipped(&mut self) {
+        self.reconnects += 1;
+        if let Some(e) = self.dto.ending {
+            self.plan_reconnect(e, self.unreached);
+        }
+    }
+
+    /// The account's connections are all in use elsewhere: stop, and say
+    /// so. Reconnecting would take one from another device.
+    fn in_use(&mut self, slots: connections::Slots) {
+        self.dto.reconnect = None;
+        self.reconnect_due = None;
+        self.dto.error = Some("the account's connections are in use".to_owned());
+        self.dto.ending = Some(Ending {
+            kind: EndingKind::InUse,
+            status: None,
+            limit: true,
+            slots: Some(slots),
+        });
+    }
+
+    /// One stream allowed and no way to see who has it: stop reconnecting,
+    /// and leave the network's explanation and Retry.
+    fn reconnect_abandoned(&mut self) {
+        self.dto.reconnect = None;
+        self.reconnect_due = None;
     }
 
     /// Playback is being taken `by` seconds forward to live, by the app
@@ -458,10 +572,15 @@ impl Machine {
     /// Folds a main-thread measurement in. Quality figures are only trusted
     /// once something is actually on screen.
     fn apply(&mut self, p: &Probe) {
-        if matches!(
+        let playing = matches!(
             self.dto.state,
             PlaybackState::Playing | PlaybackState::Paused
-        ) {
+        );
+        // The held first frame is a frame: its size and codec are known.
+        // Where it sits against live is not news, though — it is about to
+        // move, and a readout saying "24s behind" for the moment before it
+        // does would be the very jump this hold exists to hide.
+        if playing || self.join.is_some() {
             if p.width.is_some() {
                 self.dto.width = p.width;
             }
@@ -474,6 +593,8 @@ impl Machine {
             if p.codec.is_some() {
                 self.dto.codec = p.codec.clone();
             }
+        }
+        if playing {
             self.dto.behind_live = round_tenth(p.behind_live);
             self.dto.at_live_edge = live_edge_with_hysteresis(
                 self.dto.at_live_edge,
@@ -593,14 +714,161 @@ fn remember(app: &AppHandle, ledger: Ledger, reading: Option<store::Reading>) {
 
 /// Mutates the state and emits `PLAYER_STATE` if anything visible changed.
 fn commit(app: &AppHandle, f: impl FnOnce(&mut Machine)) {
-    let payload = {
+    let (payload, holding) = {
         let mut m = STATE.lock().expect("player state mutex poisoned");
         f(&mut m);
-        m.changed()
+        (m.changed(), holds_a_stream(&m))
     };
+    connections::set_held(connections::Use::Player, holding);
     if let Some(p) = payload {
         let _ = app.emit(events::PLAYER_STATE, p);
     }
+}
+
+/// Whether the player has a stream open, as the connection budget counts.
+fn holds_a_stream(m: &Machine) -> bool {
+    matches!(
+        m.dto.state,
+        PlaybackState::Opening | PlaybackState::Playing | PlaybackState::Paused
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Reconnecting
+// ---------------------------------------------------------------------------
+
+/// What was last opened, so that a reconnect can open it again. Kept here,
+/// in memory only: the URL carries the account.
+static LAST_OPEN: Mutex<Option<(i64, Playable, bool)>> = Mutex::new(None);
+
+/// Whether a reconnect decided under `token` is still wanted.
+fn still_wanted(token: u64) -> bool {
+    STATE
+        .lock()
+        .map(|m| m.reconnect_token == token)
+        .unwrap_or(false)
+}
+
+/// Waits out a reconnect's back-off, asks the account whether a connection
+/// is free, and reconnects only if one is.
+///
+/// Off the main thread, and abandoned the moment anything else happens to
+/// the player: a zap, a stop, Cancel.
+fn spawn_reconnect(app: &AppHandle, due: Due, token: u64, stream_id: i64) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(due.delay).await;
+        if !still_wanted(token) {
+            return;
+        }
+        commit(&app, |m| {
+            if let Some(r) = m.dto.reconnect.as_mut() {
+                r.checking = true;
+            }
+        });
+        let mut verdict = connections::reconnect_verdict(limit_now().await, due.unreached, false);
+        if verdict == Verdict::LookAgain {
+            // The first look may still count the connection that just died.
+            tokio::time::sleep(connections::SECOND_LOOK).await;
+            if !still_wanted(token) {
+                return;
+            }
+            verdict = connections::reconnect_verdict(limit_now().await, due.unreached, true);
+        }
+        tracing::info!("network failure; reconnect verdict {verdict:?}");
+        let target = LAST_OPEN
+            .lock()
+            .ok()
+            .and_then(|l| l.clone())
+            .filter(|(id, _, _)| *id == stream_id);
+        match (verdict, target) {
+            (Verdict::Go, Some((id, target, live))) => {
+                let attempt = {
+                    let m = STATE.lock().expect("player state mutex poisoned");
+                    if m.reconnect_token != token {
+                        return;
+                    }
+                    m.reconnects + 1
+                };
+                if let Err(e) = open_as(&app, id, target, live, Some(attempt)).await {
+                    tracing::warn!("reconnect could not be sent: {e}");
+                }
+            }
+            (Verdict::NotYet, _) => commit(&app, |m| {
+                if m.reconnect_token == token {
+                    m.reconnect_skipped();
+                }
+            }),
+            (Verdict::InUse(slots), _) => commit(&app, |m| {
+                if m.reconnect_token == token {
+                    m.in_use(slots);
+                }
+            }),
+            _ => commit(&app, |m| {
+                if m.reconnect_token == token {
+                    m.reconnect_abandoned();
+                }
+            }),
+        }
+    });
+}
+
+/// The account's connections as they stand, for a reconnect.
+async fn limit_now() -> Limit {
+    let declared = crate::catalog::settings::load_or_default().simultaneous_streams;
+    match source() {
+        Ok(src) => connections::look(src, declared).await.limit(),
+        Err(_) => Limit::Unknown,
+    }
+}
+
+/// Stops reconnecting. Mid-attempt, the attempt is stopped too, and the
+/// failure that started it is shown again with Retry.
+#[tauri::command]
+pub async fn cancel_reconnect(app: AppHandle) -> Result<(), String> {
+    let attempting = {
+        let mut m = STATE.lock().expect("player state mutex poisoned");
+        let attempting = m.dto.reconnect.is_some() && m.dto.state == PlaybackState::Opening;
+        m.reconnect_token += 1;
+        attempting
+    };
+    if attempting {
+        on_player(&app, |p| p.command("stop", &[]).map_err(|e| e.to_string())).await?;
+    }
+    commit(&app, |m| {
+        let ending = m.chain_ending.take().or(m.dto.ending);
+        if attempting {
+            m.failed("reconnecting was cancelled");
+        }
+        m.reconnect_abandoned();
+        m.reconnects = 0;
+        m.dto.ending = ending;
+    });
+    Ok(())
+}
+
+/// The account's connections, for Settings → Account: how many it allows,
+/// how many are open, when it expires.
+#[tauri::command]
+pub async fn connection_status() -> Result<ConnectionsDto, String> {
+    let declared_max = crate::catalog::settings::load_or_default().simultaneous_streams;
+    let src = source()?;
+    let declared = matches!(src, Source::M3u(_) | Source::Tvheadend(_));
+    // An account that cannot be asked has nothing worth keeping; one that
+    // can is asked at most every few seconds.
+    let s = if declared {
+        connections::look(src, declared_max).await
+    } else {
+        connections::look_cached(src, declared_max).await
+    };
+    Ok(ConnectionsDto {
+        max: s.max,
+        active: s.active,
+        ours: connections::held(),
+        counted: matches!(s.limit(), Limit::Counted(_)),
+        declared,
+        expires: s.expires,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -642,6 +910,8 @@ fn tick(app: &AppHandle, p: &Player) {
     let loaded;
     let newly_failed;
     let ledger;
+    let due;
+    let holding;
     // The newest track list this tick, if it moved. Only the last matters.
     let tracks = signals.iter().rev().find_map(|s| match s {
         Signal::Tracks(json) => Some(json.as_str()),
@@ -701,6 +971,40 @@ fn tick(app: &AppHandle, p: &Player) {
         m.apply(&probe);
         m.check_deadline();
         ledger = m.ledger(Instant::now());
+        // Wall time since the last heartbeat, which is never exactly TICK.
+        let elapsed = m
+            .last_tick_at
+            .map_or(TICK.as_secs_f64(), |t| t.elapsed().as_secs_f64());
+
+        // Starting at live: the picture is held on its first frame until the
+        // connect burst is in, then started at the cushion. See `Join`.
+        if m.join.is_some() {
+            if !probe.paused {
+                // Somebody pressed play during the hold. That is an answer
+                // too: play from here, and `Settle` catches it up after.
+                m.joined();
+            } else if let Some(by) = m
+                .join
+                .as_mut()
+                .and_then(|j| j.observe(elapsed, probe.cache_end, probe.behind_live))
+            {
+                let burst = m.join.as_ref().is_some_and(Join::saw_burst);
+                tracing::info!(
+                    "starting at live: {:.1}s of data in, {}; skipping {by:.1}s of it",
+                    probe.behind_live,
+                    if burst { "the connect burst is over" } else { "no connect burst" },
+                );
+                if by > 0.05 {
+                    // Paused, so this is unseen: the first frame that moves
+                    // is the one it lands on.
+                    let _ = p.command("seek", &[&format!("{by:.3}"), "relative"]);
+                }
+                if let Err(e) = p.set_flag("pause", false) {
+                    tracing::warn!("could not start the held channel: {e}");
+                }
+                m.joined();
+            }
+        }
         // Only a stream that never showed a picture: the tuner is asked again,
         // which is a connection, and one that ended mid-play is not a busy
         // tuner to explain but a stream to leave alone.
@@ -726,9 +1030,6 @@ fn tick(app: &AppHandle, p: &Player) {
         // when the picture actually stops, which is the one case where
         // catching up is what the viewer wants.
         if m.following_live && m.dto.state == PlaybackState::Playing {
-            let elapsed = m
-                .last_tick_at
-                .map_or(TICK.as_secs_f64(), |t| t.elapsed().as_secs_f64());
             // Clamped as a total, not per tick: see `lost_since`. Time made
             // back has to be able to cancel time lost, or timer jitter alone
             // reaches the threshold.
@@ -770,6 +1071,27 @@ fn tick(app: &AppHandle, p: &Player) {
         m.last_pos = probe.time_pos;
         m.last_tick_at = Some(Instant::now());
 
+        // Evidence for telling a stall from a stream the provider closed.
+        if matches!(
+            m.dto.state,
+            PlaybackState::Opening | PlaybackState::Playing | PlaybackState::Paused
+        ) {
+            m.flow.observe(elapsed, probe.cache_end, probe.demuxer_eof, probe.fw_bytes);
+        }
+        if m.dto.state == PlaybackState::Playing
+            && m.reconnected_at.is_some_and(|t| t.elapsed() >= RECONNECT_FORGIVEN)
+        {
+            m.reconnects = 0;
+            m.reconnected_at = None;
+            m.chain_ending = None;
+        }
+        due = m
+            .reconnect_due
+            .take()
+            .zip(m.dto.stream_id)
+            .map(|(d, id)| (d, m.reconnect_token, id));
+        holding = holds_a_stream(&m);
+
         // Watch time, for auto-favourites. Only `Playing` counts: opening is
         // not watching, and neither is a paused stream sitting on a frame.
         earned = WATCHED.lock().expect("activity mutex poisoned").observe(
@@ -788,6 +1110,10 @@ fn tick(app: &AppHandle, p: &Player) {
     };
     if loaded {
         crate::ipc::health::observe(health);
+    }
+    connections::set_held(connections::Use::Player, holding);
+    if let Some((d, token, id)) = due {
+        spawn_reconnect(app, d, token, id);
     }
     if let Some(id) = newly_failed {
         explain_failure(app, id);
@@ -875,6 +1201,7 @@ pub fn forget_source() {
     if let Ok(mut slot) = CLIENT.write() {
         *slot = None;
     }
+    connections::forget();
 }
 
 /// The Xtream client. Built on demand; a failure is not cached, so fixing the
@@ -999,21 +1326,77 @@ fn apply_http_headers(p: &Player, target: &Playable) {
     CUSTOM_HEADERS.store(custom, Ordering::Release);
 }
 
+/// "When a channel opens", as last saved or applied: [`LiveStart`] as its
+/// index, so it can live in an atomic. The default until the saved
+/// settings say otherwise.
+static LIVE_START: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(LiveStart::CatchUp as u8);
+
+fn live_start_mode() -> LiveStart {
+    match LIVE_START.load(Ordering::Acquire) {
+        x if x == LiveStart::Stay as u8 => LiveStart::Stay,
+        x if x == LiveStart::Wait as u8 => LiveStart::Wait,
+        _ => LiveStart::CatchUp,
+    }
+}
+
 /// Shared by live and catchup: state first, then the one connection.
 async fn open(app: &AppHandle, stream_id: i64, target: Playable, live: bool) -> Result<(), String> {
+    open_as(app, stream_id, target, live, None).await
+}
+
+/// [`open`], as automatic reconnect number `reconnect` when it is one.
+async fn open_as(
+    app: &AppHandle,
+    stream_id: i64,
+    target: Playable,
+    live: bool,
+    reconnect: Option<u32>,
+) -> Result<(), String> {
+    if let Ok(mut last) = LAST_OPEN.lock() {
+        *last = Some((stream_id, target.clone(), live));
+    }
     ensure_ticker(app);
     // The scrollback previews describe a buffer that is about to be closed.
     // Keeping them would put the previous channel's picture under the cursor.
     crate::surface::trickplay::clear();
     // Same reasoning, for the same reason: the graphs describe one stream.
     crate::ipc::health::clear();
+    let mode = live_start_mode();
+    let mut was_holding = false;
+    let mut join = false;
     commit(app, |m| {
+        was_holding = m.joining;
         m.opening(stream_id);
         m.live = live;
+        m.starting(mode);
+        join = m.joining;
+        match reconnect {
+            // Carries on the run: its count, and what started it.
+            Some(attempt) => {
+                m.reconnects = attempt;
+                m.dto.reconnect = Some(ReconnectDto {
+                    attempt,
+                    of: connections::BACKOFF.len() as u32,
+                    checking: false,
+                });
+            }
+            // A person asked: a fresh start.
+            None => m.chain_ending = None,
+        }
     });
     let r = on_player(app, move |p| {
         apply_http_headers(p, &target);
         reset_track_choice(p);
+        // `pause` is global in mpv and outlives the file, so it is set
+        // before the open: paused, the stream opens, decodes its first frame
+        // and shows it, and the demuxer keeps reading behind it. And put
+        // back for an open that does not hold, if the hold on the last
+        // channel was cut short by this one: that pause was ours.
+        if join || was_holding {
+            if let Err(e) = p.set_flag("pause", join) {
+                tracing::warn!("could not set up the start at live: {e}");
+            }
+        }
         // `replace` closes the current demuxer before opening the next, which
         // is what keeps this a one-connection client.
         p.load(&target.url).map_err(|e| e.to_string())
@@ -1699,6 +2082,307 @@ mod tests {
         assert_eq!(m.dto.live_jump.map(|j| j.seq), Some(3));
     }
 
+    /// A live channel opened to start at live, as `open` sets it up.
+    fn held(id: i64) -> Machine {
+        let mut m = Machine::new();
+        m.opening(id);
+        m.starting(LiveStart::Wait);
+        m
+    }
+
+    #[test]
+    fn catching_up_plays_at_once_and_jumps_after_the_burst() {
+        let mut m = Machine::new();
+        m.opening(1);
+        m.starting(LiveStart::CatchUp);
+        assert!(!m.joining, "no hold");
+        assert!(m.following_live, "the catch-up after the burst runs");
+        m.playing();
+        assert_eq!(m.dto.state, PlaybackState::Playing, "moving from the first frame");
+        assert!(m.settle.is_some());
+    }
+
+    #[test]
+    fn staying_put_never_skips_ahead_by_itself() {
+        let mut m = Machine::new();
+        m.opening(1);
+        m.starting(LiveStart::Stay);
+        assert!(!m.joining);
+        assert!(!m.following_live, "neither after the burst nor after a stall");
+        m.playing();
+        assert_eq!(m.dto.state, PlaybackState::Playing);
+    }
+
+    #[test]
+    fn waiting_holds_the_first_frame() {
+        let mut m = held(1);
+        assert!(m.joining && m.following_live);
+        m.playing();
+        assert_eq!(m.dto.state, PlaybackState::Opening);
+        assert!(m.dto.joining_live);
+    }
+
+    #[test]
+    fn a_catch_up_programme_starts_where_it_was_asked_whatever_the_setting() {
+        for mode in [LiveStart::Stay, LiveStart::CatchUp, LiveStart::Wait] {
+            let mut m = Machine::new();
+            m.opening(1);
+            m.live = false;
+            m.starting(mode);
+            assert!(!m.joining, "{mode:?}");
+            m.playing();
+            assert_eq!(m.dto.state, PlaybackState::Playing, "{mode:?}");
+        }
+    }
+
+    #[test]
+    fn the_setting_survives_its_trip_through_the_atomic() {
+        for mode in [LiveStart::Stay, LiveStart::CatchUp, LiveStart::Wait] {
+            LIVE_START.store(mode as u8, Ordering::Release);
+            assert_eq!(live_start_mode(), mode);
+        }
+        LIVE_START.store(LiveStart::CatchUp as u8, Ordering::Release);
+    }
+
+    #[test]
+    fn a_held_first_frame_is_not_yet_playing() {
+        let mut m = held(1);
+        m.playing();
+        assert_eq!(m.dto.state, PlaybackState::Opening, "nothing moves yet");
+        assert!(m.dto.joining_live, "and the interface is told why");
+        assert!(m.shown, "but a frame was shown: an ending now is a drop");
+        assert!(m.opened_at.is_none(), "and the first-frame deadline is met");
+        m.check_deadline();
+        assert_eq!(m.dto.state, PlaybackState::Opening);
+    }
+
+    #[test]
+    fn letting_go_of_the_hold_plays_and_keeps_watching_for_a_long_burst() {
+        let mut m = held(1);
+        m.playing();
+        m.joined();
+        assert_eq!(m.dto.state, PlaybackState::Playing);
+        assert!(!m.dto.joining_live);
+        assert!(m.join.is_none());
+        assert!(m.settle.is_some(), "a burst that outlasted the hold is still caught up");
+        // A later reconfigure is a resolution change, not a new hold.
+        m.playing();
+        assert_eq!(m.dto.state, PlaybackState::Playing);
+        assert!(m.join.is_none());
+    }
+
+    #[test]
+    fn a_reconfigure_during_the_hold_does_not_restart_it() {
+        let mut m = held(1);
+        m.playing();
+        let _ = m.join.as_mut().unwrap().observe(0.25, Some(20.0), 20.0);
+        m.playing();
+        let j = m.join.as_ref().unwrap();
+        assert!(j.saw_burst(), "the same hold, with what it has seen");
+    }
+
+    #[test]
+    fn the_hold_does_not_report_a_position() {
+        // The held frame is about to be skipped past; "24s behind" for the
+        // moment before it is would announce the jump this exists to hide.
+        let mut m = held(1);
+        m.playing();
+        m.apply(&Probe {
+            width: Some(1280),
+            behind_live: 24.0,
+            paused: true,
+            ..Probe::default()
+        });
+        assert_eq!(m.dto.width, Some(1280));
+        assert_eq!(m.dto.behind_live, 0.0);
+        assert!(m.dto.at_live_edge);
+        assert_eq!(m.dto.state, PlaybackState::Opening, "not Paused: nobody paused it");
+    }
+
+    #[test]
+    fn an_ending_during_the_hold_is_explained_like_any_other() {
+        let mut m = held(1);
+        m.playing();
+        m.ended();
+        assert_eq!(m.dto.state, PlaybackState::Failed);
+        assert!(!m.dto.joining_live);
+        assert!(!m.joining);
+        assert_eq!(m.dto.ending.unwrap().kind, ending::EndingKind::Dropped);
+    }
+
+    #[test]
+    fn a_zap_forgets_the_last_hold() {
+        let mut m = held(1);
+        m.playing();
+        m.opening(2);
+        assert!(!m.joining && m.join.is_none() && !m.dto.joining_live);
+    }
+
+    /// A live channel that played and then lost the network.
+    fn network_failure(m: &mut Machine) {
+        m.clues.observe("tcp: Connection to tcp://10.0.0.1:80 failed: Connection timed out");
+        m.ended_with(How::Error(-13));
+    }
+
+    #[test]
+    fn the_network_failing_is_reconnected_after_a_wait() {
+        let mut m = Machine::new();
+        m.opening(7);
+        m.playing();
+        network_failure(&mut m);
+        assert_eq!(m.dto.state, PlaybackState::Failed);
+        assert_eq!(m.dto.ending.unwrap().kind, EndingKind::Network);
+        let r = m.dto.reconnect.expect("reconnecting");
+        assert_eq!((r.attempt, r.of, r.checking), (1, 4, false));
+        let due = m.reconnect_due.expect("a reconnect is due");
+        assert!((1.5..=2.5).contains(&due.delay.as_secs_f64()), "{:?}", due.delay);
+        assert!(!due.unreached, "it had connected: a frame was shown");
+    }
+
+    #[test]
+    fn nothing_the_provider_did_is_reconnected() {
+        for (line, how) in [
+            (None, How::Eof),
+            (Some("HTTP error 509 Max Connections Reached"), How::Error(-13)),
+            (Some("HTTP error 403 Forbidden"), How::Error(-13)),
+            (Some("HTTP error 503 Service Unavailable"), How::Error(-13)),
+        ] {
+            let mut m = Machine::new();
+            m.opening(7);
+            m.playing();
+            if let Some(l) = line {
+                m.clues.observe(l);
+            }
+            m.ended_with(how);
+            assert!(m.dto.reconnect.is_none() && m.reconnect_due.is_none(), "{line:?}");
+        }
+    }
+
+    #[test]
+    fn a_catch_up_programme_is_not_reconnected() {
+        let mut m = Machine::new();
+        m.opening(7);
+        m.live = false;
+        m.playing();
+        network_failure(&mut m);
+        assert!(m.reconnect_due.is_none());
+    }
+
+    #[test]
+    fn a_failure_that_never_reached_the_provider_says_so() {
+        let mut m = Machine::new();
+        m.opening(7);
+        m.clues.observe("tcp: Failed to resolve hostname nowhere.invalid: Name or service not known");
+        m.ended_with(How::Error(-13));
+        assert!(m.reconnect_due.unwrap().unreached);
+    }
+
+    #[test]
+    fn a_reconnect_that_is_refused_stops_there() {
+        let mut m = Machine::new();
+        m.opening(7);
+        m.playing();
+        network_failure(&mut m);
+        // The reconnect, as `open_as` makes it.
+        m.opening(7);
+        m.reconnects = 1;
+        m.clues.observe("HTTP error 509 Max Connections Reached");
+        m.ended_with(How::Error(-13));
+        assert_eq!(m.dto.ending.unwrap().kind, EndingKind::Refused);
+        assert!(m.dto.reconnect.is_none(), "a refusal ends the run");
+        assert!(m.reconnect_due.is_none());
+    }
+
+    #[test]
+    fn the_allowance_runs_out() {
+        let mut m = Machine::new();
+        m.opening(7);
+        m.reconnects = 4;
+        network_failure(&mut m);
+        assert!(m.reconnect_due.is_none(), "four is all");
+        assert!(m.dto.reconnect.is_none());
+        assert_eq!(m.dto.ending.unwrap().kind, EndingKind::Network);
+    }
+
+    #[test]
+    fn an_account_that_cannot_be_asked_costs_an_attempt() {
+        let mut m = Machine::new();
+        m.opening(7);
+        m.playing();
+        network_failure(&mut m);
+        m.reconnect_due = None;
+        m.reconnect_skipped();
+        assert_eq!(m.dto.reconnect.unwrap().attempt, 2);
+        assert!(m.reconnect_due.unwrap().delay >= Duration::from_secs(3));
+    }
+
+    #[test]
+    fn a_full_account_is_said_and_not_reconnected() {
+        let mut m = Machine::new();
+        m.opening(7);
+        m.playing();
+        network_failure(&mut m);
+        m.in_use(connections::Slots { max: 1, active: 1 });
+        let e = m.dto.ending.unwrap();
+        assert_eq!(e.kind, EndingKind::InUse);
+        assert_eq!(e.slots, Some(connections::Slots { max: 1, active: 1 }));
+        assert!(m.dto.reconnect.is_none());
+        assert_eq!(m.dto.state, PlaybackState::Failed);
+    }
+
+    #[test]
+    fn a_picture_ends_the_reconnecting() {
+        let mut m = Machine::new();
+        m.opening(7);
+        m.reconnects = 1;
+        m.dto.reconnect = Some(ReconnectDto { attempt: 1, of: 4, checking: false });
+        m.playing();
+        assert!(m.dto.reconnect.is_none());
+        assert!(m.reconnected_at.is_some());
+    }
+
+    #[test]
+    fn a_zap_or_a_stop_makes_a_waiting_reconnect_stale() {
+        let mut m = Machine::new();
+        m.opening(7);
+        m.playing();
+        network_failure(&mut m);
+        let token = m.reconnect_token;
+        m.opening(8);
+        assert_ne!(m.reconnect_token, token);
+        assert!(m.dto.reconnect.is_none());
+        let token = m.reconnect_token;
+        m.stopped();
+        assert_ne!(m.reconnect_token, token);
+    }
+
+    #[test]
+    fn a_stall_is_reconnected_but_a_takeover_is_not() {
+        // Data for ten seconds, then quiet until mpv's timeout reads the end.
+        let mut m = Machine::new();
+        m.opening(7);
+        m.playing();
+        for i in 1..=72 {
+            let t = f64::from(i) * 0.25;
+            m.flow.observe(0.25, Some(t.min(10.0)), t >= 18.0, Some(1_000_000));
+        }
+        m.ended();
+        assert_eq!(m.dto.ending.unwrap().kind, EndingKind::Network);
+        assert!(m.reconnect_due.is_some());
+
+        // The provider closing it: the end is read the moment data stops.
+        let mut m = Machine::new();
+        m.opening(7);
+        m.playing();
+        for i in 1..=72 {
+            let t = f64::from(i) * 0.25;
+            m.flow.observe(0.25, Some(t.min(10.0)), t >= 10.25, Some(1_000_000));
+        }
+        m.ended();
+        assert_eq!(m.dto.ending.unwrap().kind, EndingKind::Dropped);
+        assert!(m.reconnect_due.is_none());
+    }
+
     #[test]
     fn quality_is_not_taken_before_a_frame_exists() {
         let mut m = Machine::new();
@@ -1902,46 +2586,6 @@ mod tests {
         assert_eq!(clamp_seek(-5.0, 60.0, 3.0), -5.0);
         assert_eq!(clamp_seek(-90.0, 60.0, 3.0), -60.0);
         assert_eq!(clamp_seek(-5.0, 0.0, 0.0), 0.0);
-    }
-
-    /// Feeds `Settle` a series of `behind_live` readings a heartbeat apart and
-    /// returns the decision and the heartbeat it came on.
-    fn settle_run(readings: impl IntoIterator<Item = f64>) -> Option<(usize, f64)> {
-        let mut s = Settle::new();
-        let dt = TICK.as_secs_f64();
-        readings
-            .into_iter()
-            .enumerate()
-            .find_map(|(i, b)| s.observe(dt, b).map(|by| (i, by)))
-    }
-
-    #[test]
-    fn a_tune_in_burst_is_caught_up_once_it_has_finished() {
-        // The burst: behind_live climbs to 24s over two seconds, then holds
-        // (real-time delivery, the seekable end ticking over by tenths).
-        let mut readings: Vec<f64> = (1..=8).map(|i| f64::from(i) * 3.0).collect();
-        readings.extend((0..40).map(|i| 24.0 + f64::from(i % 3) * 0.1));
-        let (at, by) = settle_run(readings).expect("never decided");
-        // Not during the climb: the seek waits for the data to have arrived.
-        assert!(at >= 8 + 5, "decided at heartbeat {at}, while the burst was arriving");
-        // Lands on the cushion.
-        assert!((24.0 - by - LIVE_CUSHION).abs() < 0.2, "jumped by {by}");
-    }
-
-    #[test]
-    fn a_tune_in_already_near_live_is_left_alone() {
-        let readings = std::iter::repeat_n(LIVE_CUSHION + 1.0, 40);
-        assert_eq!(settle_run(readings).map(|(_, by)| by), Some(0.0));
-    }
-
-    #[test]
-    fn a_burst_that_never_settles_is_decided_anyway() {
-        // Still growing at SETTLE_MAX: decide then rather than wait forever.
-        let readings = (1..=200).map(|i| f64::from(i) * 0.6);
-        let (at, by) = settle_run(readings).expect("never decided");
-        let dt = TICK.as_secs_f64();
-        assert!((at as f64 + 1.0) * dt >= SETTLE_MAX - dt);
-        assert!(by > 0.0);
     }
 
     /// The gain mpv applies for one of its volumes, in dB.
@@ -2523,6 +3167,7 @@ pub async fn apply_playback_settings(
     app: AppHandle,
     settings: crate::ipc::types::SettingsDto,
 ) -> Result<(), String> {
+    LIVE_START.store(settings.live_start as u8, Ordering::Release);
     let props = playback_properties(&settings);
     on_player(&app, move |p| apply_properties(p, &props)).await
 }
@@ -2551,6 +3196,7 @@ pub async fn set_media_session(
 /// working player.
 pub fn apply_saved_settings(app: &tauri::AppHandle) {
     let saved = crate::catalog::settings::load_or_default();
+    LIVE_START.store(saved.live_start as u8, Ordering::Release);
     let mut props = playback_properties(&saved);
     props.extend(subtitle_properties(&saved.subtitle));
 

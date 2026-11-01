@@ -7,7 +7,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { endedMessage } from "../logic/ending.ts";
+import { endedActions, endedMessage, reconnectMessage, startingLine } from "../logic/ending.ts";
 
 const failed = (ending, error = "the stream ended") => ({ state: "failed", ending, error });
 
@@ -64,4 +64,77 @@ test("a failure with no ending shows the backend's own words", () => {
   const m = endedMessage({ state: "failed", ending: null, error: why });
   assert.equal(m.title, "Couldn't play this channel.");
   assert.equal(m.detail, why);
+});
+
+// ------------------------------------------------------------- on the way in
+
+test("a channel on its way says whether it is opening or joining live", () => {
+  assert.equal(startingLine({ state: "opening", joiningLive: false }), "Opening…");
+  // The first frame is up and held while the connect burst arrives.
+  assert.equal(startingLine({ state: "opening", joiningLive: true }), "Joining live…");
+  for (const state of ["stopped", "playing", "paused", "failed"]) {
+    assert.equal(startingLine({ state, joiningLive: false }), null, state);
+  }
+  // Reconnecting, waiting or attempting, says so rather than "Opening…".
+  const reconnect = { attempt: 3, of: 4, checking: false };
+  assert.equal(startingLine({ state: "failed", joiningLive: false, reconnect }), "Reconnecting… (3 of 4)");
+  assert.equal(startingLine({ state: "opening", joiningLive: false, reconnect }), "Reconnecting… (3 of 4)");
+});
+
+// ------------------------------------------------------------- what to press
+
+test("where another device is the likely reason, the button says what it does", () => {
+  const at = (kind, limit = false) => ({
+    state: "failed",
+    ending: { kind, status: null, limit, slots: null },
+    reconnect: null,
+  });
+  for (const kind of ["dropped", "notVideo", "refused", "inUse"]) {
+    const a = endedActions(at(kind));
+    assert.equal(a.primary, "watchHere", kind);
+    assert.ok(a.note && /other device|another device/.test(a.note), kind);
+    assert.equal(a.dismiss, true);
+  }
+  assert.equal(endedActions(at("refused", true)).note, "This will stop playback on the other device.");
+  assert.equal(endedActions(at("inUse")).note, "This will stop playback on the other device.");
+  // Nobody else involved: a plain Retry, with nothing to warn about.
+  for (const kind of ["network", "unavailable", "serverError", "noVideo", "other"]) {
+    const a = endedActions(at(kind));
+    assert.equal(a.primary, "retry", kind);
+    assert.equal(a.note, null, kind);
+  }
+  assert.equal(endedActions({ state: "failed", ending: null, reconnect: null }).primary, "retry");
+  assert.equal(endedActions({ state: "playing", ending: null, reconnect: null }), null);
+});
+
+test("a reconnect in progress can only be cancelled", () => {
+  const p = {
+    state: "failed",
+    error: "x",
+    ending: { kind: "network", status: null, limit: false, slots: null },
+    reconnect: { attempt: 2, of: 4, checking: false },
+  };
+  assert.deepEqual(endedActions(p), { primary: "cancel", note: null, dismiss: false });
+  // Opening the attempt itself is still a reconnect, and still cancellable.
+  assert.equal(endedActions({ ...p, state: "opening" }).primary, "cancel");
+  const m = reconnectMessage(p);
+  assert.equal(m.title, "Reconnecting… (2 of 4)");
+  assert.equal(m.detail, "Couldn't reach the server.", "the reason stays under it");
+  assert.match(reconnectMessage({ ...p, reconnect: { ...p.reconnect, checking: true } }).detail, /connection free/);
+  assert.equal(reconnectMessage({ ...p, reconnect: null }), null);
+});
+
+test("an account in use elsewhere says how many connections", () => {
+  const m = endedMessage({
+    state: "failed",
+    error: "x",
+    ending: { kind: "inUse", status: null, limit: true, slots: { max: 1, active: 1 } },
+  });
+  assert.equal(m.title, "Your account is in use on another device (1 of 1 connection).");
+  const two = endedMessage({
+    state: "failed",
+    error: "x",
+    ending: { kind: "inUse", status: null, limit: true, slots: { max: 2, active: 2 } },
+  });
+  assert.match(two.title, /\(2 of 2 connections\)/);
 });

@@ -113,6 +113,9 @@ impl XtreamClient {
         let e: Envelope = self
             .http
             .get(self.api_url(None))
+            // Asked before reconnecting and from Settings: a server that
+            // does not answer promptly is as good as one that cannot.
+            .timeout(std::time::Duration::from_secs(8))
             .send()
             .await?
             .error_for_status()?

@@ -33,6 +33,7 @@ fn set_app_id() {}
 
 // The core: everything the recording service shares with the app.
 pub mod catalog;
+pub mod connections;
 pub mod harness;
 pub mod hdhomerun;
 pub mod ipc;
@@ -125,6 +126,8 @@ pub fn run() {
             ipc::player_cmds::set_subtitle_track,
             ipc::player_cmds::set_aspect,
             ipc::player_cmds::set_deinterlace,
+            ipc::player_cmds::cancel_reconnect,
+            ipc::player_cmds::connection_status,
             ipc::player_cmds::set_subtitle_style,
             ipc::player_cmds::apply_playback_settings,
             ipc::player_cmds::set_media_session,

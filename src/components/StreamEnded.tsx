@@ -1,17 +1,20 @@
 // What the picture says when the stream stopped by itself — most often
-// because the provider handed the account's connection to another device.
+// because the provider handed the account's connection to another device —
+// or while the backend reconnects by itself after the network failed.
 //
 // Drawn over the video, which nothing else may be (see WatchBand): there is
 // no video under it to hide. mpv has stopped, and the slot would otherwise
 // be an empty black box that says nothing.
 //
-// Retry is the only way back to the stream. Nothing reconnects on its own:
-// a provider at its limit would end the other device's stream in turn (see
-// logic/ending.ts).
+// After the provider ended or refused the stream, tuning again is only ever
+// a button. Where another device is the likely reason, the button says
+// "Watch here anyway" and what it will do to that device; elsewhere it is
+// Retry (see logic/ending.ts). A reconnect the backend is making by itself
+// can be cancelled.
 
 import { playChannel } from "../actions";
 import { backend } from "../backend";
-import { endedMessage } from "../logic/ending";
+import { endedActions, endedMessage, reconnectMessage } from "../logic/ending";
 import { run, useApp, useDispatch } from "../store";
 
 export interface StreamEndedProps {
@@ -25,8 +28,9 @@ export interface StreamEndedProps {
 export function StreamEnded({ compact = false, onDismissed }: StreamEndedProps) {
   const { player, nowChannel } = useApp();
   const dispatch = useDispatch();
-  const message = endedMessage(player);
-  if (!message) return null;
+  const message = reconnectMessage(player) ?? endedMessage(player);
+  const actions = endedActions(player);
+  if (!message || !actions) return null;
 
   const retry = () => {
     const id = player.streamId;
@@ -40,6 +44,7 @@ export function StreamEnded({ compact = false, onDismissed }: StreamEndedProps) 
     void run(dispatch, "stop", backend.stop());
     onDismissed?.();
   };
+  const cancel = () => void run(dispatch, "cancel reconnect", backend.cancelReconnect());
 
   return (
     <div
@@ -54,13 +59,22 @@ export function StreamEnded({ compact = false, onDismissed }: StreamEndedProps) 
       {!compact && message.detail ? <p className="stream-ended-detail">{message.detail}</p> : null}
       {!compact && message.code ? <p className="stream-ended-code">{message.code}</p> : null}
       <div className="stream-ended-actions">
-        <button className="ctl retry" onClick={retry} disabled={player.streamId === null}>
-          Retry
-        </button>
-        <button className="ctl" onClick={dismiss}>
-          Dismiss
-        </button>
+        {actions.primary === "cancel" ? (
+          <button className="ctl" onClick={cancel}>
+            Cancel
+          </button>
+        ) : (
+          <button className="ctl retry" onClick={retry} disabled={player.streamId === null}>
+            {actions.primary === "watchHere" ? "Watch here anyway" : "Retry"}
+          </button>
+        )}
+        {actions.dismiss ? (
+          <button className="ctl" onClick={dismiss}>
+            Dismiss
+          </button>
+        ) : null}
       </div>
+      {!compact && actions.note ? <p className="stream-ended-note">{actions.note}</p> : null}
     </div>
   );
 }

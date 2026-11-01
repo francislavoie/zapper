@@ -120,7 +120,6 @@ export const RECORDING_DEFAULTS = {
   padBefore: 60,
   padAfter: 300,
   clockTrack: true,
-  simultaneousStreams: 1,
 } as const;
 
 /** Minutes from the seconds the service keeps padding in, and back. */

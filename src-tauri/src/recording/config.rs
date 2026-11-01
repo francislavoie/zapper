@@ -29,7 +29,6 @@ pub struct ServerConfig {
     pub pad_before: i64,
     pub pad_after: i64,
     pub clock_track: bool,
-    pub simultaneous_streams: u32,
 }
 
 impl Default for ServerConfig {
@@ -40,7 +39,6 @@ impl Default for ServerConfig {
             pad_before: 60,
             pad_after: 5 * 60,
             clock_track: true,
-            simultaneous_streams: 1,
         }
     }
 }
@@ -52,7 +50,6 @@ impl ServerConfig {
             pad_before: self.pad_before,
             pad_after: self.pad_after,
             clock_track: self.clock_track,
-            simultaneous_streams: self.simultaneous_streams,
             default_output_dir: default_output_dir().to_string_lossy().into_owned(),
         }
     }
@@ -76,7 +73,6 @@ impl ServerConfig {
         self.pad_before = s.pad_before;
         self.pad_after = s.pad_after;
         self.clock_track = s.clock_track;
-        self.simultaneous_streams = s.simultaneous_streams.clamp(1, 20);
         Ok(())
     }
 }

@@ -16,7 +16,7 @@
 
 import { useRef, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 import { playChannel } from "../actions";
-import { endedMessage } from "../logic/ending";
+import { endedMessage, startingLine } from "../logic/ending";
 import { slotAction } from "../logic/gestures";
 import { backend } from "../backend";
 import { useClock } from "../hooks/useClock";
@@ -231,7 +231,7 @@ export function WatchBand({ videoRef }: WatchBandProps) {
             that these would fight with. A stream that stopped by itself
             gets its explanation and Retry here instead; the details are in
             the column beside it. */}
-        {player.state === "failed" ? (
+        {player.state === "failed" || player.reconnect ? (
           <StreamEnded compact />
         ) : live ? (
           <MiniControls onActivate={activate} />
@@ -322,6 +322,7 @@ function Playing({
   const measured = measuredLine(player);
   const badge = playerBadge(player);
   const ended = endedMessage(player);
+  const starting = startingLine(player);
 
   return (
     <>
@@ -355,8 +356,8 @@ function Playing({
             </span>
           ) : null}
         </div>
-        {player.state === "opening" ? (
-          <p className="watch-state">Opening…</p>
+        {starting ? (
+          <p className="watch-state">{starting}</p>
         ) : ended ? (
           <>
             <p className="watch-state bad">{ended.title}</p>

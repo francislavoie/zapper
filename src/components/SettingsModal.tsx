@@ -13,6 +13,7 @@ import { clampVolume, dateTime, duration, hhmm, systemUses12h, uses12h } from ".
 import {
   DEFAULT_SETTINGS,
   DEFAULT_SUBTITLE,
+  LIVE_START_CHOICES,
   REWIND_BITRATES,
   REWIND_MAX,
   REWIND_MIN,
@@ -38,12 +39,13 @@ import { checkForUpdates } from "../actions";
 import { run, useApp, useDispatch } from "../store";
 import { AboutPane } from "./AboutPane";
 import { AccountPane } from "./AccountPane";
+import { ConnectionsPane } from "./ConnectionsPane";
 import { BackupPane } from "./BackupPane";
 import { RecordingPane } from "./RecordingPane";
 import { RangeField, Segmented, SettingRow, SettingsGroup, SettingsPage } from "./SettingsParts";
 import { Switch } from "./Switch";
 import { VolumeControl } from "./VolumeControl";
-import type { SubtitleBackdrop, SettingsDto } from "../types";
+import type { LiveStart, SubtitleBackdrop, SettingsDto } from "../types";
 
 const SECTIONS = [
   "Account",
@@ -150,12 +152,17 @@ export function SettingsModal() {
               <Status status={s.status} saveError={s.saveError} onRetry={s.reload} />
             ) : null}
 
-            {section === "Account" ? <AccountPane /> : null}
+            {section === "Account" ? (
+              <>
+                <AccountPane />
+                <ConnectionsPane s={s} />
+              </>
+            ) : null}
             {section === "Playback" ? <PlaybackPage s={s} /> : null}
             {section === "Audio" ? <AudioPage /> : null}
             {section === "Subtitles" ? <SubtitlesPage s={s} /> : null}
             {section === "Guide" ? <GuidePage s={s} /> : null}
-            {section === "Recording" ? <RecordingPane /> : null}
+            {section === "Recording" ? <RecordingPane s={s} /> : null}
             {section === "Data" ? <DataPage s={s} /> : null}
             {section === "Updates" ? <UpdatesPage s={s} /> : null}
             {section === "Keyboard" ? <KeyboardPane /> : null}
@@ -243,6 +250,34 @@ function PlaybackPage({ s }: { s: SettingsControl }) {
             id="set-hdr"
             checked={s.settings.toneMapHdr}
             onChange={(v) => s.patch({ toneMapHdr: v })}
+          />
+        </SettingRow>
+      </SettingsGroup>
+
+      <SettingsGroup heading="Changing channel">
+        <SettingRow
+          label="When a channel opens"
+          htmlFor="set-live-start"
+          layout="stack"
+          description={
+            <>
+              Providers open a channel with the last half-minute or so they have buffered,
+              which starts it in the past.{" "}
+              {LIVE_START_CHOICES.find((c) => c.value === s.settings.liveStart)?.note}
+            </>
+          }
+          {...resettable(
+            s,
+            "liveStart",
+            LIVE_START_CHOICES.find((c) => c.value === d.liveStart)?.label ?? d.liveStart,
+          )}
+        >
+          <Segmented<LiveStart>
+            id="set-live-start"
+            label="When a channel opens"
+            value={s.settings.liveStart}
+            options={LIVE_START_CHOICES.map((c) => ({ id: c.value, label: c.short, tip: c.label }))}
+            onChange={(v) => s.patch({ liveStart: v })}
           />
         </SettingRow>
       </SettingsGroup>

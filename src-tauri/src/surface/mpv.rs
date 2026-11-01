@@ -70,6 +70,9 @@ pub fn request_warnings(mpv: &Mpv) {
     }
 }
 
+/// How far ahead of the playhead mpv may buffer, in bytes.
+pub const DEMUXER_MAX_BYTES: i64 = 256 * 1024 * 1024;
+
 /// A handle to the process-wide mpv instance.
 ///
 /// Zero-sized: the real state is the static above, plus whatever the
@@ -90,7 +93,7 @@ impl Player {
             // Live rewind: ~512 MiB, roughly 3.7 minutes at 18 Mbps.
             init.set_property("cache", "yes".to_owned())?;
             init.set_property("demuxer-max-back-bytes", 512i64 * 1024 * 1024)?;
-            init.set_property("demuxer-max-bytes", 256i64 * 1024 * 1024)?;
+            init.set_property("demuxer-max-bytes", DEMUXER_MAX_BYTES)?;
             init.set_property("hwdec", "auto-safe".to_owned())?;
             // Exact seeks, and the reason is measured rather than stylistic.
             //
@@ -106,6 +109,21 @@ impl Player {
             // the default's 35ms. Both are far below anything a viewer can
             // perceive, and the accuracy is the whole point of a skip button.
             init.set_property("hr-seek", "yes".to_owned())?;
+            // Deinterlace what says it is interlaced, and nothing else.
+            //
+            // Plenty of live channels are still 1080i or 576i, and shown
+            // without this they comb on every movement. `auto` costs nothing
+            // on the progressive majority: mpv reads each frame's interlaced
+            // flag and, without it, builds no filter at all (filters/
+            // f_auto_filters.c). Measured with mpv 0.41, software decode,
+            // eight seconds of each fixture: progressive 1080p25 used 1.77s
+            // of CPU under `auto` and 1.78s under `no` (720p60: 1.82s and
+            // 1.86s), where `yes` costs 4.06s by filtering frames that never
+            // needed it. On a flagged 1080i clip `auto` engages exactly as
+            // `yes` does (2.94s and 2.96s). Hardware frames take the same
+            // per-frame test before mpv picks the GPU's own deinterlacer
+            // (`vavpp` on VA-API, `d3d11vpp` on Windows).
+            init.set_property("deinterlace", "auto".to_owned())?;
             // HDR on an SDR panel must be tone-mapped, not washed out.
             init.set_property("tone-mapping", "auto".to_owned())?;
             init.set_property("target-colorspace-hint", "yes".to_owned())?;
@@ -372,6 +390,30 @@ pub struct Probe {
     /// forward a seek can actually land.
     pub live_edge: Option<f64>,
     pub time_pos: Option<f64>,
+    /// The newest packet mpv holds, in stream time. Unlike `live_edge` it
+    /// moves with every packet read, so it is what tells how fast data is
+    /// arriving — and it moves while playback is paused.
+    pub cache_end: Option<f64>,
+    /// The demuxer has read the end of the stream: the server finished the
+    /// response, or the connection failed. Playback carries on through
+    /// what is buffered, so this comes well before `end-file`.
+    pub demuxer_eof: bool,
+    /// Bytes buffered ahead of the playhead.
+    pub fw_bytes: Option<i64>,
+}
+
+/// `demuxer-cache-state`, the parts of it that are read.
+#[derive(Debug, Clone, Copy, Default)]
+struct CacheWindow {
+    /// The seekable window, which is not the cache: see
+    /// [`Player::cache_window`].
+    start: Option<f64>,
+    end: Option<f64>,
+    /// Where the demuxer is reading.
+    reader: Option<f64>,
+    cache_end: Option<f64>,
+    eof: bool,
+    fw_bytes: Option<i64>,
 }
 
 /// Logged once if mpv will not hand back `demuxer-cache-state`, so the
@@ -453,7 +495,7 @@ impl Player {
     /// but not yet seekable. A seek past that end is refused silently -
     /// playback simply stays where it was - so this is the number that must
     /// drive both the live edge and the forward clamp.
-    fn cache_window(&self) -> Option<(Option<f64>, Option<f64>, Option<f64>)> {
+    fn cache_window(&self) -> Option<CacheWindow> {
         let raw = self.get_string("demuxer-cache-state")?;
         let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
         let ranges = v.get("seekable-ranges").and_then(|r| r.as_array());
@@ -463,10 +505,15 @@ impl Player {
                 .and_then(|r| r.get(key))
                 .and_then(|x| x.as_f64())
         };
-        let start = bound(<[_]>::first, "start");
-        let end = bound(<[_]>::last, "end").or_else(|| v.get("cache-end").and_then(|x| x.as_f64()));
-        let reader = v.get("reader-pts").and_then(|x| x.as_f64());
-        Some((start, end, reader))
+        let cache_end = v.get("cache-end").and_then(|x| x.as_f64());
+        Some(CacheWindow {
+            start: bound(<[_]>::first, "start"),
+            end: bound(<[_]>::last, "end").or(cache_end),
+            reader: v.get("reader-pts").and_then(|x| x.as_f64()),
+            cache_end,
+            eof: v.get("eof").and_then(|x| x.as_bool()).unwrap_or(false),
+            fw_bytes: v.get("fw-bytes").and_then(|x| x.as_i64()),
+        })
     }
 
     /// Everything the state feed needs, in one main-thread visit.
@@ -561,7 +608,7 @@ impl Player {
 
     pub fn probe(&self) -> Probe {
         let time_pos = self.get_f64("time-pos");
-        let (begin, end, reader) = match self.cache_window() {
+        let w = match self.cache_window() {
             Some(w) => w,
             None => {
                 // Silent before a file is loaded: the property is legitimately
@@ -572,9 +619,13 @@ impl Player {
                         "demuxer-cache-state unreadable; scrollback depth will be approximate"
                     );
                 }
-                (None, self.get_f64("demuxer-cache-time"), None)
+                CacheWindow {
+                    end: self.get_f64("demuxer-cache-time"),
+                    ..CacheWindow::default()
+                }
             }
         };
+        let (begin, end, reader) = (w.start, w.end, w.reader);
         let pos = reader.or(time_pos);
         let behind_live = match (end, pos) {
             (Some(e), Some(p)) => (e - p).max(0.0),
@@ -600,6 +651,9 @@ impl Player {
             paused: self.get_bool("pause").unwrap_or(false),
             live_edge: end,
             time_pos,
+            cache_end: w.cache_end,
+            demuxer_eof: w.eof,
+            fw_bytes: w.fw_bytes,
         }
     }
 

@@ -3749,6 +3749,18 @@ kbd.mouse {
   color: var(--dim);
 }
 
+/* A reading rather than a control: the account's connections. */
+.set-value {
+  display: block;
+  max-width: 22rem;
+  font-size: 0.8125rem;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* What the rewind buffer buys, per bitrate: a small three-column table
    under the slider. The channel playing now leads, in the text colour,
    because it is the row that answers the question. */
@@ -4409,6 +4421,14 @@ textarea.field {
 .stream-ended .ctl.retry {
   border-color: var(--accent);
   color: var(--accent);
+}
+
+/* What "Watch here anyway" will do to the other device, said before it is
+   pressed. */
+.stream-ended-note {
+  margin: 0.5rem 0 0;
+  font-size: 0.75rem;
+  color: var(--dim);
 }
 
 /* The docked picture is a few rem tall: the headline and the two buttons,
@@ -5348,8 +5368,33 @@ textarea.field {
   }
 }
 
+/* Held on the first frame while the connect burst arrives. Up for as long
+   as that lasts rather than five seconds, so it fades in and stays; the dot
+   breathes to say something is happening behind the still picture. */
+.live-jump.joining {
+  animation: joining-in 200ms ease both;
+}
+
+.live-jump.joining .live-dot {
+  animation: joining-dot 1s ease-in-out infinite alternate;
+}
+
+@keyframes joining-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes joining-dot {
+  to {
+    opacity: 0.35;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .live-jump {
+  .live-jump,
+  .live-jump.joining,
+  .live-jump.joining .live-dot {
     animation: none;
   }
 }

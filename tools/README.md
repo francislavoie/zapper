@@ -29,7 +29,8 @@ fixtures directory is served too.
 `fake_stream.py` sends a fixture as an endless chunked response with no
 length, as a live feed does, paced to its bitrate. Flags imitate how real
 servers deliver: `--rate 2` bursts at twice realtime, `--burst 20` opens each
-connection with 20 s of video at once, and `--gap-every 4` goes quiet every
+connection with 20 s of video at once (`--burst-rate 4` sends it at four times
+realtime instead), and `--gap-every 4` goes quiet every
 four seconds and then sends the backlog in a burst (playing right at the live
 edge survives an even feed and stalls on that one).
 
@@ -41,12 +42,36 @@ line of text instead of video), `--refuse 403` refuses every stream from the
 start, and `--reason "Max Connections Reached"` sets the reason phrase a
 refusal is sent with.
 
+And the network failing instead: `--drop-after 5` resets the connection after
+5 s with no end of stream, `--stall-after 5` stops sending and leaves it open,
+and `--fault-once` applies either (or `--end-after`) to the first stream only,
+so a reconnect plays. `/player_api.php` answers as an Xtream account does,
+with `max_connections` from `--max-connections` (default 1) and `active_cons`
+the streams being served plus `--other-devices`.
+
+`cargo run --features harness --bin live_start_bench [fixture]` plays the
+server under several kinds of connect burst, starting each channel both ways
+that reach live — from the first frame then jumping to live ("Play right away,
+then catch up to live"), and held on the first frame until the burst is in
+("Wait and start at live") — and prints when the picture first
+moved, how far behind live it was, and any jump after. Give it a fixture
+longer than the burst plus twenty seconds (`ffmpeg -stream_loop 5 -i
+motion1080p.ts -c copy long.ts`, served from a `ZAPPER_FIXTURES` directory):
+the server loops its file, and the timestamps going back at each loop are a
+discontinuity no live channel has.
+
 `cargo run --features harness --bin ending_check` runs those cases end to end:
 it starts the server with each set of flags, plays it in a headless, silent
-mpv set up as the app's, and checks both how the ending is explained (taken
-over, refused with its status, not video, the network) and that the server saw
-exactly one request per open — that nothing reconnected on its own. Given a
-local URL as its argument, it plays that once and prints how it ended.
+mpv set up as the app's, and checks how the ending is explained (taken over,
+refused with its status, not video, the network, a stall). Where the app would
+reconnect by itself it does too, through the app's own decisions and the
+server's `player_api.php`, with the back-off scaled to a tenth; and it checks
+the server saw exactly the stream requests it should — nothing after a
+takeover or a refusal, and nothing while another device holds the account's
+one connection. Given a local URL as its argument, it plays that once and
+prints how it ended. `ZAPPER_ENDING_ONLY=stall` runs only the scenarios with
+that in their name; `ZAPPER_ENDING_DEBUG=1` prints mpv's warnings, and
+`ZAPPER_ENDING_LOG=debug` asks mpv for more of its log than the app does.
 
 ### Driving the app itself at a fixture
 

@@ -16,6 +16,7 @@ import {
   type PlayerStateDto,
   type PlayerOptionsDto,
   type AspectMode,
+  type ConnectionsDto,
   type DeinterlaceMode,
   type ProgrammeDto,
   type ProgrammeHitDto,
@@ -114,6 +115,11 @@ export const api = {
     invoke<void>("set_subtitle_style", { style }),
   applyPlaybackSettings: (settings: SettingsDto) =>
     invoke<void>("apply_playback_settings", { settings }),
+  /** Stops the reconnect the backend is making by itself after a network
+   *  failure; mid-attempt, the attempt too. */
+  cancelReconnect: () => invoke<void>("cancel_reconnect"),
+  /** The account's connections: allowed, open, when it expires. */
+  connectionStatus: () => invoke<ConnectionsDto>("connection_status"),
   /** What the desktop's media controls show; `null` with nothing on. */
   setMediaSession: (session: MediaSessionDto | null) =>
     invoke<void>("set_media_session", { session }),

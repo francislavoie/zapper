@@ -300,7 +300,9 @@ export const initialPlayer: PlayerStateDto = {
   compressor: false,
   error: null,
   liveJump: null,
+  joiningLive: false,
   ending: null,
+  reconnect: null,
 };
 
 /** Until the backend answers: nothing known, nothing to show. */
@@ -333,7 +335,7 @@ export const initialState: State = {
   qualityNews: {},
   categoryOptions: null,
   videoMenu: null,
-  options: { audio: [], subtitles: [], aspect: "auto", deinterlace: "off" },
+  options: { audio: [], subtitles: [], aspect: "auto", deinterlace: "auto" },
   sleep: null,
   sleepProgramme: null,
   statsOpen: false,

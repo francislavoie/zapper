@@ -8,7 +8,7 @@
 //
 // Pure; checked in src/__checks__/settings.test.mjs.
 
-import type { SettingsDto, SubtitleStyleDto } from "../types";
+import type { LiveStart, SettingsDto, SubtitleStyleDto } from "../types";
 
 export const DEFAULT_SUBTITLE: SubtitleStyleDto = {
   font: "Sans",
@@ -34,7 +34,43 @@ export const DEFAULT_SETTINGS: SettingsDto = {
   mediaControls: false,
   // The locale's clock until someone says otherwise.
   timeFormat: "auto",
+  // Changing channel should feel immediate: a picture at once, then one
+  // jump to live once the connect burst is in.
+  liveStart: "catchUp",
+  simultaneousStreams: 1,
 };
+
+/** "When a channel opens", in Settings → Playback: each choice and what it
+ *  trades. */
+export const LIVE_START_CHOICES: readonly {
+  value: LiveStart;
+  /** On the control itself, where three sit side by side. */
+  short: string;
+  label: string;
+  note: string;
+}[] = [
+  {
+    value: "stay",
+    short: "Where it starts",
+    label: "Play from where the stream starts",
+    note: "A picture at once, and it never jumps — but you watch twenty or thirty seconds behind until you press Live.",
+  },
+  {
+    value: "catchUp",
+    short: "Right away, then live",
+    label: "Play right away, then catch up to live",
+    note: "A picture at once, then one jump ahead to live a few seconds later, once the provider's backlog is in.",
+  },
+  {
+    value: "wait",
+    short: "Wait for live",
+    label: "Wait and start at live",
+    note: "The first picture holds still for a second or more while the backlog arrives, then plays from live with no jump.",
+  },
+];
+
+export const STREAMS_MIN = 1;
+export const STREAMS_MAX = 10;
 
 /** Rewind buffer, in megabytes. The ceiling is the backend's: the buffer is
  *  resident memory, and two gigabytes is as much as it will take. */
@@ -156,6 +192,10 @@ export function clampSettings(s: SettingsDto): SettingsDto {
     mediaControls: s.mediaControls === true,
     // A value this build does not know is the locale's clock, as missing is.
     timeFormat: s.timeFormat === "12h" || s.timeFormat === "24h" ? s.timeFormat : "auto",
+    // Like updates: a config from before the setting reads as on.
+    // Anything unknown, or a config from before the setting, catches up.
+    liveStart: LIVE_START_CHOICES.some((c) => c.value === s.liveStart) ? s.liveStart : "catchUp",
+    simultaneousStreams: round(s.simultaneousStreams ?? 1, STREAMS_MIN, STREAMS_MAX),
   };
 }
 
@@ -268,7 +308,13 @@ export interface SavePlan {
   applySubtitle: boolean;
 }
 
-const PLAYBACK_KEYS = ["rewindMb", "hardwareDecode", "toneMapHdr"] as const;
+const PLAYBACK_KEYS = [
+  "rewindMb",
+  "hardwareDecode",
+  "toneMapHdr",
+  "liveStart",
+  "simultaneousStreams",
+] as const;
 
 export function planSave(before: SettingsDto, after: SettingsDto): SavePlan {
   return {

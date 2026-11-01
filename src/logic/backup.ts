@@ -30,7 +30,7 @@ import {
   SORT_LABEL,
   type CategorySort,
 } from "./categoryOrder.ts";
-import { TIME_FORMAT_LABEL, clampSettings } from "./settings.ts";
+import { LIVE_START_CHOICES, TIME_FORMAT_LABEL, clampSettings } from "./settings.ts";
 
 export const BACKUP_FORMAT = "zapper-backup";
 export const BACKUP_VERSION = 1;
@@ -106,6 +106,8 @@ const SETTING_KINDS: Record<Exclude<keyof SettingsDto, "subtitle">, Kind> = {
   checkForUpdates: "boolean",
   mediaControls: "boolean",
   timeFormat: "string",
+  liveStart: "string",
+  simultaneousStreams: "number",
 };
 
 const SUBTITLE_KINDS: Record<keyof SubtitleStyleDto, Kind> = {
@@ -320,6 +322,11 @@ const SETTING_LABELS: Record<Exclude<keyof SettingsDto, "subtitle">, [string, (v
   checkForUpdates: ["Check for updates automatically", onOff],
   mediaControls: ["Media keys and desktop controls", onOff],
   timeFormat: ["Clock", (v: string) => TIME_FORMAT_LABEL[v] ?? v],
+  liveStart: [
+    "When a channel opens",
+    (v: string) => LIVE_START_CHOICES.find((c) => c.value === v)?.label ?? v,
+  ],
+  simultaneousStreams: ["Simultaneous streams", (v: number) => String(v)],
 };
 
 const SUBTITLE_LABELS: Record<keyof SubtitleStyleDto, [string, (v: never) => string]> = {

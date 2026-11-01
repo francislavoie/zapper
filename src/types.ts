@@ -111,9 +111,51 @@ export interface PlayerStateDto {
    *  viewer pressed Live and it moved a second or more — or null. Cleared by
    *  the next open. */
   liveJump: LiveJumpDto | null;
+  /** A live channel is being started at live: its first frame is up and held
+   *  still while the server's connect burst arrives, so the picture starts
+   *  moving at live instead of twenty seconds back and then jumping. `state`
+   *  stays "opening" meanwhile. */
+  joiningLive: boolean;
   /** Why a stream that stopped by itself stopped, while `state` is
    *  "failed" because of it. `null` otherwise. See `ipc::ending`. */
   ending: StreamEnding | null;
+  /** Reconnecting by itself after the network failed: which attempt, of how
+   *  many, and whether it is asking the account for a free connection
+   *  first. `null` otherwise. Only ever after a network failure, never after
+   *  the provider ended or refused the stream. */
+  reconnect: ReconnectDto | null;
+}
+
+/** Mirrors `ReconnectDto`. */
+export interface ReconnectDto {
+  attempt: number;
+  of: number;
+  checking: boolean;
+}
+
+/** How many streams an account allows and has open, every device counted.
+ *  Mirrors `connections::Slots`. */
+export interface SlotsDto {
+  max: number;
+  active: number;
+}
+
+/** What Settings → Account shows about the account's connections. Mirrors
+ *  `ConnectionsDto`. */
+export interface ConnectionsDto {
+  /** Allowed: counted by the provider, or as set in "Simultaneous streams". */
+  max: number | null;
+  /** Open on every device, when the provider counts them; `null` when
+   *  nobody can. */
+  active: number | null;
+  /** Streams this app holds. */
+  ours: number;
+  /** Whether the provider (or tuner) counted, as opposed to the setting. */
+  counted: boolean;
+  /** Whether "Simultaneous streams" applies: the account cannot be asked. */
+  declared: boolean;
+  /** Unix seconds, when the provider says. */
+  expires: number | null;
 }
 
 /** One jump forward to live, automatic or asked for. */
@@ -171,10 +213,13 @@ export type EndingKind =
   | "serverError"
   | "network"
   | "noVideo"
-  | "other";
+  | "other"
+  | "inUse";
 
 export interface StreamEnding {
   kind: EndingKind;
+  /** For "inUse": the account's connections as the provider counted them. */
+  slots: SlotsDto | null;
   /** The HTTP status the server answered with, when it said one. */
   status: number | null;
   /** The server said in words that it was a connection limit. */
@@ -237,7 +282,19 @@ export interface SettingsDto {
    *  `"12h"` is "8:30 pm", `"24h"` is "20:30". Any other value reads as
    *  `"auto"`. */
   timeFormat: "auto" | "12h" | "24h";
+  /** What a live channel does about the connect burst that starts it in the
+   *  past. Mirrors `LiveStart`; "catchUp" by default. */
+  liveStart: LiveStart;
+  /** Streams the account allows at once, for an account that cannot say
+   *  (a playlist, a Tvheadend server). Reconnecting by itself after a
+   *  network failure is only safe with one to spare. Default 1. */
+  simultaneousStreams: number;
 }
+
+/** Mirrors `LiveStart`: play from where the stream starts and stay there;
+ *  play at once and jump to live after the connect burst; or hold the first
+ *  frame and start at live. */
+export type LiveStart = "stay" | "catchUp" | "wait";
 
 /** One channel's watch history, as a backup carries it. Mirrors
  *  `ActivityRowDto`. */
@@ -556,8 +613,6 @@ export interface RecordingSettingsDto {
   padBefore: number;
   padAfter: number;
   clockTrack: boolean;
-  /** For playlists, which cannot say how many streams the account allows. */
-  simultaneousStreams: number;
   /** The folder used when none is chosen; an empty `outputDir` sent back
    *  means this one. */
   defaultOutputDir: string;

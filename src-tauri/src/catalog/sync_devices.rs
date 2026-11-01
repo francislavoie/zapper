@@ -153,6 +153,7 @@ async fn step_hdhomerun_guide<M: Mirror>(src: &HdhrSource, mirror: &M) -> Result
         }
     }
     mirror.write(guide::own_guide_channels)?;
+    engine::prune_guide(mirror);
     Ok(format!("{programmes} programmes from SiliconDust"))
 }
 
@@ -278,6 +279,7 @@ async fn step_tvheadend_guide<M: Mirror>(src: &TvhSource, mirror: &M) -> Result<
         engine::pump_into(resp, "the guide", None, engine::guide_parser(mirror.clone(), true))
             .await?;
     let (matched, total) = mirror.write(playlist::match_epg)?;
+    engine::prune_guide(mirror);
     Ok(format!(
         "{programmes} programmes, guide for {matched} of {total} channels"
     ))

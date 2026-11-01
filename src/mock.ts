@@ -573,14 +573,16 @@ const playerEmitter = new Emitter<PlayerStateDto>({
   compressor: false,
   error: null,
   liveJump: null,
+  joiningLive: false,
   ending: null,
+  reconnect: null,
 });
 
 const optionsEmitter = new Emitter<PlayerOptionsDto>({
   audio: [],
   subtitles: [],
   aspect: "auto",
-  deinterlace: "off",
+  deinterlace: "auto",
 });
 
 const track = (id: number, t: Partial<TrackDto>): TrackDto => ({
@@ -698,6 +700,8 @@ let storedSettings: SettingsDto = {
   checkForUpdates: true,
   mediaControls: false,
   timeFormat: "auto",
+  liveStart: "catchUp",
+  simultaneousStreams: 1,
 };
 
 // ----------------------------------------------------------------- updates
@@ -764,7 +768,22 @@ function patchPlayer(p: Partial<PlayerStateDto>) {
   patchPlayer({
     state: "failed",
     error: "the stream ended",
-    ending: { kind, status, limit },
+    ending: { kind, status, limit, slots: kind === "inUse" ? { max: 1, active: 1 } : null },
+    reconnect: null,
+    bufferedBack: 0,
+    behindLive: 0,
+  });
+};
+
+/** A driver's way to show the backend reconnecting after a network failure:
+ *  `__mockReconnect(2)`, or `__mockReconnect(1, true)` while it asks the
+ *  account for a free connection. */
+(globalThis as Record<string, unknown>).__mockReconnect = (attempt = 1, checking = false) => {
+  patchPlayer({
+    state: "failed",
+    error: "the stream could not be opened",
+    ending: { kind: "network", status: null, limit: false, slots: null },
+    reconnect: { attempt, of: 4, checking },
     bufferedBack: 0,
     behindLive: 0,
   });
@@ -812,6 +831,8 @@ function remember(streamId: number, change: (q: QualityDto) => Partial<QualityDt
 
 /** Channels the mock has already failed once this session; see makeQuality. */
 const failedOnce = new Set<number>();
+/** "Start channels at live", as last applied. */
+let mockLiveStart: SettingsDto["liveStart"] = "catchUp";
 
 /** Counts the mock's automatic catch-ups, like the backend's `seq`. */
 let mockJumps = 0;
@@ -834,6 +855,8 @@ async function openStream(
     bufferedBack: 0,
     behindLive: 0,
     liveJump: null,
+    joiningLive: false,
+    reconnect: null,
   });
   patchOptions({ audio: [], subtitles: [] });
   await delay(700);
@@ -843,7 +866,7 @@ async function openStream(
     patchPlayer({
       state: "failed",
       error: "the stream could not be opened",
-      ending: { kind: "refused", status: 403, limit: false },
+      ending: { kind: "refused", status: 403, limit: false, slots: null },
     });
     remember(streamId, (q) => ({
       failCount: q.failCount + 1,
@@ -853,6 +876,17 @@ async function openStream(
     return;
   }
   if (live) remember(streamId, (q) => ({ okCount: q.okCount + 1, failedAt: null, failReason: null }));
+  if (mockLiveStart === "wait") {
+    // The backend's Join: the first frame held while the burst arrives,
+    // then started at live, with nothing to jump.
+    patchPlayer({ ...quality, joiningLive: true });
+    patchOptions(mockTracks(streamId));
+    await delay(1500);
+    if (openSeq !== mine || playerEmitter.last.state !== "opening") return;
+    patchPlayer({ state: "playing", joiningLive: false, behindLive: 4, bufferedBack: 4, atLiveEdge: true });
+    startBufferClock();
+    return;
+  }
   // The connect burst: playback starts well behind live, as the real thing
   // does, and the backend's Settle brings it up once the burst is over —
   // reported as a jump, which is what the picture's corner announces.
@@ -874,6 +908,8 @@ async function openStream(
       }));
     }, 5000);
   }
+  // Staying put: behind it started, and behind it stays.
+  if (mockLiveStart === "stay") return;
   await delay(2500);
   if (openSeq !== mine || playerEmitter.last.state !== "playing") return;
   const cushion = 4;
@@ -901,7 +937,6 @@ const mockRecordingSettings: RecordingSettingsDto = {
   padBefore: 60,
   padAfter: 300,
   clockTrack: true,
-  simultaneousStreams: 1,
   defaultOutputDir: "/home/viewer/Videos/zapper",
 };
 let mockService: ServiceStatusDto = {
@@ -1281,8 +1316,26 @@ export const mockApi = {
       bufferedBack: 0,
       behindLive: 0,
       liveJump: null,
+      joiningLive: false,
+      reconnect: null,
     });
     patchOptions({ audio: [], subtitles: [] });
+  },
+
+  cancelReconnect: async () => {
+    patchPlayer({ reconnect: null });
+  },
+
+  connectionStatus: async () => {
+    await delay(60);
+    return {
+      max: 1,
+      active: playerEmitter.last.state === "stopped" ? 0 : 1,
+      ours: playerEmitter.last.state === "stopped" ? 0 : 1,
+      counted: true,
+      declared: false,
+      expires: 1_893_456_000,
+    };
   },
 
   togglePause: async () => {
@@ -1676,7 +1729,9 @@ export const mockApi = {
       rewindMb: next.rewindMb,
       hardwareDecode: next.hardwareDecode,
       toneMapHdr: next.toneMapHdr,
+      liveStart: next.liveStart,
     };
+    mockLiveStart = next.liveStart;
   },
 
   setMediaSession: async (session: MediaSessionDto | null) => {

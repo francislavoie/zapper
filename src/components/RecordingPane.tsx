@@ -3,7 +3,9 @@
 // every recording (where, how much padding, the clock track).
 //
 // The settings are the service's own, read and written through its API, so
-// they can only be changed while it is running. Like the rest of Settings, a
+// they can only be changed while it is running — all but "Simultaneous
+// streams", which is the app's (Settings › Account has it too) and which the
+// service reads from the catalogue the two share. Like the rest of Settings, a
 // change shows at once and is saved a moment later, and each one that
 // differs from the service's default has a ↺. Installing the service is the
 // person's decision: nothing here runs until a button is pressed.
@@ -13,6 +15,8 @@ import { refreshRecordings } from "../actions";
 import { backend } from "../backend";
 import { errorMessage } from "../logic/async";
 import { RECORDING_DEFAULTS, bytes, padMinutes, padSeconds } from "../logic/recordings";
+import { DEFAULT_SETTINGS, STREAMS_MAX, STREAMS_MIN } from "../logic/settings";
+import type { SettingsControl } from "../hooks/useSettings";
 import { useDispatch } from "../store";
 import type { RecordingSettingsDto, RecordingStatusDto, ServiceStatusDto } from "../types";
 import { RangeField, SettingRow, SettingsGroup } from "./SettingsParts";
@@ -20,7 +24,9 @@ import { Switch } from "./Switch";
 
 const SAVE_AFTER_MS = 400;
 
-export function RecordingPane() {
+export function RecordingPane({ s }: { s: SettingsControl }) {
+  const streams = s.settings.simultaneousStreams;
+  const dStreams = DEFAULT_SETTINGS.simultaneousStreams;
   const dispatch = useDispatch();
   const [service, setService] = useState<ServiceStatusDto | null>(null);
   const [status, setStatus] = useState<RecordingStatusDto | null>(null);
@@ -276,30 +282,34 @@ export function RecordingPane() {
               />
             </SettingRow>
           </SettingsGroup>
-
-          <SettingsGroup heading="Connections">
-            <SettingRow
-              label="Streams a playlist account allows at once"
-              htmlFor="rec-streams"
-              description="Xtream accounts report their own limit; playlists cannot. A recording waits for a free connection rather than take one someone is watching on."
-              modified={settings.simultaneousStreams !== d.simultaneousStreams}
-              onReset={() => patch({ simultaneousStreams: d.simultaneousStreams })}
-              resetTo={String(d.simultaneousStreams)}
-            >
-              <RangeField
-                id="rec-streams"
-                min={1}
-                max={6}
-                step={1}
-                value={settings.simultaneousStreams}
-                mark={d.simultaneousStreams}
-                format={(v) => String(v)}
-                onChange={(simultaneousStreams) => patch({ simultaneousStreams })}
-              />
-            </SettingRow>
-          </SettingsGroup>
         </>
       )}
+
+      {/* The app's own setting, not the service's: the same one Settings ›
+          Account shows, which the player's reconnects and the service's
+          captures both count against. Here because a recording is where a
+          second stream is most often wanted. */}
+      <SettingsGroup heading="Connections">
+        <SettingRow
+          label="Simultaneous streams"
+          htmlFor="rec-streams"
+          description="For a playlist, which cannot say how many streams it allows at once (Xtream accounts and HDHomeRun tuners report their own). A recording waits for a free connection rather than take one someone is watching on. The same setting as in Account."
+          modified={streams !== dStreams}
+          onReset={() => s.patch({ simultaneousStreams: dStreams })}
+          resetTo={String(dStreams)}
+        >
+          <RangeField
+            id="rec-streams"
+            min={STREAMS_MIN}
+            max={STREAMS_MAX}
+            step={1}
+            value={streams}
+            mark={dStreams}
+            format={(v) => String(v)}
+            onChange={(simultaneousStreams) => s.patch({ simultaneousStreams })}
+          />
+        </SettingRow>
+      </SettingsGroup>
     </>
   );
 }

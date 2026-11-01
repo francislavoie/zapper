@@ -102,6 +102,11 @@ name = "ending_check"
 path = "src/bin/ending_check.rs"
 required-features = ["harness", "gui"]
 
+[[bin]]
+name = "live_start_bench"
+path = "src/bin/live_start_bench.rs"
+required-features = ["harness", "gui"]
+
 [lib]
 name = "zapper_lib"
 crate-type = ["lib", "cdylib", "staticlib"]

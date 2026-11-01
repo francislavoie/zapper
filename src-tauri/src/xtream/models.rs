@@ -116,6 +116,9 @@ pub struct UserInfo {
     pub max_connections: Option<i64>,
     #[serde(default, deserialize_with = "flexible_i64")]
     pub active_cons: Option<i64>,
+    /// When the account expires, Unix seconds; `null` for one that does not.
+    #[serde(default, deserialize_with = "flexible_i64")]
+    pub exp_date: Option<i64>,
 }
 
 #[cfg(test)]
@@ -127,6 +130,19 @@ mod tests {
         let json = r#"{"stream_id": 4294967295, "name": "Big", "category_id": "7"}"#;
         let c: Channel = serde_json::from_str(json).unwrap();
         assert_eq!(c.stream_id, 4_294_967_295);
+    }
+
+    #[test]
+    fn user_info_carries_connections_and_expiry_as_strings_or_numbers() {
+        let u: UserInfo = serde_json::from_str(
+            r#"{"auth":1,"status":"Active","max_connections":"1","active_cons":"1",
+                "exp_date":"1893456000","is_trial":"0"}"#,
+        )
+        .unwrap();
+        assert_eq!((u.max_connections, u.active_cons, u.exp_date), (Some(1), Some(1), Some(1_893_456_000)));
+        let u: UserInfo =
+            serde_json::from_str(r#"{"auth":1,"max_connections":2,"active_cons":0,"exp_date":null}"#).unwrap();
+        assert_eq!((u.max_connections, u.active_cons, u.exp_date), (Some(2), Some(0), None));
     }
 
     #[test]

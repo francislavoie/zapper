@@ -284,6 +284,13 @@ impl Device {
             .await
     }
 
+    /// What each tuner is doing: `status.json`, a list with one entry per
+    /// tuner. Read by [`crate::connections::tuners_in_use`].
+    pub async fn status(&self) -> Result<serde_json::Value> {
+        self.get_json(&format!("{}/status.json", self.base), "the tuner status")
+            .await
+    }
+
     /// The lineup, from where the tuner says it is, or the usual place if it
     /// does not say.
     pub async fn lineup(&self, d: &Discover) -> Result<Vec<LineupEntry>> {

@@ -304,6 +304,16 @@ export function timeTick(unixSeconds: number, h12: boolean = twelve): string {
 
 /** A date and a time, for placing a moment in the past ("Last synced"): the
  *  locale's short date, then the time as the setting writes it. */
+/** A day, as people write one: "1 Mar 2027" in the locale's order. For an
+ *  account's expiry, where the time of day says nothing. */
+export function calendarDate(unixSeconds: number): string {
+  return new Date(unixSeconds * 1000).toLocaleDateString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+}
+
 export function dateTime(unixSeconds: number, h12: boolean = twelve): string {
   const date = new Date(unixSeconds * 1000).toLocaleDateString(undefined, {
     year: "numeric",

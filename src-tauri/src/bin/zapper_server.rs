@@ -99,9 +99,9 @@ fn main() -> Result<()> {
     let token = token()?;
     let db = store::open(&zapper_lib::paths::data_dir().join("recordings.db"))?;
     let port = cfg.port;
-    let budget = Box::new(SourceBudget {
-        limit: cfg.simultaneous_streams,
-    });
+    // How many streams a playlist allows is the app's setting, read from
+    // the catalogue the two share; see `recording::budget`.
+    let budget = Box::new(SourceBudget);
     let server = Server::new(db, cfg, cfg_path, token, budget);
 
     let rt = tokio::runtime::Builder::new_multi_thread()

@@ -135,9 +135,6 @@ pub struct RecordingSettingsDto {
     /// Add the wall-clock subtitle track to each file. It is never marked as
     /// a default track, so players leave it off until it is chosen.
     pub clock_track: bool,
-    /// How many streams the account allows at once, for accounts that cannot
-    /// be asked (playlists). Xtream accounts report their own.
-    pub simultaneous_streams: u32,
     /// The folder used when none is chosen, so a client can offer to go back
     /// to it. Ignored when settings are written.
     #[serde(default)]

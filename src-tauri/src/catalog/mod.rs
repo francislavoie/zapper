@@ -12,6 +12,7 @@ pub mod guide_search;
 pub mod index;
 pub mod origin;
 pub mod playlist;
+pub mod prune;
 pub mod schema;
 pub mod search;
 pub mod settings;

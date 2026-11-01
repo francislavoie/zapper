@@ -144,6 +144,8 @@ mod tests {
             check_for_updates: false,
             media_controls: true,
             time_format: "12h".into(),
+            live_start: crate::ipc::types::LiveStart::Wait,
+            simultaneous_streams: 2,
         };
         save(&c, &want).unwrap();
 
@@ -151,6 +153,8 @@ mod tests {
         assert_eq!(got.time_format, "12h");
         assert!(!got.check_for_updates);
         assert!(got.media_controls);
+        assert_eq!(got.live_start, crate::ipc::types::LiveStart::Wait);
+        assert_eq!(got.simultaneous_streams, 2);
         assert_eq!(got.rewind_mb, 1280);
         assert!(!got.hardware_decode);
         assert!(!got.tone_map_hdr);
@@ -192,6 +196,20 @@ mod tests {
         assert_eq!(got.time_format, "auto");
         assert!(got.media_controls);
         assert_eq!(got.guide_hours, 5);
+    }
+
+    #[test]
+    fn a_blob_from_before_live_start_catches_up() {
+        let c = open_in_memory().unwrap();
+        write_raw(&c, r#"{"guideHours":5}"#);
+        assert_eq!(load(&c).live_start, crate::ipc::types::LiveStart::CatchUp);
+        write_raw(&c, r#"{"liveStart":"stay"}"#);
+        assert_eq!(load(&c).live_start, crate::ipc::types::LiveStart::Stay);
+        // A choice from a newer build is the default, and costs nothing else.
+        write_raw(&c, r#"{"liveStart":"later","guideHours":4}"#);
+        let got = load(&c);
+        assert_eq!(got.live_start, crate::ipc::types::LiveStart::CatchUp);
+        assert_eq!(got.guide_hours, 4);
     }
 
     #[test]

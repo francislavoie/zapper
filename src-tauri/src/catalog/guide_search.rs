@@ -37,8 +37,9 @@
 //! multiply both the index and the time every guide write spends on it.
 //!
 //! `epg`'s rowid is implicit: upserts keep it, but `VACUUM` may renumber it.
-//! Nothing here vacuums; anything that ever does must follow it with
-//! [`rebuild`].
+//! The one vacuum, `catalog::prune`'s, follows it with [`rebuild`]; anything
+//! else that ever vacuums must too. Pruning deletes through the trigger
+//! below like any other delete.
 
 use anyhow::{Context, Result};
 use rusqlite::Connection;
