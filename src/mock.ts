@@ -461,8 +461,14 @@ let catalog: MockCatalog | null = null;
  *  channels, never synced. The catalogue arrives when a sync's channels
  *  phase ends, part-way through the pass, as the real one does — which is
  *  what the lists have to notice without a restart. */
-const START_EMPTY =
-  typeof location !== "undefined" && /(^|[?&])catalogue=empty(&|$)/.test(location.search);
+const flag = (re: RegExp) => typeof location !== "undefined" && re.test(location.search);
+
+/** `?account=none` is a first launch: no account on file, so an empty
+ *  catalogue too, and a sync that fails saying so. */
+const NO_ACCOUNT = flag(/(^|[?&])account=none(&|$)/);
+const MOCK_NO_ACCOUNT = "no account configured. Set one in Settings → Account.";
+
+const START_EMPTY = NO_ACCOUNT || flag(/(^|[?&])catalogue=empty(&|$)/);
 let catalogueLanded = !START_EMPTY;
 const EMPTY_CATALOG: MockCatalog = { categories: [], rows: [], span: new Map() };
 
@@ -655,8 +661,8 @@ function patchOptions(p: Partial<PlayerOptionsDto>): PlayerOptionsDto {
 }
 
 const syncEmitter = new Emitter<SyncStatusDto>({
-  phase: "idle",
-  message: "",
+  phase: NO_ACCOUNT ? "failed" : "idle",
+  message: NO_ACCOUNT ? MOCK_NO_ACCOUNT : "",
   channelsTotal: START_EMPTY ? 0 : CHANNEL_TOTAL,
   lastSynced: START_EMPTY ? null : Math.floor(Date.now() / 1000) - 3600,
 });
@@ -687,6 +693,17 @@ let mockAccount: AccountDto = {
   tvheadendUsername: "",
   tvheadendHasPassword: false,
 };
+if (NO_ACCOUNT) {
+  mockAccount = {
+    ...mockAccount,
+    host: "",
+    username: "",
+    hasPassword: false,
+    source: "none",
+    playlist: "",
+    playlistRedacted: false,
+  };
+}
 
 /** The mock's redaction, so a saved secret-bearing URL comes back the way
  *  the real backend would send it. */
@@ -1402,6 +1419,11 @@ export const mockApi = {
   syncStatus: async () => syncEmitter.last,
 
   syncNow: async () => {
+    // What `run_once` publishes when `load_account` finds nothing.
+    if (mockAccount.source === "none") {
+      syncEmitter.emit({ ...syncEmitter.last, phase: "failed", message: MOCK_NO_ACCOUNT });
+      return;
+    }
     syncEmitter.emit({ ...syncEmitter.last, phase: "categories", message: "fetching categories" });
     await delay(600);
     syncEmitter.emit({ ...syncEmitter.last, phase: "channels", message: "fetching channels" });
@@ -1631,6 +1653,8 @@ export const mockApi = {
       path: "~/.config/zapper/account.json",
       kind: "xtream",
     };
+    // As the backend does: a new account is what a sync was waiting for.
+    void mockApi.syncNow();
   },
 
   setM3uAccount: async (playlist: string | null, epgUrls: string[] | null, userAgent: string) => {
@@ -1655,6 +1679,7 @@ export const mockApi = {
         epgUrls === null ? mockAccount.epgRedacted : nextEpg.some((u) => redact(u) !== u),
       userAgent: userAgent.trim(),
     };
+    void mockApi.syncNow();
   },
 
   setHdhomerunAccount: async (device: string, epgUrls: string[] | null) => {
@@ -1670,6 +1695,7 @@ export const mockApi = {
       hdhomerunEpgRedacted:
         epgUrls === null ? mockAccount.hdhomerunEpgRedacted : nextEpg.some((u) => mockRedact(u) !== u),
     };
+    void mockApi.syncNow();
   },
 
   setTvheadendAccount: async (url: string, username: string, password: string) => {
@@ -1688,6 +1714,7 @@ export const mockApi = {
       tvheadendUsername: user,
       tvheadendHasPassword: user !== "" && (password !== "" || mockAccount.tvheadendHasPassword),
     };
+    void mockApi.syncNow();
   },
 
   testAccount: async () => {

@@ -178,6 +178,10 @@ export interface State {
   query: string;
   paletteOpen: boolean;
   settingsOpen: boolean;
+  /** The page Settings was asked to show, when it was asked for one. A new
+   *  object per request, so asking again while it is open — after wandering
+   *  to another page — goes back to it. */
+  settingsPage: { page: string } | null;
   /** The toolbar's hamburger. Here rather than inside the component because
    *  Escape has to unwind it in the same single-press order as everything
    *  else, and that ordering lives in one place. */
@@ -349,6 +353,7 @@ export const initialState: State = {
   query: "",
   paletteOpen: false,
   settingsOpen: false,
+  settingsPage: null,
   menuOpen: false,
   aboutOpen: false,
   update: initialUpdate,
@@ -413,7 +418,8 @@ export type Action =
   | { type: "stacked"; on: boolean }
   | { type: "query"; text: string }
   | { type: "palette"; open: boolean }
-  | { type: "settings"; open: boolean }
+  /** `page` opens Settings at that page; see `settingsPage`. */
+  | { type: "settings"; open: boolean; page?: string }
   | { type: "menu"; open: boolean }
   | { type: "about"; open: boolean }
   | { type: "update"; value: UpdateStatusDto }
@@ -594,6 +600,7 @@ export function reducer(state: State, action: Action): State {
       return {
         ...state,
         settingsOpen: action.open,
+        settingsPage: action.open && action.page ? { page: action.page } : null,
         menuOpen: action.open ? false : state.menuOpen,
       };
     case "menu":
