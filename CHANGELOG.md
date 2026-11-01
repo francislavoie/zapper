@@ -17,6 +17,11 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
   shows, after signing in with a password you set there. Each device is listed and can be
   revoked, and the port can be changed.
 
+### Changed
+
+- The picture beside the channel list can be made as large as the window allows, keeping enough
+  room beside it for the channel's details and below it for the list.
+
 ## [0.1.0] - 2026-11-01
 
 The first release.
