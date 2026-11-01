@@ -13,6 +13,7 @@
 #   - /usr/lib/zapper/install-kind saying `deb`: without it the updater thinks the install is a
 #     build from source and never offers to update it;
 #   - the license notices in /usr/share/doc/zapper/, none empty (docs/licensing.md);
+#   - a prerm that stops a running zapper-server on removal (packaging/linux/deb-prerm);
 #   - one desktop entry, with StartupWMClass=zapper (the window's app_id, src-tauri/src/lib.rs),
 #     valid by desktop-file-validate when that is installed.
 set -euo pipefail
@@ -115,6 +116,10 @@ for f in copyright LICENSE MPV-FFMPEG-NOTICE.txt THIRD-PARTY-NOTICES-libmpv.txt 
   size=$(awk -v p="/usr/share/doc/zapper/$f" '$2 == p { print $1 }' <<<"$sizes")
   [ -n "$size" ] && [ "$size" -gt 0 ] || fail "/usr/share/doc/zapper/$f is missing or empty"
 done
+
+# The prerm that stops a running recording service on removal (packaging/linux/deb-prerm).
+prerm=$(dpkg-deb --ctrl-tarfile "$deb" | tar -xO --wildcards '*prerm' 2>/dev/null) || true
+grep -q 'zapper-server' <<<"$prerm" || fail "no prerm stopping zapper-server (packaging/linux/deb-prerm)"
 
 shopt -s nullglob
 desktops=("$root"/usr/share/applications/*.desktop)

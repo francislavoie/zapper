@@ -73,10 +73,16 @@ pub struct ServiceStatusDto {
 /// whatever it was recording; a clean stop (Remove, or `systemctl stop`)
 /// stays stopped.
 ///
+/// `ConditionPathExists`: the unit lives in the user's home, which removing
+/// the package that carried `zapper-server` never touches (a root maintainer
+/// script has no business in people's homes). Left behind, it is skipped
+/// at each start rather than failing and being retried.
+///
 /// `home`, as for the Windows task ([`task_xml`]): the app's own
 /// `ZAPPER_HOME`, handed on as `--home`.
 pub fn unit_text(exe: &Path, home: Option<&Path>) -> String {
-    let mut exec = systemd_quote(&exe.to_string_lossy());
+    let path = exe.to_string_lossy();
+    let mut exec = systemd_quote(&path);
     if let Some(h) = home {
         exec = format!("{exec} --home {}", systemd_quote(&h.to_string_lossy()));
     }
@@ -84,6 +90,7 @@ pub fn unit_text(exe: &Path, home: Option<&Path>) -> String {
         "# Installed by zapper (Settings > Recording). Remove it there.\n\
          [Unit]\n\
          Description=zapper recording service\n\
+         ConditionPathExists={}\n\
          After=network-online.target\n\
          Wants=network-online.target\n\
          \n\
@@ -95,6 +102,7 @@ pub fn unit_text(exe: &Path, home: Option<&Path>) -> String {
          \n\
          [Install]\n\
          WantedBy=default.target\n",
+        path.replace('%', "%%"),
         exec
     )
 }
@@ -691,6 +699,11 @@ mod tests {
         assert!(u.contains("\nExecStart=/usr/bin/zapper-server --home \"/tmp/a b\"\n"));
         assert!(u.contains("\nRestart=on-failure\n"));
         assert!(u.contains("\nWantedBy=default.target\n"));
+        // Once the package that carried it is removed, the unit is skipped
+        // rather than failed and retried.
+        assert!(u.contains("\nConditionPathExists=/usr/bin/zapper-server\n"));
+        let u = unit_text(Path::new("/opt/100% z/zapper-server"), None);
+        assert!(u.contains("\nConditionPathExists=/opt/100%% z/zapper-server\n"), "{u}");
     }
 
     #[test]

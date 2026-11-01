@@ -1,0 +1,18 @@
+#!/bin/sh
+# The .deb's prerm (tauri.conf.json, bundle.linux.deb.preRemoveScript), which
+# scripts/package-arch.sh also turns into the Arch package's pre_remove.
+#
+# On a removal (not an upgrade: dpkg says "upgrade" then), stops any running
+# /usr/bin/zapper-server, the recording service, before its program goes. It is
+# each user's systemd user unit (Settings > Recording) that runs it; a stop
+# by SIGTERM is a clean one, which Restart=on-failure leaves stopped, and the
+# unit, still in the user's home, is skipped from then on
+# (ConditionPathExists). Users' homes are theirs: nothing here touches them.
+# Best effort: a removal never fails over this.
+set -e
+case "$1" in
+  remove)
+    pkill -TERM -f '^/usr/bin/zapper-server( |$)' 2>/dev/null || true
+    ;;
+esac
+exit 0

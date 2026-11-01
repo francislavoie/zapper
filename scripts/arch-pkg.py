@@ -236,7 +236,7 @@ def entries(tarpath, skip_meta):
         for m in t:
             name = m.name[2:] if m.name.startswith("./") else m.name
             name = name.rstrip("/")
-            if name in ("", ".") or (skip_meta and name in (".PKGINFO", ".MTREE")):
+            if name in ("", ".") or (skip_meta and name in (".PKGINFO", ".MTREE", ".INSTALL")):
                 continue
             kind = "dir" if m.isdir() else "link" if m.issym() else "hardlink" if m.islnk() else "file" if m.isfile() else "other"
             # A symlink's mode means nothing on Linux (tar records 755 or 777 depending on the tool).

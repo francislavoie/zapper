@@ -104,6 +104,9 @@ if command -v dpkg-deb >/dev/null && command -v cc >/dev/null; then
   cp "$root/packaging/install-kind-deb" "$pkg/usr/lib/zapper/install-kind"
   printf '[Desktop Entry]\nType=Application\nName=zapper\nExec=zapper\nIcon=zapper\nCategories=AudioVideo;Video;\nStartupWMClass=zapper\n' > "$pkg/usr/share/applications/zapper.desktop"
   printf 'Package: zapper\nVersion: 0.2.0-rc.1\nArchitecture: amd64\nMaintainer: t\nDepends: libwebkit2gtk-4.1-0, libgtk-3-0\nDescription: t\n' > "$pkg/DEBIAN/control"
+  dpkg-deb --root-owner-group --build "$pkg" "$tmp/noprerm.deb" >/dev/null
+  ! "$here/check-deb.sh" "$tmp/noprerm.deb" >/dev/null 2>&1 || fail "check-deb must refuse a .deb without the prerm"; ok
+  install -m 755 "$root/packaging/linux/deb-prerm" "$pkg/DEBIAN/prerm"
   dpkg-deb --root-owner-group --build "$pkg" "$tmp/zapper.deb" >/dev/null
   data_before=$(cd "$tmp" && ar p zapper.deb "$(ar t zapper.deb | grep ^data)" | sha256sum)
   ! "$here/check-deb.sh" "$tmp/zapper.deb" 0.2.0-rc.1 >/dev/null 2>&1 || fail "check-deb must refuse the SemVer Version"; ok
@@ -179,7 +182,13 @@ if command -v dpkg-deb >/dev/null && command -v zstd >/dev/null; then
   [ -f "$out" ] || fail "package-arch: no $out: $(ls "$tmp/arch")"; ok
   [ -z "$(find "$tmp/arch" -name '.work.*')" ] || fail "package-arch left its work directory"; ok
   zstd -dcq "$out" > "$tmp/p.tar"
-  [ "$(tar -tf "$tmp/p.tar" | head -3 | tr '\n' ' ')" = '.PKGINFO .MTREE usr/ ' ] || fail "arch: archive order"; ok
+  [ "$(tar -tf "$tmp/p.tar" | head -4 | tr '\n' ' ')" = '.PKGINFO .MTREE .INSTALL usr/ ' ] || fail "arch: archive order"; ok
+  # .INSTALL's pre_remove is the .deb's prerm on a removal: sourced as pacman does, it parses,
+  # defines pre_remove and nothing else runs.
+  install_script=$(tar -xOf "$tmp/p.tar" .INSTALL)
+  grep -qF "$(sed -n '/^case/,/^esac/p' "$root/packaging/linux/deb-prerm")" <<<"$install_script" ||
+    fail "arch: .INSTALL isn't the .deb's prerm: $install_script"; ok
+  [ "$(bash -c "$install_script"$'\n''type -t pre_remove')" = function ] || fail "arch: .INSTALL has no pre_remove"; ok
   listing=$(tar -tvf "$tmp/p.tar")
   grep -Eq '^-rwxr-xr-x root/root .* usr/bin/zapper$' <<<"$listing" || fail "arch: usr/bin/zapper"; ok
   grep -Eq '^lrwxrwxrwx root/root .* usr/share/licenses/zapper -> \.\./doc/zapper$' <<<"$listing" || fail "arch: licenses symlink"; ok
