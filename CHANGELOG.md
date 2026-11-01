@@ -38,6 +38,9 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
   never sent to the browser, and leaving it empty keeps it, as in the app. Over plain HTTP the page
   warns that a password typed there crosses the network unencrypted. The app on the same computer
   picks up an account or catalogue changed this way within a few seconds.
+- zapper keeps a log file, `zapper.log` in its data folder (on Windows,
+  `%LOCALAPPDATA%\zapper`), beside the recording service's `zapper-server.log`. Each is kept to a
+  few megabytes, with the previous one as `.old.log`.
 
 ### Changed
 

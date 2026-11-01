@@ -38,6 +38,7 @@ pub mod harness;
 pub mod hdhomerun;
 pub mod ipc;
 pub mod localtime;
+pub mod logfile;
 pub mod m3u;
 pub mod paths;
 pub mod recording;
@@ -75,7 +76,6 @@ const APP_ID: &str = "zapper";
 
 #[cfg(feature = "gui")]
 pub fn run() {
-    tracing_subscriber::fmt::init();
     // An unattended run — a harness, an autoplay, a capture, a muted check —
     // gets a scratch account and catalogue, not the ones on this machine:
     // opening the app as a person's account syncs against their provider and
@@ -84,6 +84,9 @@ pub fn run() {
     if unattended() {
         harness::isolate("app");
     }
+    // `zapper.log` in the data folder (the scratch one, for an unattended
+    // run), and standard error for a terminal that may be watching.
+    logfile::init("zapper", true);
     // Before any window exists: the app_id is sent when the surface is
     // created, and Tauri creates it before the setup hook runs.
     set_app_id();
