@@ -322,3 +322,47 @@ export function SortOrder({ className, title }: IconProps) {
     </svg>
   );
 }
+
+/** The rail's fold: a window with its left column marked off, and a chevron
+ *  saying which way the column goes — left to fold it away, right to bring
+ *  it back. One drawing both ways, so the two buttons read as one switch
+ *  even though they sit in different places. */
+export function RailFold({ className, title, open }: IconProps & { open: boolean }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" aria-hidden={!title} focusable="false">
+      {title ? <title>{title}</title> : null}
+      <rect x="3.5" y="4.5" width="17" height="15" rx="2" fill="none" stroke="currentColor"
+            strokeWidth="1.6" />
+      <path d="M9 4.5v15" fill="none" stroke="currentColor" strokeWidth="1.6" />
+      <path d={open ? "M15.5 9.25 12.75 12l2.75 2.75" : "M13.25 9.25 16 12l-2.75 2.75"}
+            fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"
+            strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+/** An eye struck through: the marker on a hidden category while hidden ones
+ *  are being shown. The usual sign for "not shown", so it needs no legend. */
+export function EyeOff({ className, title }: IconProps) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" aria-hidden={!title} focusable="false">
+      {title ? <title>{title}</title> : null}
+      <path d="M2.75 12S6.25 5.75 12 5.75 21.25 12 21.25 12 17.75 18.25 12 18.25 2.75 12 2.75 12z"
+            fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />
+      <circle cx="12" cy="12" r="2.75" fill="none" stroke="currentColor" strokeWidth="1.7" />
+      <path d="M4 20 20 4" fill="none" stroke="currentColor" strokeWidth="1.8"
+            strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/** A tick: which of a menu's choices is the current one. */
+export function Check({ className, title }: IconProps) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" aria-hidden={!title} focusable="false">
+      {title ? <title>{title}</title> : null}
+      <path d="M5 12.5 9.5 17 19 7.5" fill="none" stroke="currentColor" strokeWidth="2.2"
+            strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}

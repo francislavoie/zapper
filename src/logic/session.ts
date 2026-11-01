@@ -29,7 +29,17 @@ export interface Session {
    *  things should be, which does not change between launches — leaving it
    *  off every time means turning it on every time. */
   compressor: boolean;
+  /** Whether the categories/favourites rail is folded away, in the list and
+   *  the guide alike. A layout taste, kept between launches. */
+  railCollapsed: boolean;
+  /** The volume the app was closed at, in the slider's own 0–200 units, or
+   *  null when none was ever set (then mpv's default stands). */
+  volume: number | null;
+  muted: boolean;
 }
+
+/** The slider's range, which is also what is trusted back from storage. */
+const VOLUME_CEILING = 200;
 
 export const EMPTY_SESSION: Session = {
   categoryId: null,
@@ -38,7 +48,15 @@ export const EMPTY_SESSION: Session = {
   channelScrollTop: 0,
   lastStreamId: null,
   compressor: false,
+  railCollapsed: false,
+  volume: null,
+  muted: false,
 };
+
+const volume = (v: unknown): number | null =>
+  typeof v === "number" && Number.isFinite(v)
+    ? Math.min(VOLUME_CEILING, Math.max(0, v))
+    : null;
 
 const scroll = (v: unknown): number =>
   typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : 0;
@@ -66,6 +84,9 @@ export function parseSession(raw: string | null): Session {
         ? v.lastStreamId
         : null,
     compressor: v.compressor === true,
+    railCollapsed: v.railCollapsed === true,
+    volume: volume(v.volume),
+    muted: v.muted === true,
   };
 }
 
@@ -77,5 +98,8 @@ export function serialiseSession(s: Session): string {
     channelScrollTop: scroll(s.channelScrollTop),
     lastStreamId: s.lastStreamId,
     compressor: s.compressor,
+    railCollapsed: s.railCollapsed,
+    volume: volume(s.volume),
+    muted: s.muted,
   });
 }

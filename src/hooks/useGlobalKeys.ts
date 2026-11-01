@@ -34,6 +34,9 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
           // The same, for the category rail's. Only one of the two can be
           // open: each closes on any right-click outside itself.
           dispatch({ type: "categoryMenu", menu: null });
+        } else if (state.categoryOptions) {
+          // The rail's options menu: also a menu, also opened last.
+          dispatch({ type: "categoryOptions", menu: null });
         } else if (state.menuOpen) {
           dispatch({ type: "menu", open: false });
         } else if (state.aboutOpen) {
@@ -176,6 +179,7 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
     state.updateOpen,
     state.favouriteMenu,
     state.categoryMenu,
+    state.categoryOptions,
     state.statsOpen,
   ]);
 }

@@ -26,8 +26,29 @@ test("a round trip preserves everything", () => {
     channelScrollTop: 13_000,
     lastStreamId: 107037,
     compressor: true,
+    railCollapsed: true,
+    volume: 135,
+    muted: true,
   };
   assert.deepEqual(parseSession(serialiseSession(s)), s);
+});
+
+test("the volume the app was closed at comes back, within the slider's range", () => {
+  assert.equal(parseSession('{"volume":72}').volume, 72);
+  // Never set: mpv's default stands, so there is nothing to restore.
+  assert.equal(parseSession("{}").volume, null);
+  assert.equal(parseSession('{"volume":"loud"}').volume, null);
+  // A hand-edited or corrupt value is clamped, not trusted.
+  assert.equal(parseSession('{"volume":900}').volume, 200);
+  assert.equal(parseSession('{"volume":-5}').volume, 0);
+  assert.equal(parseSession('{"muted":true}').muted, true);
+  assert.equal(parseSession('{"muted":1}').muted, false);
+});
+
+test("a folded rail is remembered, and only a real true folds it", () => {
+  assert.equal(parseSession('{"railCollapsed":true}').railCollapsed, true);
+  assert.equal(parseSession("{}").railCollapsed, false);
+  assert.equal(parseSession('{"railCollapsed":"yes"}').railCollapsed, false);
 });
 
 test("rubbish in storage starts fresh rather than throwing", () => {

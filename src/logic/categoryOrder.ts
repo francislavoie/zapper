@@ -1,5 +1,6 @@
 // The order the category rail draws its rows in: pinned categories first, the
-// rest in whichever sort the viewer chose, and "All channels" above both.
+// rest in whichever sort the viewer chose, and "All channels" above both;
+// hidden categories left out unless the viewer asked to see them.
 // Pure; exercised by src/__checks__/categoryOrder.test.mjs.
 //
 // Pins are kept in the order they were made, not sorted. A pin is the viewer
@@ -13,7 +14,12 @@
 // provider renamed or dropped it) is kept rather than pruned: categories come
 // and go between syncs, a failed or partial sync can briefly return far fewer
 // of them, and pruning on that would forget pins the viewer still wants. A
-// stale id costs a few bytes and is simply never drawn.
+// stale id costs a few bytes and is simply never drawn. Hidden ids are kept
+// the same way, for the same reason.
+//
+// Hiding outranks pinning without undoing it: a hidden category is not drawn
+// even if pinned, but its pin stays, so unhiding it puts it back where it was
+// rather than dropping it among the rest.
 //
 // Local rather than in SettingsDto, like the rail's width: which categories
 // one person reaches for on this machine is not a property of the account.
@@ -22,20 +28,24 @@ export type CategorySort = "provider" | "az" | "count";
 
 /** The order the sort button steps through. Provider first because it is the
  *  default, and because it is the only order with meaning nobody here can
- *  recompute: the panel's own grouping, which is often by country. */
+ *  recompute: the provider's own grouping, which is often by country.
+ *  Stored as "provider" whatever it is called on screen. */
 export const CATEGORY_SORTS: readonly CategorySort[] = ["provider", "az", "count"];
 
 export const CATEGORY_SORT_DEFAULT: CategorySort = "provider";
 
 export const CATEGORY_PINS_STORAGE_KEY = "zapper.categoryPins";
 export const CATEGORY_SORT_STORAGE_KEY = "zapper.categorySort";
+export const CATEGORY_HIDDEN_STORAGE_KEY = "zapper.categoryHidden";
 
 /** What each mode is called: `short` on the button, where the rail can be as
- *  narrow as nine rem, and `long` in its tooltip. */
-export const SORT_LABEL: Record<CategorySort, { short: string; long: string }> = {
-  provider: { short: "Panel", long: "Provider order" },
-  az: { short: "A–Z", long: "A–Z" },
-  count: { short: "Most", long: "Most channels" },
+ *  narrow as nine rem, `long` in its tooltip, and `menu` in the options menu.
+ *  The provider's order is "Default" on the button, a word anyone can read
+ *  without knowing how the server is run. */
+export const SORT_LABEL: Record<CategorySort, { short: string; long: string; menu: string }> = {
+  provider: { short: "Default", long: "Provider's order", menu: "Default (provider's order)" },
+  az: { short: "A–Z", long: "A–Z", menu: "A–Z" },
+  count: { short: "Most", long: "Most channels", menu: "Most channels" },
 };
 
 export function nextSort(sort: CategorySort): CategorySort {
@@ -79,6 +89,11 @@ export function serialisePins(pins: readonly string[]): string {
   return JSON.stringify(pins);
 }
 
+/** Hidden ids are stored exactly as pins are — a JSON array of ids, rubbish
+ *  reading as none — so they share the parser. Their order means nothing. */
+export const parseHidden = parsePins;
+export const serialiseHidden = serialisePins;
+
 /** Pin or unpin one category. Pinning appends, so pins keep the order they
  *  were made in; pinning something already pinned leaves it where it is
  *  rather than moving it to the end. Returns the same array when nothing
@@ -87,6 +102,20 @@ export function setPinned(pins: readonly string[], id: string, on: boolean): rea
   const has = pins.includes(id);
   if (on === has) return pins;
   return on ? [...pins, id] : pins.filter((p) => p !== id);
+}
+
+/** Hide or unhide one category; the same set arithmetic as pinning. */
+export const setHidden = setPinned;
+
+/** How many of the catalogue's categories are hidden — what "Unhide all"
+ *  will bring back. Stale ids are not counted: there is nothing to show for
+ *  them, and a count that never reaches zero would be a puzzle. */
+export function hiddenCount(categories: readonly { id: string }[], hidden: readonly string[]): number {
+  if (hidden.length === 0) return 0;
+  const set = new Set(hidden);
+  let n = 0;
+  for (const c of categories) if (set.has(c.id)) n++;
+  return n;
 }
 
 /** The fields the ordering reads. CategoryDto has these and more. */
@@ -101,6 +130,10 @@ export interface CategoryOrderOptions {
   sort: CategorySort;
   /** The filter box's text, as typed. */
   filter: string;
+  /** Category ids the viewer hid. Absent means none. */
+  hidden?: readonly string[];
+  /** Draw hidden categories anyway, where they would otherwise be. */
+  showHidden?: boolean;
 }
 
 /** Built once: a collator is not cheap and this runs over every category
@@ -120,13 +153,21 @@ function compareNames(a: string, b: string): number {
  *  The filter applies to both halves: a pinned category that matches still
  *  comes first, which is where the viewer will look for it, and one that does
  *  not is hidden like any other — a filter that let pins through regardless
- *  would be a filter that does not filter. */
+ *  would be a filter that does not filter.
+ *
+ *  Hidden categories are dropped from both halves before the filter is even
+ *  asked; typing a hidden one's name does not bring it back. With
+ *  `showHidden` they are drawn exactly where they would be had they never
+ *  been hidden — a pinned one in the pinned block — so the viewer can see
+ *  what unhiding will restore. */
 export function orderCategories<T extends OrderableCategory>(
   categories: readonly T[],
-  { pins, sort, filter }: CategoryOrderOptions,
+  { pins, sort, filter, hidden = [], showHidden = false }: CategoryOrderOptions,
 ): { pinned: T[]; rest: T[] } {
   const q = filter.trim().toLowerCase();
-  const matches = (c: T) => q === "" || c.name.toLowerCase().includes(q);
+  const gone = showHidden || hidden.length === 0 ? null : new Set(hidden);
+  const matches = (c: T) =>
+    !gone?.has(c.id) && (q === "" || c.name.toLowerCase().includes(q));
 
   const byId = new Map<string, T>();
   for (const c of categories) byId.set(c.id, c);
@@ -157,6 +198,8 @@ export interface RailRow {
   name: string;
   count: number;
   pinned: boolean;
+  /** Hidden, and drawn only because hidden categories are being shown. */
+  hidden: boolean;
   /** The last of the pinned block, which carries the divider under it. A
    *  property of the row rather than a row of its own, because the rail is
    *  windowed on a fixed row height and a divider row would be a 26-pixel
@@ -173,15 +216,17 @@ export function railRows(
   options: CategoryOrderOptions,
 ): RailRow[] {
   const { pinned, rest } = orderCategories(categories, options);
+  const hiddenSet = new Set(options.hidden ?? []);
   const row = (c: OrderableCategory, isPinned: boolean, pinEnd: boolean): RailRow => ({
     id: c.id,
     name: c.name,
     count: c.channelCount,
     pinned: isPinned,
+    hidden: hiddenSet.has(c.id),
     pinEnd,
   });
   return [
-    { ...all, pinned: false, pinEnd: false },
+    { ...all, pinned: false, hidden: false, pinEnd: false },
     // No divider under the block when there is nothing below it to divide
     // from: a filter that only matches pins would otherwise end on a rule.
     ...pinned.map((c, i) => row(c, true, i === pinned.length - 1 && rest.length > 0)),

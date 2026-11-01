@@ -1,9 +1,10 @@
 // Volume: the icon that mutes, and the slider that goes with it.
 //
-// Inline on the player bar. On the docked picture's bar (`popover`) the
-// slider sits in a small panel above the button instead, because there the
-// row is already a full row of controls in a 22rem box and the slider is the
-// one of them that needs length to be worth having. One mute button and one
+// Inline on the player bar. On the docked picture's bar (`popover`) it is
+// inline too while the picture is wide enough to fit it, and otherwise sits
+// in a small panel above the button, because a narrow picture's row is
+// already a full row of controls and the slider is the one of them that
+// needs length to be worth having. One mute button and one
 // slider either way; see VolumeSlider for why the slider is drawn rather than
 // borrowed from the platform.
 
@@ -85,14 +86,22 @@ export function VolumeControl({
       </button>
 
       {popover ? (
-        // Two elements, and the outer one is the reason this is usable. It
-        // reaches from the button up to the panel with nothing between, so
-        // moving the pointer towards the slider never crosses a gap — cross
-        // one and the hover is lost and the thing being reached for
-        // vanishes. The visible panel is the inner element.
-        <span className="mini-volume-pop">
-          <span className="mini-volume-panel">{slider}</span>
-        </span>
+        <>
+          {/* Inline when the row has room for it, which the stylesheet
+              decides from the bar's width (`@container mini`): a slider you
+              can see is better than one you have to find. Only one of the
+              two is ever displayed, so only one is in the tab order and the
+              accessibility tree. */}
+          <span className="mini-volume-inline">{slider}</span>
+          {/* Two elements, and the outer one is the reason this is usable. It
+              reaches from the button up to the panel with nothing between, so
+              moving the pointer towards the slider never crosses a gap —
+              cross one and the hover is lost and the thing being reached for
+              vanishes. The visible panel is the inner element. */}
+          <span className="mini-volume-pop">
+            <span className="mini-volume-panel">{slider}</span>
+          </span>
+        </>
       ) : (
         slider
       )}

@@ -12,29 +12,51 @@
 // Sideways, the guide scrolls through time rather than across a wide strip:
 // the position is an offset in seconds in the store, and every render draws
 // the window that offset names. A wheel, a tilt wheel, a touchpad swipe or
-// Shift+wheel moves it by exactly the pixels the gesture reported, at once —
-// no glide, for the same reasons logic/wheel.ts gives for vertical scrolling.
+// Shift+wheel moves that offset by exactly the pixels the gesture reported.
+//
+// What is drawn eases toward it over a fifth of a second (useEasedTime).
+// Vertical lists step instantly — see logic/wheel.ts — but a wheel notch here
+// is a quarter of an hour of programmes sliding sideways, and moved at once
+// that read as the guide jumping in fifteen-minute steps. The easing is in
+// absolute time and chases a target that every notch moves on, so a fast
+// spin still covers its full distance and ends exactly where it should.
 //
 // The pixel arithmetic is all in logic/guide.ts and checked there.
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import { playCatchupProgramme, playChannel } from "../actions";
 import { useChannelPages } from "../hooks/useChannelPages";
 import { useClock } from "../hooks/useClock";
+import { useEasedTime } from "../hooks/useEasedTime";
 import { useGuideRows } from "../hooks/useGuideRows";
 import { hhmm } from "../logic/format";
 import {
+  GUIDE_FUTURE_HOURS,
+  GUIDE_PAST_HOURS,
   GUIDE_ROW_HEIGHT,
+  HOUR,
   anchorFor,
   clampHours,
   dayLabel,
+  dragOffset,
   guideWindow,
   horizontalPixels,
   nowLineX,
+  pageDirection,
   playability,
   programmeSpan,
   programmeStatus,
   rebaseOffset,
+  scrollThumb,
+  scrollbarX,
   secondsForPixels,
   showsNow,
   ticks,
@@ -44,13 +66,17 @@ import {
 import { OVERSCAN, computeWindow } from "../logic/virtual";
 import { ALL_CATEGORIES, useApp, useDispatch } from "../store";
 import type { ChannelDto, ProgrammeDto } from "../types";
+import { RailExpand } from "./Rail";
 import { ViewSwitch } from "./ViewSwitch";
 
 /** Anything narrower than this cannot hold a legible title. */
 const LABEL_MIN_PX = 34;
 const TIME_MIN_PX = 96;
 
-export function GuideGrid() {
+/** `besideRail`: this guide shares the browse grid with the rail, so it
+ *  offers the way back to a folded rail. The stacked player's guide has no
+ *  rail beside it to bring back. */
+export function GuideGrid({ besideRail = false }: { besideRail?: boolean }) {
   const state = useApp();
   const dispatch = useDispatch();
   const now = useClock(15_000);
@@ -65,7 +91,8 @@ export function GuideGrid() {
   useLayoutEffect(() => {
     if (state.guideAnchor !== anchor) dispatch({ type: "guideRebase", anchor });
   }, [anchor, state.guideAnchor, dispatch]);
-  const win = useMemo(() => guideWindow(now, hours, offset), [now, hours, offset]);
+  // Where the guide is going: what the store's offset names.
+  const target = useMemo(() => guideWindow(now, hours, offset), [now, hours, offset]);
 
   const categoryId = state.categoryId === ALL_CATEGORIES ? null : state.categoryId;
   const estimate =
@@ -81,6 +108,9 @@ export function GuideGrid() {
   const [scrollTop, setScrollTop] = useState(0);
   const [height, setHeight] = useState(0);
   const [trackWidth, setTrackWidth] = useState(0);
+  /** The rows' vertical scrollbar, which the time scrollbar below them stops
+   *  short of so the two tracks end at the same x. */
+  const [barInset, setBarInset] = useState(0);
 
   // Both dimensions are measured, never assumed: the row count per screen and
   // the seconds-per-pixel of the axis both depend on them.
@@ -91,6 +121,7 @@ export function GuideGrid() {
     const read = () => {
       setHeight(body.clientHeight);
       setTrackWidth(track.clientWidth);
+      setBarInset(Math.max(0, body.offsetWidth - body.clientWidth));
     };
     read();
     if (typeof ResizeObserver === "undefined") return;
@@ -99,6 +130,17 @@ export function GuideGrid() {
     ro.observe(track);
     return () => ro.disconnect();
   }, []);
+
+  // Where the guide has got to: the target's left edge, eased. Arrived means
+  // within a quarter of a pixel, or a second if that is more — closer than
+  // that nothing on screen moves, and the last frames would be re-rendering
+  // for nothing. While the scrollbar's thumb is held the drawn window is the
+  // target exactly, so the thumb stays under the pointer.
+  const [scrubbing, setScrubbing] = useState(false);
+  const span = hours * HOUR;
+  const snap = Math.max(1, secondsForPixels(0.25, hours, trackWidth));
+  const shownFrom = useEasedTime(target.from, snap, scrubbing);
+  const win = useMemo(() => ({ from: shownFrom, to: shownFrom + span }), [shownFrom, span]);
 
   // Sideways wheel movement is the guide's own. A native listener because
   // React's onWheel is passive and could not stop the engine acting on the
@@ -146,6 +188,7 @@ export function GuideGrid() {
     visible.filter((c) => !c.isSeparator).map((c) => c.streamId),
     win,
     state.sync.lastSynced,
+    target,
   );
 
   const onPlay = useCallback(
@@ -171,35 +214,49 @@ export function GuideGrid() {
 
   return (
     <div className="guide">
+      {/* Three groups, the middle one centred on the bar itself rather than
+          on whatever room the sides leave — see .guide-head. */}
       <header className="guide-head">
-        <h2>{categoryName}</h2>
-        <span className="guide-window">
-          {day ? `${day} ` : ""}
-          {hhmm(win.from)}–{hhmm(win.to)} · {hours}h
-        </span>
-        <span className="spring" />
-        <button
-          className="ctl"
-          data-tip="Back one screen (←)"
-          onClick={() => dispatch({ type: "guideShift", hours: -hours })}
-        >
-          ‹
-        </button>
-        <button
-          className={`ctl ${showsNow(now, win) ? "on" : ""}`}
-          data-tip="Back to now (Home)"
-          onClick={() => dispatch({ type: "guideNow" })}
-        >
-          Now
-        </button>
-        <button
-          className="ctl"
-          data-tip="Forward one screen (→)"
-          onClick={() => dispatch({ type: "guideShift", hours })}
-        >
-          ›
-        </button>
-        <ViewSwitch current="guide" />
+        <div className="guide-head-start">
+          {besideRail && state.railCollapsed ? <RailExpand /> : null}
+          <div className="guide-head-title">
+            <h2 data-tip-overflow="">{categoryName}</h2>
+            <span className="guide-window">
+              {day ? `${day} ` : ""}
+              {hhmm(win.from)}–{hhmm(win.to)} · {hours}h
+            </span>
+          </div>
+        </div>
+        <div className="guide-nav">
+          <button
+            className="ctl"
+            aria-label="Back 1 hour"
+            data-tip="Back 1 hour (←)"
+            onClick={() => dispatch({ type: "guideShift", hours: -1 })}
+          >
+            ‹
+          </button>
+          {/* Lit by where the guide is going, not where the animation has
+              got to, so it does not flicker on the way past. */}
+          <button
+            className={`ctl ${showsNow(now, target) ? "on" : ""}`}
+            data-tip="Back to now (Home)"
+            onClick={() => dispatch({ type: "guideNow" })}
+          >
+            Now
+          </button>
+          <button
+            className="ctl"
+            aria-label="Forward 1 hour"
+            data-tip="Forward 1 hour (→)"
+            onClick={() => dispatch({ type: "guideShift", hours: 1 })}
+          >
+            ›
+          </button>
+        </div>
+        <div className="guide-head-end">
+          <ViewSwitch current="guide" />
+        </div>
       </header>
 
       {source.error ? (
@@ -283,6 +340,134 @@ export function GuideGrid() {
           </div>
         ) : null}
       </div>
+
+      <TimeScrollbar
+        offset={win.from - anchor}
+        anchor={anchor}
+        hours={hours}
+        now={now}
+        inset={barInset}
+        onScrub={setScrubbing}
+        onSeek={(o) => dispatch({ type: "guideSeek", offset: o, anchor })}
+        onPage={(dir) => dispatch({ type: "guideShift", hours: dir * hours })}
+      />
+    </div>
+  );
+}
+
+/** The guide's horizontal scrollbar. The page has no wide strip for a native
+ *  one to scroll — the guide moves through time by an offset — so this is
+ *  drawn: the whole reach, a day back to two ahead, with a thumb for the
+ *  window on screen and a mark where now is. Drag the thumb to scrub; click
+ *  either side of it to move a screen that way. The arrow keys are the global
+ *  handler's, which already move the guide, so this takes no focus of its
+ *  own. Geometry in logic/guide.ts. */
+function TimeScrollbar({
+  offset,
+  anchor,
+  hours,
+  now,
+  inset,
+  onScrub,
+  onSeek,
+  onPage,
+}: {
+  /** The drawn window's offset from `anchor`, eased: the thumb follows the
+   *  animation rather than leaping ahead of it. */
+  offset: number;
+  anchor: number;
+  hours: number;
+  now: number;
+  inset: number;
+  onScrub: (on: boolean) => void;
+  onSeek: (offset: number) => void;
+  onPage: (dir: -1 | 1) => void;
+}) {
+  const trackRef = useRef<HTMLDivElement | null>(null);
+  const [width, setWidth] = useState(0);
+  useEffect(() => {
+    const el = trackRef.current;
+    if (!el) return;
+    const read = () => setWidth(el.clientWidth);
+    read();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(read);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  // The inset arrives a render after the first measurement and narrows the
+  // track; read it again before paint rather than waiting on the observer,
+  // so the first thumb drawn is already the right one.
+  useLayoutEffect(() => {
+    if (trackRef.current) setWidth(trackRef.current.clientWidth);
+  }, [inset]);
+
+  const thumb = scrollThumb(offset, hours, width);
+  const nowX = scrollbarX(now, anchor, hours, width);
+  const drag = useRef<{ x: number; offset: number } | null>(null);
+  const [dragging, setDragging] = useState(false);
+
+  const onThumbDown = (e: ReactPointerEvent<HTMLElement>) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    // From where the thumb is drawn, so grabbing it mid-glide does not make
+    // it leap to where the glide was going: the glide's target becomes
+    // where it had got to, and the drag goes on from there.
+    drag.current = { x: e.clientX, offset };
+    onSeek(offset);
+    setDragging(true);
+    onScrub(true);
+  };
+  const onThumbMove = (e: ReactPointerEvent<HTMLElement>) => {
+    const d = drag.current;
+    if (!d) return;
+    onSeek(dragOffset(d.offset, e.clientX - d.x, hours, width));
+  };
+  const endThumb = (e: ReactPointerEvent<HTMLElement>) => {
+    if (!drag.current) return;
+    drag.current = null;
+    setDragging(false);
+    onScrub(false);
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+  };
+  const onTrackDown = (e: ReactPointerEvent<HTMLElement>) => {
+    if (e.button !== 0) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const dir = pageDirection(e.clientX - rect.left, thumb);
+    if (dir !== 0) onPage(dir);
+  };
+
+  return (
+    <div className="guide-scroll" style={{ paddingRight: inset }}>
+      <div className="guide-scroll-corner" aria-hidden />
+      <div
+        className={`guide-scroll-track ${dragging ? "dragging" : ""}`}
+        ref={trackRef}
+        role="scrollbar"
+        aria-label="Time"
+        aria-orientation="horizontal"
+        aria-valuemin={-GUIDE_PAST_HOURS}
+        aria-valuemax={GUIDE_FUTURE_HOURS - hours}
+        aria-valuenow={Math.round((offset / HOUR) * 4) / 4}
+        data-tip="Drag to move through time · click either side to jump a screen"
+        onPointerDown={onTrackDown}
+      >
+        <span
+          className="guide-scroll-thumb"
+          style={{ left: thumb.left, width: thumb.width }}
+          onPointerDown={onThumbDown}
+          onPointerMove={onThumbMove}
+          onPointerUp={endThumb}
+          onPointerCancel={endThumb}
+        />
+        {nowX >= 0 && nowX <= width ? (
+          <span className="guide-scroll-now" style={{ left: nowX }} aria-hidden />
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -321,7 +506,7 @@ function GuideRow({
   return (
     <div className={`guide-row ${selected ? "sel" : ""}`} style={style}>
       <div className="guide-chan">
-        <span className="guide-num">{channel.num ?? ""}</span>
+        <span className="guide-num">{channel.numLabel ?? channel.num ?? ""}</span>
         <span className="guide-name" data-tip-overflow={channel.name}>
           {channel.cleanName}
         </span>

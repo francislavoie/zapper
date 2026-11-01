@@ -322,3 +322,128 @@ export function withinArchive(
   if (archiveDays == null) return true;
   return p.start >= now - archiveDays * 86400;
 }
+
+// ------------------------------------------------------------ easing in time
+//
+// The store holds where the guide is going; the grid draws where it has got
+// to. A wheel notch in WebKitGTK is some fifty pixels — a quarter of an hour
+// at the default width — and applied at once that reads as the guide jumping
+// rather than moving. So the grid eases its drawn window toward the target
+// instead, in absolute time: it chases the target window's left edge, not
+// the offset, so the half-hour rebase (which keeps that edge where it is)
+// never animates, while "now" moving on does.
+//
+// Each notch moves the target, and the drawn window keeps chasing whatever
+// the target now is. A fast spin therefore covers the whole distance — it is
+// never restarted from wherever the animation had got to, which is what made
+// WebKit's own smooth scrolling crawl behind the wheel.
+
+/** How quickly the drawn window closes on the target: the gap shrinks by a
+ *  factor of e every this many milliseconds, so it is ~95% of the way there
+ *  in three of them — over in about a fifth of a second. */
+export const GUIDE_EASE_MS = 70;
+
+/** One frame's step of an exponential approach. `snap` is how close counts
+ *  as there: inside it the target is returned exactly, so the animation ends
+ *  on the number it was aiming at rather than a hair short of it forever. A
+ *  negative frame time (a requestAnimationFrame stamp from before the
+ *  animation was started) is no time at all, never a step backwards. */
+export function easeToward(
+  current: number,
+  target: number,
+  dtMs: number,
+  tauMs = GUIDE_EASE_MS,
+  snap = 1,
+): number {
+  const gap = target - current;
+  if (!(Math.abs(gap) > snap) || !(tauMs > 0)) return target;
+  const next = target - gap * Math.exp(-Math.max(0, dtMs) / tauMs);
+  return Math.abs(target - next) <= snap ? target : next;
+}
+
+// ---------------------------------------------------------- the scrollbar
+//
+// A bar along the bottom of the guide standing for its whole reach, from
+// GUIDE_PAST_HOURS back to GUIDE_FUTURE_HOURS ahead, with a thumb for the
+// window on screen. The thumb is as wide as the window is a fraction of the
+// reach, but never narrower than something a pointer can hold. Because of
+// that floor, the thumb's left edge travels across the track minus its own
+// width, and every mapping below goes through the same scale so that the
+// thumb, the now mark and a drag can never disagree.
+
+/** The whole reach, in seconds. */
+export const GUIDE_REACH = (GUIDE_PAST_HOURS + GUIDE_FUTURE_HOURS) * HOUR;
+
+/** The narrowest thumb, in pixels: a 1h window over three days would
+ *  otherwise be a sliver. */
+export const GUIDE_THUMB_MIN_PX = 24;
+
+export interface Thumb {
+  left: number;
+  width: number;
+}
+
+const lowestOffset = (): number => -GUIDE_PAST_HOURS * HOUR;
+
+function thumbWidth(hours: number, track: number, minPx: number): number {
+  if (!(track > 0)) return 0;
+  return Math.min(track, Math.max(minPx, (track * clampHours(hours) * HOUR) / GUIDE_REACH));
+}
+
+/** Pixels the thumb moves per second of offset. Zero when the window is the
+ *  whole reach and there is nowhere to go. */
+function thumbScale(hours: number, track: number, minPx: number): number {
+  const span = clampOffset(Infinity, hours) - lowestOffset();
+  const travel = track - thumbWidth(hours, track, minPx);
+  return span > 0 && travel > 0 ? travel / span : 0;
+}
+
+/** The thumb for a window at `offset` seconds from the anchor. */
+export function scrollThumb(
+  offset: number,
+  hours: number,
+  track: number,
+  minPx = GUIDE_THUMB_MIN_PX,
+): Thumb {
+  const width = thumbWidth(hours, track, minPx);
+  const scale = thumbScale(hours, track, minPx);
+  return { left: (clampOffset(offset, hours) - lowestOffset()) * scale, width };
+}
+
+/** Where a drag that started with the window at `startOffset` puts it, after
+ *  the pointer has moved `dx` pixels: one to one with the thumb, clamped to
+ *  the reach. */
+export function dragOffset(
+  startOffset: number,
+  dx: number,
+  hours: number,
+  track: number,
+  minPx = GUIDE_THUMB_MIN_PX,
+): number {
+  const scale = thumbScale(hours, track, minPx);
+  if (!(scale > 0)) return clampOffset(startOffset, hours);
+  return clampOffset(startOffset + dx / scale, hours);
+}
+
+/** Where an instant sits along the bar, for the now mark: the point that
+ *  would be the thumb's centre with the window centred on it. Unclamped, so a
+ *  caller can tell when it is off the end. */
+export function scrollbarX(
+  t: number,
+  anchor: number,
+  hours: number,
+  track: number,
+  minPx = GUIDE_THUMB_MIN_PX,
+): number {
+  const half = (clampHours(hours) * HOUR) / 2;
+  const scale = thumbScale(hours, track, minPx);
+  return (t - anchor - half - lowestOffset()) * scale + thumbWidth(hours, track, minPx) / 2;
+}
+
+/** Which way a click on the bar pages: back if left of the thumb, forward if
+ *  right of it, nowhere if on it. */
+export function pageDirection(x: number, thumb: Thumb): -1 | 0 | 1 {
+  if (x < thumb.left) return -1;
+  if (x > thumb.left + thumb.width) return 1;
+  return 0;
+}

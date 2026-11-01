@@ -31,7 +31,12 @@ export function VideoFeedback({ feedback }: { feedback: Feedback | null }) {
       <div
         key={shown.id}
         className={`vfb vfb-${shown.kind}`}
-        style={{ left: `${centre * 100}%` }}
+        // Clamped so a side-zone bubble never hangs off the picture's edge:
+        // its zone's centre is 7.5% in, which a large bubble overshoots in a
+        // narrow window. `--vfb-half` is half the bubble's width (styles.css).
+        style={{
+          left: `clamp(var(--vfb-half), ${centre * 100}%, calc(100% - var(--vfb-half)))`,
+        }}
       >
         <span className="vfb-icon">
           {shown.kind === "volume" ? (

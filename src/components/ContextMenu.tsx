@@ -1,6 +1,6 @@
 // The app's own context menu: the surface, its placement and its dismissal.
 // What is in it belongs to whoever opens it — FavouriteMenu over a favourite,
-// the category rail over a category.
+// the category rail over a category, and the rail's options under its ▾.
 //
 // WebKit's browser menu is suppressed at the GTK level, so a right-click in
 // this application produces nothing at all unless something draws it. This is
@@ -9,9 +9,18 @@
 //
 // Escape is not handled here. It belongs to the one place that decides what a
 // single press unwinds — see useGlobalKeys — and an open context menu is first
-// in that order.
+// in that order. The arrow keys are handled here: they only ever mean "the
+// next item in this menu".
 
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import { documentScale } from "../zoom";
 import { menuPosition } from "../logic/favourites";
 
@@ -26,10 +35,25 @@ export interface ContextMenuProps {
    *  back to whatever had it when the menu goes. A pointer-opened menu leaves
    *  focus alone, as it always has. */
   takeFocus?: boolean;
+  /** The button that opened it, if one did. A press on it is not a press
+   *  "outside": it is left to the button, which closes the menu itself —
+   *  otherwise the press closes it and the click that follows reopens it. */
+  anchor?: RefObject<HTMLElement | null>;
   children: ReactNode;
 }
 
-export function ContextMenu({ x, y, heading, onClose, takeFocus, children }: ContextMenuProps) {
+/** Every kind of item: plain, checkbox and radio. */
+const ITEM = '[role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"]';
+
+export function ContextMenu({
+  x,
+  y,
+  heading,
+  onClose,
+  takeFocus,
+  anchor,
+  children,
+}: ContextMenuProps) {
   const ref = useRef<HTMLDivElement | null>(null);
   // Placed off the measurement rather than off a guessed size: the menu's
   // width is its text's, and its text is a name from the catalogue.
@@ -52,7 +76,7 @@ export function ContextMenu({ x, y, heading, onClose, takeFocus, children }: Con
   useEffect(() => {
     if (!takeFocus) return;
     const before = document.activeElement as HTMLElement | null;
-    ref.current?.querySelector<HTMLElement>("[role=menuitem]")?.focus();
+    ref.current?.querySelector<HTMLElement>(ITEM)?.focus();
     return () => {
       // Only if it is still there: the row the menu was opened from may have
       // been windowed out, or moved, by what the menu just did.
@@ -62,7 +86,10 @@ export function ContextMenu({ x, y, heading, onClose, takeFocus, children }: Con
 
   useEffect(() => {
     const onDown = (e: MouseEvent) => {
-      if (!ref.current?.contains(e.target as Node)) onClose();
+      const target = e.target as Node;
+      if (ref.current?.contains(target)) return;
+      if (e.type === "mousedown" && anchor?.current?.contains(target)) return;
+      onClose();
     };
     // Capture, so a click elsewhere closes this before that click acts rather
     // than after it.
@@ -76,7 +103,28 @@ export function ContextMenu({ x, y, heading, onClose, takeFocus, children }: Con
       window.removeEventListener("contextmenu", onDown, true);
       window.removeEventListener("resize", onClose);
     };
-  }, [onClose]);
+  }, [onClose, anchor]);
+
+  /** Up and down step through the items and wrap; Home and End jump. */
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    const step = { ArrowDown: 1, ArrowUp: -1, Home: 0, End: 0 }[e.key];
+    if (step === undefined) return;
+    const items = [...(ref.current?.querySelectorAll<HTMLElement>(ITEM) ?? [])];
+    if (items.length === 0) return;
+    e.preventDefault();
+    const at = items.indexOf(document.activeElement as HTMLElement);
+    const next =
+      e.key === "Home"
+        ? 0
+        : e.key === "End"
+          ? items.length - 1
+          : at < 0
+            ? step > 0
+              ? 0
+              : items.length - 1
+            : (at + step + items.length) % items.length;
+    items[next]?.focus();
+  };
 
   return (
     <div
@@ -85,6 +133,7 @@ export function ContextMenu({ x, y, heading, onClose, takeFocus, children }: Con
       aria-label={`${heading} options`}
       ref={ref}
       style={{ left: box.left, top: box.top }}
+      onKeyDown={onKeyDown}
       // A right-click on the menu itself is not a request for another one.
       onContextMenu={(e) => e.preventDefault()}
     >

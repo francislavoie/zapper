@@ -11,12 +11,17 @@ import { readFileSync } from "node:fs";
 import {
   CATEGORY_SORTS,
   CATEGORY_SORT_DEFAULT,
+  SORT_LABEL,
+  hiddenCount,
   nextSort,
   orderCategories,
+  parseHidden,
   parsePins,
   parseSort,
   railRows,
+  serialiseHidden,
   serialisePins,
+  setHidden,
   setPinned,
   sortTip,
 } from "../logic/categoryOrder.ts";
@@ -140,6 +145,94 @@ test("the sort cycles provider → A–Z → most → provider, and parses safel
   assert.equal(parseSort(null), "provider");
   assert.equal(parseSort("alphabetical"), "provider");
   assert.equal(sortTip("az"), "Sort: A–Z (click for Most channels)");
+  assert.equal(sortTip("count"), "Sort: Most channels (click for Provider's order)");
+});
+
+// "Panel" was the provider's order's name on the button, and nobody knew
+// where it came from. The stored value stays "provider" so saved prefs read.
+test("the provider's order is called Default, never Panel", () => {
+  assert.equal(SORT_LABEL.provider.short, "Default");
+  assert.equal(SORT_LABEL.provider.long, "Provider's order");
+  assert.equal(SORT_LABEL.provider.menu, "Default (provider's order)");
+  assert.equal(sortTip("provider"), "Sort: Provider's order (click for A–Z)");
+  for (const s of CATEGORY_SORTS) {
+    for (const label of Object.values(SORT_LABEL[s])) assert.doesNotMatch(label, /panel/i);
+  }
+  assert.equal(parseSort("provider"), "provider");
+});
+
+test("hidden categories are left out, pinned ones too", () => {
+  const { pinned, rest } = orderCategories(
+    CATS,
+    opts({ pins: ["doc", "uk"], hidden: ["uk", "s10"] }),
+  );
+  assert.deepEqual(ids(pinned), ["doc"]);
+  // A hidden pin is not demoted into the rest either.
+  assert.deepEqual(ids(rest), ["fr", "s2"]);
+});
+
+test("the filter does not bring a hidden category back", () => {
+  const { pinned, rest } = orderCategories(CATS, opts({ hidden: ["s2"], filter: "sports" }));
+  assert.deepEqual(ids(pinned), []);
+  assert.deepEqual(ids(rest), ["s10"]);
+});
+
+test("shown hidden categories sit where they would be, marked", () => {
+  for (const sort of CATEGORY_SORTS) {
+    const plain = railRows(ALL, CATS, opts({ sort, pins: ["uk"] }));
+    const shown = railRows(
+      ALL,
+      CATS,
+      opts({ sort, pins: ["uk"], hidden: ["uk", "fr"], showHidden: true }),
+    );
+    assert.deepEqual(ids(shown), ids(plain), sort);
+    assert.deepEqual(
+      shown.filter((r) => r.hidden).map((r) => r.id).sort(),
+      ["fr", "uk"],
+      sort,
+    );
+    // Still pinned while hidden, so it is in the pinned block when shown.
+    assert.equal(shown.find((r) => r.id === "uk").pinned, true);
+  }
+  // And the filter still applies to them.
+  const filtered = railRows(ALL, CATS, opts({ hidden: ["s2"], showHidden: true, filter: "sports" }));
+  assert.deepEqual(ids(filtered), ["*all*", "s10", "s2"]);
+});
+
+test("hiding the only rows below the pins takes the divider with them", () => {
+  const rows = railRows(ALL, CATS, opts({ pins: ["doc"], hidden: ["uk", "s10", "fr", "s2"] }));
+  assert.deepEqual(ids(rows), ["*all*", "doc"]);
+  assert.equal(rows.some((r) => r.pinEnd), false);
+  // Hiding every pin leaves no pinned block and no divider.
+  const none = railRows(ALL, CATS, opts({ pins: ["doc"], hidden: ["doc"] }));
+  assert.equal(none.some((r) => r.pinned || r.pinEnd), false);
+  assert.equal(none.length, CATS.length);
+});
+
+test("All channels cannot be hidden by a stored id", () => {
+  const rows = railRows(ALL, CATS, opts({ hidden: ["*all*"] }));
+  assert.equal(rows[0].id, "*all*");
+  assert.equal(rows[0].hidden, false);
+});
+
+test("hiding and unhiding are set operations; stale ids are kept, not counted", () => {
+  const a = setHidden([], "fr", true);
+  assert.deepEqual(a, ["fr"]);
+  assert.equal(setHidden(a, "fr", true), a);
+  assert.deepEqual(setHidden(a, "fr", false), []);
+  assert.equal(hiddenCount(CATS, ["fr", "gone", "uk"]), 2);
+  assert.equal(hiddenCount(CATS, []), 0);
+  // An unknown hidden id neither errors nor hides anything.
+  const { rest } = orderCategories(CATS, opts({ hidden: ["gone"] }));
+  assert.deepEqual(ids(rest), ids(CATS));
+});
+
+test("stored hidden ids survive a round trip, and rubbish reads as none", () => {
+  assert.deepEqual(parseHidden(serialiseHidden(["gone", "fr"])), ["gone", "fr"]);
+  assert.deepEqual(parseHidden(null), []);
+  assert.deepEqual(parseHidden("[1,2"), []);
+  assert.deepEqual(parseHidden('"fr"'), []);
+  assert.deepEqual(parseHidden('["fr", false, "fr", ""]'), ["fr"]);
 });
 
 // The sort button sits in the rail's filter row, and that row has to stay
@@ -149,17 +242,35 @@ test("the sort cycles provider → A–Z → most → provider, and parses safel
 // change can make it the taller of the two, pushing the rail's rows down by
 // a pixel against the list's. Measured in the browser too; this is what
 // keeps it from regressing quietly.
-test("the sort button takes the filter box's height instead of setting one", () => {
+//
+// The ▾ beside it, and the box holding the two, follow the same rule.
+test("the sort buttons take the filter box's height instead of setting one", () => {
   const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8").replace(
     /\/\*[\s\S]*?\*\//g,
     "",
   );
-  const m = /^\.rail-sort\s*\{([^}]*)\}/m.exec(css);
-  assert.ok(m, ".rail-sort is missing from the stylesheet");
-  const body = m[1];
-  assert.match(body, /align-self:\s*stretch/);
-  assert.doesNotMatch(body, /(^|[\s;])(height|min-height|padding-top|padding-bottom):/);
-  const padding = /(^|[\s;])padding:\s*([^;]+);/.exec(body);
-  assert.ok(padding, ".rail-sort sets its padding explicitly");
-  assert.match(padding[2].trim(), /^0(\s|$)/, "no vertical padding on .rail-sort");
+  const block = (sel) => {
+    const m = new RegExp(`^\\.${sel}\\s*\\{([^}]*)\\}`, "m").exec(css);
+    assert.ok(m, `.${sel} is missing from the stylesheet`);
+    return m[1];
+  };
+  const noHeight = (sel, body) =>
+    assert.doesNotMatch(
+      body,
+      /(^|[\s;])(height|min-height|max-height|padding-top|padding-bottom|block-size):/,
+      `.${sel} sets a height of its own`,
+    );
+  for (const sel of ["rail-sort", "rail-sort-more"]) {
+    const body = block(sel);
+    assert.match(body, /align-self:\s*stretch/, `.${sel} stretches`);
+    noHeight(sel, body);
+    const padding = /(^|[\s;])padding:\s*([^;]+);/.exec(body);
+    assert.ok(padding, `.${sel} sets its padding explicitly`);
+    assert.match(padding[2].trim(), /^0(\s|$)/, `no vertical padding on .${sel}`);
+  }
+  // The pair's box: stretched to the row and adding nothing to it.
+  const split = block("rail-sort-split");
+  assert.match(split, /align-self:\s*stretch/);
+  noHeight("rail-sort-split", split);
+  assert.doesNotMatch(split, /(^|[\s;])(padding|border|margin)(-top|-bottom)?:/);
 });

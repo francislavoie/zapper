@@ -27,6 +27,24 @@ import {
   railAfterDrag,
 } from "../logic/railWidth";
 import { useApp, useDispatch, type RailTab } from "../store";
+import { RailFold } from "./icons";
+
+/** Where the rail comes back from once it has been folded away: the first
+ *  thing in the heading row of whichever view is showing, which is where the
+ *  rail's own fold button was a moment ago — the left edge of the content. */
+export function RailExpand() {
+  const dispatch = useDispatch();
+  return (
+    <button
+      className="rail-fold"
+      aria-label="Show the categories and favourites"
+      data-tip="Show categories & favourites"
+      onClick={() => dispatch({ type: "railCollapsed", collapsed: false })}
+    >
+      <RailFold className="rail-fold-i" open={false} />
+    </button>
+  );
+}
 
 const TABS: Array<{ id: RailTab; label: string }> = [
   { id: "categories", label: "Categories" },
@@ -86,6 +104,16 @@ export function Rail() {
             {t.label}
           </button>
         ))}
+        {/* At the end of the tab row, against the edge the rail folds
+            towards. */}
+        <button
+          className="rail-fold"
+          aria-label="Hide the categories and favourites"
+          data-tip="Hide categories & favourites"
+          onClick={() => dispatch({ type: "railCollapsed", collapsed: true })}
+        >
+          <RailFold className="rail-fold-i" open />
+        </button>
       </div>
 
       {/* `mode` is the whole switch. A hidden Activity renders nothing and

@@ -22,6 +22,7 @@ import {
   subtitlePreview,
 } from "../logic/settings";
 import { MAX_GUIDE_HOURS, MIN_GUIDE_HOURS } from "../logic/guide";
+import { MOUSE_WORDS, SHORTCUT_GROUPS } from "../logic/shortcuts";
 import { VOLUME_MAX } from "../logic/volume";
 import { kindLabel, statusLine as updateStatusLine } from "../logic/updates";
 import { checkForUpdates } from "../actions";
@@ -412,27 +413,7 @@ export function SettingsModal() {
 
           {section === "Updates" ? <UpdatesPane s={s} /> : null}
 
-          {section === "Keyboard" ? (
-            <ul>
-              <li>
-                <b>/</b> — search channels
-              </li>
-              <li>
-                <b>G</b> — guide · <b>←</b>/<b>→</b> page it · <b>Home</b> back to now
-              </li>
-              <li>
-                <b>Ctrl+P</b> — command palette
-              </li>
-              <li>
-                <b>F</b> — fullscreen · <b>Space</b> — pause · <b>←</b>/<b>→</b>{" "}
-                — 5s · <b>L</b> — live edge
-              </li>
-              <li>
-                <b>Escape</b> — back one step
-              </li>
-              <li>Scroll over the video adjusts volume. Clicking does not pause.</li>
-            </ul>
-          ) : null}
+          {section === "Keyboard" ? <KeyboardPane /> : null}
 
           {section === "About" ? (
             <p>
@@ -443,6 +424,43 @@ export function SettingsModal() {
           ) : null}
         </div>
       </div>
+    </div>
+  );
+}
+
+/** Every shortcut and gesture, drawn from SHORTCUT_GROUPS: keys as keycaps,
+ *  what they do beside them, grouped by where they apply. */
+function KeyboardPane() {
+  return (
+    <div className="kb">
+      {SHORTCUT_GROUPS.map((g) => (
+        <section key={g.title} className="kb-group">
+          <h4>
+            {g.title}
+            {g.when ? <span className="kb-when">{g.when}</span> : null}
+          </h4>
+          <dl className="kb-list">
+            {g.items.map((it) => (
+              <div key={`${it.does}`} className="kb-row">
+                <dt>
+                  {it.keys.map((chord, i) => (
+                    <span key={chord.join("+")} className="kb-alt">
+                      {i > 0 ? <span className="kb-sep">{it.pair ? "/" : "or"}</span> : null}
+                      {chord.map((k, j) => (
+                        <span key={k} className="kb-chord">
+                          {j > 0 ? <span className="kb-plus">+</span> : null}
+                          <kbd className={MOUSE_WORDS.has(k) ? "mouse" : ""}>{k}</kbd>
+                        </span>
+                      ))}
+                    </span>
+                  ))}
+                </dt>
+                <dd>{it.does}</dd>
+              </div>
+            ))}
+          </dl>
+        </section>
+      ))}
     </div>
   );
 }

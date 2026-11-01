@@ -31,8 +31,8 @@ import { loadVideoWidth } from "./videoSize";
 import { loadRailWidth } from "./railWidth";
 import { clampRailWidth } from "./logic/railWidth";
 import { clampVideoWidth } from "./logic/videoSize";
-import { setPinned, type CategorySort } from "./logic/categoryOrder";
-import { loadCategoryPins, loadCategorySort } from "./categoryPrefs";
+import { setHidden, setPinned, type CategorySort } from "./logic/categoryOrder";
+import { loadCategoryHidden, loadCategoryPins, loadCategorySort } from "./categoryPrefs";
 
 export const ALL_CATEGORIES = "*all*";
 
@@ -86,6 +86,9 @@ export interface State {
   categoryFilter: string;
   /** Which half of the rail is showing. */
   railTab: RailTab;
+  /** The rail folded away, in the list and the guide alike: one rail serves
+   *  both, so one switch hides it from both. */
+  railCollapsed: boolean;
   favouriteMenu: FavouriteMenu | null;
   categoryMenu: CategoryMenu | null;
   /** Category ids pinned to the top of the rail, in the order they were
@@ -94,6 +97,17 @@ export interface State {
   categoryPins: readonly string[];
   /** How the unpinned categories are ordered. Local like zoom. */
   categorySort: CategorySort;
+  /** Category ids taken out of the rail. Kept like pins — unknown ids too —
+   *  and independent of them: a hidden pin keeps its place for when it is
+   *  unhidden. Local like zoom. */
+  categoryHidden: readonly string[];
+  /** Draw the hidden categories anyway, dimmed, so they can be unhidden one
+   *  by one. Not remembered: hidden is what the rail should be at launch. */
+  categoryShowHidden: boolean;
+  /** The rail's options menu, under the ▾ beside the sort button: where it
+   *  opens, in client pixels. In the store for the same reason as
+   *  categoryMenu — Escape unwinds it in useGlobalKeys. */
+  categoryOptions: { x: number; y: number } | null;
   /** Where a right-click on the picture landed, in client pixels. */
   videoMenu: { x: number; y: number } | null;
   /** The diagnostics panel. Off by default and polled only while open. */
@@ -211,12 +225,16 @@ export const initialState: State = {
   categoryId: loadSession().categoryId ?? ALL_CATEGORIES,
   categoryFilter: "",
   railTab: loadSession().railTab,
+  railCollapsed: loadSession().railCollapsed,
   favouriteMenu: null,
   categoryMenu: null,
   // Read before the first render, like the rail's width, so the rail draws in
   // its remembered order once rather than reshuffling a frame later.
   categoryPins: loadCategoryPins(),
   categorySort: loadCategorySort(),
+  categoryHidden: loadCategoryHidden(),
+  categoryShowHidden: false,
+  categoryOptions: null,
   videoMenu: null,
   statsOpen: false,
   fullscreenFrom: null,
@@ -251,10 +269,15 @@ export type Action =
   | { type: "selectCategory"; id: string }
   | { type: "categoryFilter"; text: string }
   | { type: "railTab"; tab: RailTab }
+  | { type: "railCollapsed"; collapsed: boolean }
   | { type: "favouriteMenu"; menu: FavouriteMenu | null }
   | { type: "categoryMenu"; menu: CategoryMenu | null }
   | { type: "categoryPin"; id: string; pinned: boolean }
   | { type: "categorySort"; sort: CategorySort }
+  | { type: "categoryHide"; id: string; hidden: boolean }
+  | { type: "categoryUnhideAll" }
+  | { type: "categoryShowHidden"; on: boolean }
+  | { type: "categoryOptions"; menu: { x: number; y: number } | null }
   | { type: "videoMenu"; at: { x: number; y: number } | null }
   | { type: "stats"; open: boolean }
   | { type: "fullscreenFrom"; mode: Mode | null }
@@ -272,10 +295,14 @@ export type Action =
   | { type: "opening"; channel: ChannelDto }
   /** The channel from last time, restored but deliberately not started. */
   | { type: "ready"; channel: ChannelDto }
-  /** A page: ‹ › and the arrow keys, by whole screens. */
+  /** A step: ‹ › and the arrow keys by an hour, a click on the scrollbar's
+   *  track by a screen. */
   | { type: "guideShift"; hours: number }
   /** A wheel or swipe, by however far it moved. */
   | { type: "guideScroll"; seconds: number }
+  /** A place on the scrollbar: an offset from `anchor`, which the grid passes
+   *  because it may be a half hour ahead of the store's. */
+  | { type: "guideSeek"; offset: number; anchor: number }
   | { type: "guideRebase"; anchor: number }
   | { type: "guideNow" }
   | { type: "settingsStatus"; value: Async<null> }
@@ -314,7 +341,24 @@ export function reducer(state: State, action: Action): State {
     case "railTab":
       // A menu belongs to the list it was opened over; changing the list
       // leaves it pointing at a row that is no longer there.
-      return { ...state, railTab: action.tab, favouriteMenu: null, categoryMenu: null };
+      return {
+        ...state,
+        railTab: action.tab,
+        favouriteMenu: null,
+        categoryMenu: null,
+        categoryOptions: null,
+      };
+    case "railCollapsed":
+      // The menus hang off rows that are about to stop being on screen.
+      return state.railCollapsed === action.collapsed
+        ? state
+        : {
+            ...state,
+            railCollapsed: action.collapsed,
+            favouriteMenu: null,
+            categoryMenu: null,
+            categoryOptions: null,
+          };
     case "favouriteMenu":
       return { ...state, favouriteMenu: action.menu };
     case "categoryMenu":
@@ -328,7 +372,27 @@ export function reducer(state: State, action: Action): State {
         categoryMenu: null,
       };
     case "categorySort":
-      return { ...state, categorySort: action.sort };
+      return { ...state, categorySort: action.sort, categoryOptions: null };
+    case "categoryHide":
+      // Hiding the category being browsed leaves it selected: the list keeps
+      // showing what it was showing, and only the rail loses the row. Jumping
+      // to "All channels" would throw away the list and its scroll position
+      // over what was a tidy-up of the rail, not a request to go anywhere.
+      return {
+        ...state,
+        categoryHidden: setHidden(state.categoryHidden, action.id, action.hidden),
+        categoryMenu: null,
+      };
+    case "categoryUnhideAll":
+      return {
+        ...state,
+        categoryHidden: state.categoryHidden.length === 0 ? state.categoryHidden : [],
+        categoryOptions: null,
+      };
+    case "categoryShowHidden":
+      return { ...state, categoryShowHidden: action.on, categoryOptions: null };
+    case "categoryOptions":
+      return { ...state, categoryOptions: action.menu };
     case "stacked":
       // Written to local storage by App, the same way zoom is: a reducer that
       // touched storage would do it twice under StrictMode and could not be
@@ -364,6 +428,7 @@ export function reducer(state: State, action: Action): State {
         menuOpen: false,
         favouriteMenu: null,
         categoryMenu: null,
+        categoryOptions: null,
       };
     case "sync":
       return { ...state, sync: action.value };
@@ -386,6 +451,12 @@ export function reducer(state: State, action: Action): State {
       const by = action.type === "guideShift" ? action.hours * HOUR : action.seconds;
       const offset = clampOffset(state.guideOffset + by, state.settings.guideHours);
       return offset === state.guideOffset ? state : { ...state, guideOffset: offset };
+    }
+    case "guideSeek": {
+      const offset = clampOffset(action.offset, state.settings.guideHours);
+      return offset === state.guideOffset && action.anchor === state.guideAnchor
+        ? state
+        : { ...state, guideOffset: offset, guideAnchor: action.anchor };
     }
     case "guideRebase":
       if (state.guideAnchor === action.anchor) return state;

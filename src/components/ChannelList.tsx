@@ -18,6 +18,7 @@ import type { ChannelDto } from "../types";
 import { ChannelRow } from "./ChannelRow";
 import { ViewSwitch } from "./ViewSwitch";
 import { SearchField } from "./SearchField";
+import { RailExpand } from "./Rail";
 
 /** The backend caps search at a sane number; 100 is plenty to scan. */
 const SEARCH_LIMIT = 100;
@@ -185,6 +186,7 @@ export function ChannelList() {
         heading={searching ? "Search results" : categoryName}
         total={source.total}
         loading={source.loading}
+        railCollapsed={state.railCollapsed}
       />
       <div className="pane-head">
         <SearchField
@@ -256,13 +258,16 @@ function ListHead({
   heading,
   total,
   loading,
+  railCollapsed,
 }: {
   heading: string;
   total: number;
   loading: boolean;
+  railCollapsed: boolean;
 }) {
   return (
     <div className="list-head">
+      {railCollapsed ? <RailExpand /> : null}
       <span className="list-title" data-tip-overflow="">
         {heading}
       </span>

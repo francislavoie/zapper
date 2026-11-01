@@ -35,11 +35,18 @@ const key = (chunk: number, id: number) => `${chunk}:${id}`;
 
 /** `epoch` empties the cache when it changes: pass something that changes
  *  when the guide data underneath does (the last sync), since chunks are
- *  otherwise kept for as long as the guide stays near them. */
+ *  otherwise kept for as long as the guide stays near them.
+ *
+ *  `win` is what is drawn and `target` is where the guide is headed: the grid
+ *  eases between the two, and fetching for the destination rather than for
+ *  every window passed through on the way means the data is asked for as soon
+ *  as the move starts, once, instead of chunk by chunk as an animation
+ *  crosses them. */
 export function useGuideRows(
   streamIds: number[],
   win: TimeWindow,
   epoch: number | null = null,
+  target: TimeWindow = win,
 ): GuideData {
   const [, bump] = useReducer((n: number) => n + 1, 0);
   const [attempt, retryNow] = useReducer((n: number) => n + 1, 0);
@@ -62,10 +69,10 @@ export function useGuideRows(
     generation.current += 1;
   }
 
-  const span = win.to - win.from;
+  const span = target.to - target.from;
   // What has to be there to draw the window, and what is worth having ready.
   const visible = chunksFor(win);
-  const wanted = chunksFor(win, span / 2);
+  const wanted = chunksFor(target, span / 2);
   const wantedKey = wanted.join(",");
   const wantedRef = useRef(wanted);
   wantedRef.current = wanted;

@@ -18,8 +18,9 @@
 // tooltips, same keys; what changes is size, which the stylesheet does from
 // `.mini-controls`, and two things the width forces:
 //
-//  - the volume slider is a panel above its button rather than inline, since
-//    the slider is the one control that needs length to be worth having;
+//  - the volume slider is shorter and loses its "100%", and if the row has
+//    no room for even that it becomes a panel above its button, since the
+//    slider is the one control that needs length to be worth having;
 //  - the scrubber's captions are said in fewer words.
 //
 // Browse is the caller's to offer (`onBrowse`) and the docked picture does

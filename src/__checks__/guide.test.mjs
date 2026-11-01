@@ -10,7 +10,9 @@ import {
   GUIDE_CHUNK,
   GUIDE_FUTURE_HOURS,
   GUIDE_PAST_HOURS,
+  GUIDE_REACH,
   GUIDE_ROW_HEIGHT,
+  GUIDE_THUMB_MIN_PX,
   HOUR,
   anchorFor,
   catchupMinutes,
@@ -18,13 +20,18 @@ import {
   clampHours,
   clampOffset,
   dayLabel,
+  dragOffset,
+  easeToward,
   guideWindow,
   horizontalPixels,
   nowLineX,
+  pageDirection,
   playability,
   programmeSpan,
   programmeStatus,
   rebaseOffset,
+  scrollThumb,
+  scrollbarX,
   secondsForPixels,
   shiftWindow,
   showsNow,
@@ -399,4 +406,113 @@ test("the header names the day once the window leaves today", () => {
   assert.equal(dayLabel(noon + 13 * HOUR, noon), "Tomorrow");
   assert.notEqual(dayLabel(noon + 49 * HOUR, noon), "");
   assert.notEqual(dayLabel(noon + 49 * HOUR, noon), "Tomorrow");
+});
+
+// ------------------------------------------------------------- easing
+
+test("easing closes on the target and lands on it exactly", () => {
+  // Ten notches' worth, as one target, from a standing start.
+  const target = 10 * 760;
+  let x = 0;
+  let frames = 0;
+  while (x !== target && frames < 200) {
+    const next = easeToward(x, target, 16, 70, 1);
+    assert.ok(next > x, "always moves toward the target");
+    assert.ok(next <= target, "never overshoots");
+    x = next;
+    frames++;
+  }
+  assert.equal(x, target);
+  // Exponential: most of the way there in a few frames, done well within a
+  // second at 60 fps.
+  assert.ok(frames < 60, `took ${frames} frames`);
+  assert.ok(easeToward(0, target, 3 * 70, 70, 1) > 0.94 * target);
+});
+
+test("easing works backwards, snaps when close, and never steps back in time", () => {
+  assert.ok(easeToward(1000, 0, 16) < 1000);
+  assert.equal(easeToward(100.4, 100, 16, 70, 1), 100);
+  assert.equal(easeToward(5, 5, 16), 5);
+  // A frame stamp from before the animation started is no time, not a step
+  // the wrong way.
+  assert.equal(easeToward(0, 1000, -8, 70, 1), 0);
+  // A long stall (a hidden tab) arrives rather than overshooting.
+  assert.equal(easeToward(0, 1000, 10_000, 70, 1), 1000);
+});
+
+test("a target that moves mid-animation is chased, not restarted", () => {
+  // Two notches 30ms apart: the second adds to where the target is going,
+  // and the drawn value ends at the sum.
+  let x = 0;
+  let target = 760;
+  for (let t = 0; t < 30; t += 10) x = easeToward(x, target, 10);
+  target += 760;
+  for (let i = 0; i < 100; i++) x = easeToward(x, target, 16);
+  assert.equal(x, 2 * 760);
+});
+
+// ---------------------------------------------------------- the scrollbar
+
+test("the thumb is the window's share of the reach, at the window's place", () => {
+  assert.equal(GUIDE_REACH, 72 * HOUR);
+  const track = 720;
+  // 3h of 72h is 30px of 720: above the floor, so exact.
+  const at0 = scrollThumb(0, 3, track);
+  assert.equal(at0.width, 30);
+  // Following now, the window starts 24h into the reach.
+  assert.equal(at0.left, 240);
+  // The ends of the reach are the ends of the track.
+  assert.equal(scrollThumb(-GUIDE_PAST_HOURS * HOUR, 3, track).left, 0);
+  const end = scrollThumb(Infinity, 3, track);
+  assert.equal(end.left + end.width, track);
+  // Out of range is clamped, like the offset itself.
+  assert.equal(scrollThumb(-1e9, 3, track).left, 0);
+});
+
+test("a narrow window still gets a thumb a pointer can hold", () => {
+  const track = 720;
+  const t = scrollThumb(0, 1, track);
+  assert.equal(t.width, GUIDE_THUMB_MIN_PX);
+  const end = scrollThumb(Infinity, 1, track);
+  assert.ok(Math.abs(end.left + end.width - track) < 1e-9);
+  assert.deepEqual(scrollThumb(0, 3, 0), { left: 0, width: 0 });
+});
+
+test("dragging the thumb moves the window one to one with the pointer", () => {
+  const track = 720;
+  for (const hours of [1, 3, 6]) {
+    const start = -2 * HOUR;
+    const off = dragOffset(start, 50, hours, track);
+    const moved = scrollThumb(off, hours, track).left - scrollThumb(start, hours, track).left;
+    assert.ok(Math.abs(moved - 50) < 1e-9, `${hours}h moved ${moved}`);
+  }
+  // Clamped at both ends.
+  assert.equal(dragOffset(0, -1e6, 3, track), -GUIDE_PAST_HOURS * HOUR);
+  assert.equal(dragOffset(0, 1e6, 3, track), clampOffset(Infinity, 3));
+  // No track, no movement — and no division by zero.
+  assert.equal(dragOffset(HOUR, 50, 3, 0), HOUR);
+});
+
+test("the now mark sits inside the thumb while the window shows now", () => {
+  const track = 720;
+  const anchor = anchorFor(1_800_000_000);
+  for (const hours of [1, 3, 6]) {
+    const now = anchor + 600;
+    const thumb = scrollThumb(0, hours, track);
+    const x = scrollbarX(now, anchor, hours, track);
+    assert.ok(x >= thumb.left && x <= thumb.left + thumb.width, `${hours}h: ${x}`);
+    // A window centred on an instant puts the mark at the thumb's centre.
+    const centred = scrollThumb(now - anchor - (hours * HOUR) / 2, hours, track);
+    assert.ok(Math.abs(x - (centred.left + centred.width / 2)) < 1e-9);
+  }
+  // Without the floor, the mapping is plain proportion over the reach.
+  const t = anchor + 6 * HOUR;
+  assert.ok(Math.abs(scrollbarX(t, anchor, 3, 720) - ((24 + 6) / 72) * 720) < 1e-9);
+});
+
+test("a click beside the thumb pages that way", () => {
+  const thumb = { left: 100, width: 30 };
+  assert.equal(pageDirection(10, thumb), -1);
+  assert.equal(pageDirection(115, thumb), 0);
+  assert.equal(pageDirection(200, thumb), 1);
 });

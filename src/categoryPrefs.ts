@@ -1,11 +1,15 @@
-// Remembering the category rail's pins and sort, the side-effecting half. The
-// ordering and the parsing are pure and live in src/logic/categoryOrder.ts.
+// Remembering the category rail's pins, hidden categories and sort, the
+// side-effecting half. The ordering and the parsing are pure and live in
+// src/logic/categoryOrder.ts.
 
 import {
+  CATEGORY_HIDDEN_STORAGE_KEY,
   CATEGORY_PINS_STORAGE_KEY,
   CATEGORY_SORT_STORAGE_KEY,
+  parseHidden,
   parsePins,
   parseSort,
+  serialiseHidden,
   serialisePins,
   type CategorySort,
 } from "./logic/categoryOrder";
@@ -48,6 +52,22 @@ export function loadCategorySort(): CategorySort {
 export function saveCategorySort(sort: CategorySort): void {
   try {
     storage()?.setItem(CATEGORY_SORT_STORAGE_KEY, sort);
+  } catch {
+    // As above.
+  }
+}
+
+export function loadCategoryHidden(): string[] {
+  try {
+    return parseHidden(storage()?.getItem(CATEGORY_HIDDEN_STORAGE_KEY) ?? null);
+  } catch {
+    return [];
+  }
+}
+
+export function saveCategoryHidden(hidden: readonly string[]): void {
+  try {
+    storage()?.setItem(CATEGORY_HIDDEN_STORAGE_KEY, serialiseHidden(hidden));
   } catch {
     // As above.
   }

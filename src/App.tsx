@@ -23,7 +23,7 @@ import { fittedVideoWidth } from "./logic/videoSize";
 import { useVideoRoom } from "./hooks/useVideoRoom";
 import { applyRailWidth, saveRailWidth } from "./railWidth";
 import { saveStacked } from "./stacked";
-import { saveCategoryPins, saveCategorySort } from "./categoryPrefs";
+import { saveCategoryHidden, saveCategoryPins, saveCategorySort } from "./categoryPrefs";
 import { AboutModal } from "./components/AboutModal";
 import { Rail } from "./components/Rail";
 import { ChannelList } from "./components/ChannelList";
@@ -104,8 +104,12 @@ export function App() {
   // setting, not synced, and a property of this machine rather than of the
   // account.
   useEffect(() => {
-    saveSession({ categoryId: state.categoryId, railTab: state.railTab });
-  }, [state.categoryId, state.railTab]);
+    saveSession({
+      categoryId: state.categoryId,
+      railTab: state.railTab,
+      railCollapsed: state.railCollapsed,
+    });
+  }, [state.categoryId, state.railTab, state.railCollapsed]);
 
   // Closing mid-scroll must still remember where you were; writes are
   // otherwise coalesced and the last one would be lost.
@@ -160,6 +164,14 @@ export function App() {
     saveSession({ compressor: state.player.compressor });
   }, [state.player.compressor]);
 
+  // Volume and mute, behind the same gate and for the same reason: the
+  // player reports mpv's default until it has been told otherwise, and saving
+  // that on mount would forget the level the app was closed at.
+  useEffect(() => {
+    if (!audioRestored.current) return;
+    saveSession({ volume: state.player.volume, muted: state.player.muted });
+  }, [state.player.volume, state.player.muted]);
+
   // Ctrl +/-/0 and Ctrl+wheel. Applied before paint, which matters below: the
   // video rect is measured from boxes this has already resized.
   useZoom(state.zoom, dispatch);
@@ -195,6 +207,10 @@ export function App() {
   useEffect(() => {
     saveCategorySort(state.categorySort);
   }, [state.categorySort]);
+
+  useEffect(() => {
+    saveCategoryHidden(state.categoryHidden);
+  }, [state.categoryHidden]);
 
   // Read once at boot rather than when the modal opens: the guide needs
   // guideHours whether or not anyone has been to the settings pane.
@@ -277,11 +293,20 @@ export function App() {
         // property, not a per-file one, so setting it once now keeps it on
         // across every channel change afterwards.
         audioRestored.current = true;
-        if (loadSession().compressor && !p.compressor) {
+        const saved = loadSession();
+        if (saved.compressor && !p.compressor) {
           void backend.setCompressor(true).catch(() => {
             // The preference is a nicety; failing to restore it is not worth
             // a toast on boot.
           });
+        }
+        // The level the app was closed at. Like the compressor, mpv's
+        // volume is global rather than per file, so once is enough.
+        if (saved.volume !== null && Math.abs(saved.volume - p.volume) > 0.5) {
+          void backend.setVolume(saved.volume).catch(() => {});
+        }
+        if (saved.muted !== p.muted) {
+          void backend.setMuted(saved.muted).catch(() => {});
         }
       })
       .catch((e) => {
@@ -325,20 +350,33 @@ export function App() {
             every toggle a visible reload. A hidden <Activity> keeps state and DOM and only
             pauses effects. The whole thing is hidden, not unmounted, while
             watching full size, so the round trip through the player costs
-            nothing either. */}
+            nothing either.
+
+            The rail is shared the same way. Both views are channels by
+            category, so both show the one rail beside them — one instance,
+            so its tab, filter and scroll are the same whichever view is up,
+            and choosing a category in it filters whichever list is showing.
+            Folded away, it is hidden rather than unmounted for the same
+            reasons, and the grid drops its column (.rail-collapsed) so the
+            view takes the whole width. */}
         <Activity mode={browsing || guiding ? "visible" : "hidden"}>
-          <div className={guiding ? "guide-stage" : "browse"}>
+          <div
+            className={`browse ${state.railCollapsed ? "rail-collapsed" : ""}`}
+            data-view={guiding ? "guide" : "list"}
+          >
             {/* First in the DOM as well as on screen: the band owns the top of
                 the stage, and what is below it scrolls under a picture that
                 never moves. mpv draws beneath the webview, so in both views
                 the band is where the hole for the picture is. */}
             <WatchBand videoRef={dockRef} />
-            <Activity mode={guiding ? "hidden" : "visible"}>
+            <Activity mode={state.railCollapsed ? "hidden" : "visible"}>
               <Rail />
+            </Activity>
+            <Activity mode={guiding ? "hidden" : "visible"}>
               <ChannelList />
             </Activity>
             <Activity mode={guiding ? "visible" : "hidden"}>
-              <GuideGrid />
+              <GuideGrid besideRail />
             </Activity>
           </div>
         </Activity>

@@ -13,17 +13,27 @@
 // Some of those categories are the only ones a given viewer ever opens, so
 // they can be pinned: drawn straight under "All channels", above a hairline,
 // in the order they were pinned. The rest can be re-sorted from the button
-// beside the filter box. What goes where is worked out in
+// beside the filter box. Others are never wanted at all, so they can be
+// hidden, from the same right-click menu; the ▾ beside the sort button brings
+// them back, and picks a sort directly. What goes where is worked out in
 // logic/categoryOrder.ts; this component only draws it.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { OVERSCAN, ROW_HEIGHT, computeWindow } from "../logic/virtual";
-import { SORT_LABEL, nextSort, railRows, sortTip } from "../logic/categoryOrder";
+import {
+  CATEGORY_SORTS,
+  SORT_LABEL,
+  hiddenCount,
+  nextSort,
+  railRows,
+  sortTip,
+  type CategorySort,
+} from "../logic/categoryOrder";
 import { loadSession, saveSession } from "../session";
 import { loadCategories } from "../actions";
 import { ALL_CATEGORIES, useApp, useDispatch } from "../store";
 import { ContextMenu } from "./ContextMenu";
-import { Pin, SortOrder } from "./icons";
+import { Check, ChevronDown, EyeOff, Pin, SortOrder } from "./icons";
 import { SearchField } from "./SearchField";
 
 export function CategoryRail() {
@@ -33,11 +43,16 @@ export function CategoryRail() {
     categoryFilter,
     categoryPins,
     categorySort,
+    categoryHidden,
+    categoryShowHidden,
     categoryMenu,
+    categoryOptions,
     sync,
   } = useApp();
   const dispatch = useDispatch();
   const scrollerRef = useRef<HTMLDivElement | null>(null);
+  const sortRef = useRef<HTMLSpanElement | null>(null);
+  const moreRef = useRef<HTMLButtonElement | null>(null);
   const restoreTo = useRef(loadSession().railScrollTop);
   const [scrollTop, setScrollTop] = useState(0);
   const [height, setHeight] = useState(0);
@@ -82,30 +97,56 @@ export function CategoryRail() {
       railRows(
         { id: ALL_CATEGORIES, name: "All channels", count: total },
         categories.status === "ready" ? categories.data : [],
-        { pins: categoryPins, sort: categorySort, filter: categoryFilter },
+        {
+          pins: categoryPins,
+          sort: categorySort,
+          filter: categoryFilter,
+          hidden: categoryHidden,
+          showHidden: categoryShowHidden,
+        },
       ),
-    [categories, total, categoryPins, categorySort, categoryFilter],
+    [categories, total, categoryPins, categorySort, categoryFilter, categoryHidden, categoryShowHidden],
+  );
+
+  const hiddenN = useMemo(
+    () => hiddenCount(categories.status === "ready" ? categories.data : [], categoryHidden),
+    [categories, categoryHidden],
   );
 
   const win = computeWindow(scrollTop, height, ROW_HEIGHT, rows.length, OVERSCAN);
 
   const closeMenu = useCallback(() => dispatch({ type: "categoryMenu", menu: null }), [dispatch]);
+  const closeOptions = useCallback(
+    () => dispatch({ type: "categoryOptions", menu: null }),
+    [dispatch],
+  );
 
   /** A new order is a different list, and the offset the old one was
    *  scrolled to lands somewhere arbitrary in it; the top is the only place
    *  in the new order that means anything. */
-  const cycleSort = () => {
-    dispatch({ type: "categorySort", sort: nextSort(categorySort) });
+  const setSort = (sort: CategorySort) => {
+    dispatch({ type: "categorySort", sort });
+    if (sort === categorySort) return;
     const el = scrollerRef.current;
     if (el) el.scrollTop = 0;
     setScrollTop(0);
+  };
+
+  /** Under the sort pair, left-aligned with it; ContextMenu keeps it inside
+   *  the window. The ▾ takes focus first even when clicked — WebKit does not
+   *  focus a clicked button — so closing the menu hands focus back to it. */
+  const openOptions = () => {
+    const box = (sortRef.current ?? moreRef.current)?.getBoundingClientRect();
+    if (!box) return;
+    moreRef.current?.focus();
+    dispatch({ type: "categoryOptions", menu: { x: box.left, y: box.bottom + 4 } });
   };
 
   // The `.rail` column itself, and the tab bar above this, belong to Rail:
   // this component is one of the two lists that can be in it.
   return (
     <>
-      <div className="pane-head">
+      <div className="pane-head rail-filter-row">
         <SearchField
           placeholder="Filter categories"
           value={categoryFilter}
@@ -120,18 +161,39 @@ export function CategoryRail() {
         />
         {/* Beside the box it orders the results of, and exactly as tall as
             it — see .rail-sort — so this row stays level with the channel
-            list's search row. One button that cycles rather than a dropdown:
-            three orders is few enough to step through, and a click is
-            cheaper than opening a list to pick from. */}
-        <button
-          className="rail-sort"
-          aria-label={`Sort: ${SORT_LABEL[categorySort].long}`}
-          data-tip={sortTip(categorySort)}
-          onClick={cycleSort}
-        >
-          <SortOrder className="rail-sort-i" />
-          <span className="rail-sort-label">{SORT_LABEL[categorySort].short}</span>
-        </button>
+            list's search row. One button that cycles: three orders is few
+            enough to step through, and a click is cheaper than opening a
+            list to pick from. The ▾ joined to it is for everything else —
+            picking an order outright, and the hidden categories. */}
+        <span className="rail-sort-split" ref={sortRef}>
+          <button
+            className="rail-sort"
+            aria-label={`Sort: ${SORT_LABEL[categorySort].long}`}
+            data-tip={sortTip(categorySort)}
+            onClick={() => setSort(nextSort(categorySort))}
+          >
+            <SortOrder className="rail-sort-i" />
+            <span className="rail-sort-label">{SORT_LABEL[categorySort].short}</span>
+          </button>
+          <button
+            className={`rail-sort-more ${categoryOptions ? "on" : ""}`}
+            ref={moreRef}
+            aria-label="Category options"
+            aria-haspopup="menu"
+            aria-expanded={categoryOptions !== null}
+            data-tip="Sort and hidden categories"
+            onClick={() => (categoryOptions ? closeOptions() : openOptions())}
+            onKeyDown={(e) => {
+              // Enter and Space arrive as a click; ArrowDown is the menu
+              // button's own way in.
+              if (e.key !== "ArrowDown" || categoryOptions) return;
+              e.preventDefault();
+              openOptions();
+            }}
+          >
+            <ChevronDown className="rail-sort-more-i" />
+          </button>
+        </span>
         {/* Settings moved to the toolbar's menu; the gear that was here made
             the rail's head a second, competing command surface. */}
       </div>
@@ -172,7 +234,9 @@ export function CategoryRail() {
           <div className="pane-note">
             {categories.data.length === 0
               ? "No categories yet. Sync has not run."
-              : `No category matches “${categoryFilter}”.`}
+              : categoryFilter.trim() !== ""
+                ? `No category matches “${categoryFilter}”.`
+                : "Every category is hidden."}
           </div>
         ) : null}
 
@@ -187,7 +251,7 @@ export function CategoryRail() {
               // button inside a button.
               <div
                 key={r.id}
-                className={`rail-row ${r.pinned ? "pinned" : ""} ${r.pinEnd ? "pin-end" : ""}`}
+                className={`rail-row ${r.pinned ? "pinned" : ""} ${r.pinEnd ? "pin-end" : ""} ${r.hidden ? "is-hidden" : ""}`}
                 style={{ top: index * ROW_HEIGHT }}
               >
                 <button
@@ -217,8 +281,10 @@ export function CategoryRail() {
                   }}
                 >
                   {r.pinned ? <Pin className="rail-pinned" filled /> : null}
+                  {r.hidden ? <EyeOff className="rail-hidden-i" /> : null}
                   <span className="rail-name" data-tip-overflow="">
                     {r.name}
+                    {r.hidden ? <span className="rail-hidden-note"> (hidden)</span> : null}
                   </span>
                   <span className="rail-count">{r.count ? r.count.toLocaleString() : ""}</span>
                 </button>
@@ -265,9 +331,73 @@ export function CategoryRail() {
               {categoryPins.includes(categoryMenu.id) ? "Unpin from the top" : "Pin to the top"}
             </span>
           </button>
+          <button
+            className="tb-menu-item"
+            role="menuitem"
+            onClick={() =>
+              dispatch({
+                type: "categoryHide",
+                id: categoryMenu.id,
+                hidden: !categoryHidden.includes(categoryMenu.id),
+              })
+            }
+          >
+            <span className="tb-menu-label">
+              {categoryHidden.includes(categoryMenu.id) ? "Unhide category" : "Hide category"}
+            </span>
+          </button>
           <div className="tb-menu-foot">
-            Pinned categories stay above the rest, in the order you pinned them.
+            Pinned categories stay above the rest. Hidden ones come back from the ▾ beside the
+            sort button.
           </div>
+        </ContextMenu>
+      ) : null}
+
+      {categoryOptions ? (
+        <ContextMenu
+          x={categoryOptions.x}
+          y={categoryOptions.y}
+          heading="Sort by"
+          onClose={closeOptions}
+          takeFocus
+          anchor={moreRef}
+        >
+          {CATEGORY_SORTS.map((sort) => (
+            <button
+              key={sort}
+              className="tb-menu-item"
+              role="menuitemradio"
+              aria-checked={sort === categorySort}
+              onClick={() => setSort(sort)}
+            >
+              <span className="ctx-check">
+                {sort === categorySort ? <Check className="ctx-check-i" /> : null}
+              </span>
+              <span className="tb-menu-label">{SORT_LABEL[sort].menu}</span>
+            </button>
+          ))}
+          <div className="ctx-sep" role="separator" />
+          <button
+            className="tb-menu-item"
+            role="menuitemcheckbox"
+            aria-checked={categoryShowHidden}
+            onClick={() => dispatch({ type: "categoryShowHidden", on: !categoryShowHidden })}
+          >
+            <span className="ctx-check">
+              {categoryShowHidden ? <Check className="ctx-check-i" /> : null}
+            </span>
+            <span className="tb-menu-label">Show hidden categories</span>
+          </button>
+          {hiddenN > 0 ? (
+            <button
+              className="tb-menu-item"
+              role="menuitem"
+              onClick={() => dispatch({ type: "categoryUnhideAll" })}
+            >
+              <span className="ctx-check" />
+              <span className="tb-menu-label">Unhide all ({hiddenN.toLocaleString()})</span>
+            </button>
+          ) : null}
         </ContextMenu>
       ) : null}
     </>
