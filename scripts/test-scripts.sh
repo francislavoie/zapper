@@ -3,10 +3,13 @@
 #
 # The release scripts, on throwaway copies: the version rules and their order, the changelog's
 # release and notes, set-version on copies of the real files (only the versions change), the
-# placeholder repository refused by release.sh, fix-deb/check-deb on a small fake .deb, and the
-# license helpers in notices.py.
+# placeholder repository refused by release.sh, fix-deb/check-deb on a small fake .deb, the Arch
+# package made from it (package-arch.sh and arch-pkg.py: no pacman needed), and the license
+# helpers in notices.py.
 # Nothing here touches the repository's own files, its tags or the network.
 set -euo pipefail
+# Package modes as a build machine makes them, whatever this shell's umask.
+umask 022
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(dirname "$here")
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
@@ -75,9 +78,14 @@ esac
 if command -v dpkg-deb >/dev/null; then
   pkg=$tmp/pkg
   mkdir -p "$pkg/DEBIAN" "$pkg/usr/bin" "$pkg/usr/lib/zapper" "$pkg/usr/share/applications" "$pkg/usr/share/doc/zapper"
-  for f in copyright LICENSE MPV-FFMPEG-NOTICE.txt THIRD-PARTY-NOTICES-rust.txt THIRD-PARTY-NOTICES-ui.txt; do
+  for f in copyright LICENSE MPV-FFMPEG-NOTICE.txt; do
     printf 'notice\n' > "$pkg/usr/share/doc/zapper/$f"
   done
+  # The third-party notices open with a summary of their licenses (the Arch package's license field).
+  printf 'Rust notices\n\nSummary\n-------\n  MIT          40\n  Apache-2.0    2\n  LGPL-2.1      1\n\n\nMIT\n' \
+    > "$pkg/usr/share/doc/zapper/THIRD-PARTY-NOTICES-rust.txt"
+  ui_notices='UI notices\n\nSummary\n-------\n  MIT     9\n  ISC     3\n\n\nMIT\n'
+  printf "$ui_notices" > "$pkg/usr/share/doc/zapper/THIRD-PARTY-NOTICES-ui.txt"
   printf '#!/bin/sh\n' > "$pkg/usr/bin/zapper"; chmod 755 "$pkg/usr/bin/zapper"
   cp "$root/packaging/install-kind-deb" "$pkg/usr/lib/zapper/install-kind"
   printf '[Desktop Entry]\nType=Application\nName=zapper\nExec=zapper\nIcon=zapper\nCategories=AudioVideo;Video;\nStartupWMClass=zapper\n' > "$pkg/usr/share/applications/zapper.desktop"
@@ -98,6 +106,85 @@ if command -v dpkg-deb >/dev/null; then
   : > "$pkg/usr/share/doc/zapper/THIRD-PARTY-NOTICES-ui.txt"
   dpkg-deb --root-owner-group --build "$pkg" "$tmp/nonotice.deb" >/dev/null
   ! "$here/check-deb.sh" "$tmp/nonotice.deb" >/dev/null 2>&1 || fail "check-deb must refuse a .deb with an empty notice"; ok
+fi
+
+# --- arch-pkg.py: the version, the dependency table, bundled libraries, mtree escaping
+a() { python3 "$here/arch-pkg.py" "$@"; }
+[ "$(a pkgver 0.2.0~rc.1)" = 0.2.0rc.1 ] && [ "$(a pkgver 0.2.0)" = 0.2.0 ] || fail "arch pkgver"; ok
+! a pkgver 1:0.2.0 2>/dev/null && ! a pkgver 0.2.0-1 2>/dev/null || fail "arch pkgver must refuse ':' and '-'"; ok
+# What tauri.conf.json's Depends becomes, Tauri's repeats included.
+[ "$(a depends 'libmpv2 | libmpv1, libwebkit2gtk-4.1-0, libgtk-3-0, libwebkit2gtk-4.1-0, libgtk-3-0' | tr '\n' ' ')" = 'gtk3 mpv webkit2gtk-4.1 ' ] ||
+  fail "arch depends"; ok
+[ "$(a depends 'libasound2t64 (>= 1.0.17), libc6 (>= 2.39), libglib2.0-0t64' | tr '\n' ' ')" = 'alsa-lib glib2 glibc ' ] ||
+  fail "arch depends: versions and t64 names"; ok
+[ "$(a depends 'libfoo9 | libmpv1')" = mpv ] || fail "arch depends: the first alternative the table knows"; ok
+err=$(a depends 'libgtk-3-0, libfoo9 (>= 1)' 2>&1 >/dev/null) && fail "an unknown dependency must fail"
+grep -q 'unknown Debian dependencies.*libfoo9' <<<"$err" || fail "unclear unknown-dependency message: $err"; ok
+# A library the package carries is no dependency, known to the table or not.
+lib=$tmp/bundled/usr/lib/zapper
+mkdir -p "$lib"
+: > "$lib/libmpv.so.2.3.0"; : > "$lib/libavcodec.so.61"; : > "$lib/libfoo-1.0.so.0"; : > "$lib/libbar.so"
+[ "$(a bundled "$tmp/bundled" | tr '\n' ' ')" = 'libavcodec61 libfoo-1.0-0 libmpv2 ' ] || fail "arch bundled: $(a bundled "$tmp/bundled")"; ok
+[ "$(a depends 'libmpv2 | libmpv1, libavcodec61t64 (>= 7), libfoo-1.0-0, libgtk-3-0' "$tmp/bundled" 2>/dev/null)" = gtk3 ] ||
+  fail "arch depends: bundled libraries dropped"; ok
+a depends 'libmpv2, libgtk-3-0' "$tmp/bundled" 2>&1 >/dev/null | grep -q "dropped 'libmpv2': the package bundles it" ||
+  fail "arch depends: a dropped dependency is noted"; ok
+[ "$(a escape 'usr/a b#c=d\e')" = 'usr/a\040b\043c\075d\134e' ] && [ "$(a escape 'é')" = '\303\251' ] || fail "arch mtree escaping"; ok
+
+# --- package-arch.sh, on the fixed fake .deb
+if command -v dpkg-deb >/dev/null && command -v zstd >/dev/null; then
+  printf "$ui_notices" > "$pkg/usr/share/doc/zapper/THIRD-PARTY-NOTICES-ui.txt"
+  # The variants below are built from $pkg, so with the Version fix-deb gave zapper.deb: each
+  # must be refused for what it changes, not for a SemVer version.
+  sed -i 's/^Version: .*/Version: 0.2.0~rc.1/' "$pkg/DEBIAN/control"
+  SOURCE_DATE_EPOCH=1791206700 "$here/package-arch.sh" "$tmp/zapper.deb" "$tmp/arch" >/dev/null
+  out=$tmp/arch/zapper-0.2.0rc.1-1-x86_64.pkg.tar.zst
+  [ -f "$out" ] || fail "package-arch: no $out: $(ls "$tmp/arch")"; ok
+  [ -z "$(find "$tmp/arch" -name '.work.*')" ] || fail "package-arch left its work directory"; ok
+  zstd -dcq "$out" > "$tmp/p.tar"
+  [ "$(tar -tf "$tmp/p.tar" | head -3 | tr '\n' ' ')" = '.PKGINFO .MTREE usr/ ' ] || fail "arch: archive order"; ok
+  listing=$(tar -tvf "$tmp/p.tar")
+  grep -Eq '^-rwxr-xr-x root/root .* usr/bin/zapper$' <<<"$listing" || fail "arch: usr/bin/zapper"; ok
+  grep -Eq '^lrwxrwxrwx root/root .* usr/share/licenses/zapper -> \.\./doc/zapper$' <<<"$listing" || fail "arch: licenses symlink"; ok
+  ! grep -v ' root/root ' <<<"$listing" | grep -q . || fail "arch: an entry isn't root:root"; ok
+  [ "$(tar -xOf "$tmp/p.tar" usr/lib/zapper/install-kind)" = arch ] || fail "arch: install-kind"; ok
+  info=$(tar -xOf "$tmp/p.tar" .PKGINFO)
+  for kv in 'pkgname = zapper' 'pkgver = 0.2.0rc.1-1' 'pkgdesc = t' 'arch = x86_64' 'builddate = 1791206700' \
+            "url = https://github.com/$repo" 'depend = gtk3' 'depend = mpv' 'depend = webkit2gtk-4.1'; do
+    grep -qxF "$kv" <<<"$info" || fail ".PKGINFO lacks '$kv': $info"; ok
+  done
+  [ "$(sed -n 's/^license = //p' <<<"$info" | tr '\n' ' ')" = 'MIT Apache-2.0 ISC LGPL-2.1 ' ] || fail "arch: licenses: $info"; ok
+  mtree=$(tar -xOf "$tmp/p.tar" .MTREE | gzip -dc)
+  [ "$(head -2 <<<"$mtree" | tr '\n' '|')" = '#mtree|/set type=file uid=0 gid=0 mode=644|' ] || fail "arch: .MTREE header"; ok
+  grep -Eq '^\./\.PKGINFO time=1791206700\.0 size=[0-9]+ md5digest=[0-9a-f]{32} sha256digest=[0-9a-f]{64}$' <<<"$mtree" || fail "arch: .MTREE .PKGINFO: $mtree"; ok
+  grep -Eq '^\./usr/bin/zapper time=1791206700\.0 mode=755 size=10 ' <<<"$mtree" || fail "arch: .MTREE binary: $mtree"; ok
+  grep -qxF './usr/share/licenses/zapper time=1791206700.0 mode=777 type=link link=../doc/zapper' <<<"$mtree" || fail "arch: .MTREE symlink: $mtree"; ok
+  grep -qxF './usr time=1791206700.0 mode=755 type=dir' <<<"$mtree" || fail "arch: .MTREE dir: $mtree"; ok
+  # Two builds of one .deb are the same bytes.
+  cp "$out" "$tmp/first.pkg.tar.zst"
+  SOURCE_DATE_EPOCH=1791206700 "$here/package-arch.sh" "$tmp/zapper.deb" "$tmp/arch" >/dev/null
+  cmp -s "$out" "$tmp/first.pkg.tar.zst" || fail "arch: not reproducible"; ok
+  # Refused: a .deb without the deb marker, with an empty notice, or with an unknown dependency.
+  rm "$pkg/usr/lib/zapper/install-kind"
+  dpkg-deb --root-owner-group --build "$pkg" "$tmp/n.deb" >/dev/null
+  refused() { ! "$here/package-arch.sh" "$tmp/n.deb" "$tmp/arch2" 2>"$tmp/err" && grep -q "$1" "$tmp/err"; }
+  refused 'no usr/lib/zapper/install-kind saying deb' || fail "package-arch must refuse a .deb without install-kind: $(cat "$tmp/err")"; ok
+  cp "$root/packaging/install-kind-deb" "$pkg/usr/lib/zapper/install-kind"
+  : > "$pkg/usr/share/doc/zapper/LICENSE"
+  dpkg-deb --root-owner-group --build "$pkg" "$tmp/n.deb" >/dev/null
+  refused 'no usr/share/doc/zapper/LICENSE' || fail "package-arch must refuse an empty LICENSE: $(cat "$tmp/err")"; ok
+  printf 'notice\n' > "$pkg/usr/share/doc/zapper/LICENSE"
+  sed -i 's/^Depends: .*/Depends: libgtk-3-0, libfoo9/' "$pkg/DEBIAN/control"
+  dpkg-deb --root-owner-group --build "$pkg" "$tmp/n.deb" >/dev/null
+  refused 'unknown Debian dependencies.*libfoo9' || fail "package-arch must refuse an unknown dependency: $(cat "$tmp/err")"; ok
+  # A library the .deb carries leaves its dependency out of the Arch package.
+  sed -i 's/^Depends: .*/Depends: libmpv2 | libmpv1, libgtk-3-0/' "$pkg/DEBIAN/control"
+  printf 'lib\n' > "$pkg/usr/lib/zapper/libmpv.so.2"
+  dpkg-deb --root-owner-group --build "$pkg" "$tmp/b.deb" >/dev/null
+  "$here/package-arch.sh" "$tmp/b.deb" "$tmp/arch2" >/dev/null 2>&1 || fail "package-arch on a .deb that bundles libmpv"
+  b=("$tmp"/arch2/zapper-*.pkg.tar.zst)
+  [ "$(zstd -dcq "${b[0]}" | tar -xO .PKGINFO | sed -n 's/^depend = //p')" = gtk3 ] || fail "arch: the bundled libmpv is still a dependency"; ok
+  rm "$pkg/usr/lib/zapper/libmpv.so.2"
 fi
 
 # --- notices.py: the .deb's copyright file from LICENSE, and the Rust notices from a small

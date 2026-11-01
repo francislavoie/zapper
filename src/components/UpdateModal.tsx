@@ -17,6 +17,7 @@ import { errorMessage } from "../logic/async";
 import { dateTime } from "../logic/format";
 import {
   asksForPassword,
+  aurNote,
   formatSize,
   kindLabel,
   nextStep,
@@ -193,6 +194,10 @@ export function UpdateModal() {
             where only the system can change it and checks it again, so what
             gets installed is exactly what was verified.
           </div>
+        ) : null}
+
+        {step === "download" && aurNote(update.kind) ? (
+          <div className="settings-note">{aurNote(update.kind)}</div>
         ) : null}
 
         {outcome?.outcome === "manual" ? (

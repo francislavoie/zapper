@@ -174,6 +174,8 @@ export function kindLabel(kind: InstallKind): string {
       return "Debian/Ubuntu package";
     case "rpm":
       return "RPM package";
+    case "arch":
+      return "Arch Linux package";
     case "nsis":
       return "Windows installer";
     case "msi":
@@ -188,5 +190,14 @@ export function kindLabel(kind: InstallKind): string {
 /** Whether installing needs the system's password prompt, worth saying
  *  before the button is pressed rather than after the prompt appears. */
 export function asksForPassword(kind: InstallKind): boolean {
-  return kind === "deb" || kind === "rpm";
+  return kind === "deb" || kind === "rpm" || kind === "arch";
+}
+
+/** For an Arch install: the update is the release's own package, installed
+ *  with pacman. Someone who installed zapper through an AUR helper keeps it
+ *  up to date there instead, so the dialog says so before they download. */
+export function aurNote(kind: InstallKind): string | null {
+  return kind === "arch"
+    ? "Installed zapper from the AUR? Update it with your AUR helper instead (yay -Syu, paru -Syu)."
+    : null;
 }

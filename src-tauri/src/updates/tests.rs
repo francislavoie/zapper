@@ -411,6 +411,30 @@ async fn windows_installers_start_and_zapper_quits() {
     assert_eq!(r.runner.quits.load(Ordering::SeqCst), 1);
 }
 
+#[tokio::test]
+async fn an_arch_install_takes_the_arch_package_and_runs_pacman() {
+    let r = rig(InstallKind::Arch, true, "0.2.0");
+    let name = asset_name(InstallKind::Arch, &Version::parse("0.3.0").unwrap()).unwrap();
+    let mut rel = a_release_with_the_deb();
+    let deb = rel.assets[0].clone();
+    rel.assets.push(GhAsset { name: name.clone(), size: 5, browser_download_url: deb.browser_download_url.replace(&deb.name, &name) });
+    *r.source.releases.lock().unwrap() = Ok(vec![rel]);
+    *r.source.sums.lock().unwrap() = format!("{}  {}\n{HELLO}  {name}\n", "0".repeat(64), deb.name);
+    r.updates.check(1).await.unwrap();
+    match r.updates.status().state {
+        UpdateStateDto::Available { release } => assert_eq!(release.asset.unwrap().name, name, "the Arch package, not the .deb"),
+        s => panic!("{s:?}"),
+    }
+    r.updates.start_download().unwrap();
+    assert!(matches!(settle(&r.updates).await, UpdateStateDto::Ready { .. }));
+    assert_eq!(r.updates.install().await.unwrap(), InstallOutcomeDto::Installed);
+    let ran = r.runner.ran.lock().unwrap();
+    assert_eq!(ran[0].program, "pkexec");
+    assert_eq!(ran[0].args[2], install::ROOT_INSTALL);
+    assert_eq!(ran[0].args[6..], ["pkg.tar.zst".to_string(), "pacman".into(), "-U".into(), "--noconfirm".into()]);
+    assert!(ran[0].args[4].ends_with(&name), "{}", ran[0].args[4]);
+}
+
 #[test]
 fn a_staged_installer_that_does_not_match_is_not_started() {
     let dir = std::env::temp_dir().join(format!("zapper-stage-test-{}", std::process::id()));

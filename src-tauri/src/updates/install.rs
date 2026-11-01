@@ -1,13 +1,15 @@
 //! How this copy of zapper was installed, and the commands that install an
 //! update over it.
 //!
-//! One build goes into every package of a platform (the `.deb` and the `.rpm`
-//! are bundled from the same binary), so the binary cannot know which one it
-//! arrived in. Each package says so instead, in a one-word file the app reads
+//! One build goes into every package of a platform (the `.deb`, the `.rpm`
+//! and the Arch package hold the same binary), so the binary cannot know which
+//! one it arrived in. Each package says so instead, in a one-word file the app reads
 //! at run time, `install-kind`:
 //!
 //! - Linux: `/usr/lib/zapper/install-kind`, shipped by tauri.conf.json's
-//!   `bundle.linux.deb.files` (`deb`) and `bundle.linux.rpm.files` (`rpm`).
+//!   `bundle.linux.deb.files` (`deb`) and `bundle.linux.rpm.files` (`rpm`);
+//!   `scripts/package-arch.sh` makes the Arch package from the `.deb` and
+//!   writes `arch` there (packaging/install-kind-arch).
 //!   Not beside the binary, which is `/usr/bin/zapper`: a stray file in
 //!   `/usr/bin` would be a command.
 //! - Windows (not built yet): beside `zapper.exe`. The MSI carries a file
@@ -36,6 +38,8 @@ pub enum InstallKind {
     Deb,
     /// Fedora, RHEL, openSUSE: dnf, else zypper, else plain rpm installs it.
     Rpm,
+    /// Arch Linux and its derivatives: pacman installs it.
+    Arch,
     /// The per-user NSIS installer.
     Nsis,
     /// The per-machine MSI.
@@ -51,6 +55,7 @@ impl InstallKind {
         match s.trim() {
             "deb" => Some(Self::Deb),
             "rpm" => Some(Self::Rpm),
+            "arch" => Some(Self::Arch),
             "nsis" => Some(Self::Nsis),
             "msi" => Some(Self::Msi),
             "dmg" => Some(Self::Dmg),
@@ -64,6 +69,7 @@ impl InstallKind {
         match self {
             Self::Deb => "deb",
             Self::Rpm => "rpm",
+            Self::Arch => "arch",
             Self::Nsis => "nsis",
             Self::Msi => "msi",
             Self::Dmg => "dmg",
@@ -80,7 +86,7 @@ impl InstallKind {
     /// The Linux package managers run as root through pkexec, which has its
     /// own failure modes worth naming (cancelled prompt, no polkit agent).
     pub fn uses_pkexec(self) -> bool {
-        matches!(self, Self::Deb | Self::Rpm)
+        matches!(self, Self::Deb | Self::Rpm | Self::Arch)
     }
 }
 
@@ -206,9 +212,10 @@ fn text(path: &Path) -> String {
 /// What installs `file`, a download already checked against SHA256SUMS
 /// with the digest `sha256`:
 ///
-/// - deb, rpm: pkexec runs [`ROOT_INSTALL`], which copies the file somewhere
-///   only root can write, checks the copy against `sha256` once more, and
-///   only then hands *the copy* to `apt install -y`, or dnf/zypper/rpm. The
+/// - deb, rpm, arch: pkexec runs [`ROOT_INSTALL`], which copies the file
+///   somewhere only root can write, checks the copy against `sha256` once
+///   more, and only then hands *the copy* to `apt install -y`, dnf/zypper/rpm,
+///   or `pacman -U --noconfirm`. The
 ///   download sits in a folder this user owns, and the polkit prompt can stay
 ///   up for as long as the person takes to type: checking the user's file
 ///   and then installing it by path would let any process running as this
@@ -221,9 +228,13 @@ fn text(path: &Path) -> String {
 pub fn install_command(kind: InstallKind, file: &Path, sha256: &str, bundle: Option<&Path>) -> Option<InstallCommand> {
     file.file_name()?;
     match kind {
-        InstallKind::Deb | InstallKind::Rpm if !file.is_absolute() || !is_sha256(sha256) => None,
+        InstallKind::Deb | InstallKind::Rpm | InstallKind::Arch if !file.is_absolute() || !is_sha256(sha256) => None,
         InstallKind::Deb => Some(root_install(file, sha256, "deb", &["apt", "install", "-y"])),
         InstallKind::Rpm => Some(rpm_install_command(file, sha256, RpmTool::detect())),
+        // pacman fetches the dependencies the package names from the sync
+        // repositories, as `apt install` does, and installs unsigned local
+        // files (LocalFileSigLevel = Optional, the default).
+        InstallKind::Arch => Some(root_install(file, sha256, "pkg.tar.zst", &["pacman", "-U", "--noconfirm"])),
         InstallKind::Nsis => Some(InstallCommand::new(&text(file), &[])),
         InstallKind::Msi => Some(InstallCommand::new("msiexec", &["/i", &text(file)])),
         InstallKind::Dmg => Some(InstallCommand::new(
@@ -320,13 +331,15 @@ pub fn bundle_replaceable(bundle: &Path) -> bool {
 
 /// The command for a person to run when the privileged one could not run (no
 /// pkexec, the password prompt was cancelled): `sudo apt install <file>`,
-/// the RPM's with this system's tool, or `open <file>` for a `.dmg`, which
+/// the RPM's with this system's tool, `sudo pacman -U <file>`, or
+/// `open <file>` for a `.dmg`, which
 /// shows the image with its Applications link to drag to.
 pub fn manual_command(kind: InstallKind, file: &Path) -> Option<String> {
     let f = quote(&text(file));
     match kind {
         InstallKind::Deb => Some(format!("sudo apt install {f}")),
         InstallKind::Rpm => Some(RpmTool::detect().manual(&f)),
+        InstallKind::Arch => Some(format!("sudo pacman -U {f}")),
         InstallKind::Dmg => Some(format!("open {f}")),
         _ => None,
     }
@@ -376,7 +389,7 @@ mod tests {
         assert_eq!(detect_install_kind(Some(&dev)), InstallKind::Unpackaged);
         assert_eq!(detect_install_kind(None), InstallKind::Unpackaged);
 
-        // The .deb and .rpm: /usr/bin/zapper with the marker in /usr/lib/zapper.
+        // The Linux packages: /usr/bin/zapper with the marker in /usr/lib/zapper.
         let usr = root.join("usr");
         std::fs::create_dir_all(usr.join("bin")).unwrap();
         std::fs::create_dir_all(usr.join("lib/zapper")).unwrap();
@@ -384,6 +397,7 @@ mod tests {
         for (text, kind) in [
             ("deb\n", InstallKind::Deb),
             ("rpm\n", InstallKind::Rpm),
+            ("arch\n", InstallKind::Arch),
             ("nsis\r\n", InstallKind::Nsis),
             ("msi", InstallKind::Msi),
             ("dmg\n", InstallKind::Dmg),
@@ -416,6 +430,7 @@ mod tests {
         for (file, kind) in [
             ("install-kind-deb", InstallKind::Deb),
             ("install-kind-rpm", InstallKind::Rpm),
+            ("install-kind-arch", InstallKind::Arch),
             ("install-kind-msi", InstallKind::Msi),
             ("install-kind-dmg", InstallKind::Dmg),
         ] {
@@ -564,6 +579,36 @@ mod tests {
             assert_eq!(tool.manual(&quote(&f)), manual);
         }
         assert!(install_command(InstallKind::Rpm, Path::new("zapper-0.3.0-1.x86_64.rpm"), SUM, None).is_none());
+    }
+
+    #[test]
+    fn an_arch_package_installs_with_pacman_through_the_verified_copy() {
+        let pkg_buf = std::env::temp_dir().join("zapper").join("updates").join("zapper-0.3.0-1-x86_64.pkg.tar.zst");
+        let pkg = pkg_buf.as_path();
+        let f = pkg.display().to_string();
+        let c = install_command(InstallKind::Arch, pkg, SUM, None).unwrap();
+        assert_eq!(c.program, "pkexec");
+        assert_eq!(c.args[..3], ["/bin/sh".to_string(), "-c".into(), ROOT_INSTALL.into()]);
+        assert_eq!(
+            c.args[3..],
+            ["zapper-install", &f, SUM, "pkg.tar.zst", "pacman", "-U", "--noconfirm"],
+            "the file, the digest and the tool are arguments, never part of the script"
+        );
+        assert!(InstallKind::Arch.uses_pkexec());
+        assert!(!InstallKind::Arch.quits_to_install());
+        assert!(
+            install_command(InstallKind::Arch, Path::new("zapper-0.3.0-1-x86_64.pkg.tar.zst"), SUM, None).is_none(),
+            "pkexec does not keep the working directory"
+        );
+        assert!(install_command(InstallKind::Arch, pkg, "abc", None).is_none());
+        assert_eq!(manual_command(InstallKind::Arch, pkg).unwrap(), format!("sudo pacman -U {}", quote(&f)));
+        if cfg!(unix) {
+            let plain = Path::new("/home/u/.cache/zapper/updates/zapper-0.3.0rc.1-1-x86_64.pkg.tar.zst");
+            assert_eq!(
+                manual_command(InstallKind::Arch, plain).unwrap(),
+                "sudo pacman -U /home/u/.cache/zapper/updates/zapper-0.3.0rc.1-1-x86_64.pkg.tar.zst"
+            );
+        }
     }
 
     #[test]

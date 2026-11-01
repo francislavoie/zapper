@@ -11,6 +11,7 @@ import assert from "node:assert/strict";
 import {
   announcement,
   asksForPassword,
+  aurNote,
   badgeLabel,
   badgeShort,
   formatSize,
@@ -154,9 +155,12 @@ test("every state has a sentence, and not configured says why", () => {
 });
 
 test("install kinds have names, and the package managers warn about the password", () => {
-  for (const k of ["deb", "rpm", "nsis", "msi", "dmg", "none"]) assert.ok(kindLabel(k).length > 0, k);
+  for (const k of ["deb", "rpm", "arch", "nsis", "msi", "dmg", "none"]) assert.ok(kindLabel(k).length > 0, k);
   assert.equal(asksForPassword("deb"), true);
   assert.equal(asksForPassword("rpm"), true);
+  assert.equal(asksForPassword("arch"), true);
+  assert.match(aurNote("arch"), /AUR helper/);
+  assert.equal(aurNote("deb"), null);
   assert.equal(asksForPassword("dmg"), false);
   assert.equal(asksForPassword("none"), false);
 });

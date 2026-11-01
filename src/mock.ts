@@ -702,6 +702,7 @@ let storedSettings: SettingsDto = {
  *
  *    available     a .deb install with 0.2.0 waiting (the default)
  *    source        a build from source: only the release page is offered
+ *    arch          as available, for an Arch package install
  *    manual        the install "fails" and hands back the command to run
  *    current       nothing newer
  *    unconfigured  the placeholder repository: no check ever happens
@@ -722,12 +723,14 @@ const MOCK_RELEASE: UpdateReleaseDto = {
   asset:
     UPDATES_MODE === "source"
       ? null
-      : { name: "zapper_0.2.0_amd64.deb", size: 9_400_000 },
+      : UPDATES_MODE === "arch"
+        ? { name: "zapper-0.2.0-1-x86_64.pkg.tar.zst", size: 6_300_000 }
+        : { name: "zapper_0.2.0_amd64.deb", size: 9_400_000 },
 };
 
 const updateEmitter = new Emitter<UpdateStatusDto>({
   current: "0.1.0",
-  kind: (UPDATES_MODE === "source" ? "none" : "deb") as InstallKind,
+  kind: (UPDATES_MODE === "source" ? "none" : UPDATES_MODE === "arch" ? "arch" : "deb") as InstallKind,
   lastChecked: null,
   state: UPDATES_MODE === "unconfigured" ? { state: "notConfigured" } : { state: "idle" },
 });

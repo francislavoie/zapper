@@ -25,7 +25,7 @@ It's built with a Rust core, a React interface and [Tauri](https://tauri.app/), 
 
 | Platform | Status |
 |---|---|
-| Linux | Supported: `.deb` and `.rpm` packages |
+| Linux | Supported: `.deb`, `.rpm` and Arch Linux packages |
 | Windows | Builds and runs (10 and 11); installers not published yet |
 | macOS | Not supported yet |
 
@@ -36,6 +36,7 @@ Download the package for your system from the
 
 - **Debian and Ubuntu:** `sudo apt install ./zapper_<version>_amd64.deb`
 - **Fedora:** `sudo dnf install ./zapper-<version>-1.x86_64.rpm`
+- **Arch Linux:** `sudo pacman -U ./zapper-<version>-1-x86_64.pkg.tar.zst`
 
 `SHA256SUMS` in each release lists the files' checksums. After that, zapper updates itself (see
 [Updates](#updates)).
@@ -132,9 +133,10 @@ zapper checks its GitHub releases a minute after startup and once a day after th
 a newer version, it offers to download the package for how you installed it, keeps the download
 only if the release's `SHA256SUMS` lists it with the same digest, and installs it:
 
-- **Linux (`.deb`, `.rpm`):** through `pkexec`, so your desktop asks for your password. The
-  package is copied somewhere only root can write and checked again before apt, dnf, zypper or
-  rpm sees it.
+- **Linux (`.deb`, `.rpm`, Arch):** through `pkexec`, so your desktop asks for your password.
+  The package is copied somewhere only root can write and checked again before apt, dnf,
+  zypper, rpm or pacman sees it. If you installed zapper through an AUR helper, update it there
+  instead.
 - **Restart** then starts the new version.
 
 A build from source only links to the release page. Settings › Updates turns the automatic check
@@ -152,7 +154,8 @@ sudo apt install libwebkit2gtk-4.1-dev libmpv-dev libgtk-3-dev libsoup-3.0-dev \
   libepoxy-dev pkg-config
 ```
 
-Packaging and the release-script checks also want `jq`, `dpkg-dev` and `desktop-file-utils`;
+Packaging and the release-script checks also want `jq`, `dpkg-dev`, `zstd` (the Arch package)
+and `desktop-file-utils`;
 the license notices want [`cargo-about`](https://github.com/EmbarkStudios/cargo-about) 0.9.2 and
 Python 3; the test streams in `tools/` want Python 3 and `ffmpeg`.
 

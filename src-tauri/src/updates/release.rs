@@ -73,6 +73,8 @@ pub fn newest_update<'a>(releases: &'a [GhRelease], current: &Version) -> Option
 const DEB_ARCH: &str = if cfg!(target_arch = "aarch64") { "arm64" } else { "amd64" };
 /// The RPM architecture, likewise.
 const RPM_ARCH: &str = if cfg!(target_arch = "aarch64") { "aarch64" } else { "x86_64" };
+/// pacman's, likewise (Arch Linux ARM names it as the RPM does).
+const PACMAN_ARCH: &str = RPM_ARCH;
 /// The `.dmg`'s: Apple Silicon or Intel.
 const DMG_ARCH: &str = if cfg!(target_arch = "aarch64") { "aarch64" } else { "x64" };
 
@@ -82,6 +84,10 @@ const DMG_ARCH: &str = if cfg!(target_arch = "aarch64") { "aarch64" } else { "x6
 /// - deb: `zapper_<version>_amd64.deb`;
 /// - rpm: `zapper-<version>-1.x86_64.rpm` (the SemVer form in the file name,
 ///   even though the package's own Version is `0.3.0~rc.1`);
+/// - arch: `zapper-<pkgver>-1-x86_64.pkg.tar.zst`, named after the package's
+///   own version as pacman's files are: the SemVer one without its `-`
+///   (`0.3.0rc.1`), which pacman sorts before `0.3.0` and cannot hold a `-`
+///   anyway (scripts/arch-pkg.py, pkgver);
 /// - nsis: `zapper_<version>_x64-setup.exe`;
 /// - msi: `zapper_<version>_x64_en-US.msi`;
 /// - dmg: `zapper_<version>_aarch64.dmg` (or `_x64` on an Intel Mac);
@@ -91,6 +97,7 @@ pub fn asset_name(kind: InstallKind, version: &Version) -> Option<String> {
     match kind {
         InstallKind::Deb => Some(format!("zapper_{v}_{DEB_ARCH}.deb")),
         InstallKind::Rpm => Some(format!("zapper-{v}-1.{RPM_ARCH}.rpm")),
+        InstallKind::Arch => Some(format!("zapper-{}-1-{PACMAN_ARCH}.pkg.tar.zst", v.replace('-', ""))),
         InstallKind::Nsis => Some(format!("zapper_{v}_x64-setup.exe")),
         InstallKind::Msi => Some(format!("zapper_{v}_x64_en-US.msi")),
         InstallKind::Dmg => Some(format!("zapper_{v}_{DMG_ARCH}.dmg")),
@@ -224,6 +231,12 @@ mod tests {
         assert_eq!(asset_name(InstallKind::Deb, &rc), Some(format!("zapper_0.3.0-rc.1_{deb}.deb")));
         assert_eq!(asset_name(InstallKind::Rpm, &rel), Some(format!("zapper-0.3.0-1.{rpm}.rpm")));
         assert_eq!(asset_name(InstallKind::Rpm, &rc), Some(format!("zapper-0.3.0-rc.1-1.{rpm}.rpm")));
+        assert_eq!(asset_name(InstallKind::Arch, &rel), Some(format!("zapper-0.3.0-1-{rpm}.pkg.tar.zst")));
+        assert_eq!(asset_name(InstallKind::Arch, &rc), Some(format!("zapper-0.3.0rc.1-1-{rpm}.pkg.tar.zst")));
+        assert_eq!(
+            asset_name(InstallKind::Arch, &v("0.3.0-beta.2+20261031.abc")),
+            Some(format!("zapper-0.3.0beta.2-1-{rpm}.pkg.tar.zst"))
+        );
         assert_eq!(asset_name(InstallKind::Nsis, &rel).as_deref(), Some("zapper_0.3.0_x64-setup.exe"));
         assert_eq!(asset_name(InstallKind::Msi, &rel).as_deref(), Some("zapper_0.3.0_x64_en-US.msi"));
         assert_eq!(asset_name(InstallKind::Dmg, &rc), Some(format!("zapper_0.3.0-rc.1_{dmg}.dmg")));

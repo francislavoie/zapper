@@ -368,7 +368,7 @@ export type UpdateStateDto =
   | { state: "failed"; message: string; release: UpdateReleaseDto | null };
 
 /** How this copy was installed. `none` is a build from source. */
-export type InstallKind = "deb" | "rpm" | "nsis" | "msi" | "dmg" | "none";
+export type InstallKind = "deb" | "rpm" | "arch" | "nsis" | "msi" | "dmg" | "none";
 
 export interface UpdateStatusDto {
   /** This build's version. */

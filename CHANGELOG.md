@@ -23,6 +23,8 @@ The first release.
   pinned, sorted or hidden.
 - A picture that keeps playing in a corner while you browse, with its own transport controls.
 - Keyboard control throughout, a command palette, and a stats overlay for drops and stalls.
+- Packages for Debian and Ubuntu (`.deb`), Fedora and openSUSE (`.rpm`), and Arch Linux
+  (`.pkg.tar.zst`).
 - Updates: zapper checks for a new release once a day (Settings → Updates turns it off), and
   installs it from the menu's Check for updates, after checking it against the release's
   published checksums.

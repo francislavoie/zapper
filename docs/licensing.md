@@ -24,6 +24,10 @@ window), so there are no engine notices to carry.
   `/usr/share/licenses/zapper/` (Fedora's place for them), without `copyright`. Both from the
   `files` maps in `src-tauri/tauri.conf.json`; `scripts/check-deb.sh` fails if one is missing
   or empty. Both packages also say `License: MIT` (`bundle.license`).
+- The Arch package is the `.deb`'s payload, so the same files in `/usr/share/doc/zapper/`, with
+  `/usr/share/licenses/zapper` (Arch's place for them) a link to that folder. Its `license`
+  field lists MIT and every license the third-party notices' summaries name
+  (`scripts/package-arch.sh`, which fails if a notice is missing or empty).
 - The Windows installers put them in `licenses\` beside `zapper.exe`, as `.txt`
   (`packaging/windows/installers.conf.json`).
 - On macOS they're in `zapper.app/Contents/Resources/licenses/` (`packaging/macos/dmg.conf.json`).
@@ -91,9 +95,9 @@ on crates.io: `THIRD-PARTY-NOTICES-rust.txt` ends with both addresses.
 libmpv is a separate shared library, never part of zapper's binary. Whether a package contains
 it depends on the platform; `packaging/licenses/MPV-FFMPEG-NOTICE.txt` says the same for users.
 
-- **Linux:** not shipped. The `.deb` and `.rpm` depend on the distribution's libmpv
-  (`libmpv2 | libmpv1`, `libmpv.so.2`), which comes with its own copyright file and source
-  package. Debian's and Fedora's are built with mpv's GPL parts, so libmpv there is
+- **Linux:** not shipped. The `.deb`, `.rpm` and Arch package depend on the distribution's
+  libmpv (`libmpv2 | libmpv1`, `libmpv.so.2`, `mpv`), which comes with its own copyright file
+  and source package. Debian's and Fedora's are built with mpv's GPL parts, so libmpv there is
   GPL-2.0-or-later; nothing of it is in zapper's package.
 - **Windows:** shipped. `libmpv-2.dll` is shinchiro/mpv-winbuild-cmake's `mpv-dev-x86_64` build
   (`tools/fetch-libmpv.ps1`, pinned to a release tag in `.github/workflows/release.yml`),

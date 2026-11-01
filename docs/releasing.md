@@ -2,13 +2,14 @@
 
 A release is a tag. `just release <version>` prepares the release commit and tag locally;
 pushing the tag starts [.github/workflows/release.yml](../.github/workflows/release.yml), which
-builds the `.deb` and the `.rpm`, checks them, and uploads them with `SHA256SUMS` to a **draft**
-GitHub release. You review the draft and publish it. Nothing is published automatically.
+builds the `.deb`, the `.rpm` and the Arch package, checks them, and uploads them with
+`SHA256SUMS` to a **draft** GitHub release. You review the draft and publish it. Nothing is
+published automatically.
 
 Installed copies of zapper find a published release by themselves (the updater, below), so
 publishing is the moment a release reaches people: everything before it is reversible.
 
-Releases carry Linux packages only: no Arch package, no AppImage, no signing. Windows and macOS
+Releases carry Linux packages only: no AppImage, no signing. Windows and macOS
 are wired in but disabled
 ([Windows and macOS](#windows-and-macos)).
 
@@ -91,9 +92,10 @@ Until this is done, `just release` refuses to run, and the updater in any build 
    has no section for the version.
 
 4. **Review the draft** under Releases. It's titled "zapper 0.2.0", has the changelog section as
-   its notes, and carries the `.deb`, the `.rpm` and `SHA256SUMS`. A version with a pre-release
-   part (`-rc.1`) is marked pre-release. Edit the notes if needed, and install the packages from
-   the draft to try them (`sudo apt install ./zapper_0.2.0_amd64.deb`).
+   its notes, and carries the `.deb`, the `.rpm`, the Arch package and `SHA256SUMS`. A version
+   with a pre-release part (`-rc.1`) is marked pre-release. Edit the notes if needed, and install
+   the packages from the draft to try them (`sudo apt install ./zapper_0.2.0_amd64.deb`,
+   `sudo pacman -U ./zapper-0.2.0-1-x86_64.pkg.tar.zst`).
 
 5. **Publish** the draft. Installed copies see it at their next check (a minute after they
    start, then daily) or when someone chooses Check for updates.
@@ -116,10 +118,11 @@ zapper updates itself without Tauri's updater plugin
 4. **Verify** it against the same release's `SHA256SUMS`. Not listed, or a different digest:
    the file is deleted and never run. The digest is checked again just before installing.
 5. **Install:**
-   - `.deb` and `.rpm`: pkexec runs a short script as root (`install::ROOT_INSTALL`; the
-     polkit prompt names `/bin/sh`) that copies the download into a fresh root-owned directory,
-     checks the copy against the verified digest, and only then runs `apt install -y` (or dnf,
-     else zypper, else `rpm -U`) on the copy. The download sits in a folder this user owns, so
+   - `.deb`, `.rpm` and Arch: pkexec runs a short script as root (`install::ROOT_INSTALL`;
+     the polkit prompt names `/bin/sh`) that copies the download into a fresh root-owned
+     directory, checks the copy against the verified digest, and only then runs
+     `apt install -y` (or dnf, else zypper, else `rpm -U`; or `pacman -U --noconfirm`) on the
+     copy. The download sits in a folder this user owns, so
      this is what stops another process running as this user from swapping in a different
      package while the password prompt is up;
    - Windows (not built yet): copies the installer into a folder made for that attempt, checks
@@ -130,7 +133,8 @@ zapper updates itself without Tauri's updater plugin
      when this user can write there; otherwise says to drag it to Applications.
 
    If pkexec is missing or the password prompt is cancelled, the dialog shows the command to
-   run in a terminal (`sudo apt install …`) instead.
+   run in a terminal (`sudo apt install …`, `sudo pacman -U …`) instead. On Arch, the dialog
+   also says that a copy installed through an AUR helper is updated there.
 6. **Restart:** starts the new binary once this process has exited.
 
 The automatic check is the setting Settings → Updates → "Check for updates automatically", on by
@@ -141,13 +145,14 @@ setting says.
 
 Installed copies find their update by these names
 ([src-tauri/src/updates/release.rs](../src-tauri/src/updates/release.rs)). They are Tauri's own
-bundle names; keep them exactly, and keep `SHA256SUMS` in every release: a package
-`SHA256SUMS` doesn't list is never installed.
+bundle names (the Arch package's, pacman's); keep them exactly, and keep `SHA256SUMS` in every
+release: a package `SHA256SUMS` doesn't list is never installed.
 
 | Install | Asset |
 |---|---|
 | `.deb` | `zapper_<version>_amd64.deb` |
 | `.rpm` (Fedora, openSUSE) | `zapper-<version>-1.x86_64.rpm` (SemVer in the name; the package's own Version is `0.2.0~rc.1` for a pre-release) |
+| Arch Linux | `zapper-<pkgver>-1-x86_64.pkg.tar.zst` (pacman's own name for it: `<pkgver>` is the version without the pre-release's `-`, `0.2.0rc.1`) |
 | Windows NSIS (not built yet) | `zapper_<version>_x64-setup.exe` |
 | Windows MSI (not built yet) | `zapper_<version>_x64_en-US.msi` |
 | macOS (not built yet) | `zapper_<version>_aarch64.dmg` (an Intel Mac would look for `_x64.dmg`) |
@@ -166,6 +171,9 @@ app reads at run time, `install-kind`
   from [packaging/](../packaging/) through `bundle.linux.deb.files` and `bundle.linux.rpm.files`
   in tauri.conf.json. Not in `/usr/bin` beside the binary, where it would be a command.
   `scripts/check-deb.sh` fails a `.deb` without it;
+- the Arch package is made from the `.deb` by `scripts/package-arch.sh`, which writes
+  [packaging/install-kind-arch](../packaging/install-kind-arch) (`arch`) over the `.deb`'s marker
+  and refuses a `.deb` without one;
 - Windows (not built yet): `packaging/windows/installers.conf.json` ships `install-kind` = `msi`
   beside `zapper.exe` as a resource, and the NSIS installer's post-install hook
   (`packaging/windows/installer-hooks.nsh`) overwrites it with `nsis`;
@@ -173,8 +181,8 @@ app reads at run time, `install-kind`
   `zapper.app/Contents/Resources`.
 
 No marker: a build from source (`npm run app`, or `npx tauri build` on Windows and macOS without
-those configs), which is only shown the release page. A `.deb` or `.rpm` you build locally with
-`just package` *does* carry the marker, and updates like a released one.
+those configs), which is only shown the release page. A `.deb`, `.rpm` or Arch package you build
+locally with `just package` *does* carry the marker, and updates like a released one.
 
 ## Versions
 
@@ -186,15 +194,18 @@ updater compares versions the same way
 
 Each package manager gets a version that sorts the same way, pre-releases before the release:
 
-| SemVer (tag `v…`) | `.deb` Version | `.rpm` Version | Files |
-|---|---|---|---|
-| `0.2.0-rc.1` | `0.2.0~rc.1` | `0.2.0~rc.1` | `zapper_0.2.0-rc.1_amd64.deb`, `zapper-0.2.0-rc.1-1.x86_64.rpm` |
-| `0.2.0` | `0.2.0` | `0.2.0` | `zapper_0.2.0_amd64.deb`, `zapper-0.2.0-1.x86_64.rpm` |
+| SemVer (tag `v…`) | `.deb` Version | `.rpm` Version | Arch pkgver | Files |
+|---|---|---|---|---|
+| `0.2.0-rc.1` | `0.2.0~rc.1` | `0.2.0~rc.1` | `0.2.0rc.1-1` | `zapper_0.2.0-rc.1_amd64.deb`, `zapper-0.2.0-rc.1-1.x86_64.rpm`, `zapper-0.2.0rc.1-1-x86_64.pkg.tar.zst` |
+| `0.2.0` | `0.2.0` | `0.2.0` | `0.2.0-1` | `zapper_0.2.0_amd64.deb`, `zapper-0.2.0-1.x86_64.rpm`, `zapper-0.2.0-1-x86_64.pkg.tar.zst` |
 
 Tauri writes the SemVer form into the `.deb`, where dpkg would sort `0.2.0-rc.1` *after*
 `0.2.0`; `scripts/fix-deb.sh` rewrites only that field (`just package` runs it). Tauri already
 writes the `~` form into the `.rpm`. `scripts/test-scripts.sh` checks the order with
-`dpkg --compare-versions`.
+`dpkg --compare-versions`. pacman's pkgver can't hold a `-`, and `vercmp` puts a leftover part
+that starts with a letter before the release (`0.2.0rc.1` < `0.2.0`) but one that starts with
+`.` after it, so the Arch package drops the `~` rather than turning it into a dot
+(`scripts/arch-pkg.py`, `pkgver`).
 
 ## What the workflow does
 
@@ -204,8 +215,10 @@ writes the `~` form into the `.rpm`. `scripts/test-scripts.sh` checks the order 
    `RELEASES_REPO` against the repository, extracts the release notes, installs
    the Linux build dependencies (README.md), stable Rust, Node from `.nvmrc` and `just`, then runs
    `just package` with `ZAPPER_RELEASE_VERSION` set: the frontend build, the release binary, the
-   `.deb` and `.rpm`, `fix-deb.sh` and `check-deb.sh`. Writes `SHA256SUMS` and keeps everything as
-   a workflow artifact for 3 days.
+   `.deb` and `.rpm`, `fix-deb.sh` and `check-deb.sh`, then the Arch package from the `.deb`
+   (`package-arch.sh`, its file times the release commit's). `just check-arch-pkg` then installs
+   that in an `archlinux:latest` container and checks it. Writes `SHA256SUMS` and keeps
+   everything as a workflow artifact for 3 days.
 3. **Windows and macOS:** skipped (below).
 4. **Release** (`contents: write`): verifies each job's checksums and merges them into one
    `SHA256SUMS`, attests the packages' build provenance (public repositories, or
@@ -214,8 +227,11 @@ writes the `~` form into the `.rpm`. `scripts/test-scripts.sh` checks the order 
 The packages' `Depends` (`.deb`) and `Requires` (`.rpm`) are fixed in tauri.conf.json, not
 derived from the runner: `libmpv2 | libmpv1`, `libwebkit2gtk-4.1-0`, `libgtk-3-0` for the
 `.deb`; the same libraries by soname for the `.rpm` (`libmpv.so.2()(64bit)` and so on), which
-resolves on Fedora and openSUSE alike. The binary itself links the runner's glibc, so the
-packages need Ubuntu 24.04, Debian 13, Fedora 40 or later.
+resolves on Fedora and openSUSE alike. The Arch package's `depend`s are the `.deb`'s, mapped to
+Arch's package names through the table in `scripts/arch-pkg.py` (`mpv`, `webkit2gtk-4.1`,
+`gtk3`): a Debian name the table doesn't know fails the build, and a library the package carries
+itself is left out. The binary itself links the runner's glibc, so the
+packages need Ubuntu 24.04, Debian 13, Fedora 40 or later (Arch, rolling, is always newer).
 
 ## Windows and macOS
 

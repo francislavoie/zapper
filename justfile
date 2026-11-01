@@ -43,7 +43,7 @@ release version:
 
 # The Linux packages, into src-tauri/target/release/bundle/: the .deb (its Version made
 # Debian's by scripts/fix-deb.sh, then checked by scripts/check-deb.sh) and the .rpm, from one
-# build. Through `npx tauri`, the project's own Tauri 2 CLI: a `cargo tauri` on PATH may be
+# build, then the Arch package made from the .deb (`just package-arch`). Through `npx tauri`, the project's own Tauri 2 CLI: a `cargo tauri` on PATH may be
 # another major version.
 #
 # ZAPPER_RELEASE_VERSION=<version> (the release workflow) must be a release version equal to
@@ -69,7 +69,22 @@ package:
     [ ${#deb[@]} = 1 ] || { echo "package: expected one .deb, found: ${deb[*]}" >&2; exit 1; }
     scripts/fix-deb.sh "${deb[0]}"
     scripts/check-deb.sh "${deb[0]}" "$v"
-    ls -l src-tauri/target/release/bundle/deb/zapper_*.deb src-tauri/target/release/bundle/rpm/zapper-*.rpm
+    scripts/package-arch.sh "${deb[0]}" src-tauri/target/release/bundle/arch
+    ls -l src-tauri/target/release/bundle/deb/zapper_*.deb src-tauri/target/release/bundle/rpm/zapper-*.rpm \
+      src-tauri/target/release/bundle/arch/zapper-*-x86_64.pkg.tar.zst
+
+# The Arch package (src-tauri/target/release/bundle/arch/zapper-<pkgver>-1-x86_64.pkg.tar.zst),
+# made from the .deb of `just package` without makepkg: the same payload with the install-kind
+# marker saying arch, pacman's .PKGINFO and .MTREE, and Depends mapped through the table in
+# scripts/arch-pkg.py. `just package` already runs it; this redoes it from the last .deb.
+package-arch:
+    scripts/package-arch.sh src-tauri/target/release/bundle/deb/zapper_*.deb src-tauri/target/release/bundle/arch
+
+# Installs that package in a throwaway archlinux:latest container and checks it (needs Docker and
+# the network, so `just package` doesn't run it): dependencies, pacman -Qkk, the marker, the
+# license notices, ldd and a headless launch. See scripts/check-arch-pkg.sh.
+check-arch-pkg:
+    scripts/check-arch-pkg.sh src-tauri/target/release/bundle/arch/zapper-*-x86_64.pkg.tar.zst
 
 # On Windows (builds; not yet tested on screen or released): the NSIS installer and the MSI,
 # with the install-kind markers the updater reads and the license notices in licenses\ beside
