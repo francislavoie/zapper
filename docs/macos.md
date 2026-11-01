@@ -23,6 +23,23 @@ mpv has no `wid` embedding on macOS, which is why it is not the Windows arrangem
 VideoToolbox's (`hwdec=auto-safe`), handed to OpenGL without a copy. Scrollback thumbnails are
 blitted down from the frame just drawn, as on Linux.
 
+## The window and the keyboard
+
+On a Mac the window keeps the system's title bar, transparent and under zapper's own
+(`titleBarStyle: "Overlay"` in `src-tauri/tauri.macos.conf.json`; Linux and Windows stay
+undecorated). The traffic lights are AppKit's, in the bar's top-left corner, so the bar draws
+no window buttons there and starts the hamburger to their right; the rest of it drags the
+window, and a double click on it does what System Settings › Desktop & Dock says
+(`src-tauri/src/chrome.rs`). Full screen is the system's, from the green button, View › Enter
+Full Screen (⌃⌘F) or zapper's F, and zapper's bar is not drawn there.
+
+Shortcuts use ⌘ where Linux and Windows use Ctrl, and are written the Mac way (⌘P, ⇧⌘F):
+`src/logic/keys.ts` decides both, and with Control held a shortcut does nothing, so ⌃P and
+⌃F stay the system's and the text fields'. The app menu is a Mac's: zapper (About, Settings…
+⌘,, Services, Hide, Quit ⌘Q), Edit (Undo, Redo, Cut, Copy, Paste, Select All, which is what
+makes ⌘C, ⌘V and ⌘A work in a text field), View (Enter Full Screen) and Window (Minimise, Zoom).
+Quit closes the window, the same way out as its red button.
+
 ## Building
 
 You need Xcode (its Swift compiler builds part of libmpv), Rust, Node.js, and from Homebrew a
@@ -84,9 +101,13 @@ the record (the job summary says how each went) and in the bundled app's screens
   That VideoToolbox's frames reach the picture every time (on the runners one run in several
   stayed black). Retina sharpness, and a window moved between screens of different scales.
 - **Sound.** Every run on CI has `ao=null`; Core Audio output has never been heard.
-- **The window.** It is undecorated (`decorations: false`) and draws the same title bar and
-  window buttons as on Linux and Windows: no traffic lights, and moving, full screen and Mission
-  Control are untried. Shortcuts are named with Ctrl, where a Mac user expects ⌘.
+- **The window by hand.** Dragging it by the bar, the double click (whichever action System
+  Settings names), the traffic lights, resizing from the edges, the green button's tiling
+  menu, full screen with a pointer that reveals the menu bar, Mission Control. CI only sees
+  screenshots of the bar and of full screen set from code.
+- **The keyboard by hand.** ⌘ for every shortcut, ⌃ letting them be, and the Edit menu's ⌘C,
+  ⌘V and ⌘A in the search box and Settings, as far as CI could not type them (the run's
+  summary says whether it could).
 - **First launch.** Ad-hoc signed and not notarized, so Gatekeeper asks before it opens
   (Control-click, Open), and quarantine applies to a downloaded `.dmg`.
 - **Updates.** The updater's `.dmg` install (mount, swap the bundle) has tests but has never run.

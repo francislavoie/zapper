@@ -70,7 +70,8 @@ Download the package for your system from the
 - Each channel's last measured resolution, frame rate and codec is shown in the list; channels
   that failed to load are dimmed, with the reason.
 - The playing channel stays in a docked picture with its own controls while you browse.
-- Command palette (`Ctrl+P`) with every action. Shortcuts are listed in Settings › Keyboard.
+- Command palette (`Ctrl+P`; `⌘P` on a Mac) with every action. Shortcuts are listed in
+  Settings › Keyboard, with ⌘ for Ctrl on a Mac.
 
 ### Playback
 
@@ -96,7 +97,7 @@ Download the package for your system from the
 ### Other
 
 - Restores the last channel, window size and volume on launch.
-- Interface zoom (`Ctrl` `+`/`−`/`0`); 12- or 24-hour clock.
+- Interface zoom (`Ctrl` `+`/`−`/`0`, `⌘` on a Mac); 12- or 24-hour clock.
 - Updates itself from GitHub releases, verified against the release's checksums.
 - Credentials are stored in your config directory, readable only by you, and kept out of logs.
 - No telemetry. Apart from your sources, the only request zapper makes is the daily update
