@@ -9,7 +9,7 @@
 //
 // Pure; checked in src/__checks__/sources.test.mjs.
 
-import type { AccountDto } from "../types";
+import type { AccountCandidateDto, AccountDto } from "../types";
 
 export type SourceKind = "xtream" | "m3u" | "hdhomerun" | "tvheadend";
 
@@ -245,4 +245,63 @@ export function m3uChanged(form: M3uForm, a: M3uOnFile): boolean {
     (form.epgTouched && splitUrls(form.epgText).join("\n") !== splitUrls(start.epgText).join("\n")) ||
     form.userAgent.trim() !== start.userAgent
   );
+}
+
+/** What the Xtream fields hold while being edited. */
+export interface XtreamForm {
+  host: string;
+  username: string;
+  /** Empty keeps the one on file. */
+  password: string;
+}
+
+/** What a save would send, or why it cannot. */
+export function planXtreamSave(
+  form: XtreamForm,
+  a: Pick<AccountDto, "hasPassword">,
+): XtreamForm | { error: string } {
+  const host = form.host.trim();
+  const username = form.username.trim();
+  if (host === "") return { error: "a host is required" };
+  if (username === "") return { error: "a username is required" };
+  if (form.password === "" && !a.hasPassword) return { error: "a password is required" };
+  return { host, username, password: form.password };
+}
+
+/** Every form at once, as the pane holds them: switching kinds keeps what was
+ *  typed into the others. */
+export interface AccountForms {
+  xtream: XtreamForm;
+  m3u: M3uForm;
+  hdhr: HdhrForm;
+  tvh: TvhForm;
+}
+
+/** What the connection test checks: the selected kind's fields as typed,
+ *  with the same keep-what-is-on-file rules a save applies, so the test
+ *  answers for exactly what Save would then store. Or why there is nothing
+ *  to test yet. */
+export function candidateFor(
+  kind: SourceKind,
+  forms: AccountForms,
+  a: AccountDto,
+): AccountCandidateDto | { error: string } {
+  switch (kind) {
+    case "xtream": {
+      const plan = planXtreamSave(forms.xtream, a);
+      return "error" in plan ? plan : { kind, ...plan };
+    }
+    case "m3u": {
+      const plan = planM3uSave(forms.m3u, a);
+      return "error" in plan ? plan : { kind, ...plan };
+    }
+    case "hdhomerun": {
+      const plan = planHdhrSave(forms.hdhr, a);
+      return "error" in plan ? plan : { kind, ...plan };
+    }
+    case "tvheadend": {
+      const plan = planTvhSave(forms.tvh, a);
+      return "error" in plan ? plan : { kind, ...plan };
+    }
+  }
 }

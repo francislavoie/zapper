@@ -21,6 +21,8 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
 
 - The picture beside the channel list can be made as large as the window allows, keeping enough
   room beside it for the channel's details and below it for the list.
+- Settings → Account: Test connection checks what is in the form, saved or not, so an account can
+  be tried before saving it.
 
 ## [0.1.0] - 2026-11-01
 

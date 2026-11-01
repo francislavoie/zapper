@@ -833,3 +833,37 @@ pub struct AccountDto {
     pub tvheadend_username: String,
     pub tvheadend_has_password: bool,
 }
+
+/// An account as typed into Settings → Account and not saved: what the
+/// connection test checks, so a change can be tried before it replaces the
+/// account in use.
+///
+/// Each kind carries exactly what its save command takes, with the same
+/// rules: an empty password and a `None` list keep what is on file, because
+/// the pane is never given those values to send back.
+///
+/// No `Debug`: it carries passwords, and the one way to print it by accident
+/// is not to be able to.
+#[derive(Clone, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase", rename_all_fields = "camelCase")]
+pub enum AccountCandidateDto {
+    Xtream {
+        host: String,
+        username: String,
+        password: String,
+    },
+    M3u {
+        playlist: Option<String>,
+        epg_urls: Option<Vec<String>>,
+        user_agent: String,
+    },
+    Hdhomerun {
+        device: String,
+        epg_urls: Option<Vec<String>>,
+    },
+    Tvheadend {
+        url: String,
+        username: String,
+        password: String,
+    },
+}
