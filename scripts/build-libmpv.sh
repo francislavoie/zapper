@@ -372,6 +372,7 @@ unpack vulkan-headers "$src/libplacebo/3rdparty/Vulkan-Headers"
 unpack glad "$src/libplacebo/3rdparty/glad"
 unpack jinja "$src/libplacebo/3rdparty/jinja"
 unpack markupsafe "$src/libplacebo/3rdparty/markupsafe"
+unpack fast_float "$src/libplacebo/3rdparty/fast_float"
 placebo=(-Dopengl=enabled -Dgl-proc-addr=disabled -Dvulkan=disabled -Dvk-proc-addr=disabled
   -Dglslang=disabled -Dlcms=disabled -Ddovi=enabled -Dlibdovi=disabled -Dunwind=disabled
   -Dxxhash=disabled -Ddemos=false -Dtests=false -Dbench=false -Dfuzz=false)
@@ -632,6 +633,7 @@ component ffmpeg "LGPL-2.1-or-later" https://ffmpeg.org COPYING.LGPLv2.1 LICENSE
 component libplacebo "LGPL-2.1-or-later" https://code.videolan.org/videolan/libplacebo LICENSE
 component glad "MIT" https://github.com/Dav1dde/glad LICENSE
 component vulkan-headers "MIT" https://github.com/KhronosGroup/Vulkan-Headers LICENSE.md
+component fast_float "MIT" https://github.com/fastfloat/fast_float LICENSE-MIT
 component dav1d "BSD-2-Clause" https://code.videolan.org/videolan/dav1d COPYING
 component libass "ISC" https://github.com/libass/libass COPYING
 case $family in

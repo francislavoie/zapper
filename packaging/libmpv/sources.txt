@@ -16,11 +16,14 @@ libass         0.17.5  all  2dca25c0e0c837ddf00b52011b3f82cac1e4ddd3ad018227806b
 
 # libplacebo's git submodules, at the commits its v7.360.1 tag records: glad generates its
 # OpenGL loader at build time with Jinja (and MarkupSafe), none of which ends up in the library
-# except glad's generated loader; Vulkan's headers are needed even with Vulkan off.
+# except glad's generated loader; Vulkan's headers are needed even with Vulkan off. fast_float
+# (header-only) parses numbers where the C++ library lacks floating-point from_chars, as
+# macOS's does.
 vulkan-headers 450bd2232225d6c7728a4108055ac2e37cef6475  all  26df9841c30806a994e2fdf42f7c87bcb1ced9db9a06033469123939fb3fa075  https://github.com/KhronosGroup/Vulkan-Headers/archive/450bd2232225d6c7728a4108055ac2e37cef6475.tar.gz
 glad          73db193f853e2ee079bf3ca8a64aa2eaf6459043  all  33dbeae44d8315ece57e14eba4b1b4a02ac5406d1c4f49cd20048c91522a6b9a  https://github.com/Dav1dde/glad/archive/73db193f853e2ee079bf3ca8a64aa2eaf6459043.tar.gz
 jinja          15206881c006c79667fe5154fe80c01c65410679  all  b88a20dcc2e34072fcf4159325bc6c34cd4b29a81a8b83d15d2f28ba561da296  https://github.com/pallets/jinja/archive/15206881c006c79667fe5154fe80c01c65410679.tar.gz
 markupsafe     297fc8e356e6836a62087949245d09a28e9f1b13  all  da7c010c9c81a66ac73036558c1fcb6212b50482f43211cd1254035b94f82414  https://github.com/pallets/markupsafe/archive/297fc8e356e6836a62087949245d09a28e9f1b13.tar.gz
+fast_float     97b54ca9e75f5303507699d27c6b4f4efe4641a1  all  2b132274539286e41f37857cac22aa8441d21bd86d55de825a3342b149f66801  https://github.com/fastfloat/fast_float/archive/97b54ca9e75f5303507699d27c6b4f4efe4641a1.tar.gz
 
 # A build tool only (dav1d's and FFmpeg's x86 assembly); nothing of it is shipped.
 nasm           3.02    linux,windows,macos  87336eba53b4acfe917424ab5d500d2b0054d9f5148d35c2273ccf2cfb712f0d  https://www.nasm.us/pub/nasm/releasebuilds/3.02/nasm-3.02.tar.xz
