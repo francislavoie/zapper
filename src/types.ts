@@ -562,6 +562,15 @@ export interface AccountDto {
   tvheadendHasPassword: boolean;
 }
 
+/** An account as typed and not saved, for the connection test. Each kind
+ *  carries what its save command takes, with the same rules: an empty
+ *  password and a `null` list keep what is on file. */
+export type AccountCandidateDto =
+  | { kind: "xtream"; host: string; username: string; password: string }
+  | { kind: "m3u"; playlist: string | null; epgUrls: string[] | null; userAgent: string }
+  | { kind: "hdhomerun"; device: string; epgUrls: string[] | null }
+  | { kind: "tvheadend"; url: string; username: string; password: string };
+
 // ------------------------------------------------------------- recording
 // Mirror of src-tauri/src/recording/api.rs and recording/service.rs: what the
 // recording service (zapper-server) answers, passed through the app's Rust

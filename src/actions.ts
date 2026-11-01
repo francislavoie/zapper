@@ -253,8 +253,11 @@ export async function openProgrammeHit(
  *  effects, so a load that lived in the rail simply never happened while the
  *  Favourites tab was the one on screen — which is exactly when the
  *  favourites needed it. */
-export async function loadCategories(dispatch: Dispatch<Action>) {
-  dispatch({ type: "categories", value: loading() });
+/** `quiet` re-reads without first saying "Loading": a refresh after a sync
+ *  keeps the rail as it is until the new list replaces it, rather than
+ *  emptying it and losing its scroll. */
+export async function loadCategories(dispatch: Dispatch<Action>, quiet = false) {
+  if (!quiet) dispatch({ type: "categories", value: loading() });
   try {
     dispatch({ type: "categories", value: ready(await backend.categories()) });
   } catch (e) {

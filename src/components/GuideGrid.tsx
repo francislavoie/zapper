@@ -105,7 +105,7 @@ export function GuideGrid({ besideRail = false }: { besideRail?: boolean }) {
         ? state.categories.data.reduce((n, c) => n + c.channelCount, 0)
         : (state.categories.data.find((c) => c.id === categoryId)?.channelCount ?? 0)
       : state.sync.channelsTotal;
-  const source = useChannelPages(categoryId, estimate);
+  const source = useChannelPages(categoryId, estimate, state.catalogueRev);
 
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const trackRef = useRef<HTMLDivElement | null>(null);

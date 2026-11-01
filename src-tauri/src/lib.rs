@@ -104,6 +104,7 @@ pub fn run() {
             ipc::catalog_cmds::set_hdhomerun_account,
             ipc::catalog_cmds::set_tvheadend_account,
             ipc::catalog_cmds::test_account,
+            ipc::catalog_cmds::test_account_candidate,
             ipc::catalog_cmds::set_settings,
             ipc::catalog_cmds::guide_rows,
             ipc::catalog_cmds::favourites,

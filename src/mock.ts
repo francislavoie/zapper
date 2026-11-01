@@ -12,6 +12,7 @@ import { alternatives } from "./logic/searchQuery";
 import { patternFor, place, validatePattern } from "./logic/naming";
 import { parsePort, passwordProblem } from "./logic/network";
 import type {
+  AccountCandidateDto,
   AccountDto,
   ActivityRowDto,
   BackupFileDto,
@@ -456,7 +457,24 @@ function separatorRow(streamId: number, name: string, categoryId: string): Chann
 }
 
 let catalog: MockCatalog | null = null;
-const getCatalog = (): MockCatalog => (catalog ??= buildCatalog());
+
+/** `?catalogue=empty` opens on the first-run mirror: no categories, no
+ *  channels, never synced. The catalogue arrives when a sync's channels
+ *  phase ends, part-way through the pass, as the real one does — which is
+ *  what the lists have to notice without a restart. */
+const flag = (re: RegExp) => typeof location !== "undefined" && re.test(location.search);
+
+/** `?account=none` is a first launch: no account on file, so an empty
+ *  catalogue too, and a sync that fails saying so. */
+const NO_ACCOUNT = flag(/(^|[?&])account=none(&|$)/);
+const MOCK_NO_ACCOUNT = "no account configured. Set one in Settings → Account.";
+
+const START_EMPTY = NO_ACCOUNT || flag(/(^|[?&])catalogue=empty(&|$)/);
+let catalogueLanded = !START_EMPTY;
+const EMPTY_CATALOG: MockCatalog = { categories: [], rows: [], span: new Map() };
+
+const getCatalog = (): MockCatalog =>
+  catalogueLanded ? (catalog ??= buildCatalog()) : EMPTY_CATALOG;
 
 // ------------------------------------------------------------- favourites
 
@@ -644,10 +662,10 @@ function patchOptions(p: Partial<PlayerOptionsDto>): PlayerOptionsDto {
 }
 
 const syncEmitter = new Emitter<SyncStatusDto>({
-  phase: "idle",
-  message: "",
-  channelsTotal: CHANNEL_TOTAL,
-  lastSynced: Math.floor(Date.now() / 1000) - 3600,
+  phase: NO_ACCOUNT ? "failed" : "idle",
+  message: NO_ACCOUNT ? MOCK_NO_ACCOUNT : "",
+  channelsTotal: START_EMPTY ? 0 : CHANNEL_TOTAL,
+  lastSynced: START_EMPTY ? null : Math.floor(Date.now() / 1000) - 3600,
 });
 
 let mockDropped = 0;
@@ -676,6 +694,17 @@ let mockAccount: AccountDto = {
   tvheadendUsername: "",
   tvheadendHasPassword: false,
 };
+if (NO_ACCOUNT) {
+  mockAccount = {
+    ...mockAccount,
+    host: "",
+    username: "",
+    hasPassword: false,
+    source: "none",
+    playlist: "",
+    playlistRedacted: false,
+  };
+}
 
 /** The mock's redaction, so a saved secret-bearing URL comes back the way
  *  the real backend would send it. */
@@ -1428,11 +1457,24 @@ export const mockApi = {
   syncStatus: async () => syncEmitter.last,
 
   syncNow: async () => {
+    // What `run_once` publishes when `load_account` finds nothing.
+    if (mockAccount.source === "none") {
+      syncEmitter.emit({ ...syncEmitter.last, phase: "failed", message: MOCK_NO_ACCOUNT });
+      return;
+    }
     syncEmitter.emit({ ...syncEmitter.last, phase: "categories", message: "fetching categories" });
     await delay(600);
-    syncEmitter.emit({ ...syncEmitter.last, phase: "channels", message: "60,000 channels" });
+    syncEmitter.emit({ ...syncEmitter.last, phase: "channels", message: "fetching channels" });
     await delay(900);
-    syncEmitter.emit({ ...syncEmitter.last, phase: "epg", message: "guide data" });
+    // Landed as the phase ends, so the guide phase that follows reports the
+    // new count the way the backend's next status would.
+    catalogueLanded = true;
+    syncEmitter.emit({
+      ...syncEmitter.last,
+      phase: "epg",
+      message: "guide data",
+      channelsTotal: CHANNEL_TOTAL,
+    });
     await delay(700);
     syncEmitter.emit({
       phase: "idle",
@@ -1649,6 +1691,8 @@ export const mockApi = {
       path: "~/.config/zapper/account.json",
       kind: "xtream",
     };
+    // As the backend does: a new account is what a sync was waiting for.
+    void mockApi.syncNow();
   },
 
   setM3uAccount: async (playlist: string | null, epgUrls: string[] | null, userAgent: string) => {
@@ -1673,6 +1717,7 @@ export const mockApi = {
         epgUrls === null ? mockAccount.epgRedacted : nextEpg.some((u) => redact(u) !== u),
       userAgent: userAgent.trim(),
     };
+    void mockApi.syncNow();
   },
 
   setHdhomerunAccount: async (device: string, epgUrls: string[] | null) => {
@@ -1688,6 +1733,7 @@ export const mockApi = {
       hdhomerunEpgRedacted:
         epgUrls === null ? mockAccount.hdhomerunEpgRedacted : nextEpg.some((u) => mockRedact(u) !== u),
     };
+    void mockApi.syncNow();
   },
 
   setTvheadendAccount: async (url: string, username: string, password: string) => {
@@ -1706,6 +1752,7 @@ export const mockApi = {
       tvheadendUsername: user,
       tvheadendHasPassword: user !== "" && (password !== "" || mockAccount.tvheadendHasPassword),
     };
+    void mockApi.syncNow();
   },
 
   testAccount: async () => {
@@ -1728,6 +1775,36 @@ export const mockApi = {
     }
     if (!mockAccount.hasPassword) throw "the server rejected these credentials (no password)";
     return "Active · 1 of 2 connections in use";
+  },
+
+  // The form as typed, checked against nothing but itself: the saved account
+  // is not read and not changed, as with the real command. A password of
+  // "wrong" is refused, so both answers can be seen; a blank one stands for
+  // the one on file, which this kind may not have.
+  testAccountCandidate: async (c: AccountCandidateDto) => {
+    await delay(300);
+    switch (c.kind) {
+      case "hdhomerun":
+        if (c.device.trim() === "") throw "an HDHomeRun address is required";
+        return `HDHomeRun FLEX 4K (HDFX-4K) at ${c.device.trim()}: 62 channels, 4 tuners`;
+      case "tvheadend": {
+        if (c.username.trim() === "nopersist")
+          throw "Tvheadend accepted this login but will not give out stream links that keep working. In Tvheadend, open Configuration → Users → Passwords, edit this user, set “Persistent authentication” to Enable, and save; then sync again.";
+        if (c.password === "wrong") throw "Tvheadend refused this username and password.";
+        const login = c.username.trim() === "" ? " · no login" : "";
+        return `Tvheadend 4.3-2183~g1b5b5ca: 212 channels${login}`;
+      }
+      case "m3u": {
+        const guides = c.epgUrls ?? mockAccount.epgUrls;
+        const guide = guides.length === 0 ? "no guide configured" : `${guides.length} guides OK`;
+        return `Playlist OK: 412 channels in the first 600 lines of 24 MB · ${guide}`;
+      }
+      case "xtream":
+        if (c.password === "" && (!mockAccount.hasPassword || mockAccount.source === "none"))
+          throw "a password is required";
+        if (c.password === "wrong") throw "the server rejected these credentials (Disabled)";
+        return `Active · 1 of 2 connections in use (${c.host.trim()} as ${c.username.trim()})`;
+    }
   },
 
   settings: async () => {

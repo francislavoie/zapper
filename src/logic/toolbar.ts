@@ -26,6 +26,23 @@ export interface StatusLine {
   detail: string;
   /** Whether the spinner turns. */
   spinning: boolean;
+  /** The link beside a failure: try the sync again, or go and set up the
+   *  account it was missing. `null` when nothing is wrong. */
+  action: StatusAction | null;
+}
+
+/** What the link beside the status line does. */
+export type StatusAction = "retry" | "account";
+
+/** How the sync says it has no account to sync from: the start of the error
+ *  `credentials::load_account` returns, which the sync publishes as its
+ *  failure message. Tied to that text by src/__checks__/toolbar.test.mjs. */
+export const NO_ACCOUNT_MESSAGE = "no account configured";
+
+/** Whether a failure is the missing account rather than a sync that went
+ *  wrong. Asking again cannot fix that one — only an account can. */
+export function isNoAccount(message: string): boolean {
+  return message.trim().toLowerCase().startsWith(NO_ACCOUNT_MESSAGE);
 }
 
 /** Each phase in the words a person would use, not the backend's. "epg" is a
@@ -69,7 +86,12 @@ export function restingText(lastSynced: number | null, now: number): string {
 export function statusLine(sync: SyncStatusDto, now: number): StatusLine {
   const busy = BUSY_TEXT[sync.phase];
   if (busy) {
-    return { tone: "busy", text: busy, detail: sync.message, spinning: true };
+    return { tone: "busy", text: busy, detail: sync.message, spinning: true, action: null };
+  }
+  if (sync.phase === "failed" && isNoAccount(sync.message)) {
+    // Said as a state rather than an error, with the way out beside it: a
+    // first run is not a failure, and "retry" would only fail again.
+    return { tone: "bad", text: "No account yet", detail: "", spinning: false, action: "account" };
   }
   if (sync.phase === "failed") {
     return {
@@ -80,6 +102,7 @@ export function statusLine(sync: SyncStatusDto, now: number): StatusLine {
       text: sync.message || "Sync failed",
       detail: "",
       spinning: false,
+      action: "retry",
     };
   }
   return {
@@ -88,6 +111,7 @@ export function statusLine(sync: SyncStatusDto, now: number): StatusLine {
     detail:
       sync.channelsTotal > 0 ? `${sync.channelsTotal.toLocaleString()} channels` : "",
     spinning: false,
+    action: null,
   };
 }
 

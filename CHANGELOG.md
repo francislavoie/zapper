@@ -28,8 +28,18 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
   shows, after signing in with a password you set there. Each device is listed and can be
   revoked, and the port can be changed.
 
+### Changed
+
+- The picture beside the channel list can be made as large as the window allows, keeping enough
+  room beside it for the channel's details and below it for the list.
+- Settings → Account: Test connection checks what is in the form, saved or not, so an account can
+  be tried before saving it.
+- With no account set up, the title bar offers "Add an account" instead of "retry".
+
 ### Fixed
 
+- After a sync — the first one, or Refresh data from the provider — the categories, channel list
+  and guide now show the new data straight away instead of after a restart.
 - Windows: a channel whose server can't be reached, or whose stream stalls, is now recognised as a
   network problem and reconnected like on Linux, instead of being reported as an unknown error
   or a dropped stream.

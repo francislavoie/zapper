@@ -10,6 +10,8 @@ import assert from "node:assert/strict";
 import {
   SOURCE_KINDS,
   asKind,
+  candidateFor,
+  planXtreamSave,
   hdhrChanged,
   hdhrFormFrom,
   kindInfo,
@@ -226,4 +228,94 @@ test("the user agent is trimmed, and a changed one is a change", () => {
   assert.equal(m3uChanged({ ...form, userAgent: " Kodi/21 " }, a), false);
   assert.equal(m3uChanged({ ...form, userAgent: "" }, a), true);
   assert.equal(planM3uSave({ ...form, userAgent: " TiviMate " }, a).userAgent, "TiviMate");
+});
+
+// ------------------------------------------------------- connection test
+
+/** A whole account as the pane gets it: Xtream in use, a password on file. */
+const account = (p = {}) => ({
+  ...onFile(),
+  host: "http://saved.example:8080",
+  username: "saved",
+  hasPassword: true,
+  source: "zapper",
+  path: "",
+  kind: "xtream",
+  hdhomerunDevice: "",
+  hdhomerunEpgUrls: [],
+  hdhomerunEpgRedacted: false,
+  tvheadendUrl: "",
+  tvheadendUsername: "",
+  tvheadendHasPassword: false,
+  ...p,
+});
+
+const forms = (p = {}) => ({
+  xtream: { host: "", username: "", password: "" },
+  m3u: { playlist: "", epgText: "", userAgent: "", epgTouched: false },
+  hdhr: { device: "", epgText: "", epgTouched: false },
+  tvh: { url: "", username: "", password: "" },
+  ...p,
+});
+
+test("the test checks what is typed, not what is saved", () => {
+  const typed = forms({
+    xtream: { host: " http://new.example:8080 ", username: " me ", password: "typed" },
+  });
+  assert.deepEqual(candidateFor("xtream", typed, account()), {
+    kind: "xtream",
+    host: "http://new.example:8080",
+    username: "me",
+    password: "typed",
+  });
+});
+
+test("a blank password is sent blank, to mean the one on file", () => {
+  const typed = forms({ xtream: { host: "http://h", username: "me", password: "" } });
+  assert.equal(candidateFor("xtream", typed, account()).password, "");
+  // Unless there is none on file, which nothing could test.
+  assert.ok("error" in candidateFor("xtream", typed, account({ hasPassword: false })));
+});
+
+test("the selected kind is tested, even when another is in use", () => {
+  const typed = forms({ m3u: { playlist: "/tv.m3u", epgText: "", userAgent: "", epgTouched: false } });
+  assert.deepEqual(candidateFor("m3u", typed, account()), {
+    kind: "m3u",
+    playlist: "/tv.m3u",
+    epgUrls: [],
+    userAgent: "",
+  });
+  const tuner = forms({ hdhr: { device: " 10.0.0.7 ", epgText: "", epgTouched: false } });
+  assert.deepEqual(candidateFor("hdhomerun", tuner, account()), {
+    kind: "hdhomerun",
+    device: "10.0.0.7",
+    epgUrls: [],
+  });
+  const server = forms({ tvh: { url: "http://tvh:9981", username: "", password: "" } });
+  assert.deepEqual(candidateFor("tvheadend", server, account()), {
+    kind: "tvheadend",
+    url: "http://tvh:9981",
+    username: "",
+    password: "",
+  });
+});
+
+test("a redacted playlist left alone is tested as the one on file", () => {
+  const a = account({
+    playlist: "http://p/get.php?username=<redacted>&password=<redacted>",
+    playlistRedacted: true,
+  });
+  const c = candidateFor("m3u", forms({ m3u: m3uFormFrom(a) }), a);
+  assert.equal(c.playlist, null);
+});
+
+test("an incomplete form says why rather than testing", () => {
+  for (const kind of ["xtream", "m3u", "hdhomerun", "tvheadend"]) {
+    const c = candidateFor(kind, forms(), account({ hasPassword: false }));
+    assert.ok("error" in c, kind);
+    assert.ok(c.error.length > 0, kind);
+  }
+  assert.deepEqual(planXtreamSave({ host: "h", username: " ", password: "x" }, { hasPassword: true }), {
+    error: "a username is required",
+  });
 });

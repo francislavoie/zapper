@@ -7,7 +7,9 @@ import {
   relativeTime,
   restingText,
   statusLine,
+  NO_ACCOUNT_MESSAGE,
 } from "../logic/toolbar.ts";
+import { readFileSync } from "node:fs";
 import {
   ACTIONS,
   ACTION_IDS,
@@ -62,6 +64,42 @@ test("a failure promotes the backend's reason and offers no false calm", () => {
   assert.equal(s.text, "server refused: 403");
   // A failure with nothing to say still says something.
   assert.equal(statusLine(sync({ phase: "failed" }), 0).text, "Sync failed");
+});
+
+test("a sync that went wrong offers to try again", () => {
+  assert.equal(statusLine(sync({ phase: "failed", message: "server refused: 403" }), 0).action, "retry");
+  assert.equal(statusLine(sync({ phase: "failed" }), 0).action, "retry");
+});
+
+test("no account offers to add one, not to retry", () => {
+  // The backend's message, as the sync publishes it. Retrying cannot help:
+  // nothing changes until there is an account to sync from.
+  const s = statusLine(
+    sync({ phase: "failed", message: "no account configured. Set one in Settings → Account." }),
+    0,
+  );
+  assert.equal(s.action, "account");
+  assert.equal(s.tone, "bad");
+  // Not the backend's sentence, which points at a menu the link now opens.
+  assert.ok(!/settings/i.test(s.text), s.text);
+});
+
+test("the no-account test matches what the backend actually says", () => {
+  // Tied to the text rather than trusted: rewording the Rust error without
+  // this would quietly bring "retry" back on a first run.
+  const rs = readFileSync(
+    new URL("../../src-tauri/src/catalog/credentials.rs", import.meta.url),
+    "utf8",
+  );
+  const said = rs.match(/fn load_account\(\)[\s\S]*?anyhow!\("([^"]+)"/);
+  assert.ok(said, "load_account's error was not found");
+  assert.ok(said[1].toLowerCase().startsWith(NO_ACCOUNT_MESSAGE), said[1]);
+});
+
+test("nothing wrong, nothing to click", () => {
+  for (const phase of ["idle", "categories", "channels", "epg"]) {
+    assert.equal(statusLine(sync({ phase }), 0).action, null, phase);
+  }
 });
 
 test("the resting line is never blank — it is the bar's whole content when idle", () => {

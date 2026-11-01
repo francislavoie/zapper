@@ -62,6 +62,9 @@ const SECTIONS = [
 
 type Section = (typeof SECTIONS)[number];
 
+const asSection = (page: string | undefined): Section | undefined =>
+  SECTIONS.find((s) => s === page);
+
 /** The line under each page's title: what is on it. */
 const SUMMARY: Record<Section, string> = {
   Account: "Where the channels and the guide come from.",
@@ -99,7 +102,14 @@ const WRITES: ReadonlySet<Section> = new Set(["Playback", "Subtitles", "Guide", 
 
 export function SettingsModal() {
   const dispatch = useDispatch();
-  const [section, setSection] = useState<Section>("Account");
+  // Account by default: it is the page with something to do on a first run.
+  // A caller that knows why Settings is being opened can name another.
+  const asked = useApp().settingsPage;
+  const [section, setSection] = useState<Section>(() => asSection(asked?.page) ?? "Account");
+  useEffect(() => {
+    const page = asSection(asked?.page);
+    if (page) setSection(page);
+  }, [asked]);
   const s = useSettings(true);
   const close = () => dispatch({ type: "settings", open: false });
   const bodyRef = useRef<HTMLDivElement | null>(null);

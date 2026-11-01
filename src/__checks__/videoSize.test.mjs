@@ -8,6 +8,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  VIDEO_GRIP_W,
+  VIDEO_INFO_MIN,
+  VIDEO_LIST_MIN,
   VIDEO_WIDTH_DEFAULT,
   VIDEO_WIDTH_MAX,
   VIDEO_WIDTH_MIN,
@@ -18,12 +21,76 @@ import {
   parseVideoWidth,
   widthAfterDrag,
 } from "../logic/videoSize.ts";
+import { readFileSync } from "node:fs";
 
-test("the picture can take most of the band", () => {
-  // The information beside it wraps rather than being crushed, so the
-  // ceiling is about leaving something rather than about leaving room for
-  // a particular layout.
-  assert.ok(VIDEO_WIDTH_MAX >= 60, "the picture cannot be made large enough to be worth it");
+const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+
+/** A declaration's value in the first top-level rule for `selector` that
+ *  sets it. */
+function declared(selector, property) {
+  const head = `\n${selector} {`;
+  for (let at = css.indexOf(head); at >= 0; at = css.indexOf(head, at + 1)) {
+    const body = css.slice(at, css.indexOf("}", at));
+    const m = body.match(new RegExp(`\\n\\s*${property}:\\s*([^;]+);`));
+    if (m) return m[1].trim();
+  }
+  assert.fail(`${selector} sets no ${property}`);
+}
+
+test("the stored width has no layout ceiling of its own", () => {
+  // The window decides how big the picture is drawn. A fixed maximum held a
+  // maximised picture well short of what the screen had room for.
+  assert.ok(VIDEO_WIDTH_MAX >= 200, `a ceiling of ${VIDEO_WIDTH_MAX}rem would cap big screens`);
+});
+
+test("the panel beside the picture keeps room for its widest column", () => {
+  // The facts column's basis is the width at which the measured line is
+  // never cut short; the panel adds a rem of padding either side.
+  const basis = Number.parseFloat(declared(".watch-col.facts", "flex").split(/\s+/)[2]);
+  const pad = Number.parseFloat(declared(".watch-info", "padding").split(/\s+/)[1]);
+  assert.ok(VIDEO_INFO_MIN >= basis + 2 * pad, `${VIDEO_INFO_MIN} < ${basis} + 2 × ${pad}`);
+  // And not so much that the picture stops being able to get big.
+  assert.ok(VIDEO_INFO_MIN <= 24, `${VIDEO_INFO_MIN}rem beside the picture is more than it needs`);
+});
+
+test("the handle's width is the one the stylesheet draws", () => {
+  assert.equal(declared(".watch-grip", "width"), `${VIDEO_GRIP_W}rem`);
+});
+
+test("a wide window lets the picture grow until the panel is at its minimum", () => {
+  // 2560×1600 at 100%: 160 × 97.6rem of stage. Tall enough that width is
+  // what decides, and far past the old fixed 72rem.
+  const room = videoRoomRem(160, 97.6);
+  // Down to the quarter rem the width moves in.
+  assert.equal(room, Math.floor((160 - VIDEO_INFO_MIN - VIDEO_GRIP_W) * 4) / 4);
+  assert.ok(room > 72);
+  assert.equal(fittedVideoWidth(200, room), room);
+});
+
+test("a short window lets the height decide, keeping the picture 16:9", () => {
+  // 1920×1080 maximised: 120 × 65.1rem of stage. The list's strip runs out
+  // before the panel's column does.
+  const room = videoRoomRem(120, 65.125);
+  assert.ok(Math.abs(room - ((65.125 - VIDEO_LIST_MIN) * 16) / 9) < 0.25, `room ${room}`);
+  assert.ok(120 - room - VIDEO_GRIP_W > VIDEO_INFO_MIN, "the width was the limit after all");
+  assert.ok(65.125 - (room * 9) / 16 >= VIDEO_LIST_MIN);
+});
+
+test("a big chosen size shrinks with the window and comes back when it widens", () => {
+  const chosen = 150;
+  const sizes = [
+    [160, 87.6],
+    [100, 60],
+    [70, 45],
+    [160, 87.6],
+  ];
+  const shown = sizes.map(([w, h]) => fittedVideoWidth(chosen, videoRoomRem(w, h)));
+  for (const [i, [w, h]] of sizes.entries()) {
+    assert.ok(w - shown[i] - VIDEO_GRIP_W >= VIDEO_INFO_MIN - 1e-9, `panel crushed at ${w}×${h}`);
+    assert.ok(h - (shown[i] * 9) / 16 >= VIDEO_LIST_MIN - 1e-9, `list crushed at ${w}×${h}`);
+  }
+  assert.ok(shown[1] < shown[0] && shown[2] < shown[1], `${shown}`);
+  assert.equal(shown[3], shown[0], "the size did not come back");
 });
 
 test("the default sits inside the bounds", () => {
@@ -116,9 +183,9 @@ test("room is quantised down, so what is drawn always fits", () => {
 });
 
 test("a big window allows a big picture", () => {
-  // 1920x1080 maximised at 16px/rem: about 120 x 65rem of stage. The old
-  // half-height cap held the picture to ~58rem here; the band may now take
-  // all but the list's strip, up to the overall maximum.
-  assert.ok(videoRoomRem(120, 65) >= VIDEO_WIDTH_MAX, `room ${videoRoomRem(120, 65)}`);
-  assert.equal(fittedVideoWidth(70, videoRoomRem(120, 65)), 70);
+  // 1920x1080 maximised at 16px/rem: about 120 x 65rem of stage. A
+  // half-height cap held the picture to ~58rem here, and a fixed maximum to
+  // 72rem; the band may take all but the list's strip.
+  assert.ok(videoRoomRem(120, 65) > 90, `room ${videoRoomRem(120, 65)}`);
+  assert.equal(fittedVideoWidth(90, videoRoomRem(120, 65)), 90);
 });

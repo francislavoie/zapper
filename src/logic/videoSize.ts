@@ -20,14 +20,15 @@ export const VIDEO_WIDTH_DEFAULT = 22.25;
  *  the "no picture" legend no longer fits inside it. */
 export const VIDEO_WIDTH_MIN = 14;
 
-/** Above this the docked picture stops being docked and starts being the
- *  layout.
+/** A sanity bound on a stored or dragged width, not a layout limit.
  *
- *  Generous, because the information beside it wraps rather than being
- *  crushed: the picture may take most of the band and the facts rearrange
- *  into fewer columns. What it may not do is leave nothing, which is what
- *  this bound is for. */
-export const VIDEO_WIDTH_MAX = 72;
+ *  How big the picture may be drawn is the window's business — see
+ *  `videoRoomRem`, which leaves the information beside it its column and the
+ *  list below it its rows, however large the window. A fixed ceiling here
+ *  held a maximised picture well short of that on any large screen. This
+ *  only keeps nonsense out of storage: 240rem is 3840 pixels at 100%, wider
+ *  than any picture a window could draw. */
+export const VIDEO_WIDTH_MAX = 240;
 
 export function clampVideoWidth(rem: number): number {
   if (!Number.isFinite(rem)) return VIDEO_WIDTH_DEFAULT;
@@ -67,10 +68,25 @@ export function widthAfterDrag(
  *  picture, which is the whole reason to drag it bigger. */
 export const VIDEO_LIST_MIN = 12;
 
-/** What has to stay beside the picture for the channel's name and programme
- *  to be readable, in rem. The column wraps, so this is its floor, not its
- *  comfortable width. */
-export const VIDEO_INFO_MIN = 14;
+/** What has to stay beside the picture for the information in it to read,
+ *  in rem: the picture grows until the panel would be narrower than this.
+ *
+ *  The panel's columns wrap into one as it narrows, so what has to fit is
+ *  its widest column at the width it was designed for: the facts column at
+ *  its full 18.75rem basis, the width at which the measured line ("1920×1080
+ *  · 59.94 fps · hevc") is never cut short — the one line in the panel that
+ *  must not be. Plus the panel's 1rem of padding either side, and a little
+ *  over for its border and for a name or programme title longer than the
+ *  line it sits beside. At this width the name keeps its Full screen and
+ *  Stop buttons on its own line and the now/next titles take a line each.
+ *  The picture is big by then: in a maximised 1920×1080 window the list's
+ *  strip below runs out first, with the picture about 94rem wide. */
+export const VIDEO_INFO_MIN = 22;
+
+/** The resize handle between the panel and the picture, in rem. Mirrors
+ *  `.watch-grip`'s width in styles.css, which the checks tie it to: it takes
+ *  its share of the band whatever size the picture is. */
+export const VIDEO_GRIP_W = 0.875;
 
 /** The widest picture this stage has room for, in rem, or `Infinity` when the
  *  stage has not been measured yet.
@@ -83,7 +99,10 @@ export const VIDEO_INFO_MIN = 14;
 export function videoRoomRem(stageWidthRem: number, stageHeightRem: number): number {
   if (!(stageWidthRem > 0) || !(stageHeightRem > 0)) return Infinity;
   const byHeight = ((stageHeightRem - VIDEO_LIST_MIN) * 16) / 9;
-  const byWidth = stageWidthRem - VIDEO_INFO_MIN;
+  // The picture keeps 16:9, so whichever of these is the tighter decides it:
+  // the band may not push the list under its strip, and the picture may not
+  // squeeze the panel beside it below its minimum.
+  const byWidth = stageWidthRem - VIDEO_INFO_MIN - VIDEO_GRIP_W;
   // Down to the quarter: rounding up could hand back a width that does not
   // fit, and a value that moves in quarter steps re-renders only when it
   // has actually changed.

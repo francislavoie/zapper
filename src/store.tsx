@@ -38,6 +38,7 @@ import { loadVideoWidth } from "./videoSize";
 import { loadRailWidth } from "./railWidth";
 import { clampRailWidth } from "./logic/railWidth";
 import { clampVideoWidth } from "./logic/videoSize";
+import { syncChangedCatalogue } from "./logic/catalogueRefresh";
 import { setHidden, setPinned, type CategorySort } from "./logic/categoryOrder";
 import { loadCategoryHidden, loadCategoryPins, loadCategorySort } from "./categoryPrefs";
 import type { ZapView } from "./logic/zap";
@@ -177,6 +178,10 @@ export interface State {
   query: string;
   paletteOpen: boolean;
   settingsOpen: boolean;
+  /** The page Settings was asked to show, when it was asked for one. A new
+   *  object per request, so asking again while it is open — after wandering
+   *  to another page — goes back to it. */
+  settingsPage: { page: string } | null;
   /** The toolbar's hamburger. Here rather than inside the component because
    *  Escape has to unwind it in the same single-press order as everything
    *  else, and that ordering lives in one place. */
@@ -187,6 +192,11 @@ export interface State {
   update: UpdateStatusDto;
   updateOpen: boolean;
   sync: SyncStatusDto;
+  /** Counts the syncs that may have changed the catalogue under the lists
+   *  that show it. Everything that keeps catalogue data — the categories,
+   *  the channel pages — reads again when it moves; see
+   *  logic/catalogueRefresh.ts. */
+  catalogueRev: number;
   player: PlayerStateDto;
   /** Optimistic: set the instant a row is clicked so the row highlights before
    *  the backend has opened anything. */
@@ -343,11 +353,13 @@ export const initialState: State = {
   query: "",
   paletteOpen: false,
   settingsOpen: false,
+  settingsPage: null,
   menuOpen: false,
   aboutOpen: false,
   update: initialUpdate,
   updateOpen: false,
   sync: initialSync,
+  catalogueRev: 0,
   player: initialPlayer,
   pendingStreamId: null,
   nowChannel: null,
@@ -406,7 +418,8 @@ export type Action =
   | { type: "stacked"; on: boolean }
   | { type: "query"; text: string }
   | { type: "palette"; open: boolean }
-  | { type: "settings"; open: boolean }
+  /** `page` opens Settings at that page; see `settingsPage`. */
+  | { type: "settings"; open: boolean; page?: string }
   | { type: "menu"; open: boolean }
   | { type: "about"; open: boolean }
   | { type: "update"; value: UpdateStatusDto }
@@ -587,6 +600,7 @@ export function reducer(state: State, action: Action): State {
       return {
         ...state,
         settingsOpen: action.open,
+        settingsPage: action.open && action.page ? { page: action.page } : null,
         menuOpen: action.open ? false : state.menuOpen,
       };
     case "menu":
@@ -619,7 +633,17 @@ export function reducer(state: State, action: Action): State {
         categoryOptions: null,
       };
     case "sync":
-      return { ...state, sync: action.value };
+      return {
+        ...state,
+        sync: action.value,
+        // Not for the first status after launch: the placeholder it replaces
+        // describes nothing, and the lists are loading for the first time
+        // anyway.
+        catalogueRev:
+          state.sync !== initialSync && syncChangedCatalogue(state.sync, action.value)
+            ? state.catalogueRev + 1
+            : state.catalogueRev,
+      };
     case "channelQuality":
       return {
         ...state,
