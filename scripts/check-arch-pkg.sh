@@ -8,7 +8,8 @@
 #   - /usr/lib/zapper/install-kind says arch;
 #   - the license notices are in /usr/share/licenses/zapper/ and not empty;
 #   - the desktop entry validates;
-#   - ldd finds every library of the binary (and of any library the package bundles);
+#   - ldd finds every library of both programs (zapper, zapper-server) and of the libraries the
+#     package bundles;
 #   - the app starts headless (xvfb-run, as a normal user, muted, with a scratch home) and is
 #     still running after 20 s, without a missing library.
 # The container is removed afterwards (--rm, and on interrupt); no other image or container is
@@ -52,7 +53,7 @@ desktop-file-validate /usr/share/applications/zapper.desktop || fail "desktop-fi
 step "ldd"
 missing=0
 shopt -s nullglob
-for f in /usr/bin/zapper /usr/lib/zapper/*.so*; do
+for f in /usr/bin/zapper /usr/bin/zapper-server /usr/lib/zapper/*.so*; do
   out=$(ldd "$f"); n=$(grep -c "not found" <<<"$out" || true)
   echo "$f: $(grep -c "=>" <<<"$out") libraries, $n not found"
   [ "$n" = 0 ] || { grep "not found" <<<"$out"; missing=1; }

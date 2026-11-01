@@ -133,7 +133,11 @@ impl Player {
             init.set_property("user-agent", "VLC/3.0.20 LibVLC/3.0.20".to_owned())?;
             init.set_property("network-timeout", 8i64)?;
             init.set_property("stream-lavf-o", NO_RECONNECT.to_owned())?;
-            init.set_property("ytdl", false)?;
+            // No youtube-dl lookups on a stream URL. The option exists only
+            // where mpv has Lua, which runs the hook; zapper's own libmpv is
+            // built without either, so there it is already off and setting
+            // it fails.
+            let _ = init.set_property("ytdl", false);
             video_out(&init)?;
             Ok(())
         })

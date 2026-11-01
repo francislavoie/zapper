@@ -19,6 +19,7 @@ dist-app/
 # browser-automation artifacts: screenshots and console logs, not source
 .playwright-mcp/
 
-# libmpv for Windows builds (DLL, import library, headers): fetched by
-# tools/fetch-libmpv.ps1, never committed. See docs/windows.md.
+# The bundled libmpv, as scripts/fetch-libmpv.sh (tools/fetch-libmpv.ps1 on Windows) unpacks
+# it, and `just build-libmpv`'s build trees: never committed. See docs/licensing.md.
 /src-tauri/lib/
+/target-libmpv/

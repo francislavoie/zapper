@@ -2,66 +2,60 @@ zapper: mpv and FFmpeg
 ======================
 
 zapper plays video with libmpv, the library form of the mpv media player,
-which decodes through FFmpeg. Neither is part of zapper's own code (MIT):
-they are separate libraries, each under its own license, loaded by zapper
-when it starts. Whether a zapper package contains them depends on the
-platform.
+which decodes through FFmpeg; its recording service, zapper-server, uses
+FFmpeg's libraries directly. Neither is part of zapper's own code (MIT):
+they are separate shared libraries, under their own license, which the two
+programs load when they start.
 
   mpv     https://mpv.io
-          source: https://github.com/mpv-player/mpv
   FFmpeg  https://ffmpeg.org
-          source: https://ffmpeg.org/download.html#get-sources
 
-Both are free software under the GNU GPL or LGPL. mpv is GPL-2.0-or-later
-(LGPL-2.1-or-later when built without its GPL parts); FFmpeg is
-LGPL-2.1-or-later (GPL-2.0-or-later, or GPL-3.0-or-later, when built with its
-GPL or version-3 parts). Which applies is decided by how your copy was built.
+Every zapper package contains those libraries, built by the zapper project
+from mpv's and FFmpeg's released source with nothing under the GPL: mpv
+configured with -Dgpl=false, FFmpeg without --enable-gpl, --enable-version3
+or --enable-nonfree. They are therefore under the GNU Lesser General Public
+License, version 2.1 or later.
 
+  Linux (.deb, .rpm, Arch)  /usr/lib/zapper/: libmpv.so.2, and FFmpeg's
+                            libavcodec, libavformat, libavutil, libavfilter,
+                            libavdevice, libswscale and libswresample
+  Windows                   libmpv-2.dll and FFmpeg's avcodec-*.dll and the
+                            rest, beside zapper.exe
+  macOS                     zapper.app/Contents/Frameworks/
 
-Linux (.deb and .rpm)
----------------------
+A few other libraries are built into them (libplacebo, libass, dav1d and,
+depending on the platform, FreeType, HarfBuzz, FriBidi, zlib and the shader
+compilers Direct3D needs), each under its own license, all of them
+LGPL-compatible. THIRD-PARTY-NOTICES-libmpv.txt beside this file lists them
+with their versions and licenses, and carries every license's full text,
+the LGPL's among them.
 
-Not included. The packages depend on your distribution's libmpv (libmpv2 or
-libmpv1 on Debian and Ubuntu, mpv-libs on Fedora), which your package manager
-installs and updates, with FFmpeg's libraries. Their licenses are installed
-with them (/usr/share/doc/libmpv2/copyright on Debian and Ubuntu), and their
-source is your distribution's source package (`apt source mpv`,
-`dnf download --source mpv`).
+The source
+----------
 
+The exact source the library was built from, every tarball, is published
+on zapper's GitHub releases page, in the libmpv release named in
+THIRD-PARTY-NOTICES-libmpv.txt (tagged libmpv-<mpv version>-ffmpeg-<FFmpeg
+version>-r<n>):
 
-Windows (installer and MSI)
----------------------------
+  https://github.com/francislavoie/zapper/releases
 
-Included, as libmpv-2.dll beside zapper.exe: the `mpv-dev-x86_64` build
-published by the mpv-winbuild-cmake project (the builds mpv's own website
-points Windows users to), unmodified:
+and the build script that made it is in zapper's own source, at
+https://github.com/francislavoie/zapper (scripts/build-libmpv.sh, with the
+list of sources in packaging/libmpv/sources.txt).
 
-  https://github.com/shinchiro/mpv-winbuild-cmake/releases
+Replacing it
+------------
 
-That build compiles mpv with its GPL parts (its default) and FFmpeg with
---enable-gpl and --enable-version3, and links into the DLL the libraries they
-use, each under its own license: among them libass, FreeType, HarfBuzz,
-FriBidi, dav1d, libvpx, libaom, SVT-AV1, x264, x265, libplacebo, LittleCMS,
-OpenSSL, LuaJIT, MuJS, libarchive, libbluray, libdvdnav, Rubber Band, uchardet
-and zimg. The DLL as a whole is therefore under the GNU General Public
-License, version 3 or later; its text is in GPL-3.0.txt beside this file.
+The LGPL lets you use modified versions of these libraries instead. zapper
+and zapper-server load whichever ones sit in the places listed above (libmpv
+version 2 of its API, FFmpeg's of the same major versions), so replacing
+those files with your own builds is all it takes.
 
-The source of libmpv-2.dll is that of mpv, FFmpeg and the libraries it
-contains. The build recipe that made it, with each library's source address,
-is the mpv-winbuild-cmake repository at the commit of the release (the
-release's tag is its build date, and the archive's name,
-mpv-dev-x86_64-<date>-git-<commit>.7z, carries the mpv commit it was built
-from). You can replace libmpv-2.dll with any other build of libmpv 2 (from
-another mpv-winbuild-cmake release, or one you build yourself): zapper loads
-whichever is beside zapper.exe.
-
-
-macOS
------
-
-Not included: the macOS port is unfinished, and its builds use the libmpv
-installed on the Mac (Homebrew's mpv, for instance), under the terms that copy
-came with.
+On Linux the library takes a few ordinary libraries from your system
+(audio, VA-API, Wayland, EGL, OpenSSL, FreeType, HarfBuzz, FriBidi,
+Fontconfig): the package depends on them, and your distribution installs
+and updates them under their own licenses.
 
 
 zapper reaches libmpv through the libmpv2 and libmpv2-sys Rust crates

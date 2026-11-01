@@ -182,7 +182,7 @@ when surface, mpv or rect behaviour changed — not on every edit.
 
 - `install-desktop.sh`: a per-user desktop entry and icons for a build run
   from this tree (README-install.md explains when, and when not, to use it).
-- `fetch-libmpv.ps1`: libmpv and its import library for Windows builds
-  (docs/windows.md).
+- `fetch-libmpv.ps1`: the bundled libmpv and its import library for Windows
+  builds (docs/windows.md); `scripts/fetch-libmpv.sh` elsewhere.
 - `licenses.mjs`: the Vite plugin that writes the interface's third-party
   notices (docs/licensing.md).

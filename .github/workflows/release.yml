@@ -146,12 +146,14 @@ jobs:
           fi
 
       # The Linux build dependencies (README.md). The packages' Depends are fixed in tauri.conf.json, not
-      # derived from these, so a package built here installs wherever its Depends resolve.
+      # derived from these, so a package built here installs wherever its Depends resolve. No
+      # libmpv: the packages carry zapper's own LGPL build, which `just package` fetches
+      # (scripts/fetch-libmpv.sh, the archive packaging/libmpv/manifest.json names).
       - name: System packages
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q --no-install-recommends \
-            libwebkit2gtk-4.1-dev libgtk-3-dev libmpv-dev libsoup-3.0-dev \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev \
             libjavascriptcoregtk-4.1-dev librsvg2-dev libxdo-dev libayatana-appindicator3-dev \
             libepoxy-dev pkg-config jq dpkg-dev desktop-file-utils zstd
 
@@ -179,10 +181,11 @@ jobs:
           cache: npm
       - run: npm ci
 
-      # `just package`: the frontend build, the release binary, the .deb and the .rpm from it,
-      # then scripts/fix-deb.sh (a pre-release's Version in Debian's form),
-      # scripts/check-deb.sh (name, Depends, /usr/bin, the install-kind marker, the desktop
-      # entry) and scripts/package-arch.sh (the Arch package, from the .deb).
+      # `just package`: the bundled libmpv (scripts/fetch-libmpv.sh), the frontend build, the
+      # release binary, the .deb and the .rpm from it, then scripts/fix-deb.sh (a pre-release's
+      # Version in Debian's form), scripts/check-deb.sh (name, Depends, /usr/bin, the bundled
+      # libmpv and the binary's way to it, the install-kind marker, the desktop entry) and
+      # scripts/package-arch.sh (the Arch package, from the .deb).
       # ZAPPER_RELEASE_VERSION must equal tauri.conf.json's version.
       - name: Build the packages
         env:
@@ -251,15 +254,16 @@ jobs:
           cache: npm
       - run: npm ci
 
-      # libmpv-2.dll and the mpv.lib import library the link needs, into src-tauri/lib/windows
-      # (docs/windows.md). Pinned, so a release does not change libmpv behind anyone's back:
-      # move the tag forward on purpose.
+      # zapper's LGPL libmpv-2.dll, the archive packaging/libmpv/manifest.json names, and the
+      # mpv.lib import library the link needs, into src-tauri/lib/windows-x86_64
+      # (docs/windows.md). The manifest pins it: a release changes libmpv only when that file
+      # does.
       - name: Fetch libmpv
-        run: ./tools/fetch-libmpv.ps1 -Tag 20261101
+        run: ./tools/fetch-libmpv.ps1
 
       # The license notices the installers carry in licenses\ (docs/licensing.md): the Rust
       # crates' from Windows' graph, in Git for Windows' bash. The UI build `tauri build` runs
-      # writes the interface's, and the GPL's text for libmpv-2.dll.
+      # writes the interface's, and copies in libmpv's from the fetched archive.
       - uses: taiki-e/install-action@183e4297cca2404691e9380e1307288dced5c82a # v2.87.25
         with:
           tool: cargo-about@${{ env.CARGO_ABOUT_VERSION }}
@@ -268,6 +272,13 @@ jobs:
         env:
           PYTHON: python
         run: scripts/licenses.sh
+
+      # zapper-server, the recording service, built against the same FFmpeg; the installers put
+      # it beside zapper.exe (packaging/windows/installers.conf.json).
+      - name: Build zapper-server
+        run: |
+          $env:CARGO_BUILD_JOBS = "$env:NUMBER_OF_PROCESSORS"
+          cargo build --release --manifest-path src-tauri/Cargo.toml --no-default-features --features server --bin zapper-server
 
       # The NSIS installer and the MSI, with the install-kind markers (packaging/windows/).
       - name: Build the installers
@@ -327,6 +338,11 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci
+
+      # zapper's LGPL libmpv.2.dylib, the archive packaging/libmpv/manifest.json names, into
+      # src-tauri/lib/macos-arm64; the bundle carries it in Contents/Frameworks.
+      - name: Fetch libmpv
+        run: scripts/fetch-libmpv.sh macos-arm64
 
       # The license notices zapper.app carries in Contents/Resources/licenses (docs/licensing.md),
       # the Rust crates' from this Mac's graph.

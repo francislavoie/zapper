@@ -14,50 +14,60 @@ what is not there yet.
 - **WebView2 runtime**: part of Windows 11, and of Windows 10 since 2021.
 - **libmpv**, fetched by a script (next section). Not in the repository.
 
-## libmpv
+## libmpv and FFmpeg
 
-zapper links libmpv dynamically. libmpv2-sys asks the linker for `mpv`, which
-MSVC resolves to `mpv.lib`, an *import library* for `libmpv-2.dll`. Neither
-file is committed (`src-tauri/lib/` is ignored): the DLL is about 120 MB of
-someone else's build, and the `.lib` is derived from it.
+zapper links libmpv dynamically, and zapper-server (the recording service,
+docs/recording.md) FFmpeg's libavformat, libavcodec and libavutil: zapper's
+own LGPL build of both (docs/licensing.md, "mpv and FFmpeg"), published as a
+pre-release of this repository and named in `packaging/libmpv/manifest.json`.
+libmpv2-sys asks the linker for `mpv`, and the remuxer for `avformat` and
+the rest, which MSVC resolves to *import libraries* (`mpv.lib`,
+`avformat.lib`, ...) for the DLLs. None of it is committed (`src-tauri/lib/`
+is ignored).
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\fetch-libmpv.ps1
 ```
 
-That downloads the newest `mpv-dev-x86_64` build from
-[shinchiro/mpv-winbuild-cmake](https://github.com/shinchiro/mpv-winbuild-cmake/releases)
-(the build mpv's own site points to), checks it against the SHA-256 GitHub
-records for the asset, and leaves in `src-tauri\lib\windows\`:
+That downloads the manifest's `libmpv-windows-x86_64.zip`, checks it against
+the manifest's SHA-256, and leaves in `src-tauri\lib\windows-x86_64\`:
 
-| File | What it is |
+| Path | What it is |
 |---|---|
-| `libmpv-2.dll` | libmpv itself |
-| `mpv.lib` | the import library the linker uses |
-| `mpv.def` | the export list `mpv.lib` was made from |
-| `include\mpv\` | the C headers, for reference |
-| `VERSION` | which release this is |
+| `runtime\` | `libmpv-2.dll` and FFmpeg's DLLs (`avcodec-62.dll`, `avformat-62.dll`, ...): what ships |
+| `link\*.lib` | the import libraries the linker uses, made by the script from the `.def` export lists beside them |
+| `link\*.dll.a` | MinGW's import libraries, unused by MSVC |
+| `include\` | mpv's and FFmpeg's C headers (the remuxer compiles against FFmpeg's) |
+| `THIRD-PARTY-NOTICES-libmpv.txt` | what is inside the DLLs, and every license's text |
+| `BUILDINFO.txt` | the sources and configuration they were built from |
 
-`-Tag 20261101` pins a release instead of taking the newest. It needs 7-Zip
-or Windows' own `tar` (Windows 10 1803 and later) to unpack the archive, and
-finds `lib.exe` through `vswhere`. Not the `-v3` build: that one requires
-AVX2 and dies with an illegal instruction on older CPUs.
+It finds `lib.exe` through `vswhere`. `-Archive <zip>` takes a zip you built
+yourself instead of downloading (`scripts/build-libmpv.sh windows-x86_64`,
+cross-compiled on Linux with MinGW-w64, or natively in an MSYS2 MINGW64
+shell).
 
-To do it by hand instead: unpack `mpv-dev-x86_64-*.7z` into
-`src-tauri\lib\windows\`, then from a "x64 Native Tools Command Prompt":
+To make an import library by hand instead, from a "x64 Native Tools Command
+Prompt" in `link\` (each `.def` names its DLL):
 
 ```bat
-cd src-tauri\lib\windows
-lib /def:mpv.def /name:libmpv-2.dll /out:mpv.lib /machine:x64
+lib /def:mpv.def /out:mpv.lib /machine:x64
 ```
 
-(If the archive has no `mpv.def`, `dumpbin /exports libmpv-2.dll` lists the
-`mpv_*` names to put in one under an `EXPORTS` line.)
+`build.rs` adds `link\` to the link path and copies `runtime\` beside the
+executable it builds, so `cargo run`, `npm run app` and a debug
+`zapper-server.exe` find the DLLs without PATH changes. Installers carry
+them as bundle resources (`src-tauri/tauri.windows.conf.json`), installed
+beside `zapper.exe` with `zapper-server.exe`
+(`packaging/windows/installers.conf.json`), and their notices in
+`licenses\`.
 
-`build.rs` adds `src-tauri\lib\windows` to the link path and copies
-`libmpv-2.dll` beside the executable it builds, so `cargo run` and
-`npm run app` find it without PATH changes. Installers carry it as a bundle
-resource (`src-tauri/tauri.windows.conf.json`), installed beside `zapper.exe`.
+The DLLs are built with Direct3D 11 output (shaderc and SPIRV-Cross linked
+into libmpv), D3D11VA and DXVA2 decoding and SChannel for HTTPS, and need
+nothing but Windows' own DLLs and each other. Checked so far headless, on
+Windows: playback through libmpv (D3D11VA copy-back, HLS over HTTPS, the
+compressor's filters) and a recording by zapper-server through the same
+FFmpeg. Not yet: video on screen through Direct3D 11, and installing the
+service (Settings → Recording says "not yet" on Windows).
 
 ## Building and running
 

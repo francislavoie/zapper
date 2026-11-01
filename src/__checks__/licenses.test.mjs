@@ -76,11 +76,19 @@ test("every notice the build can write has a label in the About list, and every 
   assert.deepEqual([...written].sort(), Object.keys(NOTICE_LABELS).sort());
 });
 
-test("the GPL's text is a Windows build's alone: the platform whose installers carry libmpv-2.dll", () => {
-  assert.ok(noticeFiles({ platform: "win32" }).some((f) => f.name === "GPL-3.0.txt"));
-  for (const platform of ["linux", "darwin"]) {
-    assert.ok(!noticeFiles({ platform }).some((f) => f.name === "GPL-3.0.txt"), platform);
+test("libmpv's notices are this platform's archive's, and nothing ships the GPL's text", () => {
+  for (const platform of ["linux", "win32", "darwin"]) {
+    assert.ok(!noticeFiles({ platform }).some((f) => /GPL/.test(f.name)), platform);
   }
+  const libmpv = (platform, arch) =>
+    noticeFiles({ platform, arch }).find((f) => f.name === "THIRD-PARTY-NOTICES-libmpv.txt").path;
+  assert.equal(libmpv("linux", "x64"), "src-tauri/lib/linux-x86_64/THIRD-PARTY-NOTICES-libmpv.txt");
+  assert.equal(libmpv("win32", "x64"), "src-tauri/lib/windows-x86_64/THIRD-PARTY-NOTICES-libmpv.txt");
+  assert.equal(libmpv("darwin", "arm64"), "src-tauri/lib/macos-arm64/THIRD-PARTY-NOTICES-libmpv.txt");
+  assert.equal(
+    noticeFiles({ libmpvDir: "/m", platform: "linux" }).find((f) => f.name === "THIRD-PARTY-NOTICES-libmpv.txt").path,
+    "/m/THIRD-PARTY-NOTICES-libmpv.txt",
+  );
   assert.equal(
     noticeFiles({ licensesDir: "/x", platform: "linux" }).find((f) => f.name === "THIRD-PARTY-NOTICES-rust.txt").path,
     "/x/THIRD-PARTY-NOTICES-rust.txt",
@@ -110,7 +118,13 @@ test("a missing notice answered with the app's page is recognised, not shown as 
 // Each package carries every notice that applies to it, from where the build leaves it.
 test("the .deb, the .rpm, the Windows installers and the macOS app all carry the notices", () => {
   const conf = JSON.parse(read("src-tauri/tauri.conf.json"));
-  const everywhere = ["LICENSE", "MPV-FFMPEG-NOTICE.txt", "THIRD-PARTY-NOTICES-rust.txt", "THIRD-PARTY-NOTICES-ui.txt"];
+  const everywhere = [
+    "LICENSE",
+    "MPV-FFMPEG-NOTICE.txt",
+    "THIRD-PARTY-NOTICES-libmpv.txt",
+    "THIRD-PARTY-NOTICES-rust.txt",
+    "THIRD-PARTY-NOTICES-ui.txt",
+  ];
   const deb = conf.bundle.linux.deb.files;
   for (const f of [...everywhere, "copyright"]) assert.ok(deb[`/usr/share/doc/zapper/${f}`], `.deb: ${f}`);
   const rpm = conf.bundle.linux.rpm.files;
@@ -118,15 +132,42 @@ test("the .deb, the .rpm, the Windows installers and the macOS app all carry the
 
   const resources = (p) => Object.values(JSON.parse(read(p)).bundle.resources);
   const win = resources("packaging/windows/installers.conf.json");
-  for (const f of ["LICENSE.txt", "MPV-FFMPEG-NOTICE.txt", "GPL-3.0.txt", "THIRD-PARTY-NOTICES-rust.txt", "THIRD-PARTY-NOTICES-ui.txt"]) {
-    assert.ok(win.includes(`licenses/${f}`), `Windows: ${f}`);
-  }
+  const txt = ["LICENSE.txt", "MPV-FFMPEG-NOTICE.txt", "THIRD-PARTY-NOTICES-libmpv.txt", "THIRD-PARTY-NOTICES-rust.txt", "THIRD-PARTY-NOTICES-ui.txt"];
+  for (const f of txt) assert.ok(win.includes(`licenses/${f}`), `Windows: ${f}`);
   const mac = resources("packaging/macos/dmg.conf.json");
-  for (const f of ["LICENSE.txt", "MPV-FFMPEG-NOTICE.txt", "THIRD-PARTY-NOTICES-rust.txt", "THIRD-PARTY-NOTICES-ui.txt"]) {
-    assert.ok(mac.includes(`licenses/${f}`), `macOS: ${f}`);
+  for (const f of txt) assert.ok(mac.includes(`licenses/${f}`), `macOS: ${f}`);
+});
+
+// The libmpv each package carries is the one scripts/fetch-libmpv.sh unpacked (the LGPL build),
+// never the distribution's.
+test("every package carries the bundled libmpv and FFmpeg, and zapper-server, and none depends on the system's", () => {
+  // The same libraries everywhere: libmpv, and FFmpeg's seven, each under its platform's name.
+  const ffmpeg = ["avutil", "avcodec", "avformat", "avfilter", "avdevice", "swscale", "swresample"];
+  const conf = JSON.parse(read("src-tauri/tauri.conf.json"));
+  const { deb, rpm } = conf.bundle.linux;
+  for (const files of [deb.files, rpm.files]) {
+    const libs = Object.keys(files).filter((k) => k.startsWith("/usr/lib/zapper/lib"));
+    assert.deepEqual(
+      libs.map((k) => k.replace(/^\/usr\/lib\/zapper\/lib(.*?)\.so\.\d+$/, "$1")).sort(),
+      ["mpv", ...ffmpeg].sort(),
+    );
+    for (const k of libs) assert.equal(files[k], `lib/linux-x86_64/runtime/${k.slice("/usr/lib/zapper/".length)}`);
+    assert.equal(files["/usr/bin/zapper-server"], "target/release/zapper-server");
   }
-  // The DLL is what the GPL's text is for; it ships beside the notices.
-  assert.ok(Object.values(JSON.parse(read("src-tauri/tauri.windows.conf.json")).bundle.resources).includes("libmpv-2.dll"));
+  for (const d of [...deb.depends, ...rpm.depends]) assert.doesNotMatch(d, /mpv|libav|libsw/, d);
+  const win = JSON.parse(read("src-tauri/tauri.windows.conf.json")).bundle.resources;
+  assert.deepEqual(
+    Object.values(win).map((n) => n.replace(/^(?:lib)?(.*?)-\d+\.dll$/, "$1")).sort(),
+    ["mpv", ...ffmpeg].sort(),
+  );
+  for (const [src, dst] of Object.entries(win)) assert.equal(src, `lib/windows-x86_64/runtime/${dst}`);
+  const installers = JSON.parse(read("packaging/windows/installers.conf.json")).bundle.resources;
+  assert.equal(installers["target/release/zapper-server.exe"], "zapper-server.exe");
+  const mac = JSON.parse(read("packaging/macos/dmg.conf.json")).bundle.macOS.frameworks;
+  assert.deepEqual(
+    mac.map((p) => p.replace(/^lib\/macos-arm64\/runtime\/lib(.*?)\.\d+\.dylib$/, "$1")).sort(),
+    ["mpv", ...ffmpeg].sort(),
+  );
 });
 
 test("zapper is MIT everywhere it says so", () => {

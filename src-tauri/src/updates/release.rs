@@ -206,6 +206,16 @@ mod tests {
     }
 
     #[test]
+    fn the_libmpv_release_is_never_an_update() {
+        // .github/workflows/libmpv.yml publishes the bundled libmpv in the same repository, as
+        // a pre-release tagged libmpv-…: not a version, so not even an rc build takes it.
+        let list = [release("libmpv-0.41.0-ffmpeg-8.1.3-r1", true, false), release("v0.3.0", false, false)];
+        assert_eq!(pick(&list, "0.2.0").as_deref(), Some("v0.3.0"));
+        assert_eq!(pick(&list, "0.4.0-rc.1"), None);
+        assert_eq!(pick(&[release("libmpv-0.41.0-ffmpeg-8.1.3-r1", false, false)], "0.0.1-rc.1"), None);
+    }
+
+    #[test]
     fn pre_releases_only_reach_pre_release_builds() {
         let list = [release("v0.3.0", false, false), release("v0.4.0-rc.1", true, false)];
         assert_eq!(pick(&list, "0.2.0").as_deref(), Some("v0.3.0"));

@@ -64,6 +64,7 @@ DEB_TO_ARCH = [
     ("libva2", ["libva"]),
     ("libva-drm2", ["libva"]),
     ("libva-x11-2", ["libva"]),
+    ("libva-wayland2", ["libva"]),
     ("libvdpau1", ["libvdpau"]),
     ("libdrm2", ["libdrm"]),
     ("libgbm1", ["mesa"]),

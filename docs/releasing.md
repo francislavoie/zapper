@@ -224,19 +224,26 @@ that starts with a letter before the release (`0.2.0rc.1` < `0.2.0`) but one tha
    `SHA256SUMS`, attests the packages' build provenance (public repositories, or
    `ZAPPER_ATTEST`), and creates the draft release, or updates it on a re-run.
 
-The packages' `Depends` (`.deb`) and `Requires` (`.rpm`) are fixed in tauri.conf.json, not
-derived from the runner: `libmpv2 | libmpv1`, `libwebkit2gtk-4.1-0`, `libgtk-3-0` for the
-`.deb`; the same libraries by soname for the `.rpm` (`libmpv.so.2()(64bit)` and so on), which
-resolves on Fedora and openSUSE alike. The Arch package's `depend`s are the `.deb`'s, mapped to
-Arch's package names through the table in `scripts/arch-pkg.py` (`mpv`, `webkit2gtk-4.1`,
-`gtk3`): a Debian name the table doesn't know fails the build, and a library the package carries
-itself is left out. The binary itself links the runner's glibc, so the
+The packages carry zapper's own libmpv and FFmpeg in `/usr/lib/zapper/` (docs/licensing.md,
+"mpv and FFmpeg"; `just package` fetches the build `packaging/libmpv/manifest.json` names), so
+none depends on the distribution's, and the recording service as `/usr/bin/zapper-server`
+(docs/recording.md), built by `just package` against that FFmpeg; the Windows installers put
+`zapper-server.exe` beside `zapper.exe`. Their `Depends` (`.deb`) and `Requires` (`.rpm`) are fixed in
+tauri.conf.json, not derived from the runner: `libwebkit2gtk-4.1-0`, `libgtk-3-0` and the system
+libraries that libmpv needs (VA-API, Wayland, EGL, the audio libraries, OpenSSL 3 and the text
+stack) for the `.deb`; the same libraries by soname for the `.rpm` (`libva.so.2()(64bit)` and so
+on), which resolves on Fedora and openSUSE alike. `scripts/check-deb.sh` checks the `.deb`'s
+cover everything the bundled library links. The Arch package's `depend`s are the `.deb`'s,
+mapped to Arch's package names through the table in `scripts/arch-pkg.py` (`webkit2gtk-4.1`,
+`gtk3`, `libva` and so on): a Debian name the table doesn't know fails the build, and a library
+the package carries itself is left out. The binary itself links the runner's glibc, so the
 packages need Ubuntu 24.04, Debian 13, Fedora 40 or later (Arch, rolling, is always newer).
 
 ## Windows and macOS
 
-Windows builds and links (docs/windows.md: libmpv comes from `tools/fetch-libmpv.ps1`, which
-the `windows` job runs), but has not been tested on screen or released; macOS has only a stub
+Windows builds and links (docs/windows.md: libmpv is zapper's own LGPL build, fetched by
+`tools/fetch-libmpv.ps1`, which the `windows` job runs), but has not been tested on screen or
+released; macOS has only a stub
 surface. What is in place:
 
 - the updater already knows the NSIS, MSI and `.dmg` installs (asset names, install commands,

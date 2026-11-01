@@ -1,0 +1,222 @@
+# libmpv: builds the libmpv zapper ships, mpv and FFmpeg under the LGPL alone, from the sources
+# pinned in packaging/libmpv/sources.txt (scripts/build-libmpv.sh), for Linux, Windows and
+# macOS, and publishes them as a GitHub *pre-release* tagged libmpv-<mpv>-ffmpeg-<ffmpeg>-r<n>:
+#
+#   libmpv-<platform>.tar.xz (.zip for Windows)  the library, its headers, its notices
+#   <name>-<version>.tar.*                       every source tarball the archives were built from
+#   SHA256SUMS                                   all of the above
+#   manifest.json                                what packaging/libmpv/manifest.json becomes
+#
+# with a build provenance attestation for each archive (`gh attestation verify`).
+#
+# The tag is not a version and the release is a pre-release, so zapper's updater never takes it
+# for an update (src-tauri/src/updates/release.rs). Run by hand only ("Run workflow"); then
+# commit the release's manifest.json as packaging/libmpv/manifest.json, which is what builds
+# fetch (`just fetch-libmpv`). docs/licensing.md, "Updating libmpv".
+#
+# Linux and Windows build on Ubuntu (Windows cross-compiled with MinGW-w64), macOS on the
+# Mac runners. Actions are pinned by commit, as in release.yml.
+name: libmpv
+
+on:
+  workflow_dispatch:
+    inputs:
+      revision:
+        description: 'Build revision: the tag is libmpv-<mpv>-ffmpeg-<ffmpeg>-r<revision>. Bump it to rebuild the same versions.'
+        required: true
+        default: '1'
+      publish:
+        description: 'Publish the pre-release. Unticked: a dry run, the archives kept as workflow artifacts.'
+        type: boolean
+        required: false
+        default: true
+      macos_x86_64:
+        description: 'Also build macOS x86_64 (Intel).'
+        type: boolean
+        required: false
+        default: false
+
+permissions: {}
+
+concurrency:
+  group: libmpv
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: Plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.plan.outputs.tag }}
+      platforms: ${{ steps.plan.outputs.platforms }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Tag and platforms
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          REVISION: ${{ inputs.revision }}
+          MAC_INTEL: ${{ inputs.macos_x86_64 }}
+          PUBLISH: ${{ inputs.publish }}
+        run: |
+          [[ "$REVISION" =~ ^[1-9][0-9]*$ ]] || { echo "::error::revision must be a number"; exit 1; }
+          mpv=$(awk '$1 == "mpv" { print $2 }' packaging/libmpv/sources.txt)
+          ffmpeg=$(awk '$1 == "ffmpeg" { print $2 }' packaging/libmpv/sources.txt)
+          tag=libmpv-$mpv-ffmpeg-$ffmpeg-r$REVISION
+          if [ "$PUBLISH" = true ] && gh release view "$tag" >/dev/null 2>&1; then
+            echo "::error::$tag is already released; bump the revision to rebuild."
+            exit 1
+          fi
+          platforms='[{"platform":"linux-x86_64","os":"ubuntu-24.04"},{"platform":"windows-x86_64","os":"ubuntu-24.04"},{"platform":"macos-arm64","os":"macos-15"}'
+          [ "$MAC_INTEL" = true ] && platforms+=',{"platform":"macos-x86_64","os":"macos-15-intel"}'
+          platforms+=']'
+          echo "tag=$tag"
+          { echo "tag=$tag"; echo "platforms=$platforms"; } >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.platform }}
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.platforms) }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    env:
+      LIBMPV_SOURCE_URL: https://github.com/${{ github.repository }}/releases/tag/${{ needs.plan.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Linux: the system libraries libmpv links (and the packages then depend on), from the
+      # oldest Ubuntu zapper is built on, so they are no newer than what its users have.
+      # patchelf gives each library its RUNPATH of $ORIGIN.
+      - name: Build tools and system libraries (Linux)
+        if: matrix.platform == 'linux-x86_64'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends \
+            build-essential pkgconf cmake ninja-build python3 pipx patchelf \
+            libva-dev libdrm-dev libssl-dev zlib1g-dev libegl-dev libwayland-dev wayland-protocols \
+            libxkbcommon-dev libpulse-dev libasound2-dev libpipewire-0.3-dev \
+            libfreetype-dev libharfbuzz-dev libfribidi-dev libfontconfig-dev
+
+      - name: Build tools (Windows, cross-compiled)
+        if: matrix.platform == 'windows-x86_64'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends \
+            build-essential pkgconf cmake ninja-build python3 pipx \
+            mingw-w64 gcc-mingw-w64-x86-64-posix g++-mingw-w64-x86-64-posix binutils-mingw-w64-x86-64
+
+      # Ubuntu's meson is older than the newest these projects ask for; one release, pinned.
+      - name: Meson (Linux runners)
+        if: runner.os == 'Linux'
+        run: |
+          pipx install meson==1.10.1
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      # macOS: Homebrew for the build tools alone (and a bash newer than macOS's 3.2); every
+      # library comes from the pinned sources.
+      - name: Build tools (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install --quiet bash meson ninja pkgconf
+          echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
+
+      - name: Build
+        shell: bash
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          jobs=$(getconf _NPROCESSORS_ONLN)
+          LIBMPV_JOBS=$jobs bash scripts/build-libmpv.sh "$PLATFORM" "$RUNNER_TEMP/libmpv" dist
+          ls -lR dist
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: libmpv-${{ matrix.platform }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+          overwrite: true
+
+  release:
+    name: Publish the pre-release
+    needs: [plan, build]
+    if: ${{ inputs.publish }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write # create the release and upload its assets
+      id-token: write # attestations: the Sigstore signing certificate
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: libmpv-*
+          path: parts
+
+      # The archives and one copy of each source tarball, side by side (a release's assets are
+      # one flat list), each source checked once more against sources.txt; SHA256SUMS over all
+      # of it, and the manifest from SHA256SUMS.
+      - name: Assemble
+        env:
+          TAG: ${{ needs.plan.outputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          mkdir dist
+          for part in parts/*/; do
+            cp "$part"/libmpv-* dist/
+            cp --update=none "$part"/sources/* dist/
+          done
+          awk '!/^#/ && NF == 5' packaging/libmpv/sources.txt | while read -r name version _ sum url; do
+            ext=${url##*/}; ext=tar.${ext##*.tar.}
+            echo "$sum  dist/$name-$version.$ext"
+          done | sha256sum -c --quiet -
+          (cd dist && sha256sum -- * > SHA256SUMS && cat SHA256SUMS)
+          python3 scripts/libmpv-manifest.py write "$TAG" "$REPO" dist/SHA256SUMS dist/manifest.json
+          cat dist/manifest.json
+
+      # Attestations need a public repository, or GitHub Enterprise Cloud for a private one, as
+      # in release.yml.
+      - name: Build provenance
+        if: ${{ !github.event.repository.private || vars.ZAPPER_ATTEST == 'true' }}
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/libmpv-*
+
+      - name: Create the pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.plan.outputs.tag }}
+        run: |
+          {
+            echo "libmpv and FFmpeg for zapper, built LGPL-only by \`scripts/build-libmpv.sh\` at $GITHUB_SHA from the sources in \`packaging/libmpv/sources.txt\`, all of which are attached here: this is where the LGPL's source offer for zapper's packages points."
+            echo
+            echo "Not a zapper release: zapper's packages carry this inside them. To use it, commit this release's \`manifest.json\` as \`packaging/libmpv/manifest.json\`."
+            echo
+            echo '```'
+            cat dist/SHA256SUMS
+            echo '```'
+          } > notes.md
+          gh release create "$TAG" --prerelease --target "$GITHUB_SHA" \
+            --title "libmpv for zapper ($TAG)" --notes-file notes.md dist/*
+          echo "Pre-release: $(gh release view "$TAG" --json url --jq .url)" | tee -a "$GITHUB_STEP_SUMMARY"

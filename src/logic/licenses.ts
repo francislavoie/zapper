@@ -16,7 +16,7 @@ export interface NoticeFile {
 export const NOTICE_LABELS: Record<string, { label: string; detail: string }> = {
   "LICENSE.txt": { label: "zapper", detail: "MIT License" },
   "MPV-FFMPEG-NOTICE.txt": { label: "mpv and FFmpeg", detail: "playback, through libmpv" },
-  "GPL-3.0.txt": { label: "GNU GPL, version 3", detail: "libmpv-2.dll's license" },
+  "THIRD-PARTY-NOTICES-libmpv.txt": { label: "Inside libmpv", detail: "the libraries built into it" },
   "THIRD-PARTY-NOTICES-rust.txt": { label: "Rust crates", detail: "the app's native code" },
   "THIRD-PARTY-NOTICES-ui.txt": { label: "Interface", detail: "npm packages" },
 };

@@ -2,9 +2,10 @@
   "bundle": {
     "resources": {
       "../packaging/install-kind-msi": "install-kind",
+      "target/release/zapper-server.exe": "zapper-server.exe",
       "../LICENSE": "licenses/LICENSE.txt",
       "../packaging/licenses/MPV-FFMPEG-NOTICE.txt": "licenses/MPV-FFMPEG-NOTICE.txt",
-      "../packaging/licenses/GPL-3.0.txt": "licenses/GPL-3.0.txt",
+      "lib/windows-x86_64/THIRD-PARTY-NOTICES-libmpv.txt": "licenses/THIRD-PARTY-NOTICES-libmpv.txt",
       "target/licenses/THIRD-PARTY-NOTICES-rust.txt": "licenses/THIRD-PARTY-NOTICES-rust.txt",
       "../dist/licenses/THIRD-PARTY-NOTICES-ui.txt": "licenses/THIRD-PARTY-NOTICES-ui.txt"
     },

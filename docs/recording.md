@@ -150,10 +150,18 @@ cargo build --release --no-default-features --features server --bin zapper-serve
 ```
 
 `--no-default-features` leaves out the `gui` feature, so nothing of Tauri, WebKit, GTK or libmpv
-is linked; the server needs only `libavformat`, `libavcodec` and `libavutil` (their development
-files, found with pkg-config — set `PKG_CONFIG_PATH` to build against another FFmpeg). Settings →
-Recording → Install looks for `zapper-server` beside the `zapper` executable, then on `PATH`
-(`ZAPPER_SERVER_BIN` overrides both). The packages do not ship it yet.
+is linked; the server needs only `libavformat`, `libavcodec` and `libavutil`. It takes them from
+zapper's own LGPL FFmpeg, the one the app's libmpv uses, when `just fetch-libmpv` has unpacked
+it into `src-tauri/lib/<platform>/` (headers in `include/`, libraries in `link/` and `runtime/`;
+docs/licensing.md); `build.rs` then links them from there and points the binary at them
+(`$ORIGIN/../lib/zapper` on Linux, beside the executable on Windows). Without it, a debug build
+uses the development files pkg-config finds, and a release build refuses unless
+`ZAPPER_SYSTEM_LIBMPV=1`. Settings → Recording → Install looks for `zapper-server` beside the
+`zapper` executable, then on `PATH` (`ZAPPER_SERVER_BIN` overrides both).
+
+The packages ship it: `/usr/bin/zapper-server` in the `.deb`, `.rpm` and Arch package, with
+FFmpeg's libraries in `/usr/lib/zapper/`, and `zapper-server.exe` beside `zapper.exe` in the
+Windows installers. `just package` and `just package-windows` build it first.
 
 ### Checking it
 
@@ -216,5 +224,4 @@ a recording is not capturing, such as "waiting for a free connection (1 of 1 in 
 - Season and episode from the guide: the catalogue does not keep XMLTV's episode numbers yet, so
   files are named by date unless a client passes them.
 - Joining parts whose codecs match into one file.
-- Shipping `zapper-server` in the packages, and a headless package without the GUI's
-  dependencies.
+- A headless package without the GUI's dependencies.

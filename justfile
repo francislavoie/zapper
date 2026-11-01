@@ -35,6 +35,19 @@ check *args:
 dev:
     npm run app
 
+# The libmpv zapper links and ships (docs/licensing.md): the LGPL build of libmpv and FFmpeg
+# that packaging/libmpv/manifest.json names for this platform, downloaded, checked against its
+# SHA-256 and unpacked into src-tauri/lib/<platform>/. `just fetch-libmpv --archive <file>`
+# takes one built by `just build-libmpv` instead. On Windows: tools/fetch-libmpv.ps1.
+fetch-libmpv *args:
+    scripts/fetch-libmpv.sh {{args}}
+
+# Builds that libmpv here, from the pinned sources in packaging/libmpv/sources.txt, into
+# target-libmpv/ (normally the libmpv workflow does, .github/workflows/libmpv.yml). Four jobs
+# unless LIBMPV_JOBS says otherwise; expect most of an hour.
+build-libmpv platform="linux-x86_64":
+    scripts/build-libmpv.sh {{platform}} target-libmpv/work target-libmpv/out
+
 # Prepares a release on main: sets the version everywhere, dates CHANGELOG.md's Unreleased
 # section, commits "Release <version>" and tags v<version>. It never pushes; it prints the push
 # command, and the pushed tag builds a draft GitHub release. See docs/releasing.md.
@@ -57,6 +70,11 @@ package:
       python3 scripts/version.py check "$ZAPPER_RELEASE_VERSION"
       [ "$ZAPPER_RELEASE_VERSION" = "$v" ] || { echo "package: ZAPPER_RELEASE_VERSION=$ZAPPER_RELEASE_VERSION doesn't match tauri.conf.json's $v" >&2; exit 1; }
     fi
+    # The bundled libmpv and FFmpeg the packages carry in /usr/lib/zapper (docs/licensing.md),
+    # then zapper-server, the recording service they install as /usr/bin/zapper-server, built
+    # against that FFmpeg (src-tauri/build.rs).
+    scripts/fetch-libmpv.sh linux-x86_64
+    cargo build --release --manifest-path src-tauri/Cargo.toml --no-default-features --features server --bin zapper-server
     # Old packages first, so the globs below match only this build's.
     rm -f src-tauri/target/release/bundle/deb/zapper_*.deb src-tauri/target/release/bundle/rpm/zapper-*.rpm
     # The license notices the packages ship (docs/licensing.md): the Rust crates' and the .deb's
@@ -91,12 +109,15 @@ check-arch-pkg:
 # zapper.exe (packaging/windows/). The notices come from scripts/licenses.sh run by Git for
 # Windows' bash, with Windows' crate graph; it needs cargo-about and Python.
 package-windows:
+    & ./tools/fetch-libmpv.ps1; if ($LASTEXITCODE) { exit $LASTEXITCODE }
+    cargo build --release --manifest-path src-tauri/Cargo.toml --no-default-features --features server --bin zapper-server; if ($LASTEXITCODE) { exit $LASTEXITCODE }
     $env:PYTHON = 'python'; & "$env:ProgramFiles\Git\bin\bash.exe" scripts/licenses.sh --if-changed; if ($LASTEXITCODE) { exit $LASTEXITCODE }
     npx tauri build --config packaging/windows/installers.conf.json
 
 # On macOS (NOT SUPPORTED YET): zapper.app and the .dmg, with the install-kind marker and the
 # license notices in Contents/Resources (packaging/macos/dmg.conf.json).
 package-macos:
+    scripts/fetch-libmpv.sh
     scripts/licenses.sh --if-changed
     npx tauri build --config packaging/macos/dmg.conf.json
 

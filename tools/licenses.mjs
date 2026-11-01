@@ -334,21 +334,31 @@ export function buildUiNotices(opts) {
  * The files Settings > About > Open source licenses lists beside the UI's own notices, as the
  * build copies them into dist/licenses/ (a `.txt` name: the app's asset protocol answers a path
  * with no extension with index.html). Paths are from the repository root. A file that doesn't
- * exist (the Rust notices before `just licenses` has run) is left out, and the pane lists what's
- * there. GPL-3.0.txt only in a Windows build: that is the platform whose installers carry
- * libmpv-2.dll, which is under it (packaging/licenses/MPV-FFMPEG-NOTICE.txt).
- * @param {{ licensesDir?: string, platform?: string }} [env]
+ * exist (the Rust notices before `just licenses` has run, libmpv's before `just fetch-libmpv`)
+ * is left out, and the pane lists what's there. libmpv's are this platform's: the ones inside
+ * the archive scripts/fetch-libmpv.sh unpacked into src-tauri/lib/<platform>/, the library the
+ * packages ship (or ZAPPER_LIBMPV_DIR's, as src-tauri/build.rs takes it).
+ * @param {{ licensesDir?: string, libmpvDir?: string, platform?: string, arch?: string }} [env]
  */
 export function noticeFiles({
   licensesDir = process.env.ZAPPER_LICENSES_DIR ?? "src-tauri/target/licenses",
   platform = process.env.ZAPPER_LICENSES_PLATFORM ?? process.platform,
+  arch = process.arch,
+  libmpvDir = process.env.ZAPPER_LIBMPV_DIR ?? `src-tauri/lib/${libmpvPlatform(platform, arch)}`,
 } = {}) {
   return [
     { name: "LICENSE.txt", path: "LICENSE" },
     { name: "MPV-FFMPEG-NOTICE.txt", path: "packaging/licenses/MPV-FFMPEG-NOTICE.txt" },
-    ...(platform === "win32" ? [{ name: "GPL-3.0.txt", path: "packaging/licenses/GPL-3.0.txt" }] : []),
+    { name: "THIRD-PARTY-NOTICES-libmpv.txt", path: `${libmpvDir}/THIRD-PARTY-NOTICES-libmpv.txt` },
     { name: "THIRD-PARTY-NOTICES-rust.txt", path: `${licensesDir}/THIRD-PARTY-NOTICES-rust.txt` },
   ];
+}
+
+/** The libmpv archive's platform name (scripts/build-libmpv.sh) for Node's platform and arch. */
+export function libmpvPlatform(platform, arch) {
+  const os = { linux: "linux", win32: "windows", darwin: "macos" }[platform] ?? platform;
+  const cpu = { x64: "x86_64", arm64: os === "macos" ? "arm64" : "aarch64" }[arch] ?? arch;
+  return `${os}-${cpu}`;
 }
 
 /**

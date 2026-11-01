@@ -145,14 +145,19 @@ off.
 ## Building from source
 
 Requirements: a stable Rust toolchain, Node.js 26 (see `.nvmrc`) and npm,
-[`just`](https://github.com/casey/just), and the libmpv and WebKitGTK development packages. On
-Debian and Ubuntu:
+[`just`](https://github.com/casey/just), and the WebKitGTK development packages. On Debian and
+Ubuntu:
 
 ```sh
-sudo apt install libwebkit2gtk-4.1-dev libmpv-dev libgtk-3-dev libsoup-3.0-dev \
+sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev \
   libjavascriptcoregtk-4.1-dev librsvg2-dev libxdo-dev libayatana-appindicator3-dev \
   libepoxy-dev pkg-config
 ```
+
+libmpv isn't one of them: zapper builds against, and its packages carry, its own LGPL build of
+libmpv and FFmpeg, which `just fetch-libmpv` downloads into `src-tauri/lib/`
+([docs/licensing.md](docs/licensing.md#mpv-and-ffmpeg)). Without it a development build falls
+back to the system's (`libmpv-dev`).
 
 Packaging and the release-script checks also want `jq`, `dpkg-dev`, `zstd` (the Arch package)
 and `desktop-file-utils`;
@@ -163,6 +168,7 @@ Then:
 
 ```sh
 npm ci
+just fetch-libmpv  # the bundled libmpv, into src-tauri/lib/
 just dev           # run a development build
 just test          # Rust, interface and release-script checks
 just package       # build the .deb and .rpm
@@ -182,8 +188,9 @@ just licenses      # regenerate the third-party license notices
 
 ## License
 
-[MIT](LICENSE). zapper links libmpv and, through it, FFmpeg; see
-[docs/licensing.md](docs/licensing.md) for what that means for each platform's packages.
+[MIT](LICENSE). zapper's packages carry libmpv and, inside it, FFmpeg, built without their GPL
+parts and so under the LGPL; see [docs/licensing.md](docs/licensing.md) for what is in it and
+where its source is.
 
 zapper is a player. It doesn't provide any channels or content: bring your own tuner, server or
 playlist, and use it with content you're entitled to watch.

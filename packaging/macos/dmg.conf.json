@@ -5,8 +5,21 @@
       "../packaging/install-kind-dmg": "install-kind",
       "../LICENSE": "licenses/LICENSE.txt",
       "../packaging/licenses/MPV-FFMPEG-NOTICE.txt": "licenses/MPV-FFMPEG-NOTICE.txt",
+      "lib/macos-arm64/THIRD-PARTY-NOTICES-libmpv.txt": "licenses/THIRD-PARTY-NOTICES-libmpv.txt",
       "target/licenses/THIRD-PARTY-NOTICES-rust.txt": "licenses/THIRD-PARTY-NOTICES-rust.txt",
       "../dist/licenses/THIRD-PARTY-NOTICES-ui.txt": "licenses/THIRD-PARTY-NOTICES-ui.txt"
+    },
+    "macOS": {
+      "frameworks": [
+        "lib/macos-arm64/runtime/libmpv.2.dylib",
+        "lib/macos-arm64/runtime/libavutil.60.dylib",
+        "lib/macos-arm64/runtime/libavcodec.62.dylib",
+        "lib/macos-arm64/runtime/libavformat.62.dylib",
+        "lib/macos-arm64/runtime/libavfilter.11.dylib",
+        "lib/macos-arm64/runtime/libavdevice.62.dylib",
+        "lib/macos-arm64/runtime/libswscale.9.dylib",
+        "lib/macos-arm64/runtime/libswresample.6.dylib"
+      ]
     }
   }
 }

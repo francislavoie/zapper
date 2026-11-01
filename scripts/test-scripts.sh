@@ -75,7 +75,7 @@ case "$repo" in
 esac
 
 # --- fix-deb.sh and check-deb.sh, on a tiny .deb shaped like Tauri's
-if command -v dpkg-deb >/dev/null; then
+if command -v dpkg-deb >/dev/null && command -v cc >/dev/null; then
   pkg=$tmp/pkg
   mkdir -p "$pkg/DEBIAN" "$pkg/usr/bin" "$pkg/usr/lib/zapper" "$pkg/usr/share/applications" "$pkg/usr/share/doc/zapper"
   for f in copyright LICENSE MPV-FFMPEG-NOTICE.txt; do
@@ -86,10 +86,22 @@ if command -v dpkg-deb >/dev/null; then
     > "$pkg/usr/share/doc/zapper/THIRD-PARTY-NOTICES-rust.txt"
   ui_notices='UI notices\n\nSummary\n-------\n  MIT     9\n  ISC     3\n\n\nMIT\n'
   printf "$ui_notices" > "$pkg/usr/share/doc/zapper/THIRD-PARTY-NOTICES-ui.txt"
-  printf '#!/bin/sh\n' > "$pkg/usr/bin/zapper"; chmod 755 "$pkg/usr/bin/zapper"
+  printf 'libmpv notices\n\nSummary\n-------\n  LGPL-2.1-or-later   4\n  MIT                 3\n\n\nmpv\n' \
+    > "$pkg/usr/share/doc/zapper/THIRD-PARTY-NOTICES-libmpv.txt"
+  # Programs and libraries shaped like the real ones: zapper links libmpv.so.2, zapper-server
+  # libavformat.so.62, each finding it through $ORIGIN/../lib/zapper; the libraries find each
+  # other through $ORIGIN.
+  printf 'int mpv_client_api_version(void) { return 0; }\n' > "$tmp/mpv.c"
+  cc -shared -fPIC -Wl,-soname,libmpv.so.2 -Wl,-rpath,'$ORIGIN' -o "$pkg/usr/lib/zapper/libmpv.so.2" "$tmp/mpv.c"
+  printf 'int avformat_version(void) { return 0; }\n' > "$tmp/avformat.c"
+  cc -shared -fPIC -Wl,-soname,libavformat.so.62 -Wl,-rpath,'$ORIGIN' -o "$pkg/usr/lib/zapper/libavformat.so.62" "$tmp/avformat.c"
+  printf 'int mpv_client_api_version(void);\nint main(void) { return mpv_client_api_version(); }\n' > "$tmp/zapper.c"
+  cc -o "$pkg/usr/bin/zapper" "$tmp/zapper.c" "$pkg/usr/lib/zapper/libmpv.so.2" -Wl,-rpath,'$ORIGIN/../lib/zapper'
+  printf 'int avformat_version(void);\nint main(void) { return avformat_version(); }\n' > "$tmp/server.c"
+  cc -o "$pkg/usr/bin/zapper-server" "$tmp/server.c" "$pkg/usr/lib/zapper/libavformat.so.62" -Wl,-rpath,'$ORIGIN/../lib/zapper'
   cp "$root/packaging/install-kind-deb" "$pkg/usr/lib/zapper/install-kind"
   printf '[Desktop Entry]\nType=Application\nName=zapper\nExec=zapper\nIcon=zapper\nCategories=AudioVideo;Video;\nStartupWMClass=zapper\n' > "$pkg/usr/share/applications/zapper.desktop"
-  printf 'Package: zapper\nVersion: 0.2.0-rc.1\nArchitecture: amd64\nMaintainer: t\nDepends: libmpv2 | libmpv1, libwebkit2gtk-4.1-0, libgtk-3-0\nDescription: t\n' > "$pkg/DEBIAN/control"
+  printf 'Package: zapper\nVersion: 0.2.0-rc.1\nArchitecture: amd64\nMaintainer: t\nDepends: libwebkit2gtk-4.1-0, libgtk-3-0\nDescription: t\n' > "$pkg/DEBIAN/control"
   dpkg-deb --root-owner-group --build "$pkg" "$tmp/zapper.deb" >/dev/null
   data_before=$(cd "$tmp" && ar p zapper.deb "$(ar t zapper.deb | grep ^data)" | sha256sum)
   ! "$here/check-deb.sh" "$tmp/zapper.deb" 0.2.0-rc.1 >/dev/null 2>&1 || fail "check-deb must refuse the SemVer Version"; ok
@@ -106,6 +118,29 @@ if command -v dpkg-deb >/dev/null; then
   : > "$pkg/usr/share/doc/zapper/THIRD-PARTY-NOTICES-ui.txt"
   dpkg-deb --root-owner-group --build "$pkg" "$tmp/nonotice.deb" >/dev/null
   ! "$here/check-deb.sh" "$tmp/nonotice.deb" >/dev/null 2>&1 || fail "check-deb must refuse a .deb with an empty notice"; ok
+  printf 'notice\n' > "$pkg/usr/share/doc/zapper/THIRD-PARTY-NOTICES-ui.txt"
+  # The system's libmpv in Depends, the bundled one missing, or a binary that would look for it
+  # elsewhere: each refused.
+  sed -i 's/^Depends: /Depends: libmpv2, /' "$pkg/DEBIAN/control"
+  dpkg-deb --root-owner-group --build "$pkg" "$tmp/sysmpv.deb" >/dev/null
+  ! "$here/check-deb.sh" "$tmp/sysmpv.deb" >/dev/null 2>&1 || fail "check-deb must refuse a .deb depending on libmpv"; ok
+  sed -i 's/^Depends: libmpv2, /Depends: /' "$pkg/DEBIAN/control"
+  cc -o "$pkg/usr/bin/zapper" "$tmp/zapper.c" "$pkg/usr/lib/zapper/libmpv.so.2" -Wl,-rpath,/home/builder/lib
+  dpkg-deb --root-owner-group --build "$pkg" "$tmp/rpath.deb" >/dev/null
+  ! "$here/check-deb.sh" "$tmp/rpath.deb" >/dev/null 2>&1 || fail "check-deb must refuse a binary with a build machine's RUNPATH"; ok
+  cc -o "$pkg/usr/bin/zapper" "$tmp/zapper.c" "$pkg/usr/lib/zapper/libmpv.so.2" -Wl,-rpath,'$ORIGIN/../lib/zapper'
+  # The server's FFmpeg missing, or the server itself: refused too.
+  mv "$pkg/usr/lib/zapper/libavformat.so.62" "$tmp/"
+  dpkg-deb --root-owner-group --build "$pkg" "$tmp/noav.deb" >/dev/null
+  ! "$here/check-deb.sh" "$tmp/noav.deb" >/dev/null 2>&1 || fail "check-deb must refuse a .deb without the server's FFmpeg"; ok
+  mv "$tmp/libavformat.so.62" "$pkg/usr/lib/zapper/"
+  mv "$pkg/usr/bin/zapper-server" "$tmp/"
+  dpkg-deb --root-owner-group --build "$pkg" "$tmp/noserver.deb" >/dev/null
+  ! "$here/check-deb.sh" "$tmp/noserver.deb" >/dev/null 2>&1 || fail "check-deb must refuse a .deb without zapper-server"; ok
+  mv "$tmp/zapper-server" "$pkg/usr/bin/"
+  rm "$pkg/usr/lib/zapper/libmpv.so.2"
+  dpkg-deb --root-owner-group --build "$pkg" "$tmp/nompv.deb" >/dev/null
+  ! "$here/check-deb.sh" "$tmp/nompv.deb" >/dev/null 2>&1 || fail "check-deb must refuse a .deb without the bundled libmpv"; ok
 fi
 
 # --- arch-pkg.py: the version, the dependency table, bundled libraries, mtree escaping
@@ -150,14 +185,16 @@ if command -v dpkg-deb >/dev/null && command -v zstd >/dev/null; then
   [ "$(tar -xOf "$tmp/p.tar" usr/lib/zapper/install-kind)" = arch ] || fail "arch: install-kind"; ok
   info=$(tar -xOf "$tmp/p.tar" .PKGINFO)
   for kv in 'pkgname = zapper' 'pkgver = 0.2.0rc.1-1' 'pkgdesc = t' 'arch = x86_64' 'builddate = 1791206700' \
-            "url = https://github.com/$repo" 'depend = gtk3' 'depend = mpv' 'depend = webkit2gtk-4.1'; do
+            "url = https://github.com/$repo" 'depend = gtk3' 'depend = webkit2gtk-4.1'; do
     grep -qxF "$kv" <<<"$info" || fail ".PKGINFO lacks '$kv': $info"; ok
   done
-  [ "$(sed -n 's/^license = //p' <<<"$info" | tr '\n' ' ')" = 'MIT Apache-2.0 ISC LGPL-2.1 ' ] || fail "arch: licenses: $info"; ok
+  ! grep -q '^depend = mpv' <<<"$info" || fail "arch: depends on mpv, though the package carries libmpv: $info"; ok
+  [ "$(sed -n 's/^license = //p' <<<"$info" | tr '\n' ' ')" = 'MIT Apache-2.0 ISC LGPL-2.1 LGPL-2.1-or-later ' ] ||
+    fail "arch: licenses: $info"; ok
   mtree=$(tar -xOf "$tmp/p.tar" .MTREE | gzip -dc)
   [ "$(head -2 <<<"$mtree" | tr '\n' '|')" = '#mtree|/set type=file uid=0 gid=0 mode=644|' ] || fail "arch: .MTREE header"; ok
   grep -Eq '^\./\.PKGINFO time=1791206700\.0 size=[0-9]+ md5digest=[0-9a-f]{32} sha256digest=[0-9a-f]{64}$' <<<"$mtree" || fail "arch: .MTREE .PKGINFO: $mtree"; ok
-  grep -Eq '^\./usr/bin/zapper time=1791206700\.0 mode=755 size=10 ' <<<"$mtree" || fail "arch: .MTREE binary: $mtree"; ok
+  grep -Eq '^\./usr/bin/zapper time=1791206700\.0 mode=755 size=[0-9]+ ' <<<"$mtree" || fail "arch: .MTREE binary: $mtree"; ok
   grep -qxF './usr/share/licenses/zapper time=1791206700.0 mode=777 type=link link=../doc/zapper' <<<"$mtree" || fail "arch: .MTREE symlink: $mtree"; ok
   grep -qxF './usr time=1791206700.0 mode=755 type=dir' <<<"$mtree" || fail "arch: .MTREE dir: $mtree"; ok
   # Two builds of one .deb are the same bytes.
@@ -206,5 +243,19 @@ grep -q 'Free Software Foundation' "$tmp/rust.txt" && ! grep -q '^  Copyright (C
   fail "rust notices: the LGPL's own copyright stays in its text, not under the crate"; ok
 grep -q '^  crate: https://crates.io/crates/libmpv2/7.0.0$' "$tmp/rust.txt" || fail "rust notices: the LGPL crate's source"; ok
 grep -q 'https://github.com/me/zapper' "$tmp/rust.txt" || fail "rust notices: zapper's own source"; ok
+
+# --- libmpv-manifest.py: a libmpv release's SHA256SUMS into the manifest, and back out per
+# platform; the committed manifest is well formed.
+a=$(printf 'a%.0s' $(seq 64)) b=$(printf 'b%.0s' $(seq 64))
+printf '%s  libmpv-linux-x86_64.tar.xz\n%s  libmpv-windows-x86_64.zip\n%s  mpv-0.41.0.tar.gz\n' "$a" "$b" "$a" > "$tmp/SHA256SUMS"
+python3 "$here/libmpv-manifest.py" write libmpv-0.41.0-ffmpeg-8.1.3-r2 me/zapper "$tmp/SHA256SUMS" "$tmp/manifest.json"
+[ "$(python3 "$here/libmpv-manifest.py" get linux-x86_64 "$tmp/manifest.json")" = \
+  "https://github.com/me/zapper/releases/download/libmpv-0.41.0-ffmpeg-8.1.3-r2/libmpv-linux-x86_64.tar.xz $a" ] ||
+  fail "libmpv-manifest: the Linux archive's address and sum"; ok
+[ "$(jq -r '.mpv + " " + .ffmpeg' "$tmp/manifest.json")" = "0.41.0 8.1.3" ] || fail "libmpv-manifest: versions from the tag"; ok
+! python3 "$here/libmpv-manifest.py" get macos-arm64 "$tmp/manifest.json" 2>/dev/null || fail "libmpv-manifest: a platform it lacks"; ok
+! python3 "$here/libmpv-manifest.py" write v1.2.3 me/zapper "$tmp/SHA256SUMS" 2>/dev/null || fail "libmpv-manifest: a tag that isn't libmpv's"; ok
+jq -e '(.tag | test("^libmpv-[0-9.]+-ffmpeg-[0-9.]+-r[0-9]+$")) and (.platforms | type == "object")' \
+  "$root/packaging/libmpv/manifest.json" >/dev/null || fail "packaging/libmpv/manifest.json"; ok
 
 echo "test-scripts: $n checks passed"

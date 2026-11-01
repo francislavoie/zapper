@@ -279,7 +279,8 @@ fn player() -> Result<libmpv2::Mpv, String> {
         init.set_property("user-agent", "VLC/3.0.20 LibVLC/3.0.20".to_owned())?;
         init.set_property("network-timeout", 8i64)?;
         init.set_property("stream-lavf-o", NO_RECONNECT.to_owned())?;
-        init.set_property("ytdl", false)?;
+        // Absent, and off, in a libmpv without Lua (zapper's own).
+        let _ = init.set_property("ytdl", false);
         Ok(())
     })
     .map_err(|e| e.to_string())?;
