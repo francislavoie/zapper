@@ -24,6 +24,11 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
 - Settings → Account: Test connection checks what is in the form, saved or not, so an account can
   be tried before saving it.
 
+### Fixed
+
+- After a sync — the first one, or Refresh data from the provider — the categories, channel list
+  and guide now show the new data straight away instead of after a restart.
+
 ## [0.1.0] - 2026-11-01
 
 The first release.

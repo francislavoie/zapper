@@ -70,7 +70,7 @@ export function ChannelList() {
         : (state.categories.data.find((c) => c.id === categoryId)?.channelCount ?? 0)
       : state.sync.channelsTotal;
 
-  const paged = useChannelPages(categoryId, estimate);
+  const paged = useChannelPages(categoryId, estimate, state.catalogueRev);
   // `/` and Ctrl+P run through the same backend index; the difference is only
   // where the results are shown.
   const results = useSearch(state.query, SEARCH_LIMIT);
