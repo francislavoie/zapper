@@ -13,7 +13,8 @@
 #
 # The crate graph is the one of the platform it runs on: Linux's (about.toml's target), Windows'
 # in Git for Windows' bash (`just package-windows`, the release workflow; Python as $PYTHON), or
-# this Mac's.
+# this Mac's. It is the app's and the recording service's together (`--features server` on top of
+# the default `gui`), since the packages ship both binaries.
 #
 # --if-changed (`just package`): does nothing when the files in out-dir were made from the same
 # inputs (Cargo.lock, Cargo.toml, about.toml, LICENSE, these scripts, the target) and haven't
@@ -67,7 +68,7 @@ rm -f "$key_file"
 
 # --locked: the notices describe exactly what Cargo.lock builds.
 cargo about generate --format json --locked --fail -c "$root/about.toml" ${target[@]+"${target[@]}"} \
-  -m "$root/src-tauri/Cargo.toml" -o "$out/about.json"
+  --features server -m "$root/src-tauri/Cargo.toml" -o "$out/about.json"
 "$python" "$here/notices.py" rust "$out/about.json" "$out/THIRD-PARTY-NOTICES-rust.txt"
 rm "$out/about.json"
 "$python" "$here/notices.py" copyright "$root/LICENSE" "$out/copyright"
