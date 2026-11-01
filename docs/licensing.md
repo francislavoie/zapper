@@ -109,7 +109,7 @@ from both programs, and the user can replace them with their own builds
 | --- | --- | --- |
 | Linux (`.deb`, `.rpm`, Arch) | `libmpv.so.2`, `libavcodec.so.62`, `libavformat.so.62`, `libavutil.so.60`, `libavfilter.so.11`, `libavdevice.so.62`, `libswscale.so.9`, `libswresample.so.6` | `/usr/lib/zapper/`, each finding the others through a RUNPATH of `$ORIGIN`; `/usr/bin/zapper` and `/usr/bin/zapper-server` find them through theirs, `$ORIGIN/../lib/zapper` |
 | Windows | `libmpv-2.dll`, `avcodec-62.dll`, `avformat-62.dll` and the rest | beside `zapper.exe` and `zapper-server.exe` (`src-tauri/tauri.windows.conf.json`) |
-| macOS | `libmpv.2.dylib`, `libavcodec.62.dylib` and the rest | `zapper.app/Contents/Frameworks/`, as `@rpath/…` (`packaging/macos/dmg.conf.json`) |
+| macOS | `libmpv.2.dylib`, `libavcodec.62.dylib` and the rest | `zapper.app/Contents/Frameworks/`, as `@rpath/…`, each finding the others through an rpath of `@loader_path`; `zapper` finds them through `@executable_path/../Frameworks` (`packaging/macos/dmg.conf.json`) |
 
 The names carry FFmpeg's major versions: moving FFmpeg to a new major changes them, in the
 package configs too (`src/__checks__/licenses.test.mjs` holds the lists together; the archive's
@@ -167,6 +167,16 @@ come from the system there rather than being built in because GTK already loads 
 same process. `scripts/build-libmpv.sh` fails if the library needs anything else, and
 `scripts/check-deb.sh` checks the package's Depends cover what it needs.
 
+On macOS the libraries take only what macOS itself has: its frameworks (Core Audio, AVFoundation,
+VideoToolbox, OpenGL, AppKit and the like), `libSystem`, `libobjc`, `libz`, `libiconv`, and the
+Swift runtime in `/usr/lib/swift` for mpv's Swift parts, which are built for the same macOS 11 as
+the rest. `scripts/build-libmpv.sh` fails if one links anything outside `/usr/lib` and
+`/System/Library` besides the others, and drops the build machine's toolchain from their rpaths.
+`scripts/check-macos-app.sh` checks the same of the finished `zapper.app`, every `@rpath`
+reference resolving inside the bundle, and that it is not a GPL build: mpv's compiled-in feature
+list has no `gpl`, and libavutil says LGPL version 2.1 or later and was configured without
+`--enable-gpl`, `--enable-version3` or `--enable-nonfree`.
+
 ### Where the source is
 
 The LGPL asks that whoever receives the library can get its source. Each libmpv build is a
@@ -204,8 +214,10 @@ until the manifest names a published build.
    shell (`scripts/build-libmpv.sh windows-x86_64 …`) and tried with
    `tools\fetch-libmpv.ps1 -Archive`.
 3. Run the **libmpv** workflow (`.github/workflows/libmpv.yml`, Run workflow) with the next
-   revision for those versions. It builds Linux and Windows on Ubuntu and macOS on the Mac
-   runners and publishes the pre-release.
+   revision for those versions. It builds Linux and Windows on Ubuntu and, with **macOS**
+   ticked, macOS on the Mac runners, and publishes the pre-release. (The macOS workflow,
+   `macos.yml`, builds macOS's from the same script on every pull request, so a change that
+   breaks it shows there first.)
 4. Commit that release's `manifest.json` as `packaging/libmpv/manifest.json` (or regenerate it:
    `python3 scripts/libmpv-manifest.py write <tag> francislavoie/zapper SHA256SUMS
    packaging/libmpv/manifest.json` from its `SHA256SUMS`). The next build fetches it.
