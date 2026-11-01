@@ -139,13 +139,16 @@ pub struct PlayerStateDto {
     pub muted: bool,
     pub compressor: bool,
     pub error: Option<String>,
-    /// The last time playback skipped ahead to live by itself, on this
-    /// stream: after a tune-in's connect burst, or after stalls had left it
-    /// behind. `None` until that happens, and again from the next open.
+    /// The last time playback skipped ahead to live on this stream: by
+    /// itself, after a tune-in's connect burst or after stalls had left it
+    /// behind, or because the viewer asked for live and it moved a second or
+    /// more. `None` until that happens, and again from the next open.
     ///
-    /// Reported because the skip is otherwise unexplained — the picture
-    /// jumps and the programme is suddenly a few seconds further on — and
-    /// the viewer should be told it was the app, and how far.
+    /// Reported because an automatic skip is otherwise unexplained — the
+    /// picture jumps and the programme is suddenly a few seconds further on
+    /// — and the viewer should be told it was the app, and how far. One
+    /// asked for is reported the same way, because "how far was I behind?"
+    /// is the obvious question after pressing Live.
     pub live_jump: Option<LiveJumpDto>,
     /// Why a stream that stopped by itself stopped, when the state is
     /// `Failed` because of it: taken over by another device, refused, the
@@ -153,7 +156,8 @@ pub struct PlayerStateDto {
     pub ending: Option<crate::ipc::ending::Ending>,
 }
 
-/// One automatic catch-up to live. See [`PlayerStateDto::live_jump`].
+/// One jump forward to live, automatic or asked for. See
+/// [`PlayerStateDto::live_jump`].
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LiveJumpDto {

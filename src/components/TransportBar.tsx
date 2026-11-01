@@ -18,9 +18,13 @@
 // tooltips, same keys; what changes is size, which the stylesheet does from
 // `.mini-controls`, and two things the width forces:
 //
-//  - the volume slider is shorter and loses its "100%", and if the row has
-//    no room for even that it becomes a panel above its button, since the
-//    slider is the one control that needs length to be worth having;
+//  - the volume slider keeps the bar's length but loses its "100%". Where
+//    the row has no room for it, mute and slider take a line of their own
+//    above the row, and on the smallest pictures the slider waits in a
+//    panel above its button: it is the one control that needs length to be
+//    worth having, so it moves rather than shrinks;
+//  - the scrollback readout leaves the row, because the scrubber's caption
+//    already says it ("23s back") and the slider needs the room;
 //  - the scrubber's captions are said in fewer words.
 //
 // Browse is the caller's to offer (`onBrowse`) and the docked picture does
@@ -222,9 +226,11 @@ export function TransportBar({
           Live
         </button>
 
-        <span className="time" data-tip="Buffered scrollback">
-          {duration(player.bufferedBack)}
-        </span>
+        {compact ? null : (
+          <span className="time" data-tip="Buffered scrollback">
+            {duration(player.bufferedBack)}
+          </span>
+        )}
 
         <span className="spring" />
 

@@ -84,8 +84,9 @@ export interface PlayerStateDto {
   muted: boolean;
   compressor: boolean;
   error: string | null;
-  /** The last time playback skipped ahead to live by itself on this stream —
-   *  after a tune-in's connect burst, or after stalls — or null. Cleared by
+  /** The last time playback skipped ahead to live on this stream — by
+   *  itself, after a tune-in's connect burst or after stalls, or because the
+   *  viewer pressed Live and it moved a second or more — or null. Cleared by
    *  the next open. */
   liveJump: LiveJumpDto | null;
   /** Why a stream that stopped by itself stopped, while `state` is
@@ -93,7 +94,7 @@ export interface PlayerStateDto {
   ending: StreamEnding | null;
 }
 
-/** One automatic catch-up to live. */
+/** One jump forward to live, automatic or asked for. */
 export interface LiveJumpDto {
   /** How far forward it went, in seconds. */
   seconds: number;

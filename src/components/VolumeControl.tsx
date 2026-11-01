@@ -1,10 +1,10 @@
 // Volume: the icon that mutes, and the slider that goes with it.
 //
 // Inline on the player bar. On the docked picture's bar (`popover`) it is
-// inline too while the picture is wide enough to fit it, and otherwise sits
-// in a small panel above the button, because a narrow picture's row is
-// already a full row of controls and the slider is the one of them that
-// needs length to be worth having. One mute button and one
+// inline too, at the same length — in the row or on a line of its own, as
+// the picture's width allows — and on the smallest pictures sits in a small
+// panel above the button instead, because the slider is the one control
+// that needs length to be worth having. One mute button and one
 // slider either way; see VolumeSlider for why the slider is drawn rather than
 // borrowed from the platform.
 
@@ -87,7 +87,7 @@ export function VolumeControl({
 
       {popover ? (
         <>
-          {/* Inline when the row has room for it, which the stylesheet
+          {/* Inline when the bar has room for it, which the stylesheet
               decides from the bar's width (`@container mini`): a slider you
               can see is better than one you have to find. Only one of the
               two is ever displayed, so only one is in the tab order and the

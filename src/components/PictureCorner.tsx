@@ -1,5 +1,7 @@
-// The top-right corner of the picture, where things the app did by itself
-// are said: a channel number being typed, and playback skipping ahead to live.
+// The top-right corner of the picture, where things that happened to the
+// picture are said: a channel number being typed, and playback skipping
+// ahead to live — by itself, or because Live was pressed, where how far it
+// went is the answer to "how far behind was I?".
 //
 // Drawn in the controls' layer the way the gesture bubbles are — inside it,
 // outside its two bars — so it is seen while the controls are faded, and it

@@ -2422,6 +2422,55 @@ button.prog:hover {
   width: 1.25rem;
 }
 
+/* The controls on the player's bar and the docked picture's. The bar is
+   already a translucent panel, and a translucent face on every button
+   inside it stacks one box on another — a row of dark tiles over a dark
+   strip, which reads as clutter rather than as buttons. So they have no
+   face at rest: the glyph is the affordance, as it is on any media player.
+   The face appears under the pointer, deeper while pressed, and keyboard
+   focus keeps the app's focus ring.
+
+   The hover face is light rather than dark: over a panel that is itself
+   dark, darkening is invisible, and over a bright picture the panel's
+   blur already carries the contrast the glyphs need. */
+.ctl-row .ctl,
+.chrome-stack-row .ctl {
+  background: transparent;
+  border-color: transparent;
+}
+
+.ctl-row .ctl:hover:not(:disabled),
+.chrome-stack-row .ctl:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: transparent;
+}
+
+.ctl-row .ctl:active:not(:disabled),
+.chrome-stack-row .ctl:active:not(:disabled) {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* A toggle that is on says so in the accent: the glyph turns blue and sits
+   on a faint blue face that stays without the pointer. A toggle's state is
+   the one thing that must be visible at rest. */
+.ctl-row .ctl.on,
+.chrome-stack-row .ctl.on {
+  color: var(--accent);
+  background: rgba(106, 169, 255, 0.16);
+}
+
+.ctl-row .ctl.on:hover:not(:disabled),
+.chrome-stack-row .ctl.on:hover:not(:disabled) {
+  background: rgba(106, 169, 255, 0.26);
+}
+
+/* Words keep a hairline, so "Browse" reads as a button rather than a label
+   — but no face. Live keeps it only while it can be pressed: at the live
+   edge it is a status, not a button (see `.ctl.live.at-edge`). */
+.ctl-row .ctl:not(.icon):not(.at-edge) {
+  border-color: var(--line);
+}
+
 /* ---------------------------------------------------------------- volume */
 
 .volume {
@@ -4167,13 +4216,6 @@ textarea.field {
   gap: 0.25rem;
 }
 
-/* The scrollback readout. "11m12s" at most, so it needs a fraction of the
-   room the bar reserves. */
-.mini-controls .time {
-  font-size: 0.6875rem;
-  min-width: 2.75rem;
-}
-
 .mini-controls .scrubber {
   height: 1.125rem;
 }
@@ -4298,23 +4340,38 @@ textarea.field {
   pointer-events: auto;
 }
 
-/* Long enough to aim along, short enough that the panel still fits the
-   smallest picture from where its button sits. */
+/* The bar's own length, so the whole range — boost zone included — is as
+   easy to see and aim along here as on the player. No "100%" beside it: it
+   would push the panel off the smallest picture (14rem, with the button
+   3.75rem in), and the number is in the bubble over the picture whenever
+   the volume changes. */
 .mini-volume-pop .vol {
-  width: 5.5rem;
+  width: 7.5rem;
 }
 
-/* The slider inline in the row, whenever the row has room for it. Below
-   that, the panel above the button does the job.
+.mini-volume-pop .vol-readout {
+  display: none;
+}
 
-   The threshold is measured on the bar's content box, inside its padding:
-   the row's fixed controls (about 18rem of buttons, Live, the scrollback
-   readout and the gaps between them) and the shortest slider still worth
-   aiming along, 3rem. The docked picture's 22.25rem leaves 21.5rem inside,
-   which clears it with a little to spare. Above it the slider
-   takes whatever the spring would have had, up to the panel's 5.5rem; the
-   spring gives way first, so the buttons right of it never move off the
-   end. */
+/* Inline, at the same length, whenever the bar has room for it; below
+   that, the panel above the button does the job. A slider squeezed to fit
+   is what made the range hard to see, so it never shrinks — what changes
+   with the picture's width is where it goes.
+
+   Measured on the bar's content box, inside its padding, three ways:
+
+   - Wide (26.5rem and up): in the row, where the player bar has it. The
+     row's fixed controls — seven 1.5rem buttons, Live, the gap after the
+     compressor and the 0.1875rem gaps between them — come to about 15.6rem;
+     the slider's 7.5rem and room for the two buttons that come and go
+     (audio track, sleep) make the rest.
+   - The default docked size (22.25rem, 21.5rem inside) and down to 17rem:
+     the mute button and the slider take a line of their own, above the
+     transport row. The row keeps every control at full size and the order
+     is unchanged — the volume is still between stop and the compressor,
+     one line up.
+   - Narrower: the picture is short enough that another line would cover
+     most of it, so the slider waits in the panel above the button. */
 .mini-controls {
   container: mini / inline-size;
 }
@@ -4323,33 +4380,38 @@ textarea.field {
   display: none;
 }
 
-@container mini (min-width: 21.25rem) {
+@container mini (min-width: 17rem) {
   .mini-controls .mini-volume {
-    flex: 0 1 auto;
-    min-width: 0;
+    order: -1;
+    flex: 0 0 100%;
     align-items: center;
     gap: 0.25rem;
   }
 
   .mini-volume-inline {
     display: flex;
-    flex: 0 1 5.5rem;
-    min-width: 3rem;
+    flex: 0 0 7.5rem;
   }
 
   .mini-volume-inline .vol {
     width: 100%;
   }
 
-  /* No "100%" beside it: the readout's 2.625rem is most of the room there
-     is, and it left a track too short to aim along. The number is in the
-     bubble over the picture whenever the volume changes. */
+  /* No "100%" beside it, for the same reason as in the panel: the number
+     is in the bubble over the picture whenever the volume changes. */
   .mini-volume-inline .vol-readout {
     display: none;
   }
 
   .mini-volume-pop {
     display: none;
+  }
+}
+
+@container mini (min-width: 26.5rem) {
+  .mini-controls .mini-volume {
+    order: 0;
+    flex: 0 0 auto;
   }
 }
 

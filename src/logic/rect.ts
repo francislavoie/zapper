@@ -42,9 +42,18 @@ export function lerpRect(a: VideoRect, b: VideoRect, t: number): VideoRect {
   };
 }
 
-export function easeOutCubic(t: number): number {
+/** The picture's move between the docked slot and the full stage, both
+ *  ways: one curve, so leaving looks like entering run backwards.
+ *
+ *  In-out rather than ease-out. Ease-out spends the last third of its time
+ *  covering the last few percent of the distance — a crawl of a pixel or
+ *  two a frame — and every one of those frames is a resize of the video
+ *  surface, at its largest on the way in. That crawl is where an uneven
+ *  frame shows, as a hitch just before the picture settles. In-out keeps
+ *  moving until much later and then lands. */
+export function easeInOutCubic(t: number): number {
   const k = Math.min(1, Math.max(0, t));
-  return 1 - Math.pow(1 - k, 3);
+  return k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;
 }
 
 /** The rect to draw `elapsed` ms into a dock/undock transition, and whether
@@ -57,7 +66,7 @@ export function rectAt(
 ): { rect: VideoRect; done: boolean } {
   if (!(duration > 0) || elapsed >= duration) return { rect: to, done: true };
   if (elapsed <= 0) return { rect: from, done: false };
-  return { rect: lerpRect(from, to, easeOutCubic(elapsed / duration)), done: false };
+  return { rect: lerpRect(from, to, easeInOutCubic(elapsed / duration)), done: false };
 }
 
 /** Sub-pixel churn is not worth an IPC round trip every frame. */
@@ -96,4 +105,35 @@ export function fitAspect(box: Box, aspect: number): Box {
   }
   const height = box.width / aspect;
   return { left: box.left, top: box.top + (box.height - height) / 2, width: box.width, height };
+}
+
+/** Sends rects to the backend one at a time, always the newest.
+ *
+ *  A transition sends a rect every frame, and each is applied on the main
+ *  thread as a resize of the video surface. While a resize is slow — the
+ *  surface is large, or the main thread is busy — sends would queue behind
+ *  it and then be applied in a burst, each one already stale: the picture
+ *  stalls, then jumps through frames nobody needed, and the last one, the
+ *  one that lands it, waits behind them all. Nor are concurrent commands
+ *  guaranteed to arrive in the order they were sent. So: at most one in
+ *  flight, and whatever arrives meanwhile replaces whatever was waiting. */
+export function latestOnly<T>(send: (value: T) => Promise<unknown>): (value: T) => void {
+  let busy = false;
+  let waiting: { value: T } | null = null;
+  const post = (value: T) => {
+    if (busy) {
+      waiting = { value };
+      return;
+    }
+    busy = true;
+    void send(value)
+      .catch(() => {})
+      .finally(() => {
+        busy = false;
+        const next = waiting;
+        waiting = null;
+        if (next) post(next.value);
+      });
+  };
+  return post;
 }

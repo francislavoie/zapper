@@ -3,11 +3,12 @@
 // Nothing is torn down on a mode change — no stop(), no reload, the stream
 // just changes shape.
 
-import { useEffect, useRef, type RefObject } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import { backend } from "../backend";
 import {
   FULL,
   fitAspect,
+  latestOnly,
   normalisedRect,
   rectAt,
   rectEquals,
@@ -70,6 +71,30 @@ export function useVideoRect({
   const complained = useRef(false);
   const errorSink = useRef(onError);
   errorSink.current = onError;
+  // One for the hook's lifetime, not one per effect run: a transition
+  // outlives the run that started it, and its frames must queue behind the
+  // same send as everything else.
+  const [post] = useState(() =>
+    latestOnly((r: VideoRect) =>
+      backend.setVideoRect(r).catch((e: unknown) => {
+        // The rect is sent every frame of a transition; one failure means
+        // all of them fail. Say so once, then stay quiet.
+        if (complained.current) return;
+        complained.current = true;
+        errorSink.current?.(typeof e === "string" ? e : String(e));
+      }),
+    ),
+  );
+
+  // The animation is stopped only when the hook goes away. An effect re-run
+  // must not stop it: see `remeasure` below.
+  useEffect(
+    () => () => {
+      if (raf.current !== undefined) cancelAnimationFrame(raf.current);
+      raf.current = undefined;
+    },
+    [],
+  );
 
   const layout = `${docked}|${fullscreen}`;
 
@@ -110,13 +135,7 @@ export function useVideoRect({
     const send = (r: VideoRect) => {
       current.current = r;
       paint(r);
-      void backend.setVideoRect(r).catch((e: unknown) => {
-        // The rect is sent every frame of a transition; one failure means all
-        // of them fail. Say so once, then stay quiet.
-        if (complained.current) return;
-        complained.current = true;
-        errorSink.current?.(typeof e === "string" ? e : String(e));
-      });
+      post(r);
     };
 
     const tick = () => {
@@ -140,6 +159,25 @@ export function useVideoRect({
       if (raf.current === undefined) raf.current = requestAnimationFrame(tick);
     };
 
+    /** The boxes moved without the layout changing shape: a zoom, a window
+     *  resize, the picture being resized. Everything on screen moved at
+     *  once, so at rest the picture snaps to follow — an animation would be
+     *  240ms of video hanging outside its slot.
+     *
+     *  Mid-transition it is the destination that moved, so the transition
+     *  is steered there and carries on at its own pace. Snapping instead is
+     *  what made leaving the player instant: the docked slot becomes
+     *  visible on the way out, a ResizeObserver reports its first size on
+     *  the next frame, and that report cut the move short after one frame. */
+    const remeasure = () => {
+      const target = measure();
+      if (raf.current !== undefined) {
+        to.current = target;
+        return;
+      }
+      animateTo(target, 0);
+    };
+
     if (!primed.current) {
       // Boot: snap. There is nothing on screen yet to animate, and Rust needs
       // to be told where the video goes before anything opens.
@@ -150,31 +188,25 @@ export function useVideoRect({
       // already moving and a 240ms lag would smear the video behind its hole.
       animateTo(measure(), DOCK_MS);
     } else {
-      // Same mode, different layout: a zoom change. Everything on screen
-      // resized instantly, so the picture has to as well — an animation here
-      // would be 240ms of the video hanging outside its slot.
-      animateTo(measure(), 0);
+      remeasure();
     }
     wasLayout.current = layout;
 
-    const snap = () => animateTo(measure(), 0);
-    window.addEventListener("resize", snap);
+    window.addEventListener("resize", remeasure);
     const ro =
       typeof ResizeObserver !== "undefined" && dockRef.current
-        ? new ResizeObserver(snap)
+        ? new ResizeObserver(remeasure)
         : null;
     if (ro && dockRef.current) ro.observe(dockRef.current);
 
     return () => {
-      window.removeEventListener("resize", snap);
+      window.removeEventListener("resize", remeasure);
       ro?.disconnect();
-      if (raf.current !== undefined) cancelAnimationFrame(raf.current);
-      raf.current = undefined;
     };
     // `zoom` is in the dependency list precisely because it is not used above:
     // it changes every measurement this effect takes. `layout` carries both
     // `docked` and `fullscreen`, and is what decides animate versus snap.
-  }, [docked, layout, zoom, videoWidthRem, dockRef, stageRef, paintRef]);
+  }, [docked, layout, zoom, videoWidthRem, dockRef, stageRef, paintRef, post]);
 
   return current;
 }

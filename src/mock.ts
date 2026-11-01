@@ -974,7 +974,15 @@ export const mockApi = {
     });
   },
 
-  seekLive: async () => patchPlayer({ behindLive: 0, atLiveEdge: true }),
+  // Reported as a jump when it went a second or more, as the backend does.
+  seekLive: async () => {
+    const by = playerEmitter.last.behindLive;
+    patchPlayer({
+      behindLive: 0,
+      atLiveEdge: true,
+      ...(by >= 1 ? { liveJump: { seconds: Math.round(by * 10) / 10, seq: ++mockJumps } } : {}),
+    });
+  },
 
   setVolume: async (volume: number) => patchPlayer({ volume }),
   setMuted: async (muted: boolean) => patchPlayer({ muted }),

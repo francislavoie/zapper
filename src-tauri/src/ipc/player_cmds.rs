@@ -345,6 +345,26 @@ impl Machine {
     fn caught_up(&mut self, by: f64) {
         self.last_live_nudge = Some(Instant::now());
         self.drift_secs = 0.0;
+        self.report_jump(by);
+    }
+
+    /// The viewer asked for live (the Live button, `L`) and playback went
+    /// `by` seconds forward. Bookkeeping only, after the seek was made.
+    ///
+    /// Reported like an automatic catch-up, so the picture says how far it
+    /// went whichever way the jump came about — but only a jump worth
+    /// mentioning: under [`MIN_REPORTED_JUMP`] the picture barely moved, and
+    /// "Jumped 0.4s to live" would be news about nothing. The nudge clock is
+    /// left alone; `seek_live` clears it, so the automatic catch-up is free
+    /// to keep the viewer there.
+    fn jumped_to_live(&mut self, by: f64) {
+        self.drift_secs = 0.0;
+        if by >= MIN_REPORTED_JUMP {
+            self.report_jump(by);
+        }
+    }
+
+    fn report_jump(&mut self, by: f64) {
         self.jumps += 1;
         self.dto.live_jump = Some(LiveJumpDto {
             seconds: round_tenth(by),
@@ -999,6 +1019,11 @@ fn live_edge_with_hysteresis(was_live: bool, behind: f64) -> bool {
 /// is not seeked on every tick.
 const LIVE_NUDGE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3);
 
+/// The shortest jump to live the picture announces when the viewer asked
+/// for it. A press of Live a moment after the last one moves playback a
+/// fraction of a second, which is not something to tell anybody about.
+const MIN_REPORTED_JUMP: f64 = 1.0;
+
 #[tauri::command]
 pub async fn seek_live(app: AppHandle) -> Result<(), String> {
     // Asking for live means staying there, not visiting once.
@@ -1007,7 +1032,7 @@ pub async fn seek_live(app: AppHandle) -> Result<(), String> {
         m.following_live = true;
         m.last_live_nudge = None;
     }
-    on_player(&app, |p| {
+    let by = on_player(&app, |p| {
         let probe = p.probe();
         // Relative, the same operation the backward seek already does, in
         // reverse - and bounded by `behind_live`, which is measured to the end
@@ -1016,13 +1041,16 @@ pub async fn seek_live(app: AppHandle) -> Result<(), String> {
         // beyond it) is ignored by mpv without an error: playback stays
         // exactly where it was.
         let by = (probe.behind_live - LIVE_CUSHION).max(0.0);
-        match by > 0.05 {
-            true => p.command("seek", &[&format!("{by:.3}"), "relative"]),
-            false => Ok(()),
+        if by <= 0.05 {
+            return Ok(0.0);
         }
-        .map_err(|e| e.to_string())
+        p.command("seek", &[&format!("{by:.3}"), "relative"])
+            .map(|()| by)
+            .map_err(|e| e.to_string())
     })
-    .await
+    .await?;
+    commit(&app, |m| m.jumped_to_live(by));
+    Ok(())
 }
 
 /// How loud a volume setting *sounds*, as mpv's own volume.
@@ -1564,6 +1592,39 @@ mod tests {
         assert_eq!(m.drift_secs, 0.0, "the jump makes back what was lost");
         assert!(m.last_live_nudge.is_some(), "and holds off the next one");
         assert!(m.changed().is_some_and(|d| d.live_jump.is_some()));
+    }
+
+    #[test]
+    fn a_jump_the_viewer_asked_for_is_reported_too() {
+        let mut m = Machine::new();
+        m.opening(1);
+        m.playing();
+        m.drift_secs = 4.0;
+        m.jumped_to_live(11.96);
+        assert_eq!(m.dto.live_jump, Some(LiveJumpDto { seconds: 12.0, seq: 1 }));
+        assert_eq!(m.drift_secs, 0.0, "at live, nothing is lost");
+        assert!(
+            m.last_live_nudge.is_none(),
+            "asking for live must not hold off the catch-up that keeps it there"
+        );
+        assert!(m.changed().is_some_and(|d| d.live_jump.is_some()));
+    }
+
+    #[test]
+    fn a_tiny_jump_the_viewer_asked_for_is_not_news() {
+        let mut m = Machine::new();
+        m.opening(1);
+        m.playing();
+        m.jumped_to_live(0.6);
+        assert_eq!(m.dto.live_jump, None, "under a second is not worth a notice");
+        m.jumped_to_live(MIN_REPORTED_JUMP);
+        assert_eq!(m.dto.live_jump.map(|j| j.seq), Some(1), "a second is");
+        m.jumped_to_live(0.2);
+        assert_eq!(
+            m.dto.live_jump.map(|j| j.seq),
+            Some(1),
+            "and a tiny one after it neither repeats nor clears it"
+        );
     }
 
     #[test]

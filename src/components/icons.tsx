@@ -5,14 +5,20 @@
 type IconProps = { className?: string; title?: string };
 
 /** The compressor icons are one waveform drawn two ways, so the pair reads as
- *  a before and after. "Off" is five bars at their natural, uneven heights.
- *  "On" is the same five squeezed toward an even level between two rails —
- *  the rails are what tells them apart at button size, where a difference in
- *  bar heights alone is a pixel or two. */
+ *  a before and after. "Off" is five bars at their natural, uneven heights,
+ *  the loudest reaching nearly the full height of the icon. "On" is the same
+ *  five evened out to one short level, with a chevron above and below
+ *  pressing in on them: the squeeze is drawn, not left to a difference in
+ *  bar heights, which at button size is a pixel or two. Stroked a touch
+ *  heavier than the outline icons, so five thin bars carry the same weight
+ *  as the filled play and speaker beside them. */
 const WAVE_X = [4.5, 8.25, 12, 15.75, 19.5];
+const WAVE_WEIGHT = "2.2";
 // Half-heights of each bar about the centre line, before the round caps.
-const WAVE_LOUD = [2.5, 7.5, 4.5, 6.5, 3];
-const WAVE_SQUEEZED = [3.2, 4.6, 3.8, 4.3, 3.4];
+const WAVE_LOUD = [3, 8.25, 5, 7, 2.5];
+const WAVE_EVEN = [3, 3, 3, 3, 3];
+// The chevrons: each spans the middle three bars and points at the centre.
+const SQUEEZE = "M6 2.75 12 5.25 18 2.75M6 21.25 12 18.75 18 21.25";
 
 function waveBars(halves: number[]): string {
   return WAVE_X.map((x, i) => `M${x} ${12 - halves[i]}V${12 + halves[i]}`).join("");
@@ -22,10 +28,10 @@ export function CompressorOn({ className, title }: IconProps) {
   return (
     <svg className={className} viewBox="0 0 24 24" aria-hidden={!title} focusable="false">
       {title ? <title>{title}</title> : null}
-      <path d="M2.5 4H21.5M2.5 20H21.5" fill="none" stroke="currentColor"
-            strokeWidth="1.7" strokeLinecap="round" />
-      <path d={waveBars(WAVE_SQUEEZED)} fill="none" stroke="currentColor"
-            strokeWidth="2" strokeLinecap="round" />
+      <path d={waveBars(WAVE_EVEN)} fill="none" stroke="currentColor"
+            strokeWidth={WAVE_WEIGHT} strokeLinecap="round" />
+      <path d={SQUEEZE} fill="none" stroke="currentColor" strokeWidth="1.8"
+            strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
@@ -35,7 +41,7 @@ export function CompressorOff({ className, title }: IconProps) {
     <svg className={className} viewBox="0 0 24 24" aria-hidden={!title} focusable="false">
       {title ? <title>{title}</title> : null}
       <path d={waveBars(WAVE_LOUD)} fill="none" stroke="currentColor"
-            strokeWidth="2" strokeLinecap="round" />
+            strokeWidth={WAVE_WEIGHT} strokeLinecap="round" />
     </svg>
   );
 }

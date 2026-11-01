@@ -7,8 +7,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   FULL,
-  easeOutCubic,
+  easeInOutCubic,
   fitAspect,
+  latestOnly,
   lerpRect,
   normalisedRect,
   rectAt,
@@ -67,17 +68,25 @@ test("lerpRect interpolates each edge independently", () => {
   assert.deepEqual(lerpRect(a, b, -4), a);
 });
 
-test("easeOutCubic is monotonic and pinned at both ends", () => {
-  near(easeOutCubic(0), 0);
-  near(easeOutCubic(1), 1);
+test("easeInOutCubic is monotonic, pinned at both ends and symmetric", () => {
+  near(easeInOutCubic(0), 0);
+  near(easeInOutCubic(1), 1);
+  near(easeInOutCubic(0.5), 0.5);
   let prev = -1;
   for (let i = 0; i <= 20; i++) {
-    const v = easeOutCubic(i / 20);
+    const v = easeInOutCubic(i / 20);
     assert.ok(v >= prev, `not monotonic at ${i}`);
     prev = v;
+    // The same curve run backwards: leaving mirrors entering.
+    near(easeInOutCubic(1 - i / 20), 1 - v, 1e-12);
   }
-  // "Out" means most of the distance is covered early.
-  assert.ok(easeOutCubic(0.5) > 0.5);
+});
+
+test("the transition does not crawl at the end", () => {
+  // The last fifth of the time still covers a visible share of the
+  // distance. Ease-out covered 0.8% there: a pixel or two a frame for the
+  // last 50ms, which is where an uneven frame showed as a hitch.
+  assert.ok(1 - easeInOutCubic(0.8) > 0.03);
 });
 
 test("rectAt lands exactly on the target and reports done", () => {
@@ -150,4 +159,40 @@ test("the last frame of a transition is always sent, however small the step", ()
   assert.equal(shouldSend(a, b, true), true);
   // Nothing at all to do is still nothing to do.
   assert.equal(shouldSend(a, { ...a }, true), false);
+});
+
+test("latestOnly keeps one send in flight and skips stale values", async () => {
+  const sent = [];
+  const pending = [];
+  const post = latestOnly((v) => {
+    sent.push(v);
+    return new Promise((resolve) => pending.push(resolve));
+  });
+  post(1);
+  post(2);
+  post(3);
+  post(4);
+  assert.deepEqual(sent, [1], "one at a time");
+  pending.shift()();
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(sent, [1, 4], "then only the newest of those that waited");
+  pending.shift()();
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(sent, [1, 4], "nothing is sent twice");
+  post(5);
+  assert.deepEqual(sent, [1, 4, 5], "idle again, so the next goes at once");
+});
+
+test("latestOnly carries on after a failed send", async () => {
+  const sent = [];
+  let fail = true;
+  const post = latestOnly((v) => {
+    sent.push(v);
+    return fail ? Promise.reject(new Error("no surface")) : Promise.resolve();
+  });
+  post("a");
+  post("b");
+  fail = false;
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(sent, ["a", "b"]);
 });
