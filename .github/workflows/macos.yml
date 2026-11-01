@@ -232,7 +232,8 @@ jobs:
         run: |
           mkdir -p ../shots
           CARGO_BUILD_JOBS=$(sysctl -n hw.ncpu) cargo build --release --features harness,tauri/custom-protocol --bin surface_check
-          ZAPPER_SHOTS=$PWD/../shots ./target/release/surface_check 30 2>&1 | tee ../shots/surface_check.log
+          ZAPPER_MPV_LOG=$PWD/../shots/surface_check-mpv.log ZAPPER_SHOTS=$PWD/../shots \
+            ./target/release/surface_check 30 2>&1 | tee ../shots/surface_check.log
           grep -q '^PASS' ../shots/surface_check.log
 
       # The app itself, from the bundle, playing the orientation fixture (ZAPPER_AUTOPLAY on a
