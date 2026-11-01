@@ -223,18 +223,33 @@ jobs:
 
       # The surface harness against the fixture: the layer draws, mpv paints, the picture is not
       # black, the rect docks the view, thumbnails are taken. Built against the interface the app
-      # embeds (tauri/custom-protocol), so its screenshots show the page over the video. The
-      # runners have no GPU: OpenGL is Apple's software renderer there, a few frames a second.
+      # embeds (tauri/custom-protocol), so its screenshots show the page over the video.
+      #
+      # The runners have no GPU: OpenGL is Apple's software renderer there, a few frames a second,
+      # and VideoToolbox's frames (handed to it as IOSurfaces) have stayed black for a whole run in
+      # one run of several. So the check that gates decodes in software, which exercises
+      # everything of zapper's; the app's own path, VideoToolbox into OpenGL, is run after it twice
+      # for the record, without failing the job (docs/macos.md).
       - name: Surface check
         working-directory: src-tauri
-        env:
-          RUST_LOG: info,zapper_lib::surface::screenshot=debug
         run: |
-          mkdir -p ../shots
           CARGO_BUILD_JOBS=$(sysctl -n hw.ncpu) cargo build --release --features harness,tauri/custom-protocol --bin surface_check
-          ZAPPER_MPV_LOG=$PWD/../shots/surface_check-mpv.log ZAPPER_SHOTS=$PWD/../shots \
-            ./target/release/surface_check 30 2>&1 | tee ../shots/surface_check.log
-          grep -q '^PASS' ../shots/surface_check.log
+          check() { # check <name> [hwdec]
+            local out=$PWD/../shots/surface-$1
+            mkdir -p "$out"
+            ZAPPER_HWDEC=${2:-} ZAPPER_MPV_LOG=$out/mpv.log ZAPPER_SHOTS=$out \
+              ./target/release/surface_check 30 > "$out/check.log" 2>&1
+            grep -E '^(PASS|FAIL)' "$out/check.log" || tail -20 "$out/check.log"
+            grep -q '^PASS' "$out/check.log"
+          }
+          check software no
+          for n in 1 2; do
+            if check videotoolbox-$n; then
+              echo "VideoToolbox run $n: passed" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "::warning::VideoToolbox into the software renderer, run $n: $(grep -E '^FAIL' ../shots/surface-videotoolbox-$n/check.log)"
+            fi
+          done
 
       # The app itself, from the bundle, playing the orientation fixture (ZAPPER_AUTOPLAY on a
       # scratch account, ZAPPER_MUTE): a screenshot of the real interface over real video. Its

@@ -71,13 +71,18 @@ On every pull request, `macos.yml`:
 
 The runners have no GPU: OpenGL there is Apple's software renderer, at a few frames a second.
 CI shows the pieces are wired together correctly, and says nothing about how smoothly video
-plays.
+plays. With it, VideoToolbox's frames (handed to OpenGL as IOSurfaces) have also come out black
+for a whole run in one run of several, which is likely the software renderer's doing but which
+only a real Mac can settle. So the `surface_check` that gates decodes in software
+(`ZAPPER_HWDEC=no`), and the app's own path, VideoToolbox into OpenGL, runs twice after it for
+the record (the job summary says how each went) and in the bundled app's screenshot.
 
 ## What needs a real Mac
 
 - **Playback on a GPU.** Smoothness, frame pacing, CPU use, and the hardware OpenGL 3.2 pixel
-  format the layer asks for first (the runners only ever reach the software fallback). Retina
-  sharpness, and a window moved between screens of different scales.
+  format the layer asks for first (the runners only ever reach the software fallback).
+  That VideoToolbox's frames reach the picture every time (on the runners one run in several
+  stayed black). Retina sharpness, and a window moved between screens of different scales.
 - **Sound.** Every run on CI has `ao=null`; Core Audio output has never been heard.
 - **The window.** It is undecorated (`decorations: false`) and draws the same title bar and
   window buttons as on Linux and Windows: no traffic lights, and moving, full screen and Mission
