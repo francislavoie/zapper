@@ -2,6 +2,12 @@
 // `decorations: false`, so everything a title bar does — dragging, the double
 // click that maximises, minimise/maximise/close — is drawn and handled here.
 //
+// Except on a Mac, where the window keeps the system's title bar, transparent
+// and under this one (`titleBarStyle: "Overlay"`, src-tauri/tauri.macos.conf.json):
+// the traffic lights are AppKit's, in the bar's top-left corner, so the bar
+// draws no window buttons there, leaves the lights their room before the
+// hamburger, and does what the system's bar would on a double click.
+//
 // Three things share the bar, and the order is the whole design:
 //
 //   left    the hamburger, which holds every action the command palette holds,
@@ -41,6 +47,8 @@ import {
 } from "../logic/palette";
 import { maximiseLabel, statusLine } from "../logic/toolbar";
 import { badgeLabel, badgeShort, showsBadge } from "../logic/updates";
+import { chordLabel, hintLabel } from "../logic/keys";
+import { IS_MAC } from "../platform";
 import { useApp, useDispatch } from "../store";
 import { windowControls } from "../window";
 import { useMaximised } from "../hooks/useMaximised";
@@ -85,9 +93,9 @@ export function Toolbar() {
   const dragWindow = (e: ReactMouseEvent) => {
     if (e.button !== 0) return;
     if (e.detail >= 2) {
-      void windowControls
-        .toggleMaximise()
-        .catch((err: unknown) => dispatch({ type: "toast", text: `maximise: ${String(err)}` }));
+      void (IS_MAC ? windowControls.titleBarDoubleClick() : windowControls.toggleMaximise()).catch(
+        (err: unknown) => dispatch({ type: "toast", text: `maximise: ${String(err)}` }),
+      );
       return;
     }
     void windowControls.startDragging().catch(() => {
@@ -118,6 +126,9 @@ export function Toolbar() {
 
   return (
     <header className="toolbar">
+      {/* The traffic lights' room: AppKit draws them here, and around them
+          the bar drags the window like the rest of it. */}
+      {IS_MAC ? <div className="tb-lights" onMouseDown={dragWindow} /> : null}
       <div className="tb-lead">
         {/* The outside-click boundary is the button and its menu, and nothing
             else: clicking the status line beside them is outside. */}
@@ -187,32 +198,42 @@ export function Toolbar() {
         >
           <Gear className="tb-gear" />
         </button>
-        <button
-          className="tb-btn"
-          aria-label="Minimise"
-          data-tip="Minimise"
-          onClick={() => void windowControls.minimise().catch(() => {})}
-        >
-          <span className="tb-glyph">—</span>
-        </button>
-        <button
-          className="tb-btn"
-          aria-label={max.label}
-          data-tip={max.label}
-          onClick={() => void windowControls.toggleMaximise().catch(() => {})}
-        >
-          <span className="tb-glyph">{max.glyph}</span>
-        </button>
-        <button
-          className="tb-btn danger"
-          aria-label="Close"
-          data-tip="Close"
-          onClick={() => void windowControls.close().catch(() => {})}
-        >
-          <span className="tb-glyph">✕</span>
-        </button>
+        {IS_MAC ? null : <WindowButtons maxLabel={max.label} maxGlyph={max.glyph} />}
       </div>
     </header>
+  );
+}
+
+/** Minimise, maximise and close: the window's own buttons, drawn because
+ *  there are none. Not on a Mac, which has its own. */
+function WindowButtons({ maxLabel, maxGlyph }: { maxLabel: string; maxGlyph: string }) {
+  return (
+    <>
+      <button
+        className="tb-btn"
+        aria-label="Minimise"
+        data-tip="Minimise"
+        onClick={() => void windowControls.minimise().catch(() => {})}
+      >
+        <span className="tb-glyph">—</span>
+      </button>
+      <button
+        className="tb-btn"
+        aria-label={maxLabel}
+        data-tip={maxLabel}
+        onClick={() => void windowControls.toggleMaximise().catch(() => {})}
+      >
+        <span className="tb-glyph">{maxGlyph}</span>
+      </button>
+      <button
+        className="tb-btn danger"
+        aria-label="Close"
+        data-tip="Close"
+        onClick={() => void windowControls.close().catch(() => {})}
+      >
+        <span className="tb-glyph">✕</span>
+      </button>
+    </>
   );
 }
 
@@ -298,7 +319,7 @@ function Menu({ onChoose }: { onChoose: (a: PaletteAction) => void }) {
                 <span className="tb-menu-label" data-tip-overflow="">
                   {a.label}
                 </span>
-                <span className="tb-menu-hint">{a.hint ?? ""}</span>
+                <span className="tb-menu-hint">{hintLabel(a.hint ?? "", IS_MAC)}</span>
               </button>
             );
           })}
@@ -306,7 +327,7 @@ function Menu({ onChoose }: { onChoose: (a: PaletteAction) => void }) {
       ))}
       </SubMenuHost>
       <div className="tb-menu-foot">
-        {ACTIONS.length} actions · <b>Ctrl+P</b> searches them
+        {ACTIONS.length} actions · <b>{chordLabel(["Ctrl", "P"], IS_MAC)}</b> searches them
       </div>
     </div>
   );

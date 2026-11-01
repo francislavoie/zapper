@@ -49,6 +49,8 @@ pub mod xtream;
 
 // The desktop app alone (the `gui` feature, on by default).
 #[cfg(feature = "gui")]
+pub mod chrome;
+#[cfg(feature = "gui")]
 pub mod media_keys;
 #[cfg(feature = "gui")]
 pub mod surface;
@@ -155,6 +157,7 @@ pub fn run() {
             ipc::recording_cmds::remove_recording_service,
             ipc::recording_cmds::set_recording_linger,
             ipc::recording_cmds::open_recording_folder,
+            chrome::title_bar_double_click,
         ])
         // The save and open dialogs, for the backups. Used from Rust alone:
         // the capability grants the window no `dialog:` permission.
@@ -187,6 +190,8 @@ pub fn run() {
             // Registers with the desktop only if Settings › Playback says to;
             // off by default.
             media_keys::install(app.handle());
+
+            chrome::install_menu(app.handle());
 
             // Development hooks. Nothing here runs in a normal launch: they
             // exist because the composited window cannot be screenshotted on

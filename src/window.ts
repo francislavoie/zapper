@@ -1,8 +1,10 @@
-// The window itself, as five verbs.
+// The window itself, as a handful of verbs.
 //
 // The window is undecorated — Rust sets `decorations: false` — so the title
 // bar this app draws is the only one there is, and dragging, minimising,
-// maximising and closing have to be asked for explicitly. Under Tauri these
+// maximising and closing have to be asked for explicitly. On a Mac the window
+// keeps its own buttons (src-tauri/tauri.macos.conf.json) and the bar here
+// only drags it and answers its double click. Under Tauri these
 // are real window calls, each one already granted in the capabilities; in a
 // plain browser they would throw, so the mock stands in and records what was
 // asked, the same trick `__lastVideoRect` plays for the video plane.
@@ -35,6 +37,10 @@ export interface WindowControls {
   toggleMaximise(): Promise<void>;
   isMaximised(): Promise<boolean>;
   close(): Promise<void>;
+  /** A double click on the title bar, on a Mac: whatever System Settings
+   *  says a double click there does (zoom, fill, minimise or nothing), which
+   *  only Rust can read. Elsewhere the bar maximises, as it always has. */
+  titleBarDoubleClick(): Promise<void>;
 }
 
 // Imported lazily so that a plain browser never loads the Tauri window module
@@ -48,6 +54,8 @@ const tauriWindow: WindowControls = {
   toggleMaximise: async () => (await win()).toggleMaximize(),
   isMaximised: async () => (await win()).isMaximized(),
   close: async () => (await win()).close(),
+  titleBarDoubleClick: async () =>
+    (await import("@tauri-apps/api/core")).invoke<void>("title_bar_double_click"),
 };
 
 export const windowControls: WindowControls = inTauri ? tauriWindow : mockWindow;

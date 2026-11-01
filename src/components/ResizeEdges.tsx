@@ -17,6 +17,7 @@
 import type { ResizeDirection } from "../window";
 import { windowControls } from "../window";
 import { useMaximised } from "../hooks/useMaximised";
+import { IS_MAC } from "../platform";
 
 const EDGES: Array<[ResizeDirection, string]> = [
   ["North", "n"],
@@ -32,8 +33,10 @@ const EDGES: Array<[ResizeDirection, string]> = [
 export function ResizeEdges({ fullscreen }: { fullscreen: boolean }) {
   const maximised = useMaximised();
   // A maximised or fullscreen window has no edge to grab, and a strip of
-  // resize cursor along the screen's border would only be in the way.
-  if (maximised || fullscreen) return null;
+  // resize cursor along the screen's border would only be in the way. A Mac's
+  // window is decorated (src-tauri/tauri.macos.conf.json) and AppKit resizes
+  // it from its own edges.
+  if (maximised || fullscreen || IS_MAC) return null;
   return (
     <div className="resize-edges" aria-hidden>
       {EDGES.map(([direction, cls]) => (

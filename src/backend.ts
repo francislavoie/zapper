@@ -9,6 +9,7 @@ import {
   api,
   onChannelQuality,
   onMediaKey,
+  onMenu,
   onPlayerOptions,
   onPlayerState,
   onSyncStatus,
@@ -26,6 +27,7 @@ import {
 import type {
   ChannelQualityDto,
   MediaKey,
+  MenuCommand,
   PlayerOptionsDto,
   PlayerStateDto,
   SyncStatusDto,
@@ -58,6 +60,11 @@ export const subscribeUpdate = (f: (s: UpdateStatusDto) => void): Promise<Unsub>
 
 export const subscribeMediaKey = (f: (k: MediaKey) => void): Promise<Unsub> =>
   inTauri ? onMediaKey(f) : onMockMediaKey(f);
+
+/** The macOS app menu's Settings… and About. A browser has no app menu, so
+ *  the mock never sends one. */
+export const subscribeMenu = (f: (c: MenuCommand) => void): Promise<Unsub> =>
+  inTauri ? onMenu(f) : Promise.resolve(() => {});
 
 export const subscribeChannelQuality = (f: (q: ChannelQualityDto) => void): Promise<Unsub> =>
   inTauri ? onChannelQuality(f) : onMockChannelQuality(f);
