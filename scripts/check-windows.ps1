@@ -25,8 +25,19 @@
     The MSI is unpacked with an administrative install (msiexec /a), which
     installs nothing. The NSIS installer is unpacked with 7-Zip, or with
     -Install really installed (silently, for this user, into a scratch
-    folder) and uninstalled again: that is what runs its hook. The release
-    workflow uses -Install; on a desktop you care about, leave it off.
+    folder): that is what runs its hooks. -Install then also checks the
+    recording service's task (installed with zapper-server --install-service,
+    on a scratch home) across both installers' lives:
+
+      * NSIS: installing over the install, and the in-place uninstall a newer
+        setup runs, keep the task (started again); a real uninstall deletes
+        it and stops zapper-server;
+      * MSI (administrator): installed for real, the task added, and a full
+        uninstall deletes it (packaging/windows/service-cleanup.wxs).
+
+    The release workflow uses -Install; on a desktop you care about, leave it
+    off: it installs and uninstalls zapper, and refuses to start when this
+    user already has the task.
 
 .EXAMPLE
     powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-windows.ps1 -Dir out -Version 0.2.0
@@ -213,12 +224,67 @@ if ($fromMsi) {
 }
 
 if ($Install) {
-    Step "uninstall the NSIS install"
+    # The recording service across an upgrade and an uninstall: Settings >
+    # Recording's Install, through the shipped zapper-server's
+    # --install-service (the same code), on a scratch home it hands the task.
+    $task = "zapper-server-$env:USERNAME"
+    function Task { Get-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue }
+    function Wait-Gone([string]$file) {
+        # An uninstaller run normally copies itself elsewhere and returns at once.
+        $deadline = (Get-Date).AddSeconds(120)
+        while ((Test-Path $file) -and (Get-Date) -lt $deadline) { Start-Sleep 1 }
+    }
+    function Install-Service([string]$at) {
+        $out = (& (Join-Path $at "zapper-server.exe") --install-service 2>&1 | Out-String).Trim()
+        Write-Host "  zapper-server --install-service: $out"
+        $t = Task
+        if (-not $t) { Fail "no task $task after --install-service from $at"; return $null }
+        Write-Host "  task $task`: $($t.State), runs $($t.Actions[0].Execute)"
+        return $t.State
+    }
+    $env:ZAPPER_HOME = Join-Path $work "home"
+    if (Task) { throw "a task $task is already registered here; not touching it" }
+
+    Step "NSIS: the recording service survives an upgrade"
+    $state = Install-Service $nsisDir
+    # Installed over itself, as the updater's run of a newer setup does.
+    $p = Start-Process -Wait -PassThru $nsis -ArgumentList "/S", "/D=$nsisDir"
+    if ($p.ExitCode -ne 0) { Fail "installing over the install failed with $($p.ExitCode)" }
+    $t = Task
+    if (-not $t) { Fail "installing over the install deleted the task" }
+    elseif ($state -eq "Running" -and $t.State -ne "Running") { Fail "the task is $($t.State) after installing over the install, not started again" }
+    else { Write-Host "  after installing over it: $($t.State)" }
+    # The old uninstaller as a newer setup runs it ("uninstall before
+    # installing"): in place, from the install folder.
+    $p = Start-Process -Wait -PassThru (Join-Path $nsisDir "uninstall.exe") -ArgumentList "/S", "_?=$nsisDir"
+    if (-not (Task)) { Fail "the uninstall a newer setup runs deleted the task" } else { Write-Host "  after the uninstall an upgrade runs: still there" }
+    $p = Start-Process -Wait -PassThru $nsis -ArgumentList "/S", "/D=$nsisDir"
+    if ($p.ExitCode -ne 0) { Fail "reinstalling failed with $($p.ExitCode)" }
+
+    Step "NSIS: uninstalling removes the recording service"
     $p = Start-Process -Wait -PassThru (Join-Path $nsisDir "uninstall.exe") -ArgumentList "/S"
-    # The uninstaller copies itself elsewhere and returns at once; wait for it.
-    $deadline = (Get-Date).AddSeconds(120)
-    while ((Test-Path (Join-Path $nsisDir "zapper.exe")) -and (Get-Date) -lt $deadline) { Start-Sleep 1 }
+    Wait-Gone (Join-Path $nsisDir "zapper.exe")
     if (Test-Path (Join-Path $nsisDir "zapper.exe")) { Fail "the NSIS uninstaller left zapper.exe behind" }
+    if (Task) { Fail "the NSIS uninstall left the task $task" } else { Write-Host "  task gone" }
+    if (Get-Process zapper-server -ErrorAction SilentlyContinue) { Fail "zapper-server still runs after the uninstall" }
+
+    Step "MSI: installed, then uninstalled with the recording service"
+    $log = Join-Path $work "msi-install.log"
+    $p = Start-Process -Wait -PassThru msiexec.exe -ArgumentList "/i", "`"$msi`"", "/qn", "/L*v", "`"$log`""
+    if ($p.ExitCode -ne 0) { Fail "msiexec /i failed with $($p.ExitCode)" }
+    else {
+        $at = Join-Path $env:ProgramFiles "zapper"
+        Install-Service $at | Out-Null
+        $log = Join-Path $work "msi-remove.log"
+        $p = Start-Process -Wait -PassThru msiexec.exe -ArgumentList "/x", "`"$msi`"", "/qn", "/L*v", "`"$log`""
+        if ($p.ExitCode -ne 0) { Fail "msiexec /x failed with $($p.ExitCode)" }
+        if (Test-Path (Join-Path $at "zapper.exe")) { Fail "the MSI uninstall left zapper.exe behind" }
+        if (Task) {
+            Fail "the MSI uninstall left the task $task"
+            Select-String -Path $log -Pattern "ZapperRemoveServiceTasks" | ForEach-Object { Write-Host "  $($_.Line)" }
+        } else { Write-Host "  task gone" }
+    }
+    Remove-Item Env:ZAPPER_HOME
 }
 
 Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
@@ -226,4 +292,4 @@ if ($failures.Count -gt 0) {
     Write-Host "FAIL: $($failures.Count) problem(s)"
     exit 1
 }
-Write-Host "PASS: both installers carry zapper and zapper-server, their DLLs, the notices and the install-kind marker, and need nothing Windows lacks"
+Write-Host "PASS: both installers carry zapper and zapper-server, their DLLs, the notices and the install-kind marker, and need nothing Windows lacks$(if ($Install) { '; the recording service outlives upgrades and goes with an uninstall' })"

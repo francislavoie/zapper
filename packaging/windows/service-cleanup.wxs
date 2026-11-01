@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The MSI's half of removing the recording service with zapper
+  (packaging/windows/installers.conf.json: wix.fragmentPaths, and
+  componentGroupRefs to pull this fragment in; Tauri bundles with WiX 3).
+
+  Settings > Recording installs the service as a scheduled task per user,
+  zapper-server-<user>, with "zapper" as its author
+  (src-tauri/src/recording/service.rs). They are the users' own tasks, so
+  only a process running as SYSTEM sees them all: a deferred action that does
+  not impersonate. On a full removal only, never on the removal half of an
+  upgrade (UPGRADINGPRODUCTCODE), it stops and deletes every such task, before
+  the files go, so that none is left starting a program that is gone. It runs
+  in the installer service's session, so no window shows; a failure is
+  ignored rather than holding the uninstall back.
+
+  The script, which has no [ ] or { } for Windows Installer to read as
+  properties:
+
+    $tasks = Get-ScheduledTask -TaskName 'zapper-server-*' | Where-Object Author -EQ 'zapper'
+    $tasks | Stop-ScheduledTask
+    $tasks | Unregister-ScheduledTask -Confirm:$false
+
+  The per-user NSIS setup does the same for its user from its uninstaller
+  (packaging/windows/installer-hooks.nsh).
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Fragment>
+    <!-- Empty: what the main template references to link this fragment. -->
+    <ComponentGroup Id="ZapperServiceCleanup" />
+
+    <CustomAction Id="ZapperRemoveServiceTasks"
+                  Directory="TARGETDIR"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="ignore"
+                  ExeCommand="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command &quot;$tasks = Get-ScheduledTask -TaskName 'zapper-server-*' -ErrorAction SilentlyContinue | Where-Object Author -EQ 'zapper'; $tasks | Stop-ScheduledTask -ErrorAction SilentlyContinue; $tasks | Unregister-ScheduledTask -Confirm:$false -ErrorAction SilentlyContinue&quot;" />
+
+    <InstallExecuteSequence>
+      <Custom Action="ZapperRemoveServiceTasks" Before="RemoveFiles">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>
+    </InstallExecuteSequence>
+  </Fragment>
+</Wix>
