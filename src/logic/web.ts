@@ -56,14 +56,30 @@ export function errorText(status: number, body: unknown): string {
 /** An answer that means this browser is not signed in (any more). */
 export const signedOutStatus = (status: number): boolean => status === 401;
 
+/** How long after asking for a refresh (or saving the account, which asks
+ *  for one) the status is asked for often even though it still says idle:
+ *  the service starts the pass when its loop wakes, not before it answers. */
+export const SYNC_BURST_MS = 20_000;
+
 /** How long to wait before asking the sync's status again: often while it is
- *  working, so the toolbar follows it; rarely otherwise, to notice a refresh
- *  that someone else started. */
-export function syncPollMs(s: SyncStatusDto | null): number {
+ *  working, so the toolbar follows it, and just after this page asked for a
+ *  refresh, so the toolbar shows it starting; rarely otherwise, to notice a
+ *  refresh that someone else started. `burstUntil` is when the "just after"
+ *  ends, on the clock `now` is read from. */
+export function syncPollMs(s: SyncStatusDto | null, now = 0, burstUntil = 0): number {
   if (s && (s.phase === "categories" || s.phase === "channels" || s.phase === "epg")) {
     return 2_000;
   }
+  if (now < burstUntil) return 1_000;
   return 15_000;
+}
+
+/** Whether a password typed on this page would cross the network
+ *  unencrypted: plain HTTP to anything but this computer itself. */
+export function passwordInClear(protocol: string, hostname: string): boolean {
+  if (protocol !== "http:") return false;
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  return !(host === "localhost" || host === "::1" || /^127\.\d+\.\d+\.\d+$/.test(host));
 }
 
 /** The settings a browser keeps for itself, in its own storage: how the

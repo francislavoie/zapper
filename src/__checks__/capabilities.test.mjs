@@ -17,20 +17,30 @@ test("the app's window can do everything but sign out", () => {
   assert.deepEqual(settingsSections(DESKTOP), [...SETTINGS_SECTIONS]);
 });
 
-test("a browser keeps the guide, recordings and the shortcuts, and nothing of the computer's", () => {
-  assert.deepEqual(settingsSections(BROWSER), ["Guide", "Recording", "Keyboard", "About"]);
+test("a browser keeps the guide, recordings, the account and refreshing, and nothing of the computer's", () => {
+  assert.deepEqual(settingsSections(BROWSER), [
+    "Account",
+    "Guide",
+    "Recording",
+    "Data",
+    "Keyboard",
+    "About",
+  ]);
   for (const k of [
     "playback",
     "window",
     "mediaKeys",
     "updater",
-    "account",
     "data",
     "localService",
     "networkAdmin",
   ]) {
     assert.equal(BROWSER[k], false, k);
   }
+  // The service keeps the account and the catalogue, so a browser signed in
+  // to it may change the one and refresh the other.
+  assert.equal(BROWSER.account, true);
+  assert.equal(BROWSER.resync, true);
   assert.equal(BROWSER.signOut, true);
   assert.equal(allows(BROWSER, undefined), true);
   assert.equal(allows(BROWSER, "window"), false);

@@ -32,6 +32,12 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
   search channels and programmes, and schedule, cancel and delete recordings; watching in the
   browser is not there yet. Each browser is listed with the other devices and can be signed out
   there or from the page itself.
+- In the browser, Refresh data from the provider (Settings → Data, the command palette, the title
+  bar's retry) refreshes the catalogue, with its progress in the title bar and the lists updated
+  when it is done. Settings → Account is there too, for every account type: a saved password is
+  never sent to the browser, and leaving it empty keeps it, as in the app. Over plain HTTP the page
+  warns that a password typed there crosses the network unencrypted. The app on the same computer
+  picks up an account or catalogue changed this way within a few seconds.
 
 ### Changed
 

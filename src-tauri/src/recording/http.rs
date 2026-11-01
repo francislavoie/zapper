@@ -32,7 +32,7 @@ use super::api::{
 };
 use super::now;
 use super::server::Server;
-use super::{browse, web};
+use super::{account, browse, web};
 
 type Shared = Arc<Server>;
 
@@ -368,6 +368,7 @@ pub fn router(server: Shared) -> Router {
         .route("/api/settings", get(settings).put(set_settings))
         .route("/api/logout", post(logout))
         .merge(browse::routes())
+        .merge(account::routes())
         .route_layer(middleware::from_fn_with_state(server.clone(), auth));
     let app = Router::new()
         .route("/api/network", get(network).put(set_network))
@@ -1608,5 +1609,270 @@ mod tests {
             call_raw(&s, from_page("GET", "/api/logo/1", Some(&token), None)).await.0,
             StatusCode::NOT_FOUND
         );
+    }
+
+    // ------------------------------------------------------------- account
+
+    /// Runs `f` on a current-thread runtime in a config directory of its
+    /// own (`paths::with_test_root` is per thread, so every await must stay
+    /// on this one), with an account file no other test can see.
+    fn with_account<T>(name: &str, f: impl std::future::Future<Output = T>) -> T {
+        let dir = std::env::temp_dir().join(format!(
+            "zapper-http-account-{name}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let out = crate::paths::with_test_root(&dir, || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(f)
+        });
+        let _ = std::fs::remove_dir_all(&dir);
+        out
+    }
+
+    /// An account file with a secret in every kind that has one.
+    fn save_every_kind() {
+        use crate::catalog::credentials;
+        credentials::save_tvheadend(&crate::tvheadend::TvhAccount {
+            url: "http://tvh.invalid:9981".into(),
+            username: "viewer".into(),
+            password: "tvh-secret-31".into(),
+        })
+        .unwrap();
+        credentials::save_m3u(&crate::m3u::M3uAccount {
+            playlist: "http://p.invalid/get.php?username=viewer&password=m3u-secret-32".into(),
+            epg_urls: vec![
+                "http://p.invalid/xmltv.php?username=viewer&password=m3u-secret-32".into(),
+            ],
+            user_agent: None,
+        })
+        .unwrap();
+        credentials::save(&crate::xtream::Credentials {
+            host: "http://saved.invalid".into(),
+            username: "viewer".into(),
+            password: "saved-secret-33".into(),
+        })
+        .unwrap();
+    }
+
+    const SECRETS: [&str; 3] = ["tvh-secret-31", "m3u-secret-32", "saved-secret-33"];
+
+    fn on_file() -> crate::catalog::credentials::OnFile {
+        crate::catalog::credentials::on_file()
+    }
+
+    #[test]
+    fn a_device_sees_the_account_without_its_secrets() {
+        with_account("view", async {
+            save_every_kind();
+            let s = server("acct-view");
+            enable(&s, true).await;
+            let token = browser_login(&s).await;
+            let (st, _, body) =
+                call_raw(&s, from_page("GET", "/api/account", Some(&token), None)).await;
+            assert_eq!(st, StatusCode::OK);
+            let text = String::from_utf8(body).unwrap();
+            for secret in SECRETS {
+                assert!(!text.contains(secret), "{secret} reached the browser: {text}");
+            }
+            let a: serde_json::Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(a["kind"], "xtream");
+            assert_eq!(a["host"], "http://saved.invalid");
+            assert_eq!(a["hasPassword"], true);
+            assert_eq!(a["tvheadendHasPassword"], true);
+            assert_eq!(a["playlistRedacted"], true);
+            assert_eq!(a["epgRedacted"], true);
+            // A path on the service's computer is not the browser's business.
+            assert_eq!(a["path"], "");
+            // Signed out, nothing.
+            assert_eq!(
+                call_raw(&s, from_page("GET", "/api/account", None, None)).await.0,
+                StatusCode::UNAUTHORIZED
+            );
+            // The app may ask too.
+            let (st, a) = call(&s, req("GET", "/api/account", HOME, false, Some(APP))).await;
+            assert_eq!(st, StatusCode::OK);
+            assert_eq!(a["username"], "viewer");
+        });
+    }
+
+    #[test]
+    fn a_device_saves_and_a_blank_password_keeps_the_saved_one() {
+        with_account("save", async {
+            save_every_kind();
+            let s = server("acct-save");
+            enable(&s, true).await;
+            let token = browser_login(&s).await;
+            let form = serde_json::json!({
+                "kind": "xtream", "host": " http://new.invalid ", "username": "viewer",
+                "password": ""
+            });
+            let (st, _, body) =
+                call_raw(&s, from_page("PUT", "/api/account", Some(&token), Some(form))).await;
+            assert_eq!(st, StatusCode::OK);
+            let text = String::from_utf8(body).unwrap();
+            assert!(!SECRETS.iter().any(|x| text.contains(x)), "{text}");
+            let saved = on_file().xtream.unwrap();
+            assert_eq!(saved.host, "http://new.invalid");
+            assert_eq!(saved.password, "saved-secret-33");
+
+            // Switching kinds: a playlist sent back as shown (null) is kept,
+            // and becomes the account in use; the Xtream login stays on file.
+            let form = serde_json::json!({
+                "kind": "m3u", "playlist": null, "epgUrls": null, "userAgent": ""
+            });
+            let (st, a) = call(&s, from_page("PUT", "/api/account", Some(&token), Some(form))).await;
+            assert_eq!(st, StatusCode::OK, "{a}");
+            assert_eq!(a["kind"], "m3u");
+            let f = on_file();
+            assert_eq!(f.kind, crate::catalog::credentials::Kind::M3u);
+            assert!(f.m3u.unwrap().playlist.ends_with("password=m3u-secret-32"));
+            assert_eq!(f.xtream.unwrap().password, "saved-secret-33");
+
+            // A Tvheadend password typed in replaces the saved one.
+            let form = serde_json::json!({
+                "kind": "tvheadend", "url": "http://tvh.invalid:9981", "username": "viewer",
+                "password": "typed-secret-34"
+            });
+            let (st, _) = call(&s, from_page("PUT", "/api/account", Some(&token), Some(form))).await;
+            assert_eq!(st, StatusCode::OK);
+            assert_eq!(on_file().tvheadend.unwrap().password, "typed-secret-34");
+
+            // An HDHomeRun, which has no secret at all.
+            let form = serde_json::json!({"kind": "hdhomerun", "device": "10.0.0.7", "epgUrls": []});
+            let (st, a) = call(&s, from_page("PUT", "/api/account", Some(&token), Some(form))).await;
+            assert_eq!(st, StatusCode::OK);
+            assert_eq!(a["hdhomerunDevice"], "10.0.0.7");
+        });
+    }
+
+    #[test]
+    fn account_changes_by_cookie_need_the_header_and_this_origin() {
+        with_account("csrf", async {
+            save_every_kind();
+            let s = server("acct-csrf");
+            enable(&s, true).await;
+            let token = browser_login(&s).await;
+            let form = || {
+                Some(serde_json::json!({
+                    "kind": "xtream", "host": "http://evil.invalid", "username": "x",
+                    "password": "evil-secret"
+                }))
+            };
+            let mut r = from_page("PUT", "/api/account", Some(&token), form());
+            r.headers_mut().remove("x-zapper");
+            assert_eq!(call(&s, r).await.0, StatusCode::FORBIDDEN);
+            let mut r = from_page("PUT", "/api/account", Some(&token), form());
+            r.headers_mut()
+                .insert(header::ORIGIN, HeaderValue::from_static("https://evil.example"));
+            assert_eq!(call(&s, r).await.0, StatusCode::FORBIDDEN);
+            let mut r = from_page("POST", "/api/account/test", Some(&token), form());
+            r.headers_mut()
+                .insert("sec-fetch-site", HeaderValue::from_static("cross-site"));
+            assert_eq!(call(&s, r).await.0, StatusCode::FORBIDDEN);
+            assert_eq!(on_file().xtream.unwrap().host, "http://saved.invalid");
+        });
+    }
+
+    #[test]
+    fn a_test_writes_nothing_and_never_repeats_the_password() {
+        use crate::test_http::{serve, Reply};
+        with_account("test", async {
+            save_every_kind();
+            let before = std::fs::read(crate::catalog::credentials::account_path()).unwrap();
+            let s = server("acct-test");
+            enable(&s, true).await;
+            let token = browser_login(&s).await;
+            // A server that knows the saved password, and fails on demand.
+            let provider = serve(|r, _| {
+                if r.route() != "/player_api.php" {
+                    return Reply::new(404, "");
+                }
+                if r.query("username") == Some("broken") {
+                    return Reply::new(500, "");
+                }
+                let ok = r.query("password") == Some("saved-secret-33");
+                Reply::ok(if ok {
+                    r#"{"user_info":{"auth":1,"status":"Active"}}"#
+                } else {
+                    r#"{"user_info":{"auth":0}}"#
+                })
+                .header("Content-Type", "application/json")
+            });
+            let form = |user: &str, password: &str| {
+                Some(serde_json::json!({
+                    "kind": "xtream", "host": provider.base, "username": user,
+                    "password": password
+                }))
+            };
+            // Blank: the saved password is the one tried.
+            let r = from_page("POST", "/api/account/test", Some(&token), form("viewer", ""));
+            let (st, body) = call(&s, r).await;
+            assert_eq!(st, StatusCode::OK, "{body}");
+            assert_eq!(body["result"], "Active");
+            // Typed and wrong: refused, without the typed password.
+            let r = from_page(
+                "POST",
+                "/api/account/test",
+                Some(&token),
+                form("viewer", "typed-secret-35"),
+            );
+            let (st, body) = call(&s, r).await;
+            assert_eq!(st, StatusCode::BAD_REQUEST);
+            assert!(body["error"].as_str().unwrap().contains("rejected"), "{body}");
+            // A failing server: reqwest quotes the URL, and the URL has it.
+            let r = from_page(
+                "POST",
+                "/api/account/test",
+                Some(&token),
+                form("broken", "typed-secret-35"),
+            );
+            let (st, body) = call(&s, r).await;
+            assert_eq!(st, StatusCode::BAD_REQUEST);
+            assert!(!body.to_string().contains("typed-secret-35"), "{body}");
+            assert!(body["error"].as_str().unwrap().contains("500"), "{body}");
+            // A form that does not parse is not quoted back either.
+            let garbled = serde_json::json!({"kind": "xtream", "password": ["typed-secret-35"]});
+            let r = from_page("POST", "/api/account/test", Some(&token), Some(garbled));
+            let (st, body) = call(&s, r).await;
+            assert_eq!(st, StatusCode::BAD_REQUEST);
+            assert!(!body.to_string().contains("typed-secret-35"), "{body}");
+            let garbled = serde_json::json!({"kind": "typed-secret-35"});
+            let r = from_page("PUT", "/api/account", Some(&token), Some(garbled));
+            let (st, body) = call(&s, r).await;
+            assert_eq!(st, StatusCode::BAD_REQUEST);
+            assert!(!body.to_string().contains("typed-secret-35"), "{body}");
+            // None of that wrote anything.
+            let after = std::fs::read(crate::catalog::credentials::account_path()).unwrap();
+            assert_eq!(before, after);
+            // No body: the account on file, which points nowhere real here.
+            let r = from_page("POST", "/api/account/test", Some(&token), None);
+            let (st, body) = call(&s, r).await;
+            assert_eq!(st, StatusCode::BAD_REQUEST);
+            assert!(!body.to_string().contains("saved-secret-33"), "{body}");
+        });
+    }
+
+    #[test]
+    fn a_save_that_fails_says_why_without_the_password() {
+        with_account("save-bad", async {
+            let s = server("acct-save-bad");
+            enable(&s, true).await;
+            let token = browser_login(&s).await;
+            let form = serde_json::json!({
+                "kind": "tvheadend", "url": "http://typed-secret-36@tvh.invalid",
+                "username": "viewer", "password": "typed-secret-36"
+            });
+            let r = from_page("PUT", "/api/account", Some(&token), Some(form));
+            let (st, body) = call(&s, r).await;
+            assert_eq!(st, StatusCode::BAD_REQUEST);
+            assert!(!body.to_string().contains("typed-secret-36"), "{body}");
+            assert!(!crate::catalog::credentials::account_path().exists());
+        });
     }
 }
