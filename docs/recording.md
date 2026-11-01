@@ -90,6 +90,68 @@ leave it off until you choose it. The time comes from when the stream's bytes ar
 through the stream's own timestamps, so it ticks smoothly while the feed does and jumps where the
 recording has a gap (a reconnect, a switch of feed). Turn it off in Settings → Recording.
 
+## Network access
+
+Off by default: the service listens on `127.0.0.1` only, for the app on the same computer.
+**Settings → Recording → Network access** lets other devices on your network reach it — today
+its API, and the web client once there is one.
+
+1. Under **Other devices**, set a **sign-in password** (at least 8 characters, typed twice).
+   Network access cannot be turned on without one.
+2. Turn on **Allow other devices on your network**. The service then listens on every interface
+   (`0.0.0.0`, and `::` where the computer has IPv6) on the same **port** (8796 unless changed;
+   1024–65535). The switch and the port take effect at once: the service replaces its listeners
+   without restarting, so recordings in progress carry on. A port another program holds is
+   refused with that reason, and the service stays where it was.
+3. **Addresses** lists where another device finds it, one per network address of this computer
+   (`https://192.168.1.20:8796`; container and virtual-machine bridges are left out), each with
+   *Copy*.
+
+### HTTPS and the certificate
+
+Other devices are served HTTPS, with a certificate the service makes itself the first time it is
+needed and keeps (`server-cert.pem`, and its key in `server-key.pem`, readable by you alone). No
+authority vouches for it, so a browser warns the first time. Before accepting it, open the
+certificate's details in the browser's warning and check that its **SHA-256 fingerprint** is the
+one Settings shows under **Certificate**: the same, pair for pair, means the browser is talking to
+your service and not to something in between. A browser told to trust it keeps trusting it, since
+the certificate stays the same across restarts. Deleting the two files makes a new one (with a new
+fingerprint) the next time network access starts.
+
+The app on the same computer keeps plain HTTP at `127.0.0.1`: the service tells the two apart by
+the first byte of each connection (a TLS handshake or an HTTP request) on the one port.
+
+**Plain HTTP on the network** turns HTTPS off for other devices. Everything they send and
+receive, the password included, then crosses the network unencrypted for anyone on it to read:
+only on a network you trust.
+
+### Who may do what
+
+- **The app on this computer** uses the token in `server-token`, which only your user can read.
+  That token is accepted from a loopback address (`127.0.0.1`, `::1`) only: a copy of it is no use
+  from another machine.
+- **Another device** signs in with the password (`POST /api/login`) and gets a token of its own:
+  256 random bits, shown to it once. From then on it can do what the app does with recordings
+  and their settings, but never change network access, the password or the devices: those are the
+  app's alone.
+- From another machine, nothing at all is answered while network access is off, and nothing over
+  plain HTTP while HTTPS is on (a `403` saying to use `https://`).
+- Nothing secret is kept as given. The password is kept only as an Argon2id hash
+  (`server-password`), device tokens only as SHA-256 hashes (`server-devices.json`); both files are
+  readable by you alone, and `server.json` holds no secret.
+- Wrong passwords are counted per address (an IPv6 address with the rest of its /64): after five,
+  each one makes that address wait before trying again, one second doubling to 15 minutes, and
+  `429` with `Retry-After` says how long. Fifteen minutes without a failure, or a right password,
+  forgives it.
+- No CORS headers are sent, so a page from another site cannot read any answer.
+
+### Signing devices out
+
+**Other devices** lists every device signed in: the name it gave or its browser's ("Firefox on
+Android"), where it was last seen from, when it was last used and when it signed in. **Revoke**
+signs one out; its token stops working at once. **Changing the password** signs every device out.
+A device can also sign itself out (`POST /api/logout`).
+
 ## How it behaves
 
 **Connections.** Most providers allow few streams at once per account, often one, and end the
@@ -127,7 +189,7 @@ honour the interval set in Settings → Guide.
 zapper-server [--port N] [--no-sync]
 ```
 
-- `--port N`: listen on `127.0.0.1:N` (default: the port in `server.json`, else 8796).
+- `--port N`: listen on port `N` for this run (default: the port in `server.json`, else 8796).
 - `--no-sync`: leave the catalogue to the app.
 
 Its files, in zapper's config and data directories (`~/.config/zapper`, `~/.local/share/zapper`
@@ -135,8 +197,11 @@ on Linux; `ZAPPER_HOME` moves both):
 
 | File | What |
 |---|---|
-| `server.json` | port, folder, file names, padding, clock track |
-| `server-token` | the API token, readable by you alone; made on first start |
+| `server.json` | port, network access (`network`: `enabled`, `https`), folder, file names, padding, clock track |
+| `server-token` | the app's API token, readable by you alone; made on first start |
+| `server-password` | the sign-in password's Argon2id hash, readable by you alone |
+| `server-devices.json` | the devices signed in, their tokens as SHA-256 hashes, readable by you alone |
+| `server-cert.pem`, `server-key.pem` | the HTTPS certificate, and its key readable by you alone |
 | `recordings.db` | the recordings (SQLite) |
 
 Logs go to standard error: `journalctl --user -u zapper-server` when installed from the app.
@@ -179,9 +244,12 @@ clock reads when it was recorded, and that each feed was asked exactly once.
 
 ## API
 
-HTTP with JSON bodies, on `127.0.0.1` only. Every request except `GET /api/version` needs
-`Authorization: Bearer <token>`, the contents of `server-token`. Field names are camelCase;
-times are Unix seconds; errors are `{"error": "…"}` with a 4xx status.
+HTTP with JSON bodies: on `127.0.0.1`, and on the network too while network access is on (HTTPS
+there, unless plain HTTP was chosen; see [Network access](#network-access)). Every request except
+`GET /api/version` and `POST /api/login` needs `Authorization: Bearer <token>`: the contents of
+`server-token` from this computer, or a device's token. Field names are camelCase; times are Unix
+seconds; errors are `{"error": "…"}` with a 4xx status (`401` for a missing, wrong or revoked
+token, or the app's token from another machine; `403` for what no token changes).
 
 | Request | Answer |
 |---|---|
@@ -194,6 +262,23 @@ times are Unix seconds; errors are `{"error": "…"}` with a 4xx status.
 | `DELETE /api/recordings/{id}?files=true` | forgets a finished recording; `files=true` deletes its files too. Refused while recording |
 | `GET /api/settings` | `{outputDir, naming, namingPattern, padBefore, padAfter, clockTrack, defaultOutputDir}` (padding in seconds; `naming` is `mediaServer`, `byChannel`, `byDate`, `flat` or `custom`, which uses `namingPattern`) |
 | `PUT /api/settings` | the same fields (`defaultOutputDir` is ignored; an empty `outputDir` means the default; omitted naming fields mean the default layout). A `namingPattern` that cannot be used is refused with `400 {"error": "file name pattern: …"}`, even while a preset is chosen; returns what was saved |
+
+Network access and devices:
+
+| Request | Who | Answer |
+|---|---|---|
+| `POST /api/login` | anyone | body `{password, name?}` → `201 {token, device: Device}`; `401` wrong password, `429` (with `Retry-After`) after too many, `403` when no password is set. `name` defaults to the browser's ("Firefox on Android") |
+| `POST /api/logout` | a device | signs the device presenting the token out |
+| `GET /api/network` | the app | `{enabled, port, https, passwordSet, fingerprint?, addresses, error?, devices: [Device]}` |
+| `PUT /api/network` | the app | body `{enabled, port, https}`: moves the listeners at once and returns the same as `GET`. `400` for a port outside 1024–65535 or turning on without a password, `409` for a port in use (nothing changes) |
+| `PUT /api/network/password` | the app | body `{password}` (at least 8 characters): sets it, signs every device out, returns the same as `GET` |
+| `GET /api/devices` | the app | `[Device]`, most recently used first |
+| `DELETE /api/devices/{id}` | the app | signs that device out; returns the same as `GET /api/network` |
+
+"The app" is the `server-token` from a loopback address; a device's token is refused there
+(`403`). `Device` is `{id, name, userAgent, created, lastUsed?, address?}`; `fingerprint` is the
+certificate's SHA-256 as `AB:CD:…`; `error` says why network access is not working as set (such
+as a port taken when the service started, in which case it listens on `127.0.0.1` only).
 
 `Recording`:
 
@@ -216,8 +301,8 @@ a recording is not capturing, such as "waiting for a free connection (1 of 1 in 
 
 ## Not yet
 
-- A web client: the app's interface in a browser, served by the service (streams proxied, so
-  provider credentials never reach the browser).
+- A web client: the app's interface in a browser, served by the service over network access
+  (streams proxied, so provider credentials never reach the browser).
 - Installing the service on Windows (a logon task) and macOS (a LaunchAgent); waking the
   computer from suspend to record.
 - Series rules ("record every episode"), and choosing the backup feed by hand.
