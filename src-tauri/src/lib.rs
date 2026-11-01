@@ -22,30 +22,39 @@
 ///
 /// `g_set_prgname` is what GTK reads for the Wayland `app_id`, and on X11
 /// GDK derives the WM_CLASS from the same name, so one call covers both.
-#[cfg(target_os = "linux")]
+#[cfg(all(feature = "gui", target_os = "linux"))]
 fn set_app_id() {
     gtk::glib::set_prgname(Some(APP_ID));
     gtk::glib::set_application_name("zapper");
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(feature = "gui", not(target_os = "linux")))]
 fn set_app_id() {}
 
+// The core: everything the recording service shares with the app.
 pub mod catalog;
 pub mod harness;
 pub mod hdhomerun;
 pub mod ipc;
+pub mod localtime;
 pub mod m3u;
-pub mod media_keys;
 pub mod paths;
+pub mod recording;
 pub mod source;
-pub mod surface;
 #[cfg(test)]
 pub(crate) mod test_http;
 pub mod tvheadend;
-pub mod updates;
-pub mod window_state;
 pub mod xtream;
+
+// The desktop app alone (the `gui` feature, on by default).
+#[cfg(feature = "gui")]
+pub mod media_keys;
+#[cfg(feature = "gui")]
+pub mod surface;
+#[cfg(feature = "gui")]
+pub mod updates;
+#[cfg(feature = "gui")]
+pub mod window_state;
 
 /// The name the desktop matches this window to.
 ///
@@ -58,9 +67,10 @@ pub mod xtream;
 /// So the `app_id` has to be a known, stable string rather than whatever
 /// GTK infers from argv, and `tools/install-desktop.sh` installs
 /// `zapper.desktop` under that exact name.
-#[cfg(target_os = "linux")]
+#[cfg(all(feature = "gui", target_os = "linux"))]
 const APP_ID: &str = "zapper";
 
+#[cfg(feature = "gui")]
 pub fn run() {
     tracing_subscriber::fmt::init();
     // An unattended run — a harness, an autoplay, a capture, a muted check —
@@ -130,6 +140,18 @@ pub fn run() {
             ipc::backup_cmds::export_backup,
             ipc::backup_cmds::open_backup,
             ipc::backup_cmds::import_backup_account,
+            ipc::recording_cmds::recordings,
+            ipc::recording_cmds::record_programme,
+            ipc::recording_cmds::cancel_recording,
+            ipc::recording_cmds::delete_recording,
+            ipc::recording_cmds::recording_status,
+            ipc::recording_cmds::recording_settings,
+            ipc::recording_cmds::set_recording_settings,
+            ipc::recording_cmds::recording_service,
+            ipc::recording_cmds::install_recording_service,
+            ipc::recording_cmds::remove_recording_service,
+            ipc::recording_cmds::set_recording_linger,
+            ipc::recording_cmds::open_recording_folder,
         ])
         // The save and open dialogs, for the backups. Used from Rust alone:
         // the capability grants the window no `dialog:` permission.
@@ -175,8 +197,10 @@ pub fn run() {
 }
 
 /// The variables that make this a run nobody is sitting in front of.
+#[cfg(feature = "gui")]
 const UNATTENDED: [&str; 4] = ["ZAPPER_AUTOPLAY", "ZAPPER_CAPTURE", "ZAPPER_MUTE", "ZAPPER_HARNESS"];
 
+#[cfg(feature = "gui")]
 fn unattended() -> bool {
     UNATTENDED
         .into_iter()
@@ -196,6 +220,7 @@ fn unattended() -> bool {
 /// [`run`]), so an autoplay plays a fixture (`ZAPPER_FIXTURE_BASE`) or
 /// nothing — never a channel through the account on this machine, unless
 /// `ZAPPER_ALLOW_REAL_ACCOUNT=1` says so.
+#[cfg(feature = "gui")]
 fn dev_hooks(app: &tauri::AppHandle) {
     let wanted = |k: &str| std::env::var_os(k).is_some_and(|v| !v.is_empty());
     if !["ZAPPER_AUTOPLAY", "ZAPPER_CAPTURE", "ZAPPER_MUTE"]

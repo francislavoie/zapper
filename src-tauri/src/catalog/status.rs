@@ -53,12 +53,14 @@ pub fn mark_synced(at: i64) {
     });
 }
 
-/// Cached value if this process has synced, otherwise the persisted one.
+/// The later of this process's last pass and the one on record.
+///
+/// The record wins when it is newer because another process may share the
+/// mirror (the recording service on the same machine), and a pass it made
+/// keeps this one's schedule as well as its own.
 pub fn last_synced() -> Option<i64> {
-    if let Some(t) = lock().last_synced {
-        return Some(t);
-    }
-    db::with_db(|c| {
+    let cached = lock().last_synced;
+    let stored = db::with_db(|c| {
         Ok(c.query_row(
             "SELECT value FROM meta WHERE key = ?1",
             [LAST_SYNCED_KEY],
@@ -68,7 +70,8 @@ pub fn last_synced() -> Option<i64> {
         .and_then(|v| v.parse::<i64>().ok()))
     })
     .ok()
-    .flatten()
+    .flatten();
+    cached.max(stored)
 }
 
 /// Live channels, excluding separators and soft-deleted rows — the number the

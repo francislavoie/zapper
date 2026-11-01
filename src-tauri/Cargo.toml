@@ -15,61 +15,105 @@ default-run = "zapper"
 # behind a feature that is off by default: `cargo build` for the app does not
 # build them, and tools/check_all.sh asks for them by name.
 [features]
+# The desktop app: Tauri, the webview, libmpv and the toolkit under them. On
+# by default, so `cargo build`, `tauri dev` and `tauri build` are the app and
+# nothing changes for them.
+#
+# `--no-default-features --features server` builds `zapper-server`, the
+# recording service, on the same catalogue, sources and guide code with none
+# of the GUI stack linked: a headless box needs no WebKit, GTK or libmpv.
+# A feature rather than a workspace of crates because the core modules are
+# shared by path (`crate::catalog`, `crate::source`, ...) throughout, and
+# splitting them out would move every file other work is editing.
+default = ["gui"]
+gui = [
+    "dep:tauri",
+    "dep:tauri-build",
+    "dep:tauri-plugin-dialog",
+    "dep:libmpv2",
+    "dep:libmpv2-sys",
+    "dep:souvlaki",
+    "dep:gtk",
+    "dep:glib",
+    "dep:webkit2gtk",
+    "dep:cairo-rs",
+]
+# The recording service's own pieces: its HTTP API and the remuxer, a small C
+# file against libavformat (see build.rs). Not in the app's build.
+server = ["dep:axum", "dep:cc", "dep:getrandom", "dep:libc", "dep:pkg-config", "tokio/net", "tokio/io-util", "tokio/signal"]
 harness = []
 
 [[bin]]
 name = "zapper"
 path = "src/main.rs"
+required-features = ["gui"]
+
+# The recording service (docs/recording.md). Built on its own, without the
+# GUI: `cargo build --no-default-features --features server --bin zapper-server`.
+[[bin]]
+name = "zapper-server"
+path = "src/bin/zapper_server.rs"
+required-features = ["server"]
+
+# Records from the fixture server through a real zapper-server, with a forced
+# switch to the backup feed, and checks what it wrote.
+[[bin]]
+name = "recording_check"
+path = "src/bin/recording_check.rs"
+required-features = ["harness", "server"]
 
 [[bin]]
 name = "ipc_check"
 path = "src/bin/ipc_check.rs"
-required-features = ["harness"]
+required-features = ["harness", "gui"]
 
 [[bin]]
 name = "player_check"
 path = "src/bin/player_check.rs"
-required-features = ["harness"]
+required-features = ["harness", "gui"]
 
 [[bin]]
 name = "shot_check"
 path = "src/bin/shot_check.rs"
-required-features = ["harness"]
+required-features = ["harness", "gui"]
 
 [[bin]]
 name = "surface_check"
 path = "src/bin/surface_check.rs"
-required-features = ["harness"]
+required-features = ["harness", "gui"]
 
 [[bin]]
 name = "seek_bench"
 path = "src/bin/seek_bench.rs"
-required-features = ["harness"]
+required-features = ["harness", "gui"]
 
 [[bin]]
 name = "filter_bench"
 path = "src/bin/filter_bench.rs"
-required-features = ["harness"]
+required-features = ["harness", "gui"]
 
 [[bin]]
 name = "open_bench"
 path = "src/bin/open_bench.rs"
-required-features = ["harness"]
+required-features = ["harness", "gui"]
 
 [[bin]]
 name = "ending_check"
 path = "src/bin/ending_check.rs"
-required-features = ["harness"]
+required-features = ["harness", "gui"]
 
 [lib]
 name = "zapper_lib"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+tauri-build = { version = "2", features = [], optional = true }
+# The remuxer's C file, compiled against the libavformat pkg-config finds.
+cc = { version = "1", optional = true }
+pkg-config = { version = "0.3", optional = true }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = [], optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs"] }
@@ -81,16 +125,21 @@ anyhow = "1"
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = "0.3"
-libmpv2 = "7"
+libmpv2 = { version = "7", optional = true }
 # libmpv2-sys is named directly for what the safe wrapper does not expose:
 # `mpv_request_log_messages`, which is the only place mpv says what HTTP
 # status refused a stream (see `ipc::ending`), and on Windows
 # `mpv_command_ret` for `screenshot-raw` (the thumbnails). It is already in
 # the tree under libmpv2, and covered by the same license entry.
-libmpv2-sys = "4"
+libmpv2-sys = { version = "4", optional = true }
 # The updater's check of a downloaded package against the release's
 # SHA256SUMS. Already in the tree through Tauri; named here so it is ours.
 sha2 = "0.10"
+# The recording service's API token. Already in the tree under rustls.
+getrandom = { version = "0.3", optional = true }
+# zapper-server's HTTP API (MIT), on the hyper and tower the HTTP client
+# already brings. Only in the `server` feature.
+axum = { version = "0.8", optional = true, default-features = false, features = ["http1", "json", "tokio", "query"] }
 # MD5 for HTTP Digest, which is how Tvheadend logs in by default (see
 # `tvheadend::digest`). RustCrypto's, on the same `digest` 0.10 that sha2
 # already brings, so it is one small crate and nothing under it.
@@ -101,25 +150,28 @@ flate2 = "1"
 # The save and open dialogs for Settings › Data's backups (MIT/Apache-2.0).
 # Opened from Rust only: the window has no `dialog:` permission, so the
 # webview can neither open one nor name a path to read or write.
-tauri-plugin-dialog = "2"
+tauri-plugin-dialog = { version = "2", optional = true }
 
 # The desktop's media controls (Settings › Playback, off by default): MPRIS on
 # Linux, the System Media Transport Controls on Windows. MIT. Its D-Bus
 # backend is the `dbus` crate tao already links, and its Windows one the same
 # `windows` 0.62, so on both it is the one crate plus `dbus-crossroads`.
 [target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
-souvlaki = "0.9"
+souvlaki = { version = "0.9", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-gtk = "0.18"
-glib = "0.18"
-webkit2gtk = "2.0"
-cairo-rs = { version = "0.18", features = ["png"] }
+gtk = { version = "0.18", optional = true }
+glib = { version = "0.18", optional = true }
+webkit2gtk = { version = "2.0", optional = true }
+cairo-rs = { version = "0.18", features = ["png"], optional = true }
 
 # Symbols out of the already-loaded C library: `setlocale` on Linux, and
 # `localtime_r` for the catch-up clock on every Unix.
 [target.'cfg(unix)'.dependencies]
 libloading = "0.8"
+# `statvfs`, for the free space the recording service reports. Already in
+# the tree under nearly everything; only in the `server` feature.
+libc = { version = "0.2", optional = true }
 
 # The Windows surface: a child window for mpv to draw into (WindowsAndMessaging,
 # Gdi for its black brush, Shell for subclassing the main window so the child

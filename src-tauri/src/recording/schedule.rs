@@ -1,0 +1,158 @@
+//! What the service should do at a given moment.
+//!
+//! The service keeps its recordings in SQLite and, each time it wakes, asks
+//! [`plan`] what is due: captures to start (a scheduled recording whose
+//! padded start has come; one that was mid-capture when the service stopped;
+//! a start that was missed while the service was down, as long as the
+//! programme is still on), captures to give up on (their whole window passed
+//! with the service off), and when to wake next. Captures stop themselves at
+//! the end of their window, so stopping is not planned here.
+//!
+//! Pure: the clock is an argument.
+
+use std::collections::HashSet;
+
+use super::api::RecordingState;
+
+/// What [`plan`] needs to know about a recording.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Slot {
+    pub id: i64,
+    pub state: RecordingState,
+    /// Unix seconds, padding included: `[from, until)`.
+    pub from: i64,
+    pub until: i64,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Plan {
+    /// Begin capturing these now.
+    pub start: Vec<i64>,
+    /// Their window passed without a capture: the service was not running.
+    pub missed: Vec<i64>,
+    /// Captured while the service ran, whose window has since passed with
+    /// no capture running (it stopped mid-recording): finish them with what
+    /// they have.
+    pub finish: Vec<i64>,
+    /// When the next start is due, if any is scheduled.
+    pub next: Option<i64>,
+}
+
+/// The longest the service sleeps without looking again.
+///
+/// Its timers run on a monotonic clock, which a suspended machine does not
+/// advance, and the wall clock may be set; looking at least this often keeps
+/// a recording from starting minutes late after either.
+pub const MAX_SLEEP_SECS: i64 = 30;
+
+/// What is due at `now`, given which recordings are being captured.
+pub fn plan(now: i64, slots: &[Slot], active: &HashSet<i64>) -> Plan {
+    let mut p = Plan::default();
+    for s in slots {
+        if active.contains(&s.id) {
+            continue;
+        }
+        match s.state {
+            RecordingState::Scheduled if now >= s.until => p.missed.push(s.id),
+            RecordingState::Scheduled if now >= s.from => p.start.push(s.id),
+            RecordingState::Scheduled => {
+                p.next = Some(p.next.map_or(s.from, |n: i64| n.min(s.from)));
+            }
+            // Mid-capture when the service stopped: carry on in a new part
+            // while there is still something to record.
+            RecordingState::Recording if now < s.until => p.start.push(s.id),
+            RecordingState::Recording => p.finish.push(s.id),
+            RecordingState::Done | RecordingState::Failed => {}
+        }
+    }
+    p
+}
+
+/// How long to sleep before looking again.
+pub fn sleep_for(now: i64, next: Option<i64>) -> i64 {
+    next.map_or(MAX_SLEEP_SECS, |n| (n - now).clamp(0, MAX_SLEEP_SECS))
+}
+
+/// A recording's window, padding included.
+pub fn window(start: i64, stop: i64, pad_before: i64, pad_after: i64) -> (i64, i64) {
+    (start - pad_before.max(0), stop + pad_after.max(0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use RecordingState::*;
+
+    fn slot(id: i64, state: RecordingState, from: i64, until: i64) -> Slot {
+        Slot {
+            id,
+            state,
+            from,
+            until,
+        }
+    }
+
+    #[test]
+    fn a_recording_starts_when_its_padded_start_comes() {
+        let slots = [slot(1, Scheduled, 1000, 2000)];
+        let none = HashSet::new();
+        assert_eq!(
+            plan(999, &slots, &none),
+            Plan {
+                next: Some(1000),
+                ..Default::default()
+            }
+        );
+        assert_eq!(plan(1000, &slots, &none).start, [1]);
+    }
+
+    #[test]
+    fn a_missed_start_begins_at_once_while_the_programme_is_on() {
+        let slots = [slot(1, Scheduled, 1000, 2000)];
+        assert_eq!(plan(1500, &slots, &HashSet::new()).start, [1]);
+    }
+
+    #[test]
+    fn a_window_that_passed_entirely_is_missed() {
+        let slots = [slot(1, Scheduled, 1000, 2000)];
+        let p = plan(2000, &slots, &HashSet::new());
+        assert_eq!((p.start.len(), p.missed.as_slice()), (0, &[1][..]));
+    }
+
+    #[test]
+    fn a_capture_interrupted_by_a_restart_resumes_or_finishes() {
+        let slots = [slot(1, Recording, 1000, 2000), slot(2, Recording, 0, 500)];
+        let p = plan(1200, &slots, &HashSet::new());
+        assert_eq!(p.start, [1]);
+        assert_eq!(p.finish, [2]);
+    }
+
+    #[test]
+    fn running_captures_and_finished_recordings_are_left_alone() {
+        let slots = [
+            slot(1, Recording, 1000, 2000),
+            slot(2, Done, 0, 10),
+            slot(3, Failed, 0, 10),
+            slot(4, Scheduled, 3000, 4000),
+            slot(5, Scheduled, 2500, 4000),
+        ];
+        let p = plan(1200, &slots, &HashSet::from([1]));
+        assert_eq!(
+            p,
+            Plan {
+                next: Some(2500),
+                ..Default::default()
+            }
+        );
+    }
+
+    #[test]
+    fn sleeps_are_short_enough_to_notice_a_suspend() {
+        assert_eq!(sleep_for(0, None), MAX_SLEEP_SECS);
+        assert_eq!(sleep_for(0, Some(10)), 10);
+        assert_eq!(sleep_for(0, Some(10_000)), MAX_SLEEP_SECS);
+        assert_eq!(sleep_for(50, Some(10)), 0);
+        assert_eq!(window(1000, 2000, 60, 300), (940, 2300));
+        assert_eq!(window(1000, 2000, -5, -5), (1000, 2000));
+    }
+}

@@ -943,7 +943,7 @@ pub async fn play_catchup(
             // The server reads the timestamp in its own wall clock, which is
             // the machine's: sending UTC replays the wrong hour for most of
             // the world.
-            let stamp = timeshift_stamp(start, local_utc_offset(start));
+            let stamp = timeshift_stamp(start, crate::localtime::utc_offset(start));
             Playable::plain(server.timeshift_url(stream_id, &stamp, duration_minutes))
         }
         // A playlist's archive is whatever its entry's template says; the
@@ -954,7 +954,7 @@ pub async fn play_catchup(
                 start,
                 duration_minutes,
                 activity::now_secs(),
-                local_utc_offset(start),
+                crate::localtime::utc_offset(start),
             )
             .map_err(|e| crate::catalog::sync_engine::scrub(&e.to_string()))?,
         // A tuner has no archive, and a Tvheadend server's is its DVR, which
@@ -1541,109 +1541,13 @@ fn compressor_filter() -> String {
 /// clock or a time zone.
 fn timeshift_stamp(unix: i64, offset: i64) -> String {
     let t = unix + offset;
-    let (y, m, d) = civil_from_days(t.div_euclid(86_400));
+    let (y, m, d) = crate::localtime::civil_from_days(t.div_euclid(86_400));
     let s = t.rem_euclid(86_400);
     format!(
         "{y:04}-{m:02}-{d:02}:{:02}-{:02}",
         s / 3600,
         (s % 3600) / 60
     )
-}
-
-/// Days since the Unix epoch to a civil date. Howard Hinnant's `civil_from_days`.
-fn civil_from_days(days: i64) -> (i64, u32, u32) {
-    let z = days + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
-    (if m <= 2 { y + 1 } else { y }, m, d)
-}
-
-/// Seconds east of UTC at `unix`, from the C library.
-///
-/// std has no local time and the dependency set is pinned, so `localtime_r`
-/// is resolved out of the already-loaded libc - the same trick the Linux
-/// surface uses for `setlocale`. Only the offset is taken; the calendar
-/// arithmetic stays in Rust where it can be tested.
-#[cfg(unix)]
-fn local_utc_offset(unix: i64) -> i64 {
-    use libloading::os::unix::Library;
-    use std::ffi::{c_char, c_int, c_long};
-
-    /// glibc's `struct tm`: nine ints, then `tm_gmtoff` and `tm_zone`. The
-    /// BSDs, macOS among them, lay it out the same way.
-    #[repr(C)]
-    struct Tm {
-        sec: c_int,
-        min: c_int,
-        hour: c_int,
-        mday: c_int,
-        mon: c_int,
-        year: c_int,
-        wday: c_int,
-        yday: c_int,
-        isdst: c_int,
-        gmtoff: c_long,
-        zone: *const c_char,
-    }
-
-    type LocaltimeR = unsafe extern "C" fn(*const i64, *mut Tm) -> *mut Tm;
-    let this = Library::this();
-    let Ok(localtime_r) = (unsafe { this.get::<LocaltimeR>(b"localtime_r\0") }) else {
-        tracing::warn!("localtime_r did not resolve; catchup times will be sent as UTC");
-        return 0;
-    };
-    let mut tm: Tm = unsafe { std::mem::zeroed() };
-    let t = unix;
-    if unsafe { localtime_r(&t, &mut tm) }.is_null() {
-        return 0;
-    }
-    tm.gmtoff as i64
-}
-
-/// Seconds east of UTC at `unix`, from Windows' own time-zone rules.
-///
-/// There is no `tm_gmtoff` here. Instead the instant is converted to local
-/// time with `SystemTimeToTzSpecificLocalTime`, which applies the daylight
-/// rule in force *at that instant* rather than now (a catch-up programme from
-/// before the clocks changed must be asked for in the offset it aired in),
-/// and the two wall-clock readings are subtracted.
-#[cfg(windows)]
-fn local_utc_offset(unix: i64) -> i64 {
-    use windows::Win32::Foundation::{FILETIME, SYSTEMTIME};
-    use windows::Win32::System::Time::{
-        FileTimeToSystemTime, SystemTimeToFileTime, SystemTimeToTzSpecificLocalTime,
-    };
-
-    /// 100ns ticks between 1601-01-01 (FILETIME's epoch) and 1970-01-01.
-    const EPOCH_DELTA: i64 = 116_444_736_000_000_000;
-    const TICKS_PER_SEC: i64 = 10_000_000;
-
-    let ticks = unix.saturating_mul(TICKS_PER_SEC).saturating_add(EPOCH_DELTA);
-    let utc_ft = FILETIME {
-        dwLowDateTime: ticks as u32,
-        dwHighDateTime: (ticks >> 32) as u32,
-    };
-    let mut utc = SYSTEMTIME::default();
-    let mut local = SYSTEMTIME::default();
-    let mut local_ft = FILETIME::default();
-    let converted = unsafe {
-        FileTimeToSystemTime(&utc_ft, &mut utc).is_ok()
-            && SystemTimeToTzSpecificLocalTime(None, &utc, &mut local).is_ok()
-            && SystemTimeToFileTime(&local, &mut local_ft).is_ok()
-    };
-    if !converted {
-        tracing::warn!("could not read the local time zone; catchup times will be sent as UTC");
-        return 0;
-    }
-    let local_ticks =
-        (i64::from(local_ft.dwHighDateTime) << 32) | i64::from(local_ft.dwLowDateTime);
-    (local_ticks - ticks) / TICKS_PER_SEC
 }
 
 #[cfg(test)]
@@ -2191,7 +2095,7 @@ mod tests {
         // epoch mistake (Windows counts 100ns ticks from 1601) fails this
         // by orders of magnitude.
         for t in [0, 1_709_251_140, 1_788_831_000] {
-            let off = local_utc_offset(t);
+            let off = crate::localtime::utc_offset(t);
             assert!((-12 * 3600..=14 * 3600).contains(&off), "offset {off}s at {t}");
             assert_eq!(off % 900, 0, "offset {off}s at {t} is not on a quarter hour");
         }

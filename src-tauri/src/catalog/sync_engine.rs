@@ -13,7 +13,7 @@ use std::time::Duration;
 use crate::catalog::credentials::Account;
 use crate::catalog::playlist::{self, PlaylistStats, PlaylistWriter};
 use crate::catalog::{db, index, origin, status, sync};
-use crate::ipc::types::{events, SyncPhase, SyncStatusDto};
+use crate::ipc::types::{SyncPhase, SyncStatusDto};
 use crate::m3u::fetch;
 use crate::source::{M3uSource, Refused};
 use crate::xtream::XtreamClient;
@@ -52,11 +52,12 @@ pub trait StatusSink {
     fn publish(&self, status: SyncStatusDto);
 }
 
+#[cfg(feature = "gui")]
 impl StatusSink for tauri::AppHandle {
     fn publish(&self, status: SyncStatusDto) {
         use tauri::Emitter;
         // A window that has gone away is not a sync failure.
-        if let Err(e) = self.emit(events::SYNC_STATUS, status) {
+        if let Err(e) = self.emit(crate::ipc::types::events::SYNC_STATUS, status) {
             tracing::debug!("sync status not delivered: {e}");
         }
     }
@@ -345,12 +346,17 @@ impl Drop for RunningGuard {
 
 /// Categories, then channels (and the index), then the guide.
 ///
-/// `None` when a pass was already running, so this one did not start.
-pub async fn run_once(app: &tauri::AppHandle) -> Result<Option<PassOutcome>> {
+/// `None` when a pass was already running, so this one did not start: in
+/// this process, or in another one sharing the mirror (the app and the
+/// recording service on one machine; see [`super::sync_lease`]).
+pub async fn run_once<S: StatusSink>(app: &S) -> Result<Option<PassOutcome>> {
     if RUNNING.swap(true, Ordering::SeqCst) {
         return Ok(None);
     }
     let _running = RunningGuard;
+    let Some(_lease) = super::sync_lease::take() else {
+        return Ok(None);
+    };
     let account = match crate::catalog::credentials::load_account() {
         Ok(a) => a,
         Err(e) => {
@@ -683,6 +689,7 @@ pub fn request_now() {
 }
 
 /// Fire and forget, for callers with no periodic loop (the harnesses).
+#[cfg(feature = "gui")]
 pub fn spawn(app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
         if let Err(e) = run_once(&app).await {
@@ -762,58 +769,63 @@ async fn wait_or_wake(d: Duration) -> bool {
 /// The interval is re-read each cycle rather than captured once, so changing
 /// it in settings takes effect without a restart. Failed passes back off
 /// (see [`backoff`]); `request_now` cuts any wait short.
+#[cfg(feature = "gui")]
 pub fn spawn_periodic(app: tauri::AppHandle) {
-    tauri::async_runtime::spawn(async move {
-        let mut failures: u32 = 0;
-        // Set when the loop was woken on purpose: run now, whatever the
-        // schedule says.
-        let mut forced = false;
-        loop {
-            if !forced && failures == 0 {
-                let hours = crate::catalog::settings::load_or_default().sync_interval_hours;
-                let interval = interval_from_settings(hours);
-                let wait = wait_before_next(crate::catalog::status::last_synced(), now(), interval);
-                if !wait.is_zero() {
-                    tracing::info!(
-                        "mirror is current; next sync in {} minutes",
-                        wait.as_secs() / 60
-                    );
-                    forced = wait_or_wake(wait).await;
-                    continue;
-                }
-            }
-            forced = false;
+    tauri::async_runtime::spawn(periodic(app));
+}
 
-            let refused = match run_once(&app).await {
-                Ok(Some(PassOutcome::Refreshed)) => {
-                    failures = 0;
-                    continue;
-                }
-                // A harness's pass is running; let it finish.
-                Ok(None) => {
-                    forced = wait_or_wake(Duration::from_secs(5)).await;
-                    continue;
-                }
-                Ok(Some(PassOutcome::Refused)) => true,
-                Ok(Some(PassOutcome::Failed)) => false,
-                Err(e) => {
-                    // No usable credentials at all. Nothing will change until
-                    // some are saved, which wakes the loop.
-                    tracing::warn!("sync aborted: {}", scrub(&format!("{e:#}")));
-                    true
-                }
-            };
-            failures = failures.saturating_add(1);
-            let wait = backoff(failures, refused);
-            tracing::info!("sync failed; retrying in {} minutes", wait.as_secs() / 60);
-            if wait_or_wake(wait).await {
-                // Asked for explicitly — a retry, or new credentials — so the
-                // slate is clean and the pass runs now.
-                failures = 0;
-                forced = true;
+/// The loop [`spawn_periodic`] runs, for a caller with its own runtime (the
+/// recording service).
+pub async fn periodic<S: StatusSink>(app: S) {
+    let mut failures: u32 = 0;
+    // Set when the loop was woken on purpose: run now, whatever the
+    // schedule says.
+    let mut forced = false;
+    loop {
+        if !forced && failures == 0 {
+            let hours = crate::catalog::settings::load_or_default().sync_interval_hours;
+            let interval = interval_from_settings(hours);
+            let wait = wait_before_next(crate::catalog::status::last_synced(), now(), interval);
+            if !wait.is_zero() {
+                tracing::info!(
+                    "mirror is current; next sync in {} minutes",
+                    wait.as_secs() / 60
+                );
+                forced = wait_or_wake(wait).await;
+                continue;
             }
         }
-    });
+        forced = false;
+
+        let refused = match run_once(&app).await {
+            Ok(Some(PassOutcome::Refreshed)) => {
+                failures = 0;
+                continue;
+            }
+            // A harness's pass is running; let it finish.
+            Ok(None) => {
+                forced = wait_or_wake(Duration::from_secs(5)).await;
+                continue;
+            }
+            Ok(Some(PassOutcome::Refused)) => true,
+            Ok(Some(PassOutcome::Failed)) => false,
+            Err(e) => {
+                // No usable credentials at all. Nothing will change until
+                // some are saved, which wakes the loop.
+                tracing::warn!("sync aborted: {}", scrub(&format!("{e:#}")));
+                true
+            }
+        };
+        failures = failures.saturating_add(1);
+        let wait = backoff(failures, refused);
+        tracing::info!("sync failed; retrying in {} minutes", wait.as_secs() / 60);
+        if wait_or_wake(wait).await {
+            // Asked for explicitly — a retry, or new credentials — so the
+            // slate is clean and the pass runs now.
+            failures = 0;
+            forced = true;
+        }
+    }
 }
 
 #[cfg(test)]

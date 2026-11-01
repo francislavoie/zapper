@@ -7,13 +7,25 @@
 //! menu's commands. `types` is the shared contract and is not edited by any
 //! of them.
 
+//!
+//! The recording service's build has `types` and the pure `ending` and
+//! `health` it refers to: plain data the catalogue speaks too. The commands
+//! are the desktop app's.
+
+#[cfg(feature = "gui")]
 pub mod backup_cmds;
+#[cfg(feature = "gui")]
 pub mod catalog_cmds;
 pub mod ending;
 pub mod health;
+#[cfg(feature = "gui")]
 pub mod player_cmds;
+#[cfg(feature = "gui")]
+pub mod recording_cmds;
+#[cfg(feature = "gui")]
 pub mod tracks;
 pub mod types;
+#[cfg(feature = "gui")]
 pub mod update_cmds;
 
 pub use types::*;

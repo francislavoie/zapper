@@ -101,6 +101,14 @@ Download the package for your system from the
   check, which can be turned off.
 - MIT licensed.
 
+### Recording
+
+- **Record from the guide:** right-click a programme. A background service, zapper-server, wakes
+  to record it with zapper closed, copying the stream into a Matroska file named the way Jellyfin
+  and Plex expect, with an optional wall-clock subtitle track. It switches to a backup feed if
+  the channel's fails, and never takes a connection someone is watching on. Linux only for now;
+  see [docs/recording.md](docs/recording.md).
+
 ## Performance
 
 Rough numbers, to give a sense of it. Measured on a Framework 13 laptop (Ryzen 7 7840U,
@@ -163,6 +171,7 @@ just licenses      # regenerate the third-party license notices
 
 ## Documentation
 
+- [docs/recording.md](docs/recording.md): the recording service, its settings and its API
 - [docs/releasing.md](docs/releasing.md): versions, packages, releases and the updater
 - [docs/windows.md](docs/windows.md): building and running on Windows
 - [docs/licensing.md](docs/licensing.md): how third-party licenses are collected and shipped

@@ -31,3 +31,9 @@ The first release.
   another device is using your connection), refused it, sent something other than video, or
   could not be reached. Retry tunes it again; nothing reconnects without you asking, so a
   second device is never knocked off in return.
+- Recording (Linux, first version): right-click a programme in the guide or the programme
+  results to record it. Settings → Recording installs the recording service, which records
+  with zapper closed, into `<Show>/<Show> - <date> <time>.mkv`, optionally with a clock
+  subtitle track; Recordings in the menu lists them. A recording waits for a free connection
+  rather than take one someone is watching on, and switches to another feed of the same
+  channel if its own fails.

@@ -171,6 +171,12 @@ fn tune(conn: &Connection) -> Result<()> {
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "synchronous", "NORMAL")?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
+    // The app and the recording service may share this file. WAL lets
+    // either read while the other writes, but two writers still take turns,
+    // and without a timeout the second fails at once with "database is
+    // locked" instead of waiting its turn. The guide's write is one long
+    // transaction, hence the generous wait.
+    conn.busy_timeout(std::time::Duration::from_secs(60))?;
     Ok(())
 }
 

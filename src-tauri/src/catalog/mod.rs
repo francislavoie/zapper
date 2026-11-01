@@ -20,6 +20,7 @@ pub mod store;
 pub mod sync;
 pub mod sync_devices;
 pub mod sync_engine;
+pub mod sync_lease;
 
 pub use schema::{migrate, open_at, open_in_memory};
 pub use search::SearchIndex;
