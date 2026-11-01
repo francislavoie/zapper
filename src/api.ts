@@ -30,6 +30,7 @@ import {
   type ThumbnailDto,
   type InstallOutcomeDto,
   type MediaKey,
+  type MenuCommand,
   type MediaSessionDto,
   type UpdateStatusDto,
   type VideoRect,
@@ -201,6 +202,9 @@ export const onUpdate = (f: (s: UpdateStatusDto) => void): Promise<UnlistenFn> =
 
 export const onMediaKey = (f: (k: MediaKey) => void): Promise<UnlistenFn> =>
   listen<MediaKey>(EVENTS.mediaKey, (e) => f(e.payload));
+
+export const onMenu = (f: (c: MenuCommand) => void): Promise<UnlistenFn> =>
+  listen<MenuCommand>(EVENTS.menu, (e) => f(e.payload));
 
 export const onChannelQuality = (f: (q: ChannelQualityDto) => void): Promise<UnlistenFn> =>
   listen<ChannelQualityDto>(EVENTS.channelQuality, (e) => f(e.payload));

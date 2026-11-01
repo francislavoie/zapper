@@ -2081,6 +2081,9 @@ export const mockWindow = {
   close: async () => {
     recordWindowCall("close");
   },
+  titleBarDoubleClick: async () => {
+    recordWindowCall("titleBarDoubleClick");
+  },
 };
 
 // Assertions a browser driver can run against the live page: no light surface
