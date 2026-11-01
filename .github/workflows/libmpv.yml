@@ -31,7 +31,7 @@ on:
         required: false
         default: true
       macos:
-        description: 'Also build macOS arm64. zapper does not run on macOS yet, so it is off by default and its archive is optional in the manifest.'
+        description: 'Also build macOS arm64. macOS is not released yet (docs/macos.md), so it is off by default and its archive is optional in the manifest.'
         type: boolean
         required: false
         default: false

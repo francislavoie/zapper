@@ -114,12 +114,14 @@ package-windows:
     $env:PYTHON = 'python'; & "$env:ProgramFiles\Git\bin\bash.exe" scripts/licenses.sh --if-changed; if ($LASTEXITCODE) { exit $LASTEXITCODE }
     npx tauri build --config packaging/windows/installers.conf.json
 
-# On macOS (NOT SUPPORTED YET): zapper.app and the .dmg, with the install-kind marker and the
-# license notices in Contents/Resources (packaging/macos/dmg.conf.json).
+# On macOS (Apple Silicon; not released yet, docs/macos.md): zapper.app and the .dmg, with
+# libmpv in Contents/Frameworks and the install-kind marker and license notices in
+# Contents/Resources (packaging/macos/dmg.conf.json), then scripts/check-macos-app.sh on it.
 package-macos:
     scripts/fetch-libmpv.sh
     scripts/licenses.sh --if-changed
     npx tauri build --config packaging/macos/dmg.conf.json
+    scripts/check-macos-app.sh src-tauri/target/release/bundle/macos/zapper.app
 
 # The third-party license notices the packages ship (docs/licensing.md): the Rust crates' into
 # src-tauri/target/licenses (scripts/licenses.sh, needs cargo-about), then the UI build, which
