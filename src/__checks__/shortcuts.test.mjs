@@ -65,3 +65,22 @@ test("rows read cleanly: something to press and something it does", () => {
     }
   }
 });
+
+test("a browser lists no player keys, and the app lists them all", async () => {
+  const { shortcutGroups } = await import("../logic/shortcuts.ts");
+  const { BROWSER, DESKTOP } = await import("../logic/capabilities.ts");
+  const count = (groups) => groups.reduce((n, g) => n + g.items.length, 0);
+  assert.equal(count(shortcutGroups(DESKTOP)), count(SHORTCUT_GROUPS));
+  const browser = shortcutGroups(BROWSER);
+  const titles = browser.map((g) => g.title);
+  assert.ok(!titles.includes("While watching"), titles.join(", "));
+  assert.ok(titles.includes("In the guide"));
+  const does = browser.flatMap((g) => g.items.map((it) => it.does)).join("\n");
+  for (const gone of ["Quit zapper", "Stats for nerds", "Previous channel", "volume", "the picture"]) {
+    assert.ok(!does.includes(gone), gone);
+  }
+  for (const kept of ["Command palette", "Search channels", "An hour earlier or later"]) {
+    assert.ok(does.includes(kept), kept);
+  }
+  assert.ok(browser.every((g) => g.items.length > 0));
+});

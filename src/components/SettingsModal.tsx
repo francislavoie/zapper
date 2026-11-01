@@ -33,7 +33,7 @@ import {
 } from "../logic/settings";
 import { MAX_GUIDE_HOURS, MIN_GUIDE_HOURS } from "../logic/guide";
 import { chordKeys } from "../logic/keys";
-import { MOUSE_WORDS, SHORTCUT_GROUPS } from "../logic/shortcuts";
+import { MOUSE_WORDS, shortcutGroups } from "../logic/shortcuts";
 import { IS_MAC } from "../platform";
 import { SEARCH_SYNTAX } from "../logic/searchQuery";
 import { VOLUME_MAX, VOLUME_UNITY } from "../logic/volume";
@@ -768,12 +768,15 @@ function UpdatesPage({ s }: { s: SettingsControl }) {
 
 // ---------------------------------------------------------------- keyboard
 
-/** Every shortcut and gesture, drawn from SHORTCUT_GROUPS: keys as keycaps,
- *  what they do beside them, a box per place they apply. */
+/** Every shortcut and gesture that does something here, drawn from
+ *  SHORTCUT_GROUPS: keys as keycaps, what they do beside them, a box per
+ *  place they apply. */
+const KEY_GROUPS = shortcutGroups(capabilities);
+
 function KeyboardPane() {
   return (
     <div className="kb">
-      {SHORTCUT_GROUPS.map((g) => (
+      {KEY_GROUPS.map((g) => (
         <section key={g.title} className="kb-group">
           <h4>
             {g.title}
