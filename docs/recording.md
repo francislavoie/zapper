@@ -16,7 +16,7 @@ schedules recordings from the guide and shows them; the service does the recordi
      signed in; recording with nobody signed in would need your password stored with the task, so
      it isn't offered. Having no window, it logs to `%LOCALAPPDATA%\zapper\zapper-server.log`.
      Updating zapper stops it to replace it, and zapper starts it again when it reopens.
-     Uninstalling zapper leaves the task behind, doing nothing: remove the service first.
+     Uninstalling zapper removes the task too ([Stopping and updating](#stopping-and-updating)).
    - **macOS:** not yet; run `zapper-server` yourself.
 2. **Right-click a programme** in the guide, or in the programme search results, and choose
    **Record**. A red dot marks it; it pulses while recording. Right-click again to cancel, or to
@@ -186,6 +186,39 @@ one whose whole window passed is marked failed ("missed"). A recording interrupt
 resumes in a new part. The service checks its schedule at least every 30 seconds, so a suspend
 or a clock change cannot make it late.
 
+### Stopping and updating
+
+The service never cuts a recording short without saying so. It counts as **idle** when nothing is
+recording and nothing starts within five minutes (padding included); `GET /api/status` says
+whether it is (`idle`), and if not, when it will be (`idleAt`: the end of what records now, and
+of anything starting too soon after that to stop between).
+
+- **Stopping in the middle of a recording** (`POST /api/shutdown` "now", SIGTERM, Ctrl+C): the
+  recording's part is closed and finished into its `.mkv` at once, so what was recorded plays;
+  the recording stays *recording*, and if the service runs again while the programme is on it
+  carries on in a new part (`… - part1.mkv`, `… - part2.mkv`). Killed outright (a crash, Task
+  Scheduler's End), the capture is finished the same way at the next start.
+- **Updating on Linux:** the package replaces `/usr/bin/zapper-server` while it runs. The
+  service notices (the file at its path is another one), and restarts into the new version at
+  the first idle moment. Nothing to do, and nothing interrupted.
+- **Updating on Windows:** a running `zapper-server.exe` cannot be replaced. zapper's updater
+  asks the service first: if it is recording, the update dialog offers to install when the
+  recording finishes (it waits, then installs) or now (stopping it as above). The installers
+  ask too when run by hand: the setup shows "zapper's recording service is recording until
+  21:05. Stop it now and continue?", and cancels if not; the MSI asks the same (its
+  `zapper-server.exe --stop-for-setup --ask`), and if the answer is no, Windows Installer's
+  files-in-use dialog follows, which can cancel. Silent installs do not ask.
+- **Removing it:** Settings → Recording → **Remove** is the clean way, everywhere.
+  - Windows: uninstalling zapper also removes it. The setup's uninstaller stops this user's
+    service cleanly and deletes its task and log (not when a newer setup runs it to replace
+    this one); the MSI's removal deletes every user's `zapper-server-*` task (an action running
+    as SYSTEM, which can see them all) after stopping the installing user's cleanly.
+  - Linux: removing the package (not upgrading it) stops a running `zapper-server` with
+    SIGTERM, which finishes its recording as above. The unit stays in each user's
+    `~/.config/systemd/user/`, which a package removal does not touch; it is skipped from then on
+    (`ConditionPathExists`), so it neither fails nor restarts. Settings → Recording → Remove
+    (or `zapper-server --remove-service`) deletes it.
+
 **Catalogue.** On the same machine the service and the app share the catalogue database. Either
 may refresh it; a lease in the database keeps them from refreshing at the same moment, and both
 honour the interval set in Settings → Guide.
@@ -193,11 +226,21 @@ honour the interval set in Settings → Guide.
 ## The service
 
 ```text
-zapper-server [--port N] [--no-sync]
+zapper-server [--port N] [--no-sync] [--home DIR]
+zapper-server --install-service | --remove-service [--home DIR]
+zapper-server --busy | --stop-for-setup [--ask] [--home DIR]
 ```
 
 - `--port N`: listen on port `N` for this run (default: the port in `server.json`, else 8796).
 - `--no-sync`: leave the catalogue to the app.
+- `--home DIR`: keep everything in `DIR`, as `ZAPPER_HOME` does. The service is given it when
+  the app that installed it runs on a home of its own.
+- `--install-service`, `--remove-service`: what Settings → Recording's Install and Remove do,
+  with this `zapper-server`: for a computer without the app's window.
+- `--busy`: whether this user's running service is recording; exit status 3 and "recording until
+  21:05" if it is, 0 otherwise. `--stop-for-setup`: stops it cleanly now and waits for it to go;
+  with `--ask`, asks first (a message box on Windows) when it is recording, and exits 2 if not.
+  The Windows installers use both.
 
 Its files, in zapper's config and data directories (`~/.config/zapper`, `~/.local/share/zapper`
 on Linux; `ZAPPER_HOME` moves both):
@@ -249,6 +292,11 @@ through the API, then checks that the recording switched to the backup, that it 
 parts that ffprobe reads with the video, the audio and a non-default *Clock* track, that the
 clock reads when it was recorded, and that each feed was asked exactly once.
 
+It then records a second programme and stops the service part way through it (SIGTERM; on
+Windows, `POST /api/shutdown` "now"), and checks that `… - part1.mkv` was left playable with the
+recording still *recording*, and that starting the service again carries on into
+`… - part2.mkv` and finishes it.
+
 `service_check` (same features) installs the service the way Settings → Recording does, on a
 scratch home it hands the service (`--home`), checks that it answers there, then removes it. It
 installs a real service for you for those few seconds, so it refuses when one is installed
@@ -266,7 +314,7 @@ token, or the app's token from another machine; `403` for what no token changes)
 | Request | Answer |
 |---|---|
 | `GET /api/version` | `{version, apiVersion}` |
-| `GET /api/status` | `{version, apiVersion, active: [{id, title, streamId, bytes, since, waiting?}], outputDir, diskFree, diskTotal, now}` |
+| `GET /api/status` | `{version, apiVersion, active: [{id, title, streamId, bytes, since, until, waiting?}], outputDir, diskFree, diskTotal, now, idle, idleAt?, nextStart?}` ([Stopping and updating](#stopping-and-updating)) |
 | `GET /api/recordings` | `[Recording]`, soonest first |
 | `GET /api/recordings/{id}` | `Recording` |
 | `POST /api/recordings` | schedule: body `{streamId, title, start, stop, backupStreamId?, channelName?, episodeTitle?, season?, episode?, padBefore?, padAfter?}` → `201 Recording`; the same channel and start again returns the existing one |
@@ -286,6 +334,7 @@ Network access and devices:
 | `PUT /api/network/password` | the app | body `{password}` (at least 8 characters): sets it, signs every device out, returns the same as `GET` |
 | `GET /api/devices` | the app | `[Device]`, most recently used first |
 | `DELETE /api/devices/{id}` | the app | signs that device out; returns the same as `GET /api/network` |
+| `POST /api/shutdown` | the app | body `{when: "idle" \| "now", restart?}`: stops (or with `restart` runs itself again) at the first idle moment, or now, finishing what it records into playable files. Answers first, with `GET /api/status` |
 
 "The app" is the `server-token` from a loopback address; a device's token is refused there
 (`403`). `Device` is `{id, name, userAgent, created, lastUsed?, address?}`; `fingerprint` is the

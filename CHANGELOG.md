@@ -18,6 +18,11 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
   Run anyway. zapper updates itself from them like the Linux packages.
 - Recording on Windows: Settings → Recording installs the recording service as a scheduled task
   that starts when you sign in, and removes it again. It records while you are signed in.
+- The recording service no longer cuts a recording short when it stops: what it recorded so far
+  is saved as a playable file, and it carries on in a new part if it starts again while the
+  programme is on. After a package upgrade on Linux it restarts into the new version once
+  nothing is recording. On Windows, updating asks first when a recording is in progress:
+  install when it finishes, or now. Uninstalling zapper removes the service too.
 - Network access for the recording service (Settings → Recording, off by default): other devices
   on your network can reach it over HTTPS with its own certificate, whose fingerprint Settings
   shows, after signing in with a password you set there. Each device is listed and can be

@@ -132,12 +132,46 @@ and deletes it. It runs while the user is signed in. Not offered: recording
 with nobody signed in (the task would need the account's password), and
 waking the computer to record (a task per recording, with a wake timer).
 
-A running `zapper-server.exe` cannot be replaced, so the updater stops the
-task before it starts an installer, and zapper starts it again when it opens;
-the NSIS setup stops it too, and starts the task again once installed. The
-MSI does neither (it runs elevated, outside the user's tasks): before
-installing a newer MSI by hand, end the task (Task Scheduler, or quit by
-Remove and Install again after), or Windows finds the file in use.
+A running `zapper-server.exe` cannot be replaced, so whatever replaces it
+stops it first, cleanly (what it is recording is finished into playable files
+and carries on in a new part when it runs again; docs/recording.md,
+"Stopping and updating"):
+
+- zapper's updater asks the service first; if it is recording, the update
+  dialog offers to install when the recording finishes, or now. It then
+  stops the task, starts the installer, and zapper starts the task again
+  when it reopens.
+- The setup (`packaging/windows/installer-hooks.nsh`) asks the installed
+  `zapper-server.exe` whether it is recording (`--busy`); run by hand, it
+  then asks whether to stop it, and cancels if not; silent, it does not ask.
+  It stops it (`--stop-for-setup`), and once installed starts the task
+  again.
+- The MSI (`packaging/windows/service-cleanup.wxs`) runs
+  `zapper-server.exe --stop-for-setup` as the installing user before any
+  file changes, with `--ask` in full UI. An EXE custom action cannot cancel
+  an MSI cleanly (only fail it, with a generic error), so a "no" leaves the
+  service running and Windows Installer's files-in-use dialog follows,
+  which can cancel. Other users' running services are files in use.
+
+Uninstalling removes the service:
+
+- the setup's uninstaller, on an uninstall, stops this user's service as
+  above and deletes its task and `zapper-server.log`. Tauri's template also
+  runs the uninstaller when a newer setup replaces this one ("uninstall
+  before installing"), in place from the install folder, while an
+  uninstall from Settings → Apps runs a copy from a temporary folder: that,
+  and `/UPDATE`, is how the hook tells the two apart and keeps the task
+  through an upgrade;
+- the MSI, on a full removal only (not the removal half of an upgrade),
+  runs an action as SYSTEM, which sees every user's tasks, that stops and
+  deletes every `zapper-server-*` task whose author is zapper.
+
+Recordings, the service's settings and its list of recordings stay.
+
+`scripts/check-windows.ps1 -Install` checks this on the release runner: a
+task made by `zapper-server --install-service` survives installing the setup
+over itself and the in-place uninstall an upgrade runs, and goes with a real
+uninstall of the setup and with the MSI's removal.
 
 `service_check` installs it, checks it answers, and removes it, on a scratch
 home, with no window:
