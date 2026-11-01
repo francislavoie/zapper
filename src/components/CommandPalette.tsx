@@ -26,7 +26,7 @@ export function CommandPalette() {
 
   const playing = state.player.state !== "stopped";
   const items = paletteItems(
-    filterActions(availableActions(playing), query),
+    filterActions(availableActions(playing, state.previousChannel !== null), query),
     results.status === "ready" ? results.data : [],
   );
   const active = clampIndex(index, items.length);
@@ -55,9 +55,13 @@ export function CommandPalette() {
       }
       // Shared with the toolbar's hamburger, which draws this same list: one
       // behaviour per action, wherever it was picked from.
-      runAction(item.action.id, { dispatch, player: state.player });
+      runAction(item.action.id, {
+        dispatch,
+        player: state.player,
+        previous: state.previousChannel,
+      });
     },
-    [close, dispatch, state.player],
+    [close, dispatch, state.player, state.previousChannel],
   );
 
   return (

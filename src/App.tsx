@@ -37,12 +37,18 @@ import { useUpdates } from "./hooks/useUpdates";
 import { Toolbar } from "./components/Toolbar";
 import { ResizeEdges } from "./components/ResizeEdges";
 import { ZoomBadge } from "./components/ZoomBadge";
+import { ZapChip } from "./components/ZapEntry";
+import { useNumberZap } from "./hooks/useNumberZap";
 import { WatchBand } from "./components/WatchBand";
 import { Toasts } from "./components/Toasts";
 import { Boundary } from "./components/Crashed";
 import { StatsPanel } from "./components/StatsPanel";
 import { VideoMenu } from "./components/VideoMenu";
 import { TooltipHost } from "./components/TooltipHost";
+
+/** How long "Jumped 12s to live" stays over the picture: long enough to be
+ *  read by someone who looked up because the picture jumped. */
+const LIVE_JUMP_MS = 5000;
 
 export function App() {
   const state = useApp();
@@ -133,15 +139,17 @@ export function App() {
   useEffect(() => {
     if (restored.current) return;
     restored.current = true;
-    const id = loadSession().lastStreamId;
-    if (id === null) return;
+    const { lastStreamId: id, previousStreamId: prev } = loadSession();
+    const ids = [id, prev].filter((v): v is number => v !== null);
+    if (ids.length === 0) return;
     void backend
-      .channelsByIds([id])
+      .channelsByIds(ids)
       .then((rows) => {
         // The reducer decides whether this is still wanted: the user may
         // have started something while the lookup was in flight.
-        const channel = rows[0];
-        if (channel) dispatch({ type: "ready", channel });
+        const channel = rows.find((r) => r.streamId === id) ?? null;
+        const previous = rows.find((r) => r.streamId === prev) ?? null;
+        if (channel || previous) dispatch({ type: "ready", channel, previous });
       })
       .catch(() => {
         // A channel that has gone, or a mirror not yet built. Starting on
@@ -153,6 +161,29 @@ export function App() {
   useEffect(() => {
     if (state.nowChannel) saveSession({ lastStreamId: state.nowChannel.streamId });
   }, [state.nowChannel]);
+
+  // And the one before it, for P. Only ever written with a channel: on mount
+  // there is none yet, and writing that would forget the remembered one
+  // before the restore above has read it back.
+  useEffect(() => {
+    if (state.previousChannel) {
+      saveSession({ previousStreamId: state.previousChannel.streamId });
+    }
+  }, [state.previousChannel]);
+
+  // A catch-up to live is announced for a few seconds and then let go. Here
+  // rather than in the corner that draws it, because that corner belongs to
+  // whichever picture is up, and moving between the docked one and the
+  // player must neither restart the clock nor lose it.
+  useEffect(() => {
+    if (!state.liveJump) return;
+    const seq = state.liveJump.seq;
+    const t = window.setTimeout(() => dispatch({ type: "liveJumpSeen", seq }), LIVE_JUMP_MS);
+    return () => window.clearTimeout(t);
+  }, [state.liveJump, dispatch]);
+
+  // Typing a channel number; see hooks/useNumberZap.ts.
+  useNumberZap(state, dispatch);
 
   /** Whether the remembered compressor setting has been dealt with.
    *
@@ -430,6 +461,9 @@ export function App() {
       <Boundary what="About">{state.aboutOpen ? <AboutModal /> : null}</Boundary>
       <Boundary what="Updates">{state.updateOpen ? <UpdateModal /> : null}</Boundary>
 
+      {/* While browsing, a channel number being typed floats over the views;
+          while watching it is in the picture's corner (PictureCorner). */}
+      {state.mode === "watch" ? null : <ZapChip />}
       <ZoomBadge />
       <Toasts />
       {/* Once, for every tip in the app: targets carry `data-tip` and this

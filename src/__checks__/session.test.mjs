@@ -25,6 +25,7 @@ test("a round trip preserves everything", () => {
     railScrollTop: 420,
     channelScrollTop: 13_000,
     lastStreamId: 107037,
+    previousStreamId: 107040,
     compressor: true,
     railCollapsed: true,
     volume: 135,
@@ -101,4 +102,11 @@ test("the compressor is remembered, and only a real true counts", () => {
   // failure mode is audio that has been quietly processed for weeks.
   assert.equal(parseSession('{"compressor":1}').compressor, false);
   assert.equal(parseSession('{"compressor":"yes"}').compressor, false);
+});
+
+test("P's channel comes back beside the channel, and junk does not", () => {
+  assert.equal(parseSession('{"previousStreamId":42}').previousStreamId, 42);
+  assert.equal(parseSession("{}").previousStreamId, null);
+  assert.equal(parseSession('{"previousStreamId":"42"}').previousStreamId, null);
+  assert.equal(parseSession('{"previousStreamId":4.2}').previousStreamId, null);
 });

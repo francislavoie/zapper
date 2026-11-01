@@ -44,13 +44,29 @@ export async function playChannel(
   if (!ok && opts.full) dispatch({ type: "mode", mode: opts.back ?? "browse" });
 }
 
+/** Back to the channel before this one, like a remote's recall button.
+ *
+ *  Starting it makes the current channel the previous one (see "opening" in
+ *  the store), so a second press comes back. Like any other pick, it leaves
+ *  the view alone: from the player it changes what the player shows, from
+ *  the list what the docked picture does. */
+export function playPrevious(dispatch: Dispatch<Action>, previous: ChannelDto | null) {
+  if (!previous) {
+    dispatch({ type: "toast", text: "No previous channel yet", kind: "info" });
+    return;
+  }
+  void playChannel(dispatch, previous);
+}
+
 // ------------------------------------------------------------------ actions
 
-/** What an action needs beyond the dispatcher: only the player, and only
- *  because "toggle compressor" has to read the current value to flip it. */
+/** What an action needs beyond the dispatcher: the player, because "toggle
+ *  compressor" has to read the current value to flip it, and the previous
+ *  channel, for recall. */
 export interface ActionContext {
   dispatch: Dispatch<Action>;
   player: PlayerStateDto;
+  previous: ChannelDto | null;
 }
 
 /** One behaviour per action id. `Record<ActionId, …>` makes the compiler
@@ -61,6 +77,7 @@ export interface ActionContext {
 const HANDLERS: Record<ActionId, (ctx: ActionContext) => void> = {
   browse: ({ dispatch }) => dispatch({ type: "mode", mode: "browse" }),
   guide: ({ dispatch }) => dispatch({ type: "mode", mode: "guide" }),
+  previous: ({ dispatch, previous }) => playPrevious(dispatch, previous),
   compressor: ({ dispatch, player }) =>
     void run(dispatch, "compressor", backend.setCompressor(!player.compressor)),
   live: ({ dispatch }) => void run(dispatch, "seek to live", backend.seekLive()),

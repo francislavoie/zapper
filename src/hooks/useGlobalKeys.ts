@@ -5,6 +5,7 @@
 
 import { useEffect } from "react";
 import { backend } from "../backend";
+import { playPrevious } from "../actions";
 import { focusSearch, typingInto } from "../focus";
 import { exitFullscreen, toggleFullscreen } from "../fullscreen";
 import { fullscreenNow, refreshFullscreen } from "./useFullscreen";
@@ -130,6 +131,15 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
         return;
       }
 
+      // Recall, from anywhere: a remote's "last" button. Not a player
+      // control — after a stop, going back to what was on still makes sense.
+      // Ctrl+P never reaches here (the palette, above); Alt+P is the system's.
+      if ((e.key === "p" || e.key === "P") && !e.altKey && !e.metaKey) {
+        e.preventDefault();
+        playPrevious(dispatch, state.previousChannel);
+        return;
+      }
+
       // The rest only mean anything with a stream open.
       if (state.player.state === "stopped") return;
 
@@ -181,5 +191,6 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
     state.categoryMenu,
     state.categoryOptions,
     state.statsOpen,
+    state.previousChannel,
   ]);
 }

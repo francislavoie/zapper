@@ -84,6 +84,19 @@ export interface PlayerStateDto {
   muted: boolean;
   compressor: boolean;
   error: string | null;
+  /** The last time playback skipped ahead to live by itself on this stream —
+   *  after a tune-in's connect burst, or after stalls — or null. Cleared by
+   *  the next open. */
+  liveJump: LiveJumpDto | null;
+}
+
+/** One automatic catch-up to live. */
+export interface LiveJumpDto {
+  /** How far forward it went, in seconds. */
+  seconds: number;
+  /** Counts up across the session: a jump is news when this changes, so two
+   *  jumps of the same size are still two. */
+  seq: number;
 }
 
 /** Normalised window coordinates. Video is not a DOM element; the frontend

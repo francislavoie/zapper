@@ -15,6 +15,7 @@ import {
 import type {
   CategoryDto,
   ChannelDto,
+  LiveJumpDto,
   PlayerStateDto,
   SettingsDto,
   SyncStatusDto,
@@ -33,6 +34,7 @@ import { clampRailWidth } from "./logic/railWidth";
 import { clampVideoWidth } from "./logic/videoSize";
 import { setHidden, setPinned, type CategorySort } from "./logic/categoryOrder";
 import { loadCategoryHidden, loadCategoryPins, loadCategorySort } from "./categoryPrefs";
+import type { ZapView } from "./logic/zap";
 
 export const ALL_CATEGORIES = "*all*";
 
@@ -139,6 +141,18 @@ export interface State {
   /** Metadata for whatever is playing, painted immediately from SQLite while
    *  the stream opens. */
   nowChannel: ChannelDto | null;
+  /** The channel before this one, for P: a remote's recall button. Set when
+   *  a different channel opens, so recalling it makes the current one the
+   *  previous and P flips between the two. Remembered across launches with
+   *  the session, beside the channel itself. */
+  previousChannel: ChannelDto | null;
+  /** A channel number being typed, as drawn; null when none is. Driven by
+   *  useNumberZap. */
+  zap: ZapView | null;
+  /** The automatic catch-up to live being announced over the picture, or
+   *  null. Raised when the backend reports a new one, cleared a few seconds
+   *  later by App. */
+  liveJump: LiveJumpDto | null;
   /** How far the guide has been scrolled away from now, in seconds from
    *  `guideAnchor`; zero follows the clock. Seconds rather than a scrollLeft
    *  because the guide never has a wide strip to scroll — see "scrolling in
@@ -206,6 +220,7 @@ export const initialPlayer: PlayerStateDto = {
   muted: false,
   compressor: false,
   error: null,
+  liveJump: null,
 };
 
 /** Until the backend answers: nothing known, nothing to show. */
@@ -249,6 +264,9 @@ export const initialState: State = {
   player: initialPlayer,
   pendingStreamId: null,
   nowChannel: null,
+  previousChannel: null,
+  zap: null,
+  liveJump: null,
   guideOffset: 0,
   guideAnchor: null,
   settings: DEFAULT_SETTINGS,
@@ -293,8 +311,12 @@ export type Action =
   | { type: "sync"; value: SyncStatusDto }
   | { type: "player"; value: PlayerStateDto }
   | { type: "opening"; channel: ChannelDto }
-  /** The channel from last time, restored but deliberately not started. */
-  | { type: "ready"; channel: ChannelDto }
+  /** The channel from last time, restored but deliberately not started, and
+   *  the one before it, for P. */
+  | { type: "ready"; channel: ChannelDto | null; previous?: ChannelDto | null }
+  | { type: "zap"; value: ZapView | null }
+  /** The announcement of jump `seq` has been up long enough. */
+  | { type: "liveJumpSeen"; seq: number }
   /** A step: ‹ › and the arrow keys by an hour, a click on the scrollbar's
    *  track by a screen. */
   | { type: "guideShift"; hours: number }
@@ -436,6 +458,7 @@ export function reducer(state: State, action: Action): State {
       return {
         ...state,
         player: action.value,
+        liveJump: nextLiveJump(state, action.value),
         // Once the backend confirms the stream we asked for, the optimistic
         // highlight has served its purpose.
         pendingStreamId:
@@ -488,16 +511,30 @@ export function reducer(state: State, action: Action): State {
       // zoom and dispatching the result would read the same stale value twice
       // and move once — React has not re-rendered in between.
       return { ...state, zoom: nextZoom(state.zoom, action.command) };
-    case "ready":
+    case "ready": {
       // Only while nothing has claimed the band. Restoring is a round trip
       // through the catalogue and the user can start something while it is
       // in flight; replacing their choice with a memory of the last session
-      // would be worse than not restoring at all.
+      // would be worse than not restoring at all. The same goes for P's
+      // channel: one started in the meantime has already set it.
       if (state.nowChannel !== null || state.player.state !== "stopped") return state;
       // Metadata only. No pendingStreamId, because nothing is opening, and no
       // mode change, because restoring where you were must not decide what
       // you are doing now.
-      return { ...state, nowChannel: action.channel };
+      const previous =
+        action.previous && action.previous.streamId !== action.channel?.streamId
+          ? action.previous
+          : null;
+      return {
+        ...state,
+        nowChannel: action.channel,
+        previousChannel: state.previousChannel ?? previous,
+      };
+    }
+    case "zap":
+      return state.zap === action.value ? state : { ...state, zap: action.value };
+    case "liveJumpSeen":
+      return state.liveJump?.seq === action.seq ? { ...state, liveJump: null } : state;
     case "videoWidth":
       return {
         ...state,
@@ -518,6 +555,13 @@ export function reducer(state: State, action: Action): State {
         ...state,
         pendingStreamId: action.channel.streamId,
         nowChannel: action.channel,
+        // Only a different channel moves the recall: a catch-up programme on
+        // the channel already on, or the same channel reopened, leaves P
+        // pointing where it was.
+        previousChannel:
+          state.nowChannel && state.nowChannel.streamId !== action.channel.streamId
+            ? state.nowChannel
+            : state.previousChannel,
       };
     case "toast":
       return {
@@ -533,6 +577,16 @@ export function reducer(state: State, action: Action): State {
         toasts: state.toasts.filter((t) => t.id !== action.id),
       };
   }
+}
+
+/** The catch-up to announce after a player update: a new one when the
+ *  backend reports a jump it had not reported before, nothing once the
+ *  stream it happened on has gone, and otherwise whatever was showing. */
+function nextLiveJump(state: State, next: PlayerStateDto): LiveJumpDto | null {
+  const jump = next.liveJump;
+  if (jump && jump.seq !== state.player.liveJump?.seq) return jump;
+  if (next.streamId !== state.player.streamId || next.state === "stopped") return null;
+  return state.liveJump;
 }
 
 const StateCtx = createContext<State>(initialState);

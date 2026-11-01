@@ -71,7 +71,7 @@ export function Toolbar() {
 
   const choose = (action: PaletteAction) => {
     closeMenu();
-    runAction(action.id, { dispatch, player: state.player });
+    runAction(action.id, { dispatch, player: state.player, previous: state.previousChannel });
   };
 
   const max = maximiseLabel(maximised);
@@ -136,7 +136,9 @@ export function Toolbar() {
         <Status
           {...status}
           onDrag={dragWindow}
-          onRetry={() => runAction("sync", { dispatch, player: state.player })}
+          onRetry={() =>
+            runAction("sync", { dispatch, player: state.player, previous: state.previousChannel })
+          }
         />
       </div>
 
@@ -248,7 +250,7 @@ function Status({
 }
 
 function Menu({ onChoose }: { onChoose: (a: PaletteAction) => void }) {
-  const { player } = useApp();
+  const { player, previousChannel } = useApp();
   const firstRef = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
@@ -257,7 +259,9 @@ function Menu({ onChoose }: { onChoose: (a: PaletteAction) => void }) {
 
   // Exactly the palette's list, regrouped. Anything the palette can do, the
   // menu can do, and nothing else — there is no second list to keep in step.
-  const groups = actionGroups(availableActions(player.state !== "stopped"));
+  const groups = actionGroups(
+    availableActions(player.state !== "stopped", previousChannel !== null),
+  );
   let seen = 0;
 
   return (

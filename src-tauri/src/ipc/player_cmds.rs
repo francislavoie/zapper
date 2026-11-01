@@ -20,7 +20,7 @@ use tauri::{AppHandle, Emitter};
 
 use crate::catalog::activity::{self, Accumulator};
 use crate::catalog::store;
-use crate::ipc::types::{events, PlaybackState, PlayerStateDto};
+use crate::ipc::types::{events, LiveJumpDto, PlaybackState, PlayerStateDto};
 use crate::surface::mpv::{self, Player, Probe, Signal};
 use crate::surface::VideoRect;
 use crate::source::{Playable, Source};
@@ -105,6 +105,8 @@ struct Machine {
     last_live_nudge: Option<Instant>,
     /// The one catch-up after a channel's connect burst; see [`Settle`].
     settle: Option<Settle>,
+    /// Automatic catch-ups so far this session, for [`LiveJumpDto::seq`].
+    jumps: u64,
 }
 
 /// Brings a freshly tuned channel up to live once its connect burst is over.
@@ -184,6 +186,7 @@ impl Machine {
             last_tick_at: None,
             last_live_nudge: None,
             settle: None,
+            jumps: 0,
         }
     }
 
@@ -207,6 +210,8 @@ impl Machine {
         self.dto.buffered_back = 0.0;
         self.opened_at = Some(Instant::now());
         self.settle = None;
+        // The last stream's catch-up is not news about this one.
+        self.dto.live_jump = None;
     }
 
     /// First frame decoded. The only honest "it works" edge: `file-loaded`
@@ -253,6 +258,7 @@ impl Machine {
         self.dto.behind_live = 0.0;
         self.dto.buffered_back = 0.0;
         self.opened_at = None;
+        self.dto.live_jump = None;
     }
 
     /// mpv ended the file on its own. Before a first frame that is a failure,
@@ -265,6 +271,22 @@ impl Machine {
             PlaybackState::Playing | PlaybackState::Paused => self.stopped(),
             _ => {}
         }
+    }
+
+    /// Playback is being taken `by` seconds forward to live, by the app
+    /// rather than the viewer. Bookkeeping only: the caller makes the seek.
+    ///
+    /// Resets the drift measure and stamps the nudge clock, which both
+    /// automatic catch-ups need, and reports the jump so the frontend can say
+    /// what just happened to the picture.
+    fn caught_up(&mut self, by: f64) {
+        self.last_live_nudge = Some(Instant::now());
+        self.drift_secs = 0.0;
+        self.jumps += 1;
+        self.dto.live_jump = Some(LiveJumpDto {
+            seconds: round_tenth(by),
+            seq: self.jumps,
+        });
     }
 
     /// Folds a main-thread measurement in. Quality figures are only trusted
@@ -485,8 +507,7 @@ fn tick(app: &AppHandle, p: &Player) {
                         "tuned in {:.1}s behind live; catching up to the cushion",
                         probe.behind_live
                     );
-                    m.last_live_nudge = Some(Instant::now());
-                    m.drift_secs = 0.0;
+                    m.caught_up(decision);
                     let _ = p.command("seek", &[&format!("{decision:.3}"), "relative"]);
                 }
             }
@@ -495,9 +516,8 @@ fn tick(app: &AppHandle, p: &Player) {
                 .last_live_nudge
                 .is_none_or(|t| t.elapsed() >= LIVE_NUDGE_INTERVAL);
             if m.drift_secs > MAX_DRIFT_SECS && settled && probe.behind_live > LIVE_CUSHION + 1.0 {
-                m.last_live_nudge = Some(Instant::now());
-                m.drift_secs = 0.0;
                 let by = (probe.behind_live - LIVE_CUSHION).max(0.0);
+                m.caught_up(by);
                 // Best-effort: failing to catch up is not a reason to fail a
                 // stream that is otherwise playing fine.
                 let _ = p.command("seek", &[&format!("{by:.3}"), "relative"]);
@@ -1332,6 +1352,53 @@ mod tests {
             "channel names lie; stale numbers lie too"
         );
         assert_eq!(m.dto.codec, None);
+    }
+
+    #[test]
+    fn an_automatic_catch_up_is_reported_with_its_distance() {
+        let mut m = Machine::new();
+        m.opening(1);
+        m.playing();
+        assert_eq!(m.dto.live_jump, None, "nothing has jumped yet");
+        m.drift_secs = 3.0;
+        m.caught_up(12.04);
+        assert_eq!(m.dto.live_jump, Some(LiveJumpDto { seconds: 12.0, seq: 1 }));
+        assert_eq!(m.drift_secs, 0.0, "the jump makes back what was lost");
+        assert!(m.last_live_nudge.is_some(), "and holds off the next one");
+        assert!(m.changed().is_some_and(|d| d.live_jump.is_some()));
+    }
+
+    #[test]
+    fn a_second_jump_of_the_same_size_is_still_news() {
+        let mut m = Machine::new();
+        m.opening(1);
+        m.playing();
+        m.caught_up(6.0);
+        let first = m.changed().and_then(|d| d.live_jump).expect("first jump");
+        m.caught_up(6.0);
+        let second = m.changed().and_then(|d| d.live_jump).expect("second jump");
+        assert_eq!(first.seconds, second.seconds);
+        assert!(second.seq > first.seq, "the counter is what tells them apart");
+    }
+
+    #[test]
+    fn a_jump_belongs_to_the_stream_it_happened_on() {
+        let mut m = Machine::new();
+        m.opening(1);
+        m.playing();
+        m.caught_up(9.0);
+        m.opening(2);
+        assert_eq!(m.dto.live_jump, None, "a zap starts with no news");
+        m.playing();
+        m.caught_up(4.0);
+        m.stopped();
+        assert_eq!(m.dto.live_jump, None);
+        // Counted across the session, so a jump on the next stream cannot
+        // repeat a number the frontend has already announced.
+        m.opening(3);
+        m.playing();
+        m.caught_up(4.0);
+        assert_eq!(m.dto.live_jump.map(|j| j.seq), Some(3));
     }
 
     #[test]

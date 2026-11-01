@@ -8,7 +8,11 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { MOUSE_WORDS, SHORTCUT_GROUPS } from "../logic/shortcuts.ts";
 
-const keysSource = readFileSync(new URL("../hooks/useGlobalKeys.ts", import.meta.url), "utf8");
+// Number zapping has a hook of its own, listening ahead of everything else
+// while a number is being typed; its keys count as handled too.
+const keysSource =
+  readFileSync(new URL("../hooks/useGlobalKeys.ts", import.meta.url), "utf8") +
+  readFileSync(new URL("../hooks/useNumberZap.ts", import.meta.url), "utf8");
 const zoomSource = readFileSync(new URL("../logic/zoom.ts", import.meta.url), "utf8");
 
 /** How a listed key appears in the handler's source. */
@@ -19,6 +23,8 @@ const IN_SOURCE = {
   Esc: '"Escape"',
   Home: '"Home"',
   "/": '"/"',
+  // Digits are recognised by zapChar in logic/zap.ts, which the hook calls.
+  "0–9": "zapChar(",
 };
 
 test("every key listed is one the app handles", () => {

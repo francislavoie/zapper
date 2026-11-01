@@ -32,6 +32,10 @@ export const api = {
 
   channelsByIds: (ids: number[]) => invoke<ChannelDto[]>("channels_by_ids", { ids }),
 
+  /** Every channel number as the list writes it ("12", "5.1") and the channel
+   *  it tunes, in list order; see logic/zap.ts. */
+  channelNumbers: () => invoke<[string, number][]>("channel_numbers"),
+
   search: (query: string, limit: number) =>
     invoke<ChannelDto[]>("search", { query, limit }),
 

@@ -30,6 +30,7 @@ import { volumeAfterWheel } from "../logic/volume";
 import { run, useApp, useDispatch } from "../store";
 import { TransportBar } from "./TransportBar";
 import { VideoFeedback } from "./VideoFeedback";
+import { PictureCorner } from "./PictureCorner";
 
 export interface MiniControlsProps {
   /** What a single click on the picture does. Owned by the band, which also
@@ -131,6 +132,7 @@ export function MiniControls({ onActivate }: MiniControlsProps) {
       }}
     >
       <VideoFeedback feedback={gestures.feedback} />
+      <PictureCorner docked />
 
       {/* Every click inside the bar belongs to the control it hit. Without
           stopping it here, pausing would also count as a click on the

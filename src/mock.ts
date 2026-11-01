@@ -324,6 +324,13 @@ function buildCatalog(): MockCatalog {
     categories.push({ id, name, channelCount: count });
   }
 
+  // Over-the-air subchannels, numbered the way HDHomeRun and Tvheadend
+  // number them: "5.1" held as 5001, so it sorts among the 5000s. Enough to
+  // type a number with a dot in it.
+  for (const r of rows) {
+    if (r.num !== null && r.num >= 5001 && r.num <= 5003) r.numLabel = `5.${r.num - 5000}`;
+  }
+
   // One guaranteed specimen of the lying-name case, near the top of the list.
   const liar = rows.find((r) => !r.isSeparator);
   if (liar) {
@@ -492,6 +499,7 @@ const playerEmitter = new Emitter<PlayerStateDto>({
   muted: false,
   compressor: false,
   error: null,
+  liveJump: null,
 });
 
 const syncEmitter = new Emitter<SyncStatusDto>({
@@ -617,12 +625,39 @@ function startBufferClock() {
   }, 1000);
 }
 
+/** Counts the mock's automatic catch-ups, like the backend's `seq`. */
+let mockJumps = 0;
+
+/** Bumped on every open, so a catch-up timer from the last stream cannot
+ *  land on the next one. */
+let openSeq = 0;
+
 async function openStream(streamId: number, quality: Partial<PlayerStateDto>) {
-  patchPlayer({ state: "opening", streamId, error: null, bufferedBack: 0, behindLive: 0 });
+  const mine = ++openSeq;
+  patchPlayer({
+    state: "opening",
+    streamId,
+    error: null,
+    bufferedBack: 0,
+    behindLive: 0,
+    liveJump: null,
+  });
   await delay(700);
-  if (playerEmitter.last.streamId !== streamId) return;
-  patchPlayer({ state: "playing", ...quality });
+  if (openSeq !== mine) return;
+  // The connect burst: playback starts well behind live, as the real thing
+  // does, and the backend's Settle brings it up once the burst is over —
+  // reported as a jump, which is what the picture's corner announces.
+  const behind = 14 + Math.round(Math.random() * 100) / 10;
+  patchPlayer({ state: "playing", ...quality, behindLive: behind, bufferedBack: behind, atLiveEdge: false });
   startBufferClock();
+  await delay(2500);
+  if (openSeq !== mine || playerEmitter.last.state !== "playing") return;
+  const cushion = 4;
+  patchPlayer({
+    behindLive: cushion,
+    atLiveEdge: true,
+    liveJump: { seconds: Math.round((behind - cushion) * 10) / 10, seq: ++mockJumps },
+  });
 }
 
 export const mockApi = {
@@ -649,6 +684,16 @@ export const mockApi = {
     // Ids that no longer exist are simply absent, same as the backend: a
     // remembered channel can vanish between sessions.
     return getCatalog().rows.filter((r) => !r.isSeparator && want.has(r.streamId));
+  },
+
+  channelNumbers: async (): Promise<[string, number][]> => {
+    await delay(80);
+    const out: [string, number][] = [];
+    for (const r of getCatalog().rows) {
+      if (r.isSeparator || r.num === null) continue;
+      out.push([r.numLabel ?? String(r.num), r.streamId]);
+    }
+    return out;
   },
 
   search: async (query: string, limit: number) => {
@@ -748,7 +793,14 @@ export const mockApi = {
   },
 
   stop: async () => {
-    patchPlayer({ state: "stopped", streamId: null, bufferedBack: 0, behindLive: 0 });
+    openSeq++;
+    patchPlayer({
+      state: "stopped",
+      streamId: null,
+      bufferedBack: 0,
+      behindLive: 0,
+      liveJump: null,
+    });
   },
 
   togglePause: async () => {

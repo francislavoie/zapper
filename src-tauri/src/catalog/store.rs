@@ -144,6 +144,30 @@ pub fn channels_in(
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
+/// Every channel number in the catalogue, as it is written, beside the
+/// channel it tunes: `(label, stream_id)`, in the order the "All channels"
+/// list draws them.
+///
+/// For tuning by number, remote-control style. The label is `num_label` when
+/// there is one — an over-the-air subchannel's `5.1`, held in `num` as `5001`
+/// — and `num` written out otherwise, because the label is what the viewer
+/// sees beside the channel and so what they will type. Separators, deleted
+/// rows and channels without a number are left out: none can be tuned by one.
+///
+/// Two channels can share a number (playlists do not promise otherwise); both
+/// are returned, in list order, and the caller takes the first — the one the
+/// list shows first, so typing the number agrees with looking it up.
+pub fn channel_numbers(conn: &Connection) -> Result<Vec<(String, i64)>> {
+    let mut stmt = conn.prepare(
+        "SELECT COALESCE(NULLIF(TRIM(num_label), ''), CAST(num AS TEXT)), stream_id
+         FROM channels
+         WHERE deleted_at IS NULL AND is_separator = 0 AND num IS NOT NULL
+         ORDER BY num, name",
+    )?;
+    let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
 /// Channels in the order the ids were given, because search hands back ranked
 /// ids and SQLite would return them in whatever order it pleases. Ids with no
 /// row are skipped rather than treated as an error.
@@ -419,6 +443,37 @@ mod tests {
             rusqlite::params![id, name, sort],
         )
         .unwrap();
+    }
+
+    #[test]
+    fn channel_numbers_are_written_as_the_list_writes_them() {
+        let c = open_in_memory().unwrap();
+        chan(&c, 1, "Twelve", None, Some(12));
+        chan(&c, 2, "Subchannel", None, Some(5001));
+        c.execute("UPDATE channels SET num_label = '5.1' WHERE stream_id = 2", [])
+            .unwrap();
+        chan(&c, 3, "Blank label", None, Some(7));
+        c.execute("UPDATE channels SET num_label = '  ' WHERE stream_id = 3", [])
+            .unwrap();
+        chan(&c, 4, "Unnumbered", None, None);
+        separator(&c, 5, "##### NEWS #####", None);
+        chan(&c, 6, "Gone", None, Some(8));
+        soft_delete(&c, 6);
+        // A shared number: both come back, the list's first one first.
+        chan(&c, 7, "B second", None, Some(12));
+        chan(&c, 8, "A first", None, Some(12));
+
+        let got = channel_numbers(&c).unwrap();
+        assert_eq!(
+            got,
+            vec![
+                ("7".to_owned(), 3),
+                ("12".to_owned(), 8),
+                ("12".to_owned(), 7),
+                ("12".to_owned(), 1),
+                ("5.1".to_owned(), 2),
+            ]
+        );
     }
 
     fn epg_row(c: &Connection, chan_ref: &str, start: i64, stop: i64, title: &str) {

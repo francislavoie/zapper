@@ -25,6 +25,11 @@ export interface Session {
   channelScrollTop: number;
   /** The channel to have ready, not to play. */
   lastStreamId: number | null;
+  /** The channel before it, for P. Kept for the same reason the channel is:
+   *  a remote's recall still goes back after the set was off, and the app
+   *  comes back showing the channel, so flipping away from it and back
+   *  should work on the first press rather than only after a second zap. */
+  previousStreamId: number | null;
   /** Whether the loudness compressor was left on. A taste about how loud
    *  things should be, which does not change between launches — leaving it
    *  off every time means turning it on every time. */
@@ -47,6 +52,7 @@ export const EMPTY_SESSION: Session = {
   railScrollTop: 0,
   channelScrollTop: 0,
   lastStreamId: null,
+  previousStreamId: null,
   compressor: false,
   railCollapsed: false,
   volume: null,
@@ -57,6 +63,9 @@ const volume = (v: unknown): number | null =>
   typeof v === "number" && Number.isFinite(v)
     ? Math.min(VOLUME_CEILING, Math.max(0, v))
     : null;
+
+const streamId = (v: unknown): number | null =>
+  typeof v === "number" && Number.isInteger(v) ? v : null;
 
 const scroll = (v: unknown): number =>
   typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : 0;
@@ -79,10 +88,8 @@ export function parseSession(raw: string | null): Session {
     railTab: v.railTab === "favourites" ? "favourites" : "categories",
     railScrollTop: scroll(v.railScrollTop),
     channelScrollTop: scroll(v.channelScrollTop),
-    lastStreamId:
-      typeof v.lastStreamId === "number" && Number.isInteger(v.lastStreamId)
-        ? v.lastStreamId
-        : null,
+    lastStreamId: streamId(v.lastStreamId),
+    previousStreamId: streamId(v.previousStreamId),
     compressor: v.compressor === true,
     railCollapsed: v.railCollapsed === true,
     volume: volume(v.volume),
@@ -97,6 +104,7 @@ export function serialiseSession(s: Session): string {
     railScrollTop: scroll(s.railScrollTop),
     channelScrollTop: scroll(s.channelScrollTop),
     lastStreamId: s.lastStreamId,
+    previousStreamId: s.previousStreamId,
     compressor: s.compressor,
     railCollapsed: s.railCollapsed,
     volume: volume(s.volume),

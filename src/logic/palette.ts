@@ -18,6 +18,7 @@ export type ActionGroup = "view" | "player" | "data" | "app";
 export const ACTION_IDS = [
   "browse",
   "guide",
+  "previous",
   "compressor",
   "live",
   "pause",
@@ -40,6 +41,8 @@ export interface PaletteAction {
   group: ActionGroup;
   /** Actions that need something playing are hidden when nothing is. */
   needsPlayer?: boolean;
+  /** Hidden until there is a previous channel to go back to. */
+  needsPrevious?: boolean;
 }
 
 export type PaletteItem =
@@ -53,6 +56,16 @@ export type PaletteItem =
 export const ACTIONS: PaletteAction[] = [
   { id: "browse", label: "Browse channels", hint: "Esc", group: "view" },
   { id: "guide", label: "Open the guide", hint: "G", group: "view" },
+  // A remote's recall button. Not tied to something playing: after a stop,
+  // going back to what was on is still a reasonable thing to want.
+  // "last" and "recall" are what the button is called on remotes.
+  {
+    id: "previous",
+    label: "Previous channel",
+    hint: "P · last · recall",
+    needsPrevious: true,
+    group: "player",
+  },
   {
     id: "compressor",
     label: "Toggle compressor",
@@ -108,8 +121,10 @@ export function flatGroups(groups: PaletteAction[][]): PaletteAction[] {
   return groups.flat();
 }
 
-export function availableActions(playing: boolean): PaletteAction[] {
-  return ACTIONS.filter((a) => !a.needsPlayer || playing);
+export function availableActions(playing: boolean, hasPrevious = false): PaletteAction[] {
+  return ACTIONS.filter(
+    (a) => (!a.needsPlayer || playing) && (!a.needsPrevious || hasPrevious),
+  );
 }
 
 /** Case-insensitive subsequence, the same shape of match the palette gives

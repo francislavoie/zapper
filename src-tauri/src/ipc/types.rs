@@ -118,6 +118,26 @@ pub struct PlayerStateDto {
     pub muted: bool,
     pub compressor: bool,
     pub error: Option<String>,
+    /// The last time playback skipped ahead to live by itself, on this
+    /// stream: after a tune-in's connect burst, or after stalls had left it
+    /// behind. `None` until that happens, and again from the next open.
+    ///
+    /// Reported because the skip is otherwise unexplained — the picture
+    /// jumps and the programme is suddenly a few seconds further on — and
+    /// the viewer should be told it was the app, and how far.
+    pub live_jump: Option<LiveJumpDto>,
+}
+
+/// One automatic catch-up to live. See [`PlayerStateDto::live_jump`].
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveJumpDto {
+    /// How far forward it went, in seconds, to a tenth.
+    pub seconds: f64,
+    /// Counts up across the session, so two jumps of the same distance are
+    /// still two jumps: the frontend announces a jump when this changes,
+    /// not when the distance does.
+    pub seq: u64,
 }
 
 impl Default for PlayerStateDto {
@@ -136,6 +156,7 @@ impl Default for PlayerStateDto {
             muted: false,
             compressor: false,
             error: None,
+            live_jump: None,
         }
     }
 }

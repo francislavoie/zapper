@@ -28,6 +28,7 @@ import { refreshFullscreen, useFullscreen } from "../hooks/useFullscreen";
 import { useVideoGestures } from "../hooks/useVideoGestures";
 import { TransportBar } from "./TransportBar";
 import { VideoFeedback } from "./VideoFeedback";
+import { PictureCorner } from "./PictureCorner";
 
 export function PlayerChrome() {
   const { player, nowChannel, stacked, zoom } = useApp();
@@ -104,6 +105,7 @@ export function PlayerChrome() {
       }}
     >
       <VideoFeedback feedback={gestures.feedback} />
+      <PictureCorner />
       <div className="chrome-top">
         {/* Top-left, where the way out of a full-screen thing lives on every
             device anybody owns. It leaves the player without stopping the

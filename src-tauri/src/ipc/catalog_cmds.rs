@@ -75,6 +75,18 @@ pub async fn channels_by_ids(ids: Vec<i64>) -> Result<Vec<ChannelDto>, String> {
     .map_err(|e| e.to_string())
 }
 
+/// Every channel number and the channel it tunes, for typing a number to
+/// change channel. See [`store::channel_numbers`].
+///
+/// The whole list in one answer rather than a lookup per keystroke: deciding
+/// whether another digit could still be coming needs every number that starts
+/// with what has been typed, and the frontend asks once and keeps the answer
+/// until the next sync.
+#[tauri::command]
+pub async fn channel_numbers() -> Result<Vec<(String, i64)>, String> {
+    db::with_db(store::channel_numbers).map_err(|e| e.to_string())
+}
+
 /// Fuzzy match over all channels. Separators are never returned.
 #[tauri::command]
 pub async fn search(query: String, limit: u32) -> Result<Vec<ChannelDto>, String> {

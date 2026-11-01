@@ -37,6 +37,7 @@ export const SHORTCUT_GROUPS: readonly ShortcutGroup[] = [
       { keys: [["/"]], does: "Search channels" },
       { keys: [["G"]], does: "Switch between the list and the guide" },
       { keys: [["S"]], does: "Stats for nerds" },
+      { keys: [["P"]], does: "Previous channel; again to come back" },
       { keys: [["F"]], does: "Fullscreen" },
       { keys: [["Esc"]], does: "Back one step: a menu, a dialog, fullscreen, the player" },
       {

@@ -53,9 +53,16 @@ test("player-only actions are hidden when nothing is playing", () => {
   assert.ok(idle.includes("sync"));
   assert.ok(idle.includes("settings"));
 
-  const live = availableActions(true).map((a) => a.id);
+  const live = availableActions(true, true).map((a) => a.id);
   assert.ok(live.includes("compressor"));
   assert.equal(live.length, ACTIONS.length);
+});
+
+test("the previous channel is offered only when there is one", () => {
+  assert.ok(!availableActions(true).some((a) => a.id === "previous"));
+  assert.ok(availableActions(true, true).some((a) => a.id === "previous"));
+  // Not a player control: after a stop, going back is still on offer.
+  assert.ok(availableActions(false, true).some((a) => a.id === "previous"));
 });
 
 test("actions come before channels", () => {
