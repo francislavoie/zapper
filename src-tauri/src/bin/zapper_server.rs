@@ -30,9 +30,9 @@
 //! task cannot set the environment of what it starts.
 //!
 //! On Windows it is a windowless program, so that the task that starts it at
-//! sign-in (Settings › Recording) opens no console window. Started from a
-//! terminal, it prints to that terminal's console; started by the task, with
-//! nowhere to print, it logs to `zapper-server.log` in the data folder.
+//! sign-in (Settings › Recording) opens no console window. It logs to
+//! `zapper-server.log` in the data folder (`zapper_lib::logfile`), and
+//! started from a terminal, to that terminal's console as well.
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 use std::path::Path;
@@ -250,13 +250,7 @@ fn token() -> Result<String> {
 fn main() -> Result<()> {
     let console = console::attach();
     let Some(args) = args()? else { return Ok(()) };
-    match (!console).then(log_file).flatten() {
-        Some(file) => tracing_subscriber::fmt()
-            .with_writer(std::sync::Mutex::new(file))
-            .with_ansi(false)
-            .init(),
-        None => tracing_subscriber::fmt::init(),
-    }
+    zapper_lib::logfile::init("zapper-server", console);
 
     let cfg_path = config::config_path();
     let mut cfg = config::load_from(&cfg_path);
@@ -348,23 +342,6 @@ fn restart(exe: &Path) -> Result<()> {
         std::process::Command::new(exe).args(&args).spawn()?;
         Ok(())
     }
-}
-
-/// `zapper-server.log` in the data folder, for a service with no console
-/// (Windows' task). Started afresh past a few megabytes, the last one kept
-/// beside it as `zapper-server.old.log`.
-fn log_file() -> Option<std::fs::File> {
-    let dir = zapper_lib::paths::data_dir();
-    std::fs::create_dir_all(&dir).ok()?;
-    let path = dir.join("zapper-server.log");
-    if std::fs::metadata(&path).is_ok_and(|m| m.len() > 4 * 1024 * 1024) {
-        let _ = std::fs::rename(&path, dir.join("zapper-server.old.log"));
-    }
-    std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .ok()
 }
 
 /// Where a windowless program prints.

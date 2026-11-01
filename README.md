@@ -109,6 +109,8 @@ Download the package for your system from the
 - Interface zoom (`Ctrl` `+`/`−`/`0`, `⌘` on a Mac); 12- or 24-hour clock.
 - Updates itself from GitHub releases, verified against the release's checksums.
 - Credentials are stored in your config directory, readable only by you, and kept out of logs.
+- A log in the data directory (`zapper.log`, and `zapper-server.log` for the recording service),
+  kept to a few megabytes, for when a sync or a recording went wrong.
 - No telemetry. Apart from your sources, the only request zapper makes is the daily update
   check, which can be turned off.
 - MIT licensed.

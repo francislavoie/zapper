@@ -113,6 +113,8 @@ itself. `packaging/windows/installers.conf.json` adds only what a release
 needs on top (docs/releasing.md).
 
 A debug build opens a console beside the window, with zapper's log in it.
+Every build also writes it to `%LOCALAPPDATA%\zapper\zapper.log` (started
+afresh past 4 MB, the one before kept as `zapper.old.log`).
 
 `zapper-server.exe` has no window and no console of its own, so that the
 sign-in task that runs it opens nothing. Started from a terminal it prints to
@@ -273,6 +275,7 @@ itself was installed.
 |---|---|
 | Account, window size | `%APPDATA%\zapper` |
 | Catalogue database | `%LOCALAPPDATA%\zapper\zapper.db` |
+| Logs (the app's, the recording service's) | `%LOCALAPPDATA%\zapper\zapper.log`, `zapper-server.log`, each with the one before as `*.old.log` |
 | Downloaded updates | `%LOCALAPPDATA%\zapper\updates` |
 | WebView2 profile | `%LOCALAPPDATA%\dev.lavoie.zapper` (Tauri's default) |
 
