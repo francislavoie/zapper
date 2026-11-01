@@ -23,7 +23,7 @@
 // data in logic/sources.ts so it is checked against what the backend does.
 
 import { useEffect, useState } from "react";
-import { backend } from "../backend";
+import { backend, capabilities, passwordsInClear } from "../backend";
 import { errorMessage } from "../logic/async";
 import {
   SOURCE_KINDS,
@@ -166,8 +166,19 @@ export function AccountPane() {
   };
   const changed = account !== null && (switching || fieldsChanged(account));
 
+  // "This window" in the app; in a browser, the page the service sent.
+  const here = capabilities.window ? "this window" : "this page";
+
   return (
     <>
+      {/* Said before anything is typed, since typing it is the risk. */}
+      {passwordsInClear ? (
+        <div className="settings-note bad" role="note">
+          This page uses plain HTTP, so a password saved or tested here crosses the network
+          unencrypted. To encrypt it, turn off “Plain HTTP on the network” in the zapper app’s
+          Settings → Recording.
+        </div>
+      ) : null}
       {/* The choice is the explanation: one card per type, saying what you
           need for it and what you get from it, so picking one and learning
           what it means are the same act. */}
@@ -428,13 +439,21 @@ export function AccountPane() {
           </p>
         ) : null}
         <p>
-          Stored in <code data-selectable>{account?.path ?? "—"}</code>, readable only by
-          you.{" "}
+          {/* The recording service does not say where on its computer the
+              file is: the browser may be on another one. */}
+          {account && !account.path ? (
+            "Stored by the recording service, on its computer, readable only by its user."
+          ) : (
+            <>
+              Stored in <code data-selectable>{account?.path ?? "—"}</code>, readable only by
+              you.
+            </>
+          )}{" "}
           {kind === "m3u"
-            ? "Credentials inside a playlist or guide address are never sent back to this window."
+            ? `Credentials inside a playlist or guide address are never sent back to ${here}.`
             : kind === "hdhomerun"
-              ? "Credentials inside a guide address are never sent back to this window."
-              : "The password is never sent back to this window."}
+              ? `Credentials inside a guide address are never sent back to ${here}.`
+              : `The password is never sent back to ${here}.`}
         </p>
       </div>
     </>

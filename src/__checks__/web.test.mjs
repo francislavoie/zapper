@@ -9,6 +9,8 @@ import {
   idList,
   requestInit,
   signedOutStatus,
+  SYNC_BURST_MS,
+  passwordInClear,
   syncPollMs,
   withBrowserSettings,
 } from "../logic/web.ts";
@@ -67,6 +69,28 @@ test("the sync is asked about often while it works, rarely otherwise", () => {
   for (const p of ["categories", "channels", "epg"]) assert.equal(syncPollMs(at(p)), 2000, p);
   for (const p of ["idle", "failed"]) assert.equal(syncPollMs(at(p)), 15000, p);
   assert.equal(syncPollMs(null), 15000);
+});
+
+test("just after asking for a refresh, the sync is asked about every second", () => {
+  const at = (phase) => ({ phase, message: "", channelsTotal: 0, lastSynced: null });
+  const asked = 1_000_000;
+  const until = asked + SYNC_BURST_MS;
+  assert.equal(syncPollMs(at("idle"), asked + 10, until), 1000);
+  assert.equal(syncPollMs(null, asked + 10, until), 1000);
+  // Working is followed as before; and once the burst is over, rarely again.
+  assert.equal(syncPollMs(at("epg"), asked + 10, until), 2000);
+  assert.equal(syncPollMs(at("idle"), until, until), 15000);
+  assert.equal(syncPollMs(at("failed"), until + 1, until), 15000);
+});
+
+test("a password crosses the network in the clear only over plain HTTP to another computer", () => {
+  assert.equal(passwordInClear("http:", "192.168.1.20"), true);
+  assert.equal(passwordInClear("http:", "tv.lan"), true);
+  assert.equal(passwordInClear("https:", "192.168.1.20"), false);
+  for (const home of ["127.0.0.1", "127.1.2.3", "localhost", "LOCALHOST", "[::1]", "::1"]) {
+    assert.equal(passwordInClear("http:", home), false, home);
+  }
+  assert.equal(passwordInClear("http:", "127.0.0.1.evil.example"), true);
 });
 
 test("a browser keeps how its guide looks, and nothing else", () => {

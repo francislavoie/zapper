@@ -25,6 +25,7 @@ import {
   onUpdate,
 } from "./api";
 import { BROWSER, DESKTOP, type Capabilities } from "./logic/capabilities";
+import { passwordInClear } from "./logic/web";
 import {
   mockBackend,
   onMockChannelQuality,
@@ -66,6 +67,14 @@ export const isMock = backendKind === "mock";
 
 /** What the interface can do here. */
 export const capabilities: Capabilities = backendKind === "web" ? BROWSER : DESKTOP;
+
+/** Whether a password typed here crosses the network unencrypted: a browser
+ *  reaching the recording service over plain HTTP from another computer.
+ *  The app's window talks to its own Rust side, and never does. */
+export const passwordsInClear: boolean =
+  backendKind === "web" &&
+  typeof location !== "undefined" &&
+  passwordInClear(location.protocol, location.hostname);
 
 /** Structurally identical to `api`; TypeScript checks that below. */
 export const backend: typeof api =

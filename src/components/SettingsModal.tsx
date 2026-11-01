@@ -51,7 +51,7 @@ import { VolumeControl } from "./VolumeControl";
 import type { LiveStart, SubtitleBackdrop, SettingsDto } from "../types";
 
 /** The pages there is something to do on here: in a browser, not the
- *  account, the player's, backups or updates (logic/capabilities.ts). */
+ *  player's or updates (logic/capabilities.ts). */
 const SECTIONS = settingsSections(capabilities);
 
 type Section = SettingsSection;
@@ -71,7 +71,9 @@ const SUMMARY: Record<Section, string> = {
   Recording: capabilities.localService
     ? "The recording service on this computer, what it does with each recording, and which other devices may reach it."
     : "The recording service this page comes from, and what it does with each recording.",
-  Data: "The catalogue, and backups of your settings and favourites.",
+  Data: capabilities.data
+    ? "The catalogue, and backups of your settings and favourites."
+    : "The catalogue the recording service keeps, and refreshing it from the provider.",
   Updates: "Whether zapper looks for new versions, and which one is installed.",
   Keyboard: "Every shortcut and mouse gesture, grouped by where it works.",
   About: "",
@@ -166,7 +168,9 @@ export function SettingsModal() {
             {section === "Account" ? (
               <>
                 <AccountPane />
-                <ConnectionsPane s={s} />
+                {/* How many streams the account allows is about playing
+                    here, which a browser does not do. */}
+                {capabilities.playback ? <ConnectionsPane s={s} /> : null}
               </>
             ) : null}
             {section === "Playback" ? <PlaybackPage s={s} /> : null}
@@ -677,6 +681,7 @@ function GuidePage({ s }: { s: SettingsControl }) {
 function DataPage({ s }: { s: SettingsControl }) {
   const { sync } = useApp();
   const dispatch = useDispatch();
+  const syncing = sync.phase === "categories" || sync.phase === "channels" || sync.phase === "epg";
   return (
     <>
       <SettingsGroup heading="Catalogue">
@@ -689,12 +694,19 @@ function DataPage({ s }: { s: SettingsControl }) {
             </>
           }
         >
-          <button className="ctl" onClick={() => void run(dispatch, "sync", backend.syncNow())}>
-            Refresh now
+          {/* Busy while a pass runs, here or (in a browser) on the service:
+              the toolbar says how far it has got. */}
+          <button
+            className="ctl"
+            disabled={syncing}
+            onClick={() => void run(dispatch, "sync", backend.syncNow())}
+          >
+            {syncing ? "Refreshing…" : "Refresh now"}
           </button>
         </SettingRow>
       </SettingsGroup>
-      <BackupPane s={s} />
+      {/* Backups go through this computer's file dialogs. */}
+      {capabilities.data ? <BackupPane s={s} /> : null}
     </>
   );
 }

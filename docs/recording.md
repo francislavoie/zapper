@@ -144,6 +144,9 @@ only on a network you trust.
 - **A browser** signs in the same way and gets the same kind of token, in a cookie its page cannot
   read ([Web access](#web-access)). The cookie only ever stands for a device: the app's token in
   one is refused.
+- A device may also change the provider account and test it (`/api/account`), as Settings →
+  Account does: the service keeps the catalogue from it. It is never sent a saved password, and
+  a blank one keeps what is on file.
 - From another machine, nothing at all is answered while network access is off, and nothing over
   plain HTTP while HTTPS is on (a `403` saying to use `https://`).
 - Nothing secret is kept as given. The password is kept only as an Argon2id hash
@@ -176,12 +179,25 @@ What a browser can do there:
   and delete recordings (**Recordings** in the menu);
 - change what the service does with recordings (Settings → Recording), as the app can;
 - set the guide's hours per screen and how times are written, which that browser keeps for itself;
-- refresh the catalogue, and sign out.
+- refresh the catalogue from the provider (Settings → Data, the command palette, or the title
+  bar's retry), and follow the refresh in the title bar until the lists show what it brought;
+- change the provider account and test it (Settings → Account), for every kind the app takes;
+- sign out.
 
 Watching is not there yet: choosing a channel says so. What belongs to the computer the app runs
-on is left out rather than shown and refused: the player and its settings, the window, the media
-keys, the updater, the provider account, backups, installing the service, opening a folder, and
-network access, the password and the devices.
+on is left out rather than shown and refused: the player and its settings (how many streams the
+account allows among them), the window, the media keys, the updater, backups, installing the
+service, opening a folder, and network access, the password and the devices.
+
+**The account in a browser.** The page is sent the account as the app's own Settings shows it:
+whether a password is on file but never the password, and a playlist or guide address with any
+login in it shown as `<redacted>`. Leaving a password empty, or such an address untouched, keeps
+what is saved; testing tries the form as typed and saves nothing. Saving makes the service sync
+at once. The app on the same computer reads the same account file and catalogue: it notices a
+change within a few seconds, uses the new account for what it plays next, syncs from it if the
+service does not (`--no-sync`), and reads the catalogue again once a sync lands. Over plain HTTP
+from another device, the password typed there crosses the network unencrypted, and the page says
+so; turn HTTPS back on (Settings → Recording, *Plain HTTP on the network* off) to avoid it.
 
 The interface is the app's, built into `zapper-server` (`src-tauri/build.rs`): the same version as
 the service, nothing installed beside it. Its files under `/assets/` are named by their contents
@@ -414,6 +430,9 @@ The catalogue, for the web interface (the app or a device); channels come as the
 | `GET /api/favourites?limit=` | the most watched channels; `DELETE /api/favourites/{id}` forgets one |
 | `GET /api/sync` | `{phase, message, channelsTotal, lastSynced}`; `POST /api/sync` asks for a refresh (`202`) |
 | `GET /api/logo/{id}` | the channel's logo, fetched by the service |
+| `GET /api/account` | the provider account as the app's `AccountDto`, with no secret in it (`hasPassword`, `tvheadendHasPassword`; addresses with `<redacted>` in place of a login, flagged `playlistRedacted`, `epgRedacted`, `hdhomerunEpgRedacted`) and an empty `path` |
+| `PUT /api/account` | saves a form and makes its kind the one in use: `{kind: "xtream", host, username, password}`, `{kind: "m3u", playlist, epgUrls, userAgent}`, `{kind: "hdhomerun", device, epgUrls}` or `{kind: "tvheadend", url, username, password}`. An empty password, or `null` for `playlist` or `epgUrls`, keeps what is on file. Asks for a sync; returns the same as `GET`. `400 {"error"}` with what is wrong, never with what was sent |
+| `POST /api/account/test` | the same body, tested as typed and not saved (`{result}`, or `400 {"error"}`); with no body, the account on file |
 
 "The app" is the `server-token` from a loopback address; a device's token is refused there
 (`403`). `Device` is `{id, name, userAgent, created, lastUsed?, address?}`; `fingerprint` is the

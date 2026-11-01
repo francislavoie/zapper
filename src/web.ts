@@ -8,10 +8,10 @@
 // means the sign-in is gone (revoked in the app, or signed out elsewhere),
 // and the page goes back to the sign-in (src/components/WebGate.tsx).
 //
-// What has no meaning here — the player, the window, the updater, the
-// account, installing the service — is hidden through `BROWSER`'s
-// capabilities. The calls are still answered, harmlessly: player controls do
-// nothing with nothing playing, and the rest say they are not available.
+// What has no meaning here — the player, the window, the updater, backups,
+// installing the service — is hidden through `BROWSER`'s capabilities. The
+// calls are still answered, harmlessly: player controls do nothing with
+// nothing playing, and the rest say they are not available.
 
 import type { api } from "./api";
 import { DEFAULT_SETTINGS } from "./logic/settings";
@@ -19,6 +19,7 @@ import {
   BROWSER_SETTINGS_KEY,
   NO_PLAYBACK,
   NOT_HERE,
+  SYNC_BURST_MS,
   apiUrl,
   browserSettings,
   errorText,
@@ -30,6 +31,8 @@ import {
 } from "./logic/web";
 import { initialPlayer } from "./store";
 import type {
+  AccountCandidateDto,
+  AccountDto,
   CategoryDto,
   ChannelDto,
   DeviceDto,
@@ -146,6 +149,26 @@ function keepSettings(s: SettingsDto) {
   }
 }
 
+// ------------------------------------------------------------------- sync
+
+/** When the sync's status stops being asked for often (`syncPollMs`). */
+let burstUntil = 0;
+/** Asks the status now, if anything is following it. */
+let pollNow: (() => void) | null = null;
+
+/** After asking the service for a refresh: follow its status closely for a
+ *  while, so the toolbar shows the pass starting and how it goes, and the
+ *  lists read the catalogue again once it lands (catalogueRefresh.ts). */
+function watchSyncStart(): void {
+  burstUntil = Date.now() + SYNC_BURST_MS;
+  pollNow?.();
+}
+
+async function saveAccount(form: AccountCandidateDto): Promise<void> {
+  await put<AccountDto>("/api/account", form);
+  watchSyncStart();
+}
+
 // ------------------------------------------------------------------ backend
 
 const noOptions: PlayerOptionsDto = {
@@ -176,7 +199,7 @@ export const webBackend: typeof api = {
     get<GuideRowDto[]>(apiUrl("/api/guide/rows", { ids: idList(streamIds), from, to })),
 
   syncStatus: () => get<SyncStatusDto>("/api/sync"),
-  syncNow: () => post<unknown>("/api/sync").then(() => undefined),
+  syncNow: () => post<unknown>("/api/sync").then(watchSyncStart),
 
   // Nothing plays here yet, so there is nothing to control.
   play: () => Promise.reject(new Error(NO_PLAYBACK)),
@@ -202,14 +225,21 @@ export const webBackend: typeof api = {
   applyPlaybackSettings: nothing,
   setSubtitleStyle: nothing,
 
-  // The provider account is the app's, on the service's computer.
-  account: notHere,
-  setAccount: notHere,
-  setM3uAccount: notHere,
-  setHdhomerunAccount: notHere,
-  setTvheadendAccount: notHere,
-  testAccount: notHere,
-  testAccountCandidate: notHere,
+  // The provider account, kept by the service (and shared with the app on
+  // its computer). Never sent with its secrets; a blank password keeps the
+  // one on file, as in the app. Saving starts a refresh there.
+  account: () => get<AccountDto>("/api/account"),
+  setAccount: (host, username, password) =>
+    saveAccount({ kind: "xtream", host, username, password }),
+  setM3uAccount: (playlist, epgUrls, userAgent) =>
+    saveAccount({ kind: "m3u", playlist, epgUrls, userAgent }),
+  setHdhomerunAccount: (device, epgUrls) => saveAccount({ kind: "hdhomerun", device, epgUrls }),
+  setTvheadendAccount: (url, username, password) =>
+    saveAccount({ kind: "tvheadend", url, username, password }),
+  testAccount: () => post<{ result: string }>("/api/account/test").then((r) => r.result),
+  testAccountCandidate: (candidate) =>
+    post<{ result: string }>("/api/account/test", candidate).then((r) => r.result),
+  // How many streams the account has open is about playing here.
   connectionStatus: notHere,
 
   // The app's settings are the app's; a browser keeps how its guide looks.
@@ -267,7 +297,12 @@ export function onWebSyncStatus(f: (s: SyncStatusDto) => void): Promise<Unsub> {
   let live = true;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let last: SyncStatusDto | null = null;
+  // One chain of polls: asked for now while a poll is out, the next one
+  // follows it at once rather than starting a second chain beside it.
+  let asking = false;
+  let again = false;
   const tick = async () => {
+    asking = true;
     try {
       last = await webBackend.syncStatus();
       if (live) f(last);
@@ -275,11 +310,25 @@ export function onWebSyncStatus(f: (s: SyncStatusDto) => void): Promise<Unsub> {
       // Signed out, or the service is restarting: the gate deals with the
       // first, and the next poll with the second.
     }
-    if (live) timer = setTimeout(() => void tick(), syncPollMs(last));
+    asking = false;
+    if (!live) return;
+    const wait = again ? 0 : syncPollMs(last, Date.now(), burstUntil);
+    again = false;
+    timer = setTimeout(() => void tick(), wait);
   };
+  const now = () => {
+    if (asking) {
+      again = true;
+      return;
+    }
+    if (timer !== undefined) clearTimeout(timer);
+    void tick();
+  };
+  pollNow = now;
   timer = setTimeout(() => void tick(), syncPollMs(null));
   return Promise.resolve(() => {
     live = false;
+    if (pollNow === now) pollNow = null;
     if (timer !== undefined) clearTimeout(timer);
   });
 }

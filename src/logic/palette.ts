@@ -158,7 +158,13 @@ export const ACTIONS: PaletteAction[] = [
     needs: "sleeping",
     sleep: null,
   },
-  { id: "sync", label: "Refresh data from the provider", hint: "sync", group: "data" },
+  {
+    id: "sync",
+    label: "Refresh data from the provider",
+    hint: "sync",
+    group: "data",
+    needsCapability: "resync",
+  },
   // What the recording service has scheduled and recorded. "record" and
   // "dvr" are what people type looking for it.
   { id: "recordings", label: "Recordings", hint: "record · dvr", group: "data" },

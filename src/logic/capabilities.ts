@@ -21,10 +21,14 @@ export interface Capabilities {
   mediaKeys: boolean;
   /** Looks for, downloads and installs new versions of the app. */
   updater: boolean;
-  /** Changes where the channels come from: the provider account, testing it,
-   *  its connections and how many streams it allows. */
+  /** Changes where the channels come from: the provider account and
+   *  testing it (Settings › Account). Its connections and how many streams
+   *  it allows are about playing here, and go with `playback`. */
   account: boolean;
-  /** Settings › Data (backups through the system's file dialogs) and how
+  /** Refreshes the catalogue from the provider now: Settings › Data's
+   *  Refresh, the toolbar's retry. */
+  resync: boolean;
+  /** Backups through the system's file dialogs (Settings › Data), and how
    *  often the catalogue refreshes. */
   data: boolean;
   /** Installs and removes the recording service on this computer, and opens
@@ -45,6 +49,7 @@ export const DESKTOP: Capabilities = {
   mediaKeys: true,
   updater: true,
   account: true,
+  resync: true,
   data: true,
   localService: true,
   networkAdmin: true,
@@ -52,13 +57,15 @@ export const DESKTOP: Capabilities = {
 };
 
 /** A browser signed in to the recording service. Browsing, the guide,
- *  search and recordings; nothing of this computer's. */
+ *  search and recordings, the provider account and refreshing from it (the
+ *  service keeps both, docs/recording.md); nothing of this computer's. */
 export const BROWSER: Capabilities = {
   playback: false,
   window: false,
   mediaKeys: false,
   updater: false,
-  account: false,
+  account: true,
+  resync: true,
   data: false,
   localService: false,
   networkAdmin: false,
@@ -89,7 +96,7 @@ const SECTION_NEEDS: Partial<Record<SettingsSection, Capability>> = {
   Playback: "playback",
   Audio: "playback",
   Subtitles: "playback",
-  Data: "data",
+  Data: "resync",
   Updates: "updater",
 };
 
