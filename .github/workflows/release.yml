@@ -1,19 +1,17 @@
 # Release: `just release <version>` commits the version bump and tags it v<version>; pushing the
-# tag builds the Linux packages (.deb, .rpm and the Arch package), checks them, and uploads them
-# with SHA256SUMS to a *draft* GitHub release for review. Nothing is published until someone
-# presses Publish.
+# tag builds the Linux packages (.deb, .rpm and the Arch package) and the Windows installers (the
+# NSIS setup and the MSI), checks them, and uploads them with SHA256SUMS to a *draft* GitHub
+# release for review. Nothing is published until someone presses Publish.
 #
 # - a pushed v* tag builds that tag and drafts its release;
 # - "Run workflow" (workflow_dispatch) with a tag does the same for that tag (to redo or rescue
 #   a release); without one it is a dry run: the same build and checks, the packages kept as a
 #   workflow artifact, no release.
 #
-# Windows and macOS: the jobs are here and wired up. Windows builds but is not
-# yet tested on screen (docs/windows.md); macOS has only a stub surface. They run only on a
-# manual run with "Also build Windows and macOS" ticked, and the macOS one is expected to fail
-# until that port exists. A tag push never runs them, so they can never hold a release back. When the port
-# lands: make them run on tag pushes too (drop the `inputs.windows_macos` condition) and list
-# their assets in docs/releasing.md.
+# macOS: the job is here and wired up, but zapper has only a stub surface there. It runs only on
+# a manual run with "Also build macOS" ticked, and is expected to fail until that port exists. A
+# tag push never runs it, so it can never hold a release back. When the port lands: make it run
+# on tag pushes too (drop the `inputs.macos` condition) and list its asset in docs/releasing.md.
 #
 # See docs/releasing.md.
 name: Release
@@ -27,8 +25,8 @@ on:
         description: 'Release this tag (v1.2.3): build its commit and draft the release. Empty: a dry run.'
         required: false
         default: ''
-      windows_macos:
-        description: 'Also build Windows and macOS (not supported yet: expected to fail).'
+      macos:
+        description: 'Also build macOS (not supported yet: expected to fail).'
         type: boolean
         required: false
         default: false
@@ -229,12 +227,13 @@ jobs:
           compression-level: 0
           overwrite: true # a re-run replaces the earlier attempt's artifact
 
-  # EXPERIMENTAL: zapper builds on Windows (docs/windows.md) but has not been tested on screen.
-  # Runs only when asked for on a manual run (see the top of this file). Unsigned: set a signing step here when there's a certificate.
+  # The NSIS setup (per-user) and the MSI (per-machine), from one build, beside the Linux job
+  # rather than after it: the version check is repeated here, so neither waits on the other.
+  # Unsigned, so SmartScreen warns on the first run (README.md): a signing step goes here when
+  # there's a certificate.
   windows:
-    name: Build the Windows installers (experimental)
-    needs: [plan, linux]
-    if: ${{ inputs.windows_macos == true }}
+    name: Build and check the Windows installers
+    needs: plan
     runs-on: windows-latest
     timeout-minutes: 90
     permissions:
@@ -251,6 +250,28 @@ jobs:
           ref: ${{ needs.plan.outputs.sha }}
           persist-credentials: false
 
+      # As the Linux job checks it: the tag is tauri.conf.json's version. An MSI's own version
+      # is numeric (Tauri refuses `0.2.0-rc.1`), so a pre-release's MSI says X.Y.Z; its file
+      # name keeps the full version, which is what the updater looks for. Every build of X.Y.Z
+      # then shares one MSI version, which is fine: Tauri's MSI replaces any version it finds.
+      - name: Version
+        id: version
+        env:
+          TAG: ${{ needs.plan.outputs.tag }}
+        run: |
+          $conf = (Get-Content -Raw src-tauri/tauri.conf.json | ConvertFrom-Json).version
+          $v = $conf
+          if ($env:TAG) {
+            $v = $env:TAG.Substring(1)
+            if ($v -ne $conf) { throw "The tag $env:TAG doesn't match tauri.conf.json's version $conf" }
+          }
+          $numeric = ($v -split '-')[0]
+          $wix = Join-Path $env:RUNNER_TEMP "wix-version.json"
+          @{ bundle = @{ windows = @{ wix = @{ version = $numeric } } } } | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 $wix
+          "version=$v" >> $env:GITHUB_OUTPUT
+          "wix_config=$wix" >> $env:GITHUB_OUTPUT
+          "Version $v (MSI version $numeric)"
+
       - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
         with:
           toolchain: stable
@@ -261,8 +282,8 @@ jobs:
           cache: npm
       - run: npm ci
 
-      # zapper's LGPL libmpv-2.dll, the archive packaging/libmpv/manifest.json names, and the
-      # mpv.lib import library the link needs, into src-tauri/lib/windows-x86_64
+      # zapper's LGPL libmpv-2.dll and FFmpeg's DLLs, the archive packaging/libmpv/manifest.json
+      # names, and the import libraries the link needs, into src-tauri/lib/windows-x86_64
       # (docs/windows.md). The manifest pins it: a release changes libmpv only when that file
       # does.
       - name: Fetch libmpv
@@ -286,16 +307,22 @@ jobs:
         run: |
           $env:CARGO_BUILD_JOBS = "$env:NUMBER_OF_PROCESSORS"
           cargo build --release --manifest-path src-tauri/Cargo.toml --no-default-features --features server --bin zapper-server
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
       # The NSIS installer and the MSI, with the install-kind markers (packaging/windows/).
       - name: Build the installers
+        env:
+          WIX_CONFIG: ${{ steps.version.outputs.wix_config }}
         run: |
           $env:CARGO_BUILD_JOBS = "$env:NUMBER_OF_PROCESSORS"
-          npx tauri build --config packaging/windows/installers.conf.json
+          npx tauri build --config packaging/windows/installers.conf.json --config $env:WIX_CONFIG
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
-      - name: Collect the installers and their checksums
+      # The names are an API: installed copies find their update by them
+      # (src-tauri/src/updates/release.rs, docs/releasing.md).
+      - name: Collect the installers
         env:
-          VERSION: ${{ needs.linux.outputs.version }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           $files = @(
             "src-tauri/target/release/bundle/nsis/zapper_${env:VERSION}_x64-setup.exe",
@@ -303,9 +330,23 @@ jobs:
           )
           New-Item -ItemType Directory -Force out | Out-Null
           foreach ($f in $files) {
-            if (-not (Test-Path $f)) { throw "Missing $f" }
+            if (-not (Test-Path $f)) { throw "Missing $f`: $(Get-ChildItem -Name src-tauri/target/release/bundle/*/)" }
             Copy-Item $f out/
           }
+
+      # Unpacks the MSI, and installs the NSIS setup (silently, for this user) then uninstalls
+      # it: zapper.exe, zapper-server.exe and the DLLs side by side, the install-kind marker each
+      # leaves, the license notices, nothing imported but the bundled DLLs and Windows' own,
+      # FFmpeg and libmpv built LGPL, and zapper-server starting (scripts/check-windows.ps1).
+      - name: Check the installers
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          ./scripts/check-windows.ps1 -Dir out -Version $env:VERSION -Install
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      - name: SHA256SUMS
+        run: |
           # sha256sum's format, so the release job checks and merges it with the Linux one.
           $sums = foreach ($f in Get-ChildItem out -File) { "{0}  {1}" -f (Get-FileHash -Algorithm SHA256 $f.FullName).Hash.ToLower(), $f.Name }
           [IO.File]::WriteAllText("$PWD/out/SHA256SUMS", ($sums -join "`n") + "`n")
@@ -313,7 +354,7 @@ jobs:
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: zapper-${{ needs.linux.outputs.version }}-windows
+          name: zapper-${{ steps.version.outputs.version }}-windows
           path: out/
           if-no-files-found: error
           retention-days: 3
@@ -325,7 +366,7 @@ jobs:
   macos:
     name: Build the macOS disk image (experimental)
     needs: [plan, linux]
-    if: ${{ inputs.windows_macos == true }}
+    if: ${{ inputs.macos == true }}
     runs-on: macos-15 # Apple Silicon: the aarch64 .dmg
     timeout-minutes: 90
     permissions:
@@ -385,12 +426,12 @@ jobs:
   release:
     name: Draft the GitHub release
     needs: [plan, linux, windows, macos]
-    # The Linux packages are the release. Windows and macOS join it when they ran and passed;
-    # skipped (the normal case) they're simply absent, but a failure or a cancel holds the
-    # release back rather than drafting it without them by surprise.
+    # The Linux packages and the Windows installers are the release. macOS joins it when it ran
+    # and passed; skipped (the normal case) it's simply absent, but a failure or a cancel holds
+    # the release back rather than drafting it without it by surprise.
     if: >-
       ${{ always() && needs.plan.outputs.tag != '' && needs.linux.result == 'success'
-      && needs.windows.result != 'failure' && needs.windows.result != 'cancelled'
+      && needs.windows.result == 'success'
       && needs.macos.result != 'failure' && needs.macos.result != 'cancelled' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
