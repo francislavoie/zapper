@@ -252,8 +252,11 @@ jobs:
           done
 
       # The app itself, from the bundle, playing the orientation fixture (ZAPPER_AUTOPLAY on a
-      # scratch account, ZAPPER_MUTE): a screenshot of the real interface over real video. Its
-      # window is larger than the runner's screen, so the window itself is captured by its id.
+      # scratch account, ZAPPER_MUTE): a screenshot of the real interface over real video, with the
+      # system's title bar and menu bar. Its window is larger than the runner's screen, so the
+      # window itself is captured by its id. Then the menu and the ⌘ keys, typed through System
+      # Events: ⌘V into the search box, ⌘, for Settings, ⌃⌘F for fullscreen, ⌘Q to quit. That
+      # needs the runner to allow accessibility control; where it does not, this says so.
       - name: The app, playing
         if: ${{ !cancelled() && steps.streams.outcome == 'success' }}
         run: |
@@ -268,6 +271,13 @@ jobs:
           }
           exit(1)
           SWIFT
+          swiftc -O -o "$RUNNER_TEMP/window-id" "$RUNNER_TEMP/window-id.swift"
+          win() { # win <name>: the zapper window alone, into shots/app-<name>.png
+            local id
+            if id=$("$RUNNER_TEMP/window-id" zapper); then screencapture -x -o -l"$id" "shots/app-$1.png"
+            else echo "::warning::no zapper window to capture for $1"; fi
+          }
+          keys() { osascript -e "tell application \"System Events\" to $1"; }
           mkdir -p shots
           app=src-tauri/target/release/bundle/macos/zapper.app/Contents/MacOS/zapper
           ZAPPER_MUTE=1 ZAPPER_AUTOPLAY=1 ZAPPER_FIXTURE_BASE=http://127.0.0.1:8788 \
@@ -275,14 +285,35 @@ jobs:
           pid=$!
           sleep 20
           screencapture -x shots/app-screen.png
-          if id=$(swift "$RUNNER_TEMP/window-id.swift" zapper); then
-            screencapture -x -o -l"$id" shots/app-window.png
-          else
-            echo "::warning::no zapper window found to capture"
-          fi
+          win window
           kill -0 "$pid" || { echo "::error::the app exited"; tail -40 shots/app.log; exit 1; }
-          kill "$pid"
-          cat shots/app.log | tail -30
+
+          set +e
+          if keys 'set frontmost of process "zapper" to true'; then
+            sleep 1
+            printf 'paste-check' | pbcopy
+            keys 'keystroke "/"'; sleep 1
+            keys 'keystroke "v" using command down'; sleep 2
+            win paste
+            keys 'keystroke "," using command down'; sleep 2
+            win settings
+            keys 'key code 53'; sleep 1
+            keys 'keystroke "f" using {control down, command down}'; sleep 4
+            screencapture -x shots/app-fullscreen.png
+            keys 'keystroke "f" using {control down, command down}'; sleep 4
+            keys 'keystroke "q" using command down'; sleep 5
+            if kill -0 "$pid" 2>/dev/null; then
+              echo "::warning::⌘Q did not quit zapper"
+              kill "$pid"
+            else
+              echo "⌘Q quit zapper through its menu" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          else
+            echo "::warning::System Events refused the keystrokes: the menu and ⌘ keys are untested here"
+            kill "$pid"
+          fi
+          set -e
+          tail -30 shots/app.log
           ! grep -E 'panicked at|CAPTURE FAILED|creating mpv render context' shots/app.log
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
