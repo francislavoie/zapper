@@ -303,6 +303,11 @@ fn main() {
             // must never make noise.
             mpv::with_player(|p| -> anyhow::Result<()> {
                 p.set_property("ao", "null")?;
+                // mpv's own log, verbose, for working out a failure afterwards.
+                if let Ok(path) = std::env::var("ZAPPER_MPV_LOG") {
+                    p.set_property("msg-level", "all=v")?;
+                    p.set_property("log-file", &path)?;
+                }
                 p.load(&url)
             })
             .ok_or_else(|| anyhow::anyhow!("no player after install"))??;
