@@ -7,7 +7,8 @@
 //! protocol and `m3u` the playlist/XMLTV one, `source` chooses between the
 //! two for the account in use, `catalog` owns persistence, `paths` says where
 //! on disk each platform keeps it, `updates` owns zapper's own releases
-//! (checking, downloading, installing), and `ipc` is the only thing that
+//! (checking, downloading, installing), `media_keys` the desktop's media
+//! controls (MPRIS, the Windows SMTC), and `ipc` is the only thing that
 //! talks to the frontend. Nothing else may reach across those lines.
 
 /// Names the process so the compositor can identify the window.
@@ -34,6 +35,7 @@ pub mod catalog;
 pub mod hdhomerun;
 pub mod ipc;
 pub mod m3u;
+pub mod media_keys;
 pub mod paths;
 pub mod source;
 pub mod surface;
@@ -99,6 +101,7 @@ pub fn run() {
             ipc::player_cmds::player_stats,
             ipc::player_cmds::set_subtitle_style,
             ipc::player_cmds::apply_playback_settings,
+            ipc::player_cmds::set_media_session,
             ipc::update_cmds::update_status,
             ipc::update_cmds::update_check,
             ipc::update_cmds::update_download,
@@ -106,7 +109,15 @@ pub fn run() {
             ipc::update_cmds::update_install,
             ipc::update_cmds::update_restart,
             ipc::update_cmds::update_open_page,
+            ipc::backup_cmds::activity_rows,
+            ipc::backup_cmds::import_activity,
+            ipc::backup_cmds::export_backup,
+            ipc::backup_cmds::open_backup,
+            ipc::backup_cmds::import_backup_account,
         ])
+        // The save and open dialogs, for the backups. Used from Rust alone:
+        // the capability grants the window no `dialog:` permission.
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             use tauri::Manager;
             let window = app
@@ -131,6 +142,10 @@ pub fn run() {
             // Before the frontend can ask: its first `update_status` needs
             // the state to exist. The first check itself waits a minute.
             ipc::update_cmds::install(app.handle());
+
+            // Registers with the desktop only if Settings › Playback says to;
+            // off by default.
+            media_keys::install(app.handle());
 
             // Development hooks. Nothing here runs in a normal launch: they
             // exist because the composited window cannot be screenshotted on

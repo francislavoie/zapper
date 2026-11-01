@@ -9,7 +9,7 @@ use rusqlite::{Connection, Row};
 use std::collections::HashMap;
 
 use crate::ipc::types::{
-    CategoryDto, ChannelDto, FavouriteDto, GuideRowDto, ProgrammeDto, QualityDto,
+    ActivityRowDto, CategoryDto, ChannelDto, FavouriteDto, GuideRowDto, ProgrammeDto, QualityDto,
 };
 
 /// The channel columns every listing selects, in the order
@@ -395,6 +395,64 @@ pub fn forget_activity(conn: &Connection, stream_id: i64) -> Result<()> {
     Ok(())
 }
 
+/// Every channel's watch history, for a backup. All of it, not only what
+/// ranks as a favourite today: a channel gone from this catalogue, or long
+/// decayed, may matter again on the machine the backup is restored to.
+pub fn activity_rows(conn: &Connection) -> Result<Vec<ActivityRowDto>> {
+    let mut stmt = conn.prepare(
+        "SELECT a.stream_id,
+                CASE WHEN ch.clean_name <> '' THEN ch.clean_name ELSE ch.name END,
+                a.watch_seconds, a.last_watched, a.open_count
+         FROM activity a
+         LEFT JOIN channels ch ON ch.stream_id = a.stream_id
+         ORDER BY a.watch_seconds DESC, a.stream_id",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(ActivityRowDto {
+            stream_id: r.get(0)?,
+            name: r.get(1)?,
+            watch_seconds: r.get(2)?,
+            last_watched: r.get(3)?,
+            open_count: r.get(4)?,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// Folds a backup's watch history into this one. Returns the rows taken.
+///
+/// Per channel, the larger of each figure rather than their sum: the same
+/// backup imported twice must not double anyone's hours, and restoring onto
+/// a machine with its own history must not lose any of it. Negative figures,
+/// which nothing here writes, are taken as zero. One transaction, so a
+/// failure part way leaves the table as it was.
+pub fn merge_activity(conn: &Connection, rows: &[ActivityRowDto]) -> Result<usize> {
+    let tx = conn.unchecked_transaction()?;
+    {
+        let mut stmt = tx.prepare(
+            "INSERT INTO activity (stream_id, watch_seconds, last_watched, open_count)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(stream_id) DO UPDATE SET
+                 watch_seconds = MAX(activity.watch_seconds, excluded.watch_seconds),
+                 last_watched  = CASE
+                     WHEN excluded.last_watched IS NULL THEN activity.last_watched
+                     WHEN activity.last_watched IS NULL THEN excluded.last_watched
+                     ELSE MAX(activity.last_watched, excluded.last_watched) END,
+                 open_count    = MAX(activity.open_count, excluded.open_count)",
+        )?;
+        for r in rows {
+            stmt.execute(rusqlite::params![
+                r.stream_id,
+                r.watch_seconds.max(0),
+                r.last_watched,
+                r.open_count.max(0)
+            ])?;
+        }
+    }
+    tx.commit()?;
+    Ok(rows.len())
+}
+
 /// `(stream_id, name)` for the fuzzy index. The cleaned name is preferred:
 /// the picker should not have to match around `|CA|` and `[FHD]`.
 pub fn channel_names(conn: &Connection) -> Result<Vec<(i64, String)>> {
@@ -411,6 +469,44 @@ pub fn channel_names(conn: &Connection) -> Result<Vec<(i64, String)>> {
 mod tests {
     use super::*;
     use crate::catalog::open_in_memory;
+
+    fn row(stream_id: i64, watch: i64, last: Option<i64>, opens: i64) -> ActivityRowDto {
+        ActivityRowDto {
+            stream_id,
+            name: None,
+            watch_seconds: watch,
+            last_watched: last,
+            open_count: opens,
+        }
+    }
+
+    #[test]
+    fn imported_history_merges_by_the_larger_figure_and_twice_is_once() {
+        let c = open_in_memory().unwrap();
+        chan(&c, 1, "One", None, Some(1));
+        record_activity(&c, 1, 600, true, 1_000).unwrap();
+        let backup = [row(1, 300, Some(5_000), 4), row(2, 90, None, 1), row(3, -5, Some(7), -1)];
+        assert_eq!(merge_activity(&c, &backup).unwrap(), 3);
+        assert_eq!(merge_activity(&c, &backup).unwrap(), 3);
+
+        let got = activity_rows(&c).unwrap();
+        let by = |id| got.iter().find(|r| r.stream_id == id).cloned().unwrap();
+        // Kept the local 600 seconds, took the later date and the larger count.
+        assert_eq!(by(1), ActivityRowDto { name: Some("One".into()), ..row(1, 600, Some(5_000), 4) });
+        // A channel not in this catalogue is kept, nameless, for later.
+        assert_eq!(by(2), row(2, 90, None, 1));
+        assert_eq!(by(3), row(3, 0, Some(7), 0));
+        // Ordered by watch time, the way a reader of the file would want it.
+        assert_eq!(got.iter().map(|r| r.stream_id).collect::<Vec<_>>(), [1, 2, 3]);
+    }
+
+    #[test]
+    fn a_dated_row_keeps_its_date_against_an_undated_import() {
+        let c = open_in_memory().unwrap();
+        record_activity(&c, 9, 60, true, 4_000).unwrap();
+        merge_activity(&c, &[row(9, 10, None, 0)]).unwrap();
+        assert_eq!(activity_rows(&c).unwrap()[0].last_watched, Some(4_000));
+    }
 
     /// `num`/`cat` are the fields browse ordering turns on; the rest of the
     /// row is uninteresting to these tests and left at its default.

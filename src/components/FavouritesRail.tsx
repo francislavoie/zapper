@@ -26,7 +26,7 @@ import { FavouriteMenu } from "./FavouriteMenu";
 import { Logo } from "./Logo";
 
 export function FavouritesRail() {
-  const { player, pendingStreamId, favouriteMenu, categories } = useApp();
+  const { player, pendingStreamId, favouriteMenu, categories, activityVersion } = useApp();
 
   // The channel knows its category by id; only the rail's own catalogue
   // knows what that is called. Absent while the categories are still
@@ -68,9 +68,10 @@ export function FavouritesRail() {
   // Reloaded when the channel changes as well as on mount: watching something
   // is the only thing that can change this list, and a list that only updated
   // on a restart would look broken in exactly the way the feature is about.
+  // An imported backup is the other thing.
   useEffect(() => {
     void load();
-  }, [load, player.streamId]);
+  }, [load, player.streamId, activityVersion]);
 
   const forget = async (streamId: number) => {
     dispatch({ type: "favouriteMenu", menu: null });

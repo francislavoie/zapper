@@ -147,7 +147,58 @@ export interface SettingsDto {
   /** Look for a new release a minute after startup and daily after that.
    *  On by default; off means only "Check for updates" asks. */
   checkForUpdates: boolean;
+  /** Answer the desktop's media keys and controls (MPRIS on Linux, the
+   *  SMTC on Windows). Off by default: the desktop gives those keys to one
+   *  player at a time, and a music player may want to keep them. */
+  mediaControls: boolean;
 }
+
+/** One channel's watch history, as a backup carries it. Mirrors
+ *  `ActivityRowDto`. */
+export interface ActivityRowDto {
+  streamId: number;
+  /** The channel's name when this catalogue has it, for whoever reads the
+   *  file; never used to match. */
+  name: string | null;
+  watchSeconds: number;
+  lastWatched: number | null;
+  openCount: number;
+}
+
+/** A backup opened for import. Mirrors `BackupFileDto`: the account stays in
+ *  the backend, and only what it is comes across. */
+export interface BackupFileDto {
+  name: string;
+  /** The file, without its account. Unchecked: see logic/backup.ts. */
+  document: unknown;
+  account: BackupAccountDto | null;
+  /** Why the file's account cannot be imported, when it has one this build
+   *  cannot use. */
+  accountError: string | null;
+}
+
+export interface BackupAccountDto {
+  kind: "xtream" | "m3u" | "hdhomerun" | "tvheadend";
+  /** Where and who as, credentials redacted. */
+  description: string;
+  hasSecret: boolean;
+}
+
+/** What the desktop's media controls show. Mirrors `MediaSessionDto`. */
+export interface MediaSessionDto {
+  /** The channel. */
+  title: string;
+  /** What is on it, when the guide knows. */
+  subtitle: string | null;
+  /** The channel's logo. */
+  artUrl: string | null;
+  playback: MediaPlayback;
+}
+
+export type MediaPlayback = "playing" | "paused" | "stopped";
+
+/** A media key, pushed as `EVENTS.mediaKey`. Mirrors `MediaKey`. */
+export type MediaKey = "play" | "pause" | "toggle" | "next" | "previous" | "stop";
 
 /** One channel's row in the guide, programmes included, so the grid needs no
  *  second round trip per row. */
@@ -177,6 +228,7 @@ export const EVENTS = {
   syncStatus: "zapper://sync-status",
   playerState: "zapper://player-state",
   update: "zapper://update",
+  mediaKey: "zapper://media-key",
 } as const;
 
 /** A release the update dialog can show. Mirrors `UpdateReleaseDto`. */

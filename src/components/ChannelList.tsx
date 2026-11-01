@@ -7,6 +7,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { playChannel } from "../actions";
+import { backend } from "../backend";
+import { registerZapList, type ZapList } from "../mediaKeys";
 import { registerSearchInput } from "../focus";
 import { useChannelPages, type RowSource } from "../hooks/useChannelPages";
 import { useSearch } from "../hooks/useSearch";
@@ -66,6 +68,17 @@ export function ChannelList() {
   // where the results are shown.
   const results = useSearch(state.query, SEARCH_LIMIT);
   const source: RowSource = searching ? asSource(results) : paged;
+
+  // What the media keys' next and previous step through. Updated on every
+  // render, hidden ones included: behind the player this list still follows
+  // the category a favourite was played from, but its effects do not run.
+  const zap = useRef<ZapList | null>(null);
+  zap.current = {
+    rowAt: source.rowAt,
+    total: source.total,
+    fetch: searching ? undefined : (start, count) => backend.channels(categoryId, start, count),
+  };
+  useEffect(() => registerZapList(() => zap.current), []);
 
   // Measure rather than assume: the window is resizable and the row count per
   // screen is the whole point of the dense layout.

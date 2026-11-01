@@ -238,6 +238,12 @@ pub struct SettingsDto {
     /// Look for a new release on GitHub a minute after startup and once a
     /// day after that. On by default; off means only Check for updates asks.
     pub check_for_updates: bool,
+    /// Offer playback to the desktop's media controls: MPRIS on Linux (the
+    /// play/pause, next and previous keys, GNOME's media panel), the System
+    /// Media Transport Controls on Windows. Off by default, because the
+    /// desktop gives those keys to one player at a time and plenty of people
+    /// want their music player to keep them.
+    pub media_controls: bool,
 }
 
 impl Default for SettingsDto {
@@ -251,6 +257,7 @@ impl Default for SettingsDto {
             language: "auto".to_owned(),
             subtitle: SubtitleStyleDto::default(),
             check_for_updates: true,
+            media_controls: false,
         }
     }
 }
@@ -284,11 +291,89 @@ pub struct FavouriteDto {
     pub open_count: i64,
 }
 
+/// One channel's watch history, as a settings backup carries it: the
+/// activity row behind a favourite, with the channel's name so the file
+/// says something to whoever opens it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActivityRowDto {
+    pub stream_id: i64,
+    #[serde(default)]
+    pub name: Option<String>,
+    pub watch_seconds: i64,
+    #[serde(default)]
+    pub last_watched: Option<i64>,
+    #[serde(default)]
+    pub open_count: i64,
+}
+
+/// A backup file, opened for import. The account, when there is one, stays
+/// in Rust: the interface is told what it is, never what it holds.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupFileDto {
+    /// The file's name, for saying what is being imported.
+    pub name: String,
+    /// The file's contents, without its account.
+    pub document: serde_json::Value,
+    pub account: Option<BackupAccountDto>,
+    /// Why the file's account cannot be imported, when it has one that this
+    /// build cannot use.
+    pub account_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupAccountDto {
+    /// `xtream`, `m3u`, `hdhomerun` or `tvheadend`.
+    pub kind: String,
+    /// Where and who as, with any credentials redacted.
+    pub description: String,
+    /// Whether it carries a password or a login inside an address.
+    pub has_secret: bool,
+}
+
 /// Event names. Emitted by Rust, subscribed by React.
 pub mod events {
     pub const SYNC_STATUS: &str = "zapper://sync-status";
     pub const PLAYER_STATE: &str = "zapper://player-state";
     pub const UPDATE: &str = "zapper://update";
+    /// A [`super::MediaKey`] pressed on the desktop's media controls.
+    pub const MEDIA_KEY: &str = "zapper://media-key";
+}
+
+/// What the desktop's media controls should show: the channel as the title,
+/// what is on it as the line beneath, and its logo. Sent by the frontend,
+/// which is the side that knows the channel and the guide.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaSessionDto {
+    pub title: String,
+    pub subtitle: Option<String>,
+    pub art_url: Option<String>,
+    pub playback: MediaPlayback,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MediaPlayback {
+    Playing,
+    Paused,
+    Stopped,
+}
+
+/// A media key, or its button on the desktop's controls. Emitted as
+/// `events::MEDIA_KEY`. What each one does is the frontend's decision: next
+/// and previous step through the list it is showing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MediaKey {
+    Play,
+    Pause,
+    Toggle,
+    Next,
+    Previous,
+    Stop,
 }
 
 /// A release the update dialog can show.

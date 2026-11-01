@@ -8,6 +8,8 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   EVENTS,
   type AccountDto,
+  type ActivityRowDto,
+  type BackupFileDto,
   type CategoryDto,
   type ChannelDto,
   type PlayerStateDto,
@@ -20,6 +22,8 @@ import {
   type StatsDto,
   type ThumbnailDto,
   type InstallOutcomeDto,
+  type MediaKey,
+  type MediaSessionDto,
   type UpdateStatusDto,
   type VideoRect,
 } from "./types";
@@ -83,12 +87,28 @@ export const api = {
     invoke<void>("set_subtitle_style", { style }),
   applyPlaybackSettings: (settings: SettingsDto) =>
     invoke<void>("apply_playback_settings", { settings }),
+  /** What the desktop's media controls show; `null` with nothing on. */
+  setMediaSession: (session: MediaSessionDto | null) =>
+    invoke<void>("set_media_session", { session }),
   guideRows: (streamIds: number[], from: number, to: number) =>
     invoke<GuideRowDto[]>("guide_rows", { streamIds, from, to }),
 
   favourites: (limit: number) => invoke<FavouriteDto[]>("favourites", { limit }),
   forgetActivity: (streamId: number) =>
     invoke<void>("forget_activity", { streamId }),
+
+  // Backups (Settings › Data). The backend opens the file dialogs itself, so
+  // no path crosses this boundary, and it adds and removes the account, so
+  // no password does either.
+  activityRows: () => invoke<ActivityRowDto[]>("activity_rows"),
+  importActivity: (rows: ActivityRowDto[]) => invoke<number>("import_activity", { rows }),
+  /** Asks where to save; the file's name, or `null` if cancelled. */
+  exportBackup: (document: unknown, includeAccount: boolean, fileName: string) =>
+    invoke<string | null>("export_backup", { document, includeAccount, fileName }),
+  /** Asks for a file and reads it; `null` if cancelled. */
+  openBackup: () => invoke<BackupFileDto | null>("open_backup"),
+  /** Writes the account from the backup opened last. */
+  importBackupAccount: () => invoke<void>("import_backup_account"),
 
   // The updater. None of these takes a URL or a path: what to fetch, install
   // and open is decided by the backend from its own state.
@@ -109,3 +129,6 @@ export const onPlayerState = (f: (s: PlayerStateDto) => void): Promise<UnlistenF
 
 export const onUpdate = (f: (s: UpdateStatusDto) => void): Promise<UnlistenFn> =>
   listen<UpdateStatusDto>(EVENTS.update, (e) => f(e.payload));
+
+export const onMediaKey = (f: (k: MediaKey) => void): Promise<UnlistenFn> =>
+  listen<MediaKey>(EVENTS.mediaKey, (e) => f(e.payload));

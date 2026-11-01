@@ -2067,6 +2067,17 @@ pub async fn apply_playback_settings(
     on_player(&app, move |p| apply_properties(p, &props)).await
 }
 
+/// What the desktop's media controls show: the channel, its programme and
+/// whether it is playing, or `None` with nothing on. Accepted whether or not
+/// the controls are on, so turning them on shows what is already playing.
+#[tauri::command]
+pub async fn set_media_session(
+    session: Option<crate::ipc::types::MediaSessionDto>,
+) -> Result<(), String> {
+    crate::media_keys::set_session(session);
+    Ok(())
+}
+
 /// Applies the settings on disk to the player, once, at startup.
 ///
 /// Settings that only take effect when you change them are settings that

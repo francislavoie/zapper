@@ -106,6 +106,9 @@ export interface State {
   /** Draw the hidden categories anyway, dimmed, so they can be unhidden one
    *  by one. Not remembered: hidden is what the rail should be at launch. */
   categoryShowHidden: boolean;
+  /** Bumped when watch history changes other than by watching — an import —
+   *  so the favourites rail knows to ask again. */
+  activityVersion: number;
   /** The rail's options menu, under the ▾ beside the sort button: where it
    *  opens, in client pixels. In the store for the same reason as
    *  categoryMenu — Escape unwinds it in useGlobalKeys. */
@@ -249,6 +252,7 @@ export const initialState: State = {
   categorySort: loadCategorySort(),
   categoryHidden: loadCategoryHidden(),
   categoryShowHidden: false,
+  activityVersion: 0,
   categoryOptions: null,
   videoMenu: null,
   statsOpen: false,
@@ -295,6 +299,9 @@ export type Action =
   | { type: "categoryHide"; id: string; hidden: boolean }
   | { type: "categoryUnhideAll" }
   | { type: "categoryShowHidden"; on: boolean }
+  /** All three of the rail's choices at once, from a backup. */
+  | { type: "categoryPrefs"; pins: readonly string[]; hidden: readonly string[]; sort: CategorySort }
+  | { type: "activityChanged" }
   | { type: "categoryOptions"; menu: { x: number; y: number } | null }
   | { type: "videoMenu"; at: { x: number; y: number } | null }
   | { type: "stats"; open: boolean }
@@ -413,6 +420,16 @@ export function reducer(state: State, action: Action): State {
       };
     case "categoryShowHidden":
       return { ...state, categoryShowHidden: action.on, categoryOptions: null };
+    case "categoryPrefs":
+      // Saved by App's effects, like any other change to the three.
+      return {
+        ...state,
+        categoryPins: action.pins,
+        categoryHidden: action.hidden,
+        categorySort: action.sort,
+      };
+    case "activityChanged":
+      return { ...state, activityVersion: state.activityVersion + 1 };
     case "categoryOptions":
       return { ...state, categoryOptions: action.menu };
     case "stacked":

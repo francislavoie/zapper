@@ -29,6 +29,7 @@ import { checkForUpdates } from "../actions";
 import { run, useApp, useDispatch } from "../store";
 import { AboutPane } from "./AboutPane";
 import { AccountPane } from "./AccountPane";
+import { BackupPane } from "./BackupPane";
 import type { SubtitleBackdrop } from "../types";
 
 const SECTIONS = [
@@ -166,6 +167,25 @@ export function SettingsModal() {
                 How far back it reaches depends on the channel’s bitrate, so
                 the times above are estimates. Turning tone mapping off
                 leaves HDR channels washed out on an SDR panel.
+              </p>
+              <div className="row-field">
+                <label htmlFor="set-media">Media keys and desktop controls</label>
+                <button
+                  id="set-media"
+                  className={`ctl ${s.settings.mediaControls ? "on" : ""}`}
+                  aria-pressed={s.settings.mediaControls}
+                  onClick={() => s.patch({ mediaControls: !s.settings.mediaControls })}
+                >
+                  {s.settings.mediaControls ? "on" : "off"}
+                </button>
+              </div>
+              <p>
+                Lets the keyboard’s play/pause, next and previous keys and the
+                desktop’s media controls drive zapper, which shows them the
+                channel and what is on it. Next and previous change channel
+                within the list on screen. Off by default: the desktop gives
+                those keys to one player at a time, so turning this on can
+                take them from a music player.
               </p>
             </>
           ) : null}
@@ -409,6 +429,7 @@ export function SettingsModal() {
                 {sync.channelsTotal.toLocaleString()} channels known. Sync
                 failures are non-fatal — the last good catalogue keeps serving.
               </p>
+              <BackupPane s={s} />
             </>
           ) : null}
 

@@ -3083,6 +3083,84 @@ kbd.mouse {
   color: #ffc9c9;
 }
 
+/* Settings › Data's backups: a heading of their own under the sync line, and
+   the import preview, which lists what each section would change before
+   anything does. */
+.backup {
+  margin-top: 1.25rem;
+}
+
+.backup h4 {
+  margin: 0 0 0.25rem;
+  font-size: 0.8125rem;
+}
+
+.backup .settings-note {
+  margin: 0.5rem 0 0;
+}
+
+.backup-preview {
+  margin-top: 0.75rem;
+  padding: 0.5rem 0.75rem 0.625rem;
+  border: 1px solid var(--line);
+  border-radius: 0.375rem;
+  background: var(--bg-3);
+}
+
+.backup-preview > p:first-child {
+  margin-top: 0.125rem;
+}
+
+.backup-section.same label {
+  color: var(--dim);
+}
+
+.backup-same {
+  color: var(--dimmer);
+}
+
+.backup-section p {
+  margin: 0.375rem 0;
+}
+
+/* Setting, from, to: the same three-column grid as the rewind estimates. */
+.backup-changes {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 1rem;
+  row-gap: 0.125rem;
+  margin: 0.375rem 0 0.5rem;
+  font-size: 0.75rem;
+}
+
+.backup-changes > div {
+  display: contents;
+}
+
+.backup-changes dt,
+.backup-changes dd {
+  margin: 0;
+}
+
+.backup-changes dt,
+.backup-changes .from {
+  color: var(--dim);
+}
+
+.backup-warnings {
+  margin: 0.375rem 0;
+  padding-left: 1.125rem;
+  color: var(--dim);
+  font-size: 0.75rem;
+}
+
+.backup-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
 .choices {
   display: flex;
   flex-wrap: wrap;

@@ -339,6 +339,91 @@ fn write(stored: &Stored) -> Result<()> {
     Ok(())
 }
 
+/// The account as it travels in a settings backup: the file's own fields,
+/// every kind's and passwords included, so that restoring it is restoring the
+/// file. Only ever built in Rust and written to a file the user chose; the
+/// interface sees [`Portable::describe`] and nothing more. No `Debug`, so
+/// it cannot end up in a log line.
+pub struct Portable(Stored);
+
+/// The account file as a backup carries it, or `None` with no account.
+pub fn portable() -> Result<Option<serde_json::Value>> {
+    match read_file()? {
+        Some(s) => Ok(Some(serde_json::to_value(&s)?)),
+        None => Ok(None),
+    }
+}
+
+/// Reads an account out of a backup, refusing one this build could not use:
+/// an unknown kind, or a kind without the details it needs.
+pub fn parse_portable(v: serde_json::Value) -> Result<Portable> {
+    let s: Stored = serde_json::from_value(v)
+        .map_err(|e| anyhow!("the account in this file cannot be read ({e})"))?;
+    let kind = match s.kind.as_deref().map(str::trim) {
+        None | Some("") | Some("xtream") => Kind::Xtream,
+        Some("m3u") => Kind::M3u,
+        Some("hdhomerun") => Kind::HdHomeRun,
+        Some("tvheadend") => Kind::Tvheadend,
+        Some(other) => {
+            return Err(anyhow!(
+                "the account in this file is of a kind this version does not know ({other})"
+            ))
+        }
+    };
+    let usable = match kind {
+        Kind::Xtream => s.xtream().is_some(),
+        Kind::M3u => s.m3u().is_some(),
+        Kind::HdHomeRun => s.hdhomerun().is_some(),
+        Kind::Tvheadend => s.tvheadend().is_some(),
+    };
+    if !usable {
+        return Err(anyhow!(
+            "the account in this file is {} with no address",
+            kind.label()
+        ));
+    }
+    Ok(Portable(s))
+}
+
+impl Portable {
+    pub fn kind(&self) -> Kind {
+        self.0.kind().unwrap_or(Kind::Xtream)
+    }
+
+    /// Where, and who as, for the import preview: no password, and any
+    /// credentials in a URL redacted.
+    pub fn describe(&self) -> String {
+        use crate::m3u::redact::redact_url;
+        let s = &self.0;
+        match self.kind() {
+            Kind::Xtream => format!("{} as {}", redact_url(&s.host).0, s.username),
+            Kind::M3u => redact_url(&s.playlist).0,
+            Kind::HdHomeRun => s.hdhomerun_device.clone(),
+            Kind::Tvheadend if s.tvheadend_username.is_empty() => redact_url(&s.tvheadend_url).0,
+            Kind::Tvheadend => {
+                format!("{} as {}", redact_url(&s.tvheadend_url).0, s.tvheadend_username)
+            }
+        }
+    }
+
+    /// Whether restoring this writes a secret: a password, or a playlist or
+    /// guide address with a login in it.
+    pub fn has_secret(&self) -> bool {
+        use crate::m3u::redact::redact_url;
+        let s = &self.0;
+        !s.password.is_empty()
+            || !s.tvheadend_password.is_empty()
+            || redact_url(&s.playlist).1
+            || s.epg_urls.iter().chain(&s.hdhomerun_epg_urls).any(|u| redact_url(u).1)
+    }
+}
+
+/// Replaces the account file with a backup's, owner-readable only like
+/// every other save.
+pub fn save_portable(p: &Portable) -> Result<()> {
+    write(&p.0)
+}
+
 /// Whether there is an account on file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Source {
@@ -647,5 +732,50 @@ mod tests {
             let mode = std::fs::metadata(account_path()).unwrap().permissions().mode();
             assert_eq!(mode & 0o777, 0o600);
         });
+    }
+
+    #[test]
+    fn a_backed_up_account_restores_as_it_was_and_describes_itself_without_secrets() {
+        let carried = in_temp_config(|| {
+            save(&creds()).unwrap();
+            save_m3u(&playlist()).unwrap();
+            portable().unwrap().expect("an account is on file")
+        });
+        in_temp_config(|| {
+            assert!(portable().unwrap().is_none(), "nothing on file is no account");
+            let p = parse_portable(carried.clone()).unwrap();
+            assert_eq!(p.kind(), Kind::M3u);
+            assert!(p.has_secret());
+            assert!(!p.describe().contains("secret"), "{}", p.describe());
+            save_portable(&p).unwrap();
+            // Every kind's fields came across, not only the one in use.
+            let f = on_file();
+            assert_eq!(f.kind, Kind::M3u);
+            assert_eq!(f.m3u, Some(playlist()));
+            assert_eq!(f.xtream.unwrap().password, "secret");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mode = std::fs::metadata(account_path()).unwrap().permissions().mode();
+                assert_eq!(mode & 0o777, 0o600);
+            }
+        });
+    }
+
+    #[test]
+    fn an_account_this_build_cannot_use_is_refused() {
+        let err = |v: serde_json::Value| parse_portable(v).err().map(|e| e.to_string());
+        assert!(err(serde_json::json!({"kind":"plex","host":"h"}))
+            .unwrap()
+            .contains("plex"));
+        assert!(err(serde_json::json!({"kind":"m3u","host":"h","username":"u"}))
+            .unwrap()
+            .contains("no address"));
+        assert!(err(serde_json::json!("a string")).is_some());
+        assert!(err(serde_json::json!({"kind":"hdhomerun","hdhomerunDevice":"x"})).is_some());
+        let anon = parse_portable(serde_json::json!({"kind":"tvheadend","tvheadend_url":"tvh.lan"}))
+            .unwrap();
+        assert!(!anon.has_secret());
+        assert_eq!(anon.describe(), "tvh.lan");
     }
 }

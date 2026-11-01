@@ -87,6 +87,17 @@ md-5 = "0.10"
 # Gzipped XMLTV guides (and the odd gzipped playlist). Already in the tree
 # through the PNG stack; named here so it is ours.
 flate2 = "1"
+# The save and open dialogs for Settings › Data's backups (MIT/Apache-2.0).
+# Opened from Rust only: the window has no `dialog:` permission, so the
+# webview can neither open one nor name a path to read or write.
+tauri-plugin-dialog = "2"
+
+# The desktop's media controls (Settings › Playback, off by default): MPRIS on
+# Linux, the System Media Transport Controls on Windows. MIT. Its D-Bus
+# backend is the `dbus` crate tao already links, and its Windows one the same
+# `windows` 0.62, so on both it is the one crate plus `dbus-crossroads`.
+[target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
+souvlaki = "0.9"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18"
@@ -117,6 +128,11 @@ windows = { version = "0.62", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 libmpv2-sys = "4"
+
+# The MPRIS round trip in `media_keys`'s ignored test, which talks to the
+# registration as a desktop would. Already in the tree under tao.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+dbus = "0.9"
 
 [profile.dev]
 incremental = true

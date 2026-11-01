@@ -142,11 +142,13 @@ mod tests {
                 shadow_offset: 1.5,
             },
             check_for_updates: false,
+            media_controls: true,
         };
         save(&c, &want).unwrap();
 
         let got = load(&c);
         assert!(!got.check_for_updates);
+        assert!(got.media_controls);
         assert_eq!(got.rewind_mb, 1280);
         assert!(!got.hardware_decode);
         assert!(!got.tone_map_hdr);
@@ -168,6 +170,16 @@ mod tests {
         let got = load(&c);
         assert_eq!(got.guide_hours, 5);
         assert!(got.check_for_updates, "on unless someone turned it off");
+    }
+
+    #[test]
+    fn a_blob_from_before_media_controls_leaves_them_off() {
+        // Opt-in: an upgrade must not start answering the media keys.
+        let c = open_in_memory().unwrap();
+        write_raw(&c, r#"{"guideHours":5,"checkForUpdates":false}"#);
+        let got = load(&c);
+        assert!(!got.media_controls);
+        assert!(!got.check_for_updates);
     }
 
     #[test]

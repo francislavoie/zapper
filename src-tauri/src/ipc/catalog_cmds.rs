@@ -800,7 +800,11 @@ pub async fn settings() -> Result<SettingsDto, String> {
 /// player is `apply_playback_settings`, which the frontend calls alongside.
 #[tauri::command]
 pub async fn set_settings(settings: SettingsDto) -> Result<(), String> {
-    db::with_db(|c| settings_store::save(c, &settings)).map_err(|e| e.to_string())
+    db::with_db(|c| settings_store::save(c, &settings)).map_err(|e| e.to_string())?;
+    // Takes effect now, not at the next launch. Idempotent, so every save
+    // can say it.
+    crate::media_keys::set_enabled(settings.media_controls);
+    Ok(())
 }
 
 /// Guide rows for a window, one per channel, ordered as requested.

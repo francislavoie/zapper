@@ -30,6 +30,8 @@ export const DEFAULT_SETTINGS: SettingsDto = {
   syncIntervalHours: 6,
   subtitle: DEFAULT_SUBTITLE,
   checkForUpdates: true,
+  // Opt-in: the desktop gives the media keys to one player at a time.
+  mediaControls: false,
 };
 
 /** Rewind buffer, in megabytes. The ceiling is the backend's: the buffer is
@@ -104,6 +106,8 @@ export function clampSettings(s: SettingsDto): SettingsDto {
     // Only an explicit `false` turns it off: a config from before the setting
     // existed has no value, and that must read as the default, on.
     checkForUpdates: s.checkForUpdates !== false,
+    // The other way round: only an explicit `true` takes the media keys.
+    mediaControls: s.mediaControls === true,
   };
 }
 

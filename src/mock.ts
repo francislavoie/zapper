@@ -10,10 +10,14 @@
 import { auditLightSurfaces, auditOverVideo } from "./audit";
 import type {
   AccountDto,
+  ActivityRowDto,
+  BackupFileDto,
   CategoryDto,
   ChannelDto,
   FavouriteDto,
   GuideRowDto,
+  MediaKey,
+  MediaSessionDto,
   PlayerStateDto,
   ProgrammeDto,
   QualityDto,
@@ -562,6 +566,7 @@ let storedSettings: SettingsDto = {
     shadowOffset: 0,
   },
   checkForUpdates: true,
+  mediaControls: false,
 };
 
 // ----------------------------------------------------------------- updates
@@ -1057,6 +1062,119 @@ export const mockApi = {
     ];
   },
 
+  activityRows: async (): Promise<ActivityRowDto[]> => {
+    await delay(30);
+    const c = getCatalog();
+    if (!activitySeeded) seedActivity(c.rows);
+    const byId = new Map(c.rows.map((r) => [r.streamId, r]));
+    const now = Math.floor(Date.now() / 1000);
+    return [...activity]
+      .map(([streamId, a]) => ({
+        streamId,
+        name: byId.get(streamId)?.cleanName ?? null,
+        watchSeconds: a.watchSeconds,
+        lastWatched: now - a.ago,
+        openCount: a.openCount,
+      }))
+      .sort((x, y) => y.watchSeconds - x.watchSeconds || x.streamId - y.streamId);
+  },
+
+  importActivity: async (rows: ActivityRowDto[]) => {
+    await delay(30);
+    if (!activitySeeded) seedActivity(getCatalog().rows);
+    const now = Math.floor(Date.now() / 1000);
+    // The backend's merge: the larger of each figure, per channel.
+    for (const r of rows) {
+      const had = activity.get(r.streamId);
+      const ago = r.lastWatched === null ? (had?.ago ?? 365 * 86_400) : Math.max(0, now - r.lastWatched);
+      activity.set(r.streamId, {
+        watchSeconds: Math.max(had?.watchSeconds ?? 0, r.watchSeconds),
+        ago: had ? Math.min(had.ago, ago) : ago,
+        openCount: Math.max(had?.openCount ?? 0, r.openCount),
+      });
+    }
+    return rows.length;
+  },
+
+  /** A browser download in place of the save dialog. The account, when asked
+   *  for, is added here as the backend adds it — a stand-in with a fake
+   *  password, never anything real. */
+  exportBackup: async (document: unknown, includeAccount: boolean, fileName: string) => {
+    await delay(20);
+    const doc = { ...(document as Record<string, unknown>) };
+    delete doc.account;
+    if (includeAccount) {
+      doc.account = {
+        kind: mockAccount.kind,
+        host: mockAccount.host,
+        username: mockAccount.username,
+        password: "mock-password",
+      };
+    }
+    const text = `${JSON.stringify(doc, null, 2)}\n`;
+    (globalThis as Record<string, unknown>).__mockExported = text;
+    const url = URL.createObjectURL(new Blob([text], { type: "application/json" }));
+    const a = document_().createElement("a");
+    a.href = url;
+    a.download = fileName;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    return fileName;
+  },
+
+  /** A file picker in place of the open dialog; the account is taken out and
+   *  kept here, as the backend keeps it. */
+  openBackup: async (): Promise<BackupFileDto | null> => {
+    const file = await pickFile();
+    if (!file) return null;
+    const text = await file.text();
+    let value: unknown;
+    try {
+      value = JSON.parse(text.replace(/^\uFEFF/, ""));
+    } catch (e) {
+      throw `this file is not JSON (${String(e)})`;
+    }
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw "this file is not a zapper backup";
+    }
+    const doc = { ...(value as Record<string, unknown>) };
+    if (doc.format !== "zapper-backup") throw "this file is not a zapper backup";
+    const account = doc.account as Record<string, unknown> | null | undefined;
+    delete doc.account;
+    mockStagedAccount = null;
+    let summary: BackupFileDto["account"] = null;
+    let accountError: string | null = null;
+    if (account) {
+      const kind = (account.kind as string | undefined) || "xtream";
+      if (!["xtream", "m3u", "hdhomerun", "tvheadend"].includes(kind)) {
+        accountError = `the account in this file is of a kind this version does not know (${kind})`;
+      } else {
+        mockStagedAccount = account;
+        summary = {
+          kind: kind as AccountDto["kind"],
+          description: `${String(account.host ?? account.playlist ?? "")} as ${String(account.username ?? "")}`,
+          hasSecret: typeof account.password === "string" && account.password !== "",
+        };
+      }
+    }
+    return { name: file.name, document: doc, account: summary, accountError };
+  },
+
+  importBackupAccount: async () => {
+    await delay(20);
+    const a = mockStagedAccount;
+    if (!a) throw "no account to import: open the backup again";
+    mockStagedAccount = null;
+    mockAccount = {
+      ...mockAccount,
+      kind: ((a.kind as string | undefined) || "xtream") as AccountDto["kind"],
+      host: String(a.host ?? ""),
+      username: String(a.username ?? ""),
+      hasPassword: typeof a.password === "string" && a.password !== "",
+    };
+    (globalThis as Record<string, unknown>).__mockImportedAccount = a;
+  },
+
   applyPlaybackSettings: async (next: SettingsDto) => {
     await delay(20);
     (globalThis as Record<string, unknown>).__mockPlaybackApplied = {
@@ -1064,6 +1182,11 @@ export const mockApi = {
       hardwareDecode: next.hardwareDecode,
       toneMapHdr: next.toneMapHdr,
     };
+  },
+
+  setMediaSession: async (session: MediaSessionDto | null) => {
+    // Exposed so a driver can read what the desktop's controls would show.
+    (globalThis as Record<string, unknown>).__mockMediaSession = session;
   },
 
   updateStatus: async (): Promise<UpdateStatusDto> => {
@@ -1241,6 +1364,24 @@ export function paintMockStill(el: HTMLElement): void {
   img.src = url;
 }
 
+/** The account from the last backup opened, as the backend stages it. */
+let mockStagedAccount: Record<string, unknown> | null = null;
+
+// `document` is shadowed by the export's parameter above.
+const document_ = () => globalThis.document;
+
+/** The browser's file picker, resolved with nothing when it is dismissed. */
+function pickFile(): Promise<File | null> {
+  return new Promise((resolve) => {
+    const input = document_().createElement("input");
+    input.type = "file";
+    input.accept = ".json,application/json";
+    input.addEventListener("change", () => resolve(input.files?.[0] ?? null));
+    input.addEventListener("cancel", () => resolve(null));
+    input.click();
+  });
+}
+
 /** `?backend=broken` makes every command reject the way the real backend does
  *  today, so the degraded UI can be seen rather than imagined. */
 const BROKEN =
@@ -1260,6 +1401,18 @@ export const onMockPlayerState = (f: (s: PlayerStateDto) => void) =>
 
 export const onMockUpdate = (f: (s: UpdateStatusDto) => void) =>
   Promise.resolve(updateEmitter.on(f));
+
+/** The desktop's media keys, which a browser has no way to press: a driver
+ *  presses one with `__mockMediaKey("next")`. Pressed only when the stored
+ *  setting is on, as the real registration only exists then. */
+const mediaKeyEmitter = new Emitter<MediaKey>("toggle");
+(globalThis as Record<string, unknown>).__mockMediaKey = (k: MediaKey) => {
+  if (storedSettings.mediaControls) mediaKeyEmitter.emit(k);
+  return storedSettings.mediaControls;
+};
+
+export const onMockMediaKey = (f: (k: MediaKey) => void) =>
+  Promise.resolve(mediaKeyEmitter.on(f));
 
 /** Cheap subsequence match, standing in for nucleo. Ranking is not modelled;
  *  the real matcher lives in Rust and the UI must not reimplement it. */
