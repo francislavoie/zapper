@@ -669,6 +669,13 @@ pub enum UpdateStateDto {
     Installing {
         release: UpdateReleaseDto,
     },
+    /// Waiting for the recording service to finish what it records before
+    /// installing (Windows: the installer must stop it). `until`: when it
+    /// expects to, Unix seconds, if it says.
+    WaitingForRecording {
+        release: UpdateReleaseDto,
+        until: Option<i64>,
+    },
     /// Installed over the running copy; a restart starts the new one.
     Installed {
         release: UpdateReleaseDto,
@@ -712,6 +719,28 @@ pub enum InstallOutcomeDto {
         reason: String,
         output: Option<String>,
     },
+    /// Not installed yet: the recording service is recording (or about to),
+    /// and installing would stop it. Install again with `now` or
+    /// `whenIdle`. `until`: when it will be done, `title`: what it records.
+    Recording {
+        until: Option<i64>,
+        title: Option<String>,
+    },
+    /// Waiting for the recording was cancelled; nothing was installed.
+    NotNow,
+}
+
+/// When Install may stop the recording service (Windows), if it records.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum InstallWhen {
+    /// Ask first: [`InstallOutcomeDto::Recording`].
+    #[default]
+    Ask,
+    /// Stop it now, finishing what it recorded into playable files.
+    Now,
+    /// Wait until it is idle, then install.
+    WhenIdle,
 }
 
 /// A scrollback preview: what the picture looked like at a point in the

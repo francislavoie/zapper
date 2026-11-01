@@ -43,6 +43,7 @@
     "linux": {
       "deb": {
         "desktopTemplate": "../packaging/zapper.desktop.hbs",
+        "preRemoveScript": "../packaging/linux/deb-prerm",
         "depends": [
           "libwebkit2gtk-4.1-0",
           "libgtk-3-0",
@@ -88,6 +89,7 @@
       },
       "rpm": {
         "desktopTemplate": "../packaging/zapper.desktop.hbs",
+        "preRemoveScript": "../packaging/linux/rpm-preun",
         "depends": [
           "libwebkit2gtk-4.1.so.0()(64bit)",
           "libgtk-3.so.0()(64bit)",

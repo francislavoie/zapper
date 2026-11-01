@@ -13,6 +13,10 @@
       "nsis": {
         "installMode": "currentUser",
         "installerHooks": "../packaging/windows/installer-hooks.nsh"
+      },
+      "wix": {
+        "fragmentPaths": ["../packaging/windows/service-cleanup.wxs"],
+        "componentGroupRefs": ["ZapperServiceCleanup"]
       }
     }
   }

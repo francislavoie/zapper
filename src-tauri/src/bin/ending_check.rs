@@ -447,6 +447,9 @@ fn play(mpv: &libmpv2::Mpv, url: &str) -> Result<Outcome, String> {
             let dt = last.elapsed().as_secs_f64();
             last = Instant::now();
             let (end, eof, fw) = cache(mpv);
+            if std::env::var_os("ZAPPER_ENDING_DEBUG").is_some() {
+                println!("        cache: end {end:?} eof {eof} ahead {fw:?} after {dt:.2}s");
+            }
             flow.observe(dt, end, eof, fw);
         }
         let Some(ev) = mpv.wait_event(0.05) else { continue };
@@ -536,7 +539,7 @@ struct Server {
 impl Server {
     fn start(port: u16, flags: &[&str]) -> Result<Self, String> {
         let script = concat!(env!("CARGO_MANIFEST_DIR"), "/../tools/fake_stream.py");
-        let mut child = Command::new("python3")
+        let mut child = Command::new(zapper_lib::harness::tool("python3"))
             .arg(script)
             .args(["--port", &port.to_string(), "--verbose"])
             .args(flags)

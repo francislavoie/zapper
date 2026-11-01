@@ -29,6 +29,7 @@ import {
   type StatsDto,
   type ThumbnailDto,
   type InstallOutcomeDto,
+  type InstallWhen,
   type MediaKey,
   type MenuCommand,
   type MediaSessionDto,
@@ -157,7 +158,8 @@ export const api = {
   updateCheck: () => invoke<UpdateStatusDto>("update_check"),
   updateDownload: () => invoke<UpdateStatusDto>("update_download"),
   updateCancel: () => invoke<UpdateStatusDto>("update_cancel"),
-  updateInstall: () => invoke<InstallOutcomeDto>("update_install"),
+  updateInstall: (when: InstallWhen = "ask") =>
+    invoke<InstallOutcomeDto>("update_install", { when }),
   updateRestart: () => invoke<void>("update_restart"),
   updateOpenPage: () => invoke<void>("update_open_page"),
 

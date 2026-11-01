@@ -81,6 +81,14 @@ name = "recording_check"
 path = "src/bin/recording_check.rs"
 required-features = ["harness", "server"]
 
+# Installs the recording service as Settings > Recording does (the sign-in
+# task on Windows, the systemd user unit on Linux), on a scratch home, checks
+# that it answers, and removes it.
+[[bin]]
+name = "service_check"
+path = "src/bin/service_check.rs"
+required-features = ["harness", "server"]
+
 [[bin]]
 name = "ipc_check"
 path = "src/bin/ipc_check.rs"
@@ -135,6 +143,10 @@ tauri-build = { version = "2", features = [], optional = true }
 # The remuxer's C file, compiled against the libavformat pkg-config finds.
 cc = { version = "1", optional = true }
 pkg-config = { version = "0.3", optional = true }
+# On Windows, the Visual C++ runtime linked in rather than loaded from
+# vcruntime140.dll, which a fresh Windows does not have: what tauri-build does
+# for the app, done for zapper-server too, which is built without it.
+static_vcruntime = "3"
 
 [dependencies]
 tauri = { version = "2", features = [], optional = true }
@@ -226,11 +238,21 @@ libc = { version = "0.2", optional = true }
 # follows its size), and the local UTC offset (System_Time). The same 0.62
 # that tauri, tao and wry already build, so this adds features, not a crate.
 [target.'cfg(windows)'.dependencies]
+# Com, Ole, Variant and TaskScheduler: the recording service's sign-in task
+# (recording::service). Console, Security and Storage_FileSystem:
+# zapper-server finding its terminal's console.
 windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Com",
+    "Win32_System_Console",
     "Win32_System_LibraryLoader",
+    "Win32_System_Ole",
+    "Win32_System_TaskScheduler",
     "Win32_System_Time",
+    "Win32_System_Variant",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }

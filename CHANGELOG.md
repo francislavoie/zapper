@@ -12,6 +12,17 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
 
 ### Added
 
+- Windows: an installer for you alone (`zapper_<version>_x64-setup.exe`, no administrator needed)
+  and an MSI for everyone on the computer, each with its own libmpv and FFmpeg and the recording
+  service. They aren't signed yet, so Windows SmartScreen warns the first time: More info, then
+  Run anyway. zapper updates itself from them like the Linux packages.
+- Recording on Windows: Settings → Recording installs the recording service as a scheduled task
+  that starts when you sign in, and removes it again. It records while you are signed in.
+- The recording service no longer cuts a recording short when it stops: what it recorded so far
+  is saved as a playable file, and it carries on in a new part if it starts again while the
+  programme is on. After a package upgrade on Linux it restarts into the new version once
+  nothing is recording. On Windows, updating asks first when a recording is in progress:
+  install when it finishes, or now. Uninstalling zapper removes the service too.
 - Network access for the recording service (Settings → Recording, off by default): other devices
   on your network can reach it over HTTPS with its own certificate, whose fingerprint Settings
   shows, after signing in with a password you set there. Each device is listed and can be
@@ -29,6 +40,9 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
 
 - After a sync — the first one, or Refresh data from the provider — the categories, channel list
   and guide now show the new data straight away instead of after a restart.
+- Windows: a channel whose server can't be reached, or whose stream stalls, is now recognised as a
+  network problem and reconnected like on Linux, instead of being reported as an unknown error
+  or a dropped stream.
 
 ## [0.1.0] - 2026-11-01
 

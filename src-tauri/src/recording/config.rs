@@ -306,12 +306,14 @@ mod tests {
         let mut s = c.settings();
         s.output_dir = "relative/dir".into();
         assert!(c.apply(s.clone()).is_err());
-        s.output_dir = "/srv/tv".into();
+        // Absolute on this platform: `/srv/tv` has no drive on Windows.
+        let absolute = if cfg!(windows) { r"D:\TV" } else { "/srv/tv" };
+        s.output_dir = absolute.into();
         s.pad_after = -1;
         assert!(c.apply(s.clone()).is_err());
         s.pad_after = 600;
         c.apply(s.clone()).unwrap();
-        assert_eq!((c.output_dir.as_str(), c.pad_after), ("/srv/tv", 600));
+        assert_eq!((c.output_dir.as_str(), c.pad_after), (absolute, 600));
         s.output_dir = String::new();
         c.apply(s).unwrap();
         assert_eq!(c.output_dir, c.settings().default_output_dir, "empty is the default");

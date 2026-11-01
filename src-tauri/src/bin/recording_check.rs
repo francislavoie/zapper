@@ -22,7 +22,16 @@
 //! - each fixture server saw exactly one stream request: nothing retried a
 //!   feed in a loop.
 //!
-//! Needs python3, ffprobe and ffmpeg, and the fixtures (tools/make_fixtures.sh).
+//! Then a stop in the middle of a recording (recording::lifecycle): a second
+//! recording of the backup feed, the service stopped part way through with
+//! SIGTERM (on Windows, which has none, `POST /api/shutdown` "now"), which
+//! must leave `… - part1.mkv` playable on disk and the recording still
+//! `recording`; started again, it carries on in `… - part2.mkv` and
+//! finishes Done.
+//!
+//! Needs python3, ffprobe and ffmpeg (`ZAPPER_PYTHON3`, `ZAPPER_FFPROBE` and
+//! `ZAPPER_FFMPEG` name them when `PATH` does not; see `harness::tool`), and
+//! the fixtures (tools/make_fixtures.sh, or a folder named by `ZAPPER_FIXTURES`).
 
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -291,6 +300,111 @@ async fn check(seconds: i64) -> Result<(), String> {
             "expected one request per feed, saw main {rm} and backup {rb}"
         ));
     }
+    drop(service);
+    interrupted(p_api, ids.1).await
+}
+
+/// A recording stopped part way by the service stopping, then resumed.
+async fn interrupted(port: u16, stream_id: i64) -> Result<(), String> {
+    let mut service = Service::start(port)?;
+    let token = zapper_lib::recording::config::read_token().ok_or("no token")?;
+    let client = Client::new(&format!("http://127.0.0.1:{port}"), Some(token))
+        .map_err(|e| e.to_string())?;
+    wait_until(Duration::from_secs(20), || async { client.version().await.is_ok() }).await?;
+    let start = zapper_lib::recording::now();
+    let rec = client
+        .schedule(&ScheduleRequest {
+            stream_id,
+            backup_stream_id: Some(stream_id),
+            channel_name: None,
+            title: "Fixture: Interrupted".into(),
+            episode_title: None,
+            season: None,
+            episode: None,
+            start,
+            stop: start + 30,
+            pad_before: None,
+            pad_after: None,
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+    // Some seconds of it on disk.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let st = client.status().await.map_err(|e| e.to_string())?;
+        if st.active.iter().any(|a| a.id == rec.id && a.bytes > 2_000_000) {
+            if st.idle || st.idle_at.is_none_or(|t| t < start + 30) {
+                return Err(format!("recording, but the status says idle {} until {:?}", st.idle, st.idle_at));
+            }
+            break;
+        }
+        if Instant::now() > deadline {
+            return Err("the second recording never got going".into());
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    service.terminate(&client).await?;
+    let code = service.wait(Duration::from_secs(60)).ok_or("zapper-server did not stop")?;
+    println!("stopped part way (exit {code:?})");
+
+    let db = zapper_lib::recording::store::open(
+        &zapper_lib::paths::data_dir().join("recordings.db"),
+    )
+    .map_err(|e| e.to_string())?;
+    let mid = zapper_lib::recording::store::get(&db, rec.id)
+        .map_err(|e| e.to_string())?
+        .ok_or("the recording vanished")?;
+    drop(db);
+    if mid.state != RecordingState::Recording {
+        return Err(format!("stopped part way, it is {:?}, not still recording", mid.state));
+    }
+    let first = mid.parts.first().ok_or("no part saved")?;
+    if !first.path.ends_with(" - part1.mkv") || !Path::new(&first.path).is_file() {
+        return Err(format!("the part so far was not finished into its file: {:?}", mid.parts));
+    }
+    let probe = ffprobe(&first.path)?;
+    println!("part1 as left: {} — {:.1} s", probe.streams.join(", "), probe.duration);
+    if probe.duration < 3.0 || !probe.streams.iter().any(|s| s.starts_with("video:h264")) {
+        return Err(format!("part1 is not playable: {:?}, {:.1} s", probe.streams, probe.duration));
+    }
+
+    // Started again while the programme is on: a second part, then Done.
+    let _service = Service::start(port)?;
+    wait_until(Duration::from_secs(20), || async { client.version().await.is_ok() }).await?;
+    let deadline = Instant::now() + Duration::from_secs(90);
+    let done = loop {
+        if Instant::now() > deadline {
+            return Err("the resumed recording did not finish in time".into());
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        let r = client
+            .list()
+            .await
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .find(|r| r.id == rec.id)
+            .ok_or("the recording vanished")?;
+        if matches!(r.state, RecordingState::Done | RecordingState::Failed) {
+            break r;
+        }
+    };
+    let names: Vec<&str> = done
+        .parts
+        .iter()
+        .filter_map(|p| Path::new(&p.path).file_name()?.to_str())
+        .collect();
+    println!("resumed: {:?}, {names:?}", done.state);
+    if done.state != RecordingState::Done
+        || names.len() != 2
+        || !names[0].ends_with(" - part1.mkv")
+        || !names[1].ends_with(" - part2.mkv")
+    {
+        return Err(format!("expected Done in part1.mkv and part2.mkv: {:?} {names:?}", done.state));
+    }
+    let probe = ffprobe(&done.parts[1].path)?;
+    if probe.duration < 3.0 {
+        return Err(format!("part2 is only {:.1} s", probe.duration));
+    }
     Ok(())
 }
 
@@ -366,7 +480,7 @@ struct Probe {
 
 /// `kind:codec[:title:default|not-default]` per stream, and the duration.
 fn ffprobe(path: &str) -> Result<Probe, String> {
-    let out = Command::new("ffprobe")
+    let out = Command::new(zapper_lib::harness::tool("ffprobe"))
         .args([
             "-v",
             "error",
@@ -414,7 +528,7 @@ fn ffprobe(path: &str) -> Result<Probe, String> {
 
 /// The clock track's cues as seconds of the day, in order.
 fn clock_cues(path: &str) -> Result<Vec<i64>, String> {
-    let out = Command::new("ffmpeg")
+    let out = Command::new(zapper_lib::harness::tool("ffmpeg"))
         .args([
             "-v", "error", "-nostdin", "-i", path, "-map", "0:s:0", "-c", "copy", "-f", "ass", "-",
         ])
@@ -446,7 +560,7 @@ impl Service {
     fn start(port: u16) -> Result<Self, String> {
         let exe = std::env::current_exe()
             .map_err(|e| e.to_string())?
-            .with_file_name("zapper-server");
+            .with_file_name(format!("zapper-server{}", std::env::consts::EXE_SUFFIX));
         if !exe.is_file() {
             return Err(format!(
                 "{} is missing; build it with --bin zapper-server",
@@ -468,6 +582,38 @@ impl Service {
         let _ = self.0.kill();
         let _ = self.0.wait();
     }
+
+    /// Asks it to stop as a package removal or an installer does: SIGTERM
+    /// where there are signals, the API's "now" on Windows.
+    async fn terminate(&mut self, client: &Client) -> Result<(), String> {
+        #[cfg(unix)]
+        {
+            let _ = client;
+            let ok = Command::new("kill")
+                .args(["-TERM", &self.0.id().to_string()])
+                .status()
+                .map_err(|e| e.to_string())?
+                .success();
+            if !ok {
+                return Err("kill -TERM failed".into());
+            }
+            Ok(())
+        }
+        #[cfg(not(unix))]
+        {
+            use zapper_lib::recording::api::{ShutdownRequest, ShutdownWhen};
+            client
+                .shutdown(&ShutdownRequest { when: ShutdownWhen::Now, restart: false })
+                .await
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+        }
+    }
+
+    /// Waits for it to exit by itself; its exit code.
+    fn wait(&mut self, limit: Duration) -> Option<Option<i32>> {
+        wait_for(limit, || self.0.try_wait().ok().flatten().map(|s| s.code()))
+    }
 }
 
 impl Drop for Service {
@@ -485,7 +631,7 @@ struct Fixture {
 impl Fixture {
     fn start(port: u16, flags: &[&str]) -> Result<Self, String> {
         let script = concat!(env!("CARGO_MANIFEST_DIR"), "/../tools/fake_stream.py");
-        let mut child = Command::new("python3")
+        let mut child = Command::new(zapper_lib::harness::tool("python3"))
             .arg(script)
             .args(["--port", &port.to_string(), "--verbose"])
             .args(flags)

@@ -116,20 +116,26 @@ impl Clues {
         if speaks_of_a_limit(&lower) && lower.contains("connection") {
             self.limit = true;
         }
-        // Never connected at all: these come from opening the socket.
+        // Never connected at all: these come from opening the socket. The
+        // last four are Windows' words for the same.
         const UNREACHED: &[&str] = &[
             "connection refused",
             "network is unreachable",
+            "network is down",
             "no route to host",
             "host is unreachable",
             "failed to resolve",
             "name or service not known",
             "temporary failure in name resolution",
             "could not resolve",
+            "actively refused",
+            "unreachable network",
+            "unreachable host",
+            "no such host is known",
         ];
         // The network, but perhaps after the provider had answered: a reset
         // or a timeout can come mid-stream, and a TLS failure from a
-        // connection that was made.
+        // connection that was made. The last two are Windows' words.
         const NETWORK: &[&str] = &[
             "connection timed out",
             "operation timed out",
@@ -138,14 +144,63 @@ impl Clues {
             "tls handshake",
             "ssl routines",
             "certificate verify failed",
+            "forcibly closed",
+            "did not properly respond",
         ];
-        if UNREACHED.iter().any(|n| lower.contains(n)) {
+        let numbered = socket_error(&lower);
+        if UNREACHED.iter().any(|n| lower.contains(n))
+            || numbered == Some(Reach::Unreached)
+            || failed_to_connect(&lower)
+        {
             self.network = true;
             self.unreached = true;
-        } else if NETWORK.iter().any(|n| lower.contains(n)) {
+        } else if NETWORK.iter().any(|n| lower.contains(n)) || numbered == Some(Reach::Network) {
             self.network = true;
         }
     }
+}
+
+/// What a socket error number says about the network.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Reach {
+    /// No connection was made: see [`Clues::unreached`].
+    Unreached,
+    /// The network failed, perhaps mid-stream.
+    Network,
+}
+
+/// FFmpeg built for Windows has no words for socket errors and logs their
+/// numbers instead: `Error number -138 occurred`. The number is minus either
+/// the C runtime's `errno`, in Windows' own numbering (`ETIMEDOUT` is 138
+/// there, not Linux's 110), or a Winsock code (`WSAETIMEDOUT`, 10060), which
+/// is what a socket's pending error comes back as.
+fn socket_error(lower: &str) -> Option<Reach> {
+    let rest = &lower[lower.find("error number -")? + "error number -".len()..];
+    let end = rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len());
+    match rest[..end].parse::<u32>().ok()? {
+        // ECONNREFUSED, EHOSTUNREACH, ENETDOWN, ENETUNREACH; WSAENETDOWN,
+        // WSAENETUNREACH, WSAECONNREFUSED, WSAEHOSTDOWN, WSAEHOSTUNREACH,
+        // WSAHOST_NOT_FOUND, WSATRY_AGAIN.
+        107 | 110 | 116 | 118 | 10050 | 10051 | 10061 | 10064 | 10065 | 11001 | 11002 => {
+            Some(Reach::Unreached)
+        }
+        // ECONNABORTED, ECONNRESET, ENETRESET, ETIMEDOUT; WSAENETRESET,
+        // WSAECONNABORTED, WSAECONNRESET, WSAETIMEDOUT.
+        106 | 108 | 117 | 138 | 10052 | 10053 | 10054 | 10060 => Some(Reach::Network),
+        _ => None,
+    }
+}
+
+/// FFmpeg's `Connection to tcp://host:port failed: …`: the socket never
+/// connected, whatever the reason given, and without a connection there was
+/// no request, so nothing reached the provider. That includes a timeout, and
+/// has to: on Windows a refused connection is never reported as refused;
+/// FFmpeg waits out its timeout and says `ETIMEDOUT` (measured with
+/// `ending_check`, "nobody there").
+fn failed_to_connect(lower: &str) -> bool {
+    lower
+        .find("connection to tcp://")
+        .is_some_and(|at| lower[at..].contains(" failed"))
 }
 
 /// `http error 509 max connections reached` → (509, "max connections reached").
@@ -335,7 +390,12 @@ impl Flow {
         self.t += dt;
         if let Some(end) = cache_end {
             // Any change counts, backwards too: a timestamp wrap is data.
-            if self.end.is_none_or(|last| (end - last).abs() > 0.01) {
+            // Except one seen with the end: that is the demuxer letting go
+            // of the packet it held back when the read failed, not data
+            // arriving (a stall's end on Windows moves the cache's end by a
+            // frame or two, measured with `ending_check`).
+            let flushed = eof && self.eof_at.is_none() && self.end.is_some();
+            if !flushed && self.end.is_none_or(|last| (end - last).abs() > 0.01) {
                 self.end = Some(end);
                 self.grew_at = Some(self.t);
                 self.room = fw_bytes.is_none_or(|b| b < FORWARD_FULL);
@@ -363,9 +423,11 @@ impl Flow {
 /// reconnecting is picking up where the viewer was; a catch-up programme
 /// would start again from its beginning. How sure that is, by evidence:
 ///
-/// - Its name did not resolve, the connection was refused, or there was no
-///   route: certain. No request reached the provider.
-/// - A timeout while connecting, a reset while connecting, a TLS failure:
+/// - Its name did not resolve, the connection was refused, there was no
+///   route, or the connection was otherwise never made (a timeout while
+///   connecting, which is also how Windows reports a refusal): certain. No
+///   request reached the provider.
+/// - A reset or a timeout on a connection that was made, a TLS failure:
 ///   near certain. These come from the socket before any stream was served.
 /// - A connection reset *mid-play* is not here at all, because it cannot be
 ///   seen: FFmpeg hands mpv a reset as an ordinary end of the stream, and
@@ -561,12 +623,14 @@ mod tests {
             "tcp: Failed to resolve hostname nowhere.invalid: Name or service not known",
             "tcp: Connection to tcp://127.0.0.1:1?timeout=8000000 failed: Connection refused",
             "Network is unreachable",
+            // Never connected, whatever the reason: no request was made.
+            "tcp: Connection to tcp://10.0.0.1:80 failed: Connection timed out",
         ] {
             let c = clues(&[line]);
             assert!(c.network && c.unreached, "{line}");
         }
         for line in [
-            "tcp: Connection to tcp://10.0.0.1:80 failed: Connection timed out",
+            "Connection timed out",
             "Connection reset by peer",
             "tls: Error in the pull function.",
             "error:0A00010B:SSL routines::wrong version number",
@@ -576,6 +640,41 @@ mod tests {
         }
         // A URL with "https" in it is not a TLS failure.
         assert!(!clues(&["Opening https://host/live/1.ts"]).network);
+    }
+
+    #[test]
+    fn windows_socket_errors_are_read_by_number_and_by_name() {
+        // A refused connection on Windows, as FFmpeg logs it there: its wait
+        // for the connection runs out (ETIMEDOUT is 138 in Windows' C
+        // runtime).
+        let c = clues(&["tcp: Connection to tcp://127.0.0.1:59807 failed: Error number -138 occurred"]);
+        assert!(c.network && c.unreached);
+        for line in [
+            "Error number -107 occurred",   // ECONNREFUSED
+            "Error number -118 occurred",   // ENETUNREACH
+            "Error number -10061 occurred", // WSAECONNREFUSED
+            "Error number -10065 occurred", // WSAEHOSTUNREACH
+            "No connection could be made because the target machine actively refused it.",
+            "A socket operation was attempted to an unreachable host.",
+            "tcp: Failed to resolve hostname nowhere.invalid: No such host is known.",
+        ] {
+            let c = clues(&[line]);
+            assert!(c.network && c.unreached, "{line}");
+        }
+        for line in [
+            "Error number -138 occurred",   // ETIMEDOUT, once connected
+            "Error number -108 occurred",   // ECONNRESET
+            "Error number -10054 occurred", // WSAECONNRESET
+            "An existing connection was forcibly closed by the remote host.",
+        ] {
+            let c = clues(&[line]);
+            assert!(c.network && !c.unreached, "{line}");
+        }
+        // Other numbers, and numbers that only begin like one, are not the
+        // network.
+        for line in ["Error number -5 occurred", "Error number -1380 occurred", "Error number -1 occurred"] {
+            assert!(!clues(&[line]).network, "{line}");
+        }
     }
 
     /// A stream's flow, a heartbeat at a time: data for `data` seconds, then
@@ -601,6 +700,28 @@ mod tests {
         assert!(!flow(30.0, 30.25, 90.0, true).stalled());
         // A full cache stops reading on purpose; quiet then is not a stall.
         assert!(!flow(30.0, 38.0, 40.0, false).stalled());
+    }
+
+    #[test]
+    fn the_packet_flushed_with_the_end_is_not_new_data() {
+        // A stall as Windows reports it: quiet from 1.92 for seven seconds,
+        // then the end read and the cache's end nudged forward with it.
+        let mut f = Flow::default();
+        for i in 0..20 {
+            f.observe(0.25, Some(1.0 + 0.05 * i as f64), false, Some(1));
+        }
+        for _ in 0..28 {
+            f.observe(0.25, Some(1.95), false, Some(0));
+        }
+        f.observe(0.25, Some(1.982), true, Some(0));
+        assert!(f.stalled());
+        // A provider closing a flowing stream still reads as closed.
+        let mut f = Flow::default();
+        for i in 0..20 {
+            f.observe(0.25, Some(1.0 + 0.05 * i as f64), false, Some(1));
+        }
+        f.observe(0.25, Some(2.1), true, Some(0));
+        assert!(!f.stalled());
     }
 
     #[test]

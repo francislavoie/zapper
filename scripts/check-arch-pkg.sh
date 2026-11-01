@@ -11,7 +11,8 @@
 #   - ldd finds every library of both programs (zapper, zapper-server) and of the libraries the
 #     package bundles;
 #   - the app starts headless (xvfb-run, as a normal user, muted, with a scratch home) and is
-#     still running after 20 s, without a missing library.
+#     still running after 20 s, without a missing library;
+#   - removing it (pacman -R) stops a running zapper-server (the .INSTALL's pre_remove).
 # The container is removed afterwards (--rm, and on interrupt); no other image or container is
 # touched.
 set -euo pipefail
@@ -72,5 +73,15 @@ tail -n 20 /tmp/run.log
 echo "exit status: $rc (124 = still running when the 20 s timeout stopped it)"
 grep -Ei "error while loading shared libraries|cannot open shared object" /tmp/run.log && fail "launch: missing library"
 [ "$rc" = 124 ] || fail "the app exited on its own (status $rc) within 20 s"
+step "removal stops a running zapper-server (.INSTALL pre_remove)"
+pacman -Qi zapper | grep -E "^Install Script +: Yes" || fail "the package has no install script"
+runuser -u tester -- env HOME=/home/tester ZAPPER_HOME=/home/tester/zapper-home \
+  /usr/bin/zapper-server --no-sync >/tmp/server.log 2>&1 &
+for _ in $(seq 50); do pgrep -f "^/usr/bin/zapper-server" >/dev/null && break; sleep 0.2; done
+pgrep -f "^/usr/bin/zapper-server" >/dev/null || { cat /tmp/server.log; fail "zapper-server did not start"; }
+pacman -R --noconfirm --noprogressbar zapper >/dev/null
+for _ in $(seq 25); do pgrep -f "^/usr/bin/zapper-server" >/dev/null || break; sleep 0.2; done
+pgrep -f "^/usr/bin/zapper-server" >/dev/null && fail "zapper-server still runs after pacman -R"
+echo "stopped by the removal"
 echo; echo "check-arch-pkg: OK"
 '

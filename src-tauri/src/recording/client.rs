@@ -10,7 +10,7 @@ use serde::de::DeserializeOwned;
 
 use super::api::{
     ErrorDto, NetworkDto, NetworkSettingsDto, PasswordRequest, RecordingDto, RecordingSettingsDto,
-    ScheduleRequest, StatusDto, VersionDto,
+    ScheduleRequest, ShutdownRequest, StatusDto, VersionDto,
 };
 
 pub struct Client {
@@ -85,6 +85,13 @@ impl Client {
 
     pub async fn status(&self) -> Result<StatusDto> {
         self.send(self.http.get(self.url("/api/status"))).await
+    }
+
+    /// Asks the service to stop, or restart, now or once it is idle. It
+    /// answers before it goes, with its status.
+    pub async fn shutdown(&self, req: &ShutdownRequest) -> Result<StatusDto> {
+        self.send(self.http.post(self.url("/api/shutdown")).json(req))
+            .await
     }
 
     pub async fn list(&self) -> Result<Vec<RecordingDto>> {

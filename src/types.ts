@@ -427,6 +427,9 @@ export type UpdateStateDto =
   | { state: "downloading"; release: UpdateReleaseDto; received: number; total: number }
   | { state: "ready"; release: UpdateReleaseDto }
   | { state: "installing"; release: UpdateReleaseDto }
+  /** Waiting for the recording service to finish before installing
+   *  (Windows); `until` is when it expects to, Unix seconds. */
+  | { state: "waitingForRecording"; release: UpdateReleaseDto; until: number | null }
   | { state: "installed"; release: UpdateReleaseDto }
   | { state: "failed"; message: string; release: UpdateReleaseDto | null };
 
@@ -443,11 +446,19 @@ export interface UpdateStatusDto {
 }
 
 /** What Install did. `manual`: zapper could not install it itself — the
- *  command to run, why, and the package manager's output when it ran. */
+ *  command to run, why, and the package manager's output when it ran.
+ *  `recording`: nothing yet, the recording service is recording and the
+ *  installer would stop it; ask, then install again with `now` or
+ *  `whenIdle`. `notNow`: that wait was cancelled. */
 export type InstallOutcomeDto =
   | { outcome: "installed" }
   | { outcome: "quitting" }
-  | { outcome: "manual"; command: string; reason: string; output: string | null };
+  | { outcome: "manual"; command: string; reason: string; output: string | null }
+  | { outcome: "recording"; until: number | null; title: string | null }
+  | { outcome: "notNow" };
+
+/** What Install may do about a recording in progress. */
+export type InstallWhen = "ask" | "now" | "whenIdle";
 
 /** A scrollback preview: what the picture looked like at a point in the
  *  buffer. `behindLive` is the moment it was actually taken, which is not
@@ -647,6 +658,8 @@ export interface ActiveRecordingDto {
   bytes: number;
   since: number;
   waiting?: string;
+  /** When it stops, padding included (Unix seconds). */
+  until: number;
 }
 
 export interface RecordingStatusDto {
@@ -657,16 +670,28 @@ export interface RecordingStatusDto {
   diskFree: number | null;
   diskTotal: number | null;
   now: number;
+  /** Nothing recording, nothing starting within five minutes. */
+  idle: boolean;
+  /** When it next will be idle, if it is not now. */
+  idleAt?: number;
+  /** The next padded start of a recording not yet begun. */
+  nextStart?: number;
 }
 
 export interface ServiceStatusDto {
   supported: boolean;
   unsupportedReason?: string;
+  /** What Install sets up, in words: "a systemd user service". */
+  kind?: string;
   installed: boolean;
-  /** systemd's word: active, inactive, failed… */
+  /** systemd's word (active, inactive, failed…), or Task Scheduler's in the
+   *  same spirit (running, stopped, disabled). */
   state?: string;
   /** Keeps running after logging out. */
   linger: boolean;
+  /** Whether keeping it running after logging out is offered here (not on
+   *  Windows, where the task runs while you are signed in). */
+  canLinger: boolean;
   binary?: string;
   /** Set when the service answered on its API. */
   version?: string;

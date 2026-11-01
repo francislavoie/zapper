@@ -10,6 +10,8 @@ fn main() {
     #[cfg(feature = "server")]
     remuxer(bundle.as_deref());
     let _ = bundle;
+    // Windows (MSVC) only; tauri-build does the same for the app.
+    static_vcruntime::metabuild();
 }
 
 /// zapper's own LGPL libmpv and FFmpeg: the archive `scripts/fetch-libmpv.sh` (or, on Windows,

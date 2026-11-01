@@ -1,0 +1,9 @@
+# The .rpm's %preun (tauri.conf.json, bundle.linux.rpm.preRemoveScript).
+#
+# $1 is how many copies remain once this one is gone: 0 on an erase, 1 on an
+# upgrade. On an erase, stops any running /usr/bin/zapper-server, as the .deb's
+# prerm does (packaging/linux/deb-prerm, which says why that is enough).
+if [ "$1" -eq 0 ]; then
+  pkill -TERM -f '^/usr/bin/zapper-server( |$)' 2>/dev/null || true
+fi
+exit 0
