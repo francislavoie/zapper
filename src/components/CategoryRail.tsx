@@ -18,7 +18,7 @@
 // them back, and picks a sort directly. What goes where is worked out in
 // logic/categoryOrder.ts; this component only draws it.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { OVERSCAN, ROW_HEIGHT, computeWindow } from "../logic/virtual";
 import {
   CATEGORY_SORTS,
@@ -115,6 +115,20 @@ export function CategoryRail() {
 
   const win = computeWindow(scrollTop, height, ROW_HEIGHT, rows.length, OVERSCAN);
 
+  // Whether the scrollbar is drawn over the rows rather than beside them.
+  // A classic scrollbar takes its width out of the box, so nothing can be
+  // under it; an overlay one (WebKitGTK under GTK's overlay scrolling, macOS)
+  // takes none, and lands on the pin and the count at the rows' right end.
+  // Measured rather than assumed per platform: the two differ by a desktop
+  // setting, and a scroller that does not scroll has no bar at all.
+  const [overlayBar, setOverlayBar] = useState(false);
+  useLayoutEffect(() => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    const scrolls = el.scrollHeight > el.clientHeight;
+    setOverlayBar(scrolls && el.offsetWidth - el.clientWidth === 0);
+  }, [height, rows.length]);
+
   const closeMenu = useCallback(() => dispatch({ type: "categoryMenu", menu: null }), [dispatch]);
   const closeOptions = useCallback(
     () => dispatch({ type: "categoryOptions", menu: null }),
@@ -199,7 +213,7 @@ export function CategoryRail() {
       </div>
 
       <div
-        className="scroller"
+        className={`scroller rail-scroller ${overlayBar ? "overlay-bar" : ""}`}
         ref={scrollerRef}
         onScroll={(e) => {
           const top = e.currentTarget.scrollTop;
@@ -346,10 +360,6 @@ export function CategoryRail() {
               {categoryHidden.includes(categoryMenu.id) ? "Unhide category" : "Hide category"}
             </span>
           </button>
-          <div className="tb-menu-foot">
-            Pinned categories stay above the rest. Hidden ones come back from the ▾ beside the
-            sort button.
-          </div>
         </ContextMenu>
       ) : null}
 

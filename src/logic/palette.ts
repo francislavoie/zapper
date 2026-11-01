@@ -7,6 +7,7 @@
 // Checked in src/__checks__/palette.test.mjs.
 
 import type { ChannelDto, ProgrammeHitDto } from "../types";
+import { anyAlternative } from "./searchQuery.ts";
 import type { SleepRequest } from "./sleep";
 
 /** Where an action sits when the list is drawn as a menu rather than filtered
@@ -194,14 +195,16 @@ export function availableActions(
  *  the haystack: "sync" is what someone types looking for "Refresh data from
  *  the provider", and the word is right there on the row. */
 export function actionMatches(label: string, query: string, hint = ""): boolean {
-  const q = query.trim().toLowerCase();
-  if (q === "") return true;
   const h = `${label} ${hint}`.toLowerCase();
-  let i = 0;
-  for (let j = 0; j < h.length && i < q.length; j++) {
-    if (h[j] === q[i]) i++;
-  }
-  return i === q.length;
+  // Alternatives (`sleep|stop`) as the channel search reads them.
+  return anyAlternative(query, (alt) => {
+    const q = alt.toLowerCase();
+    let i = 0;
+    for (let j = 0; j < h.length && i < q.length; j++) {
+      if (h[j] === q[i]) i++;
+    }
+    return i === q.length;
+  });
 }
 
 export function filterActions(

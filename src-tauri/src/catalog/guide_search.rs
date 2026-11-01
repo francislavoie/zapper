@@ -43,7 +43,8 @@
 use anyhow::{Context, Result};
 use rusqlite::Connection;
 
-use crate::catalog::store::{channel_from_row, CHANNEL_COLUMNS};
+use crate::catalog::search::alternatives;
+use crate::catalog::store::{channel_from_row, CHANNEL_COLUMNS, CHANNEL_COLUMN_COUNT, QUALITY_JOIN};
 use crate::ipc::types::{AiringDto, ProgrammeDto, ProgrammeHitDto};
 
 /// The index and what keeps it, created together or not at all.
@@ -169,22 +170,38 @@ pub fn rebuild(conn: &Connection) -> Result<()> {
 }
 
 /// What someone typed, as an FTS5 query: each word a quoted prefix term, all
-/// of them required. `None` when there is no word in it at all.
+/// of them required — and, where the query offers alternatives (`a|b`, see
+/// [`crate::catalog::search`]), each alternative's words so, any one
+/// alternative enough. `None` when there is no word in it at all.
 ///
 /// Split on anything that is not a letter or digit, which is how the
 /// tokenizer splits titles, so "grey's" asks for "grey" and "s" just as the
 /// title "Grey's Anatomy" was indexed. Quoting every term keeps FTS5's own
-/// syntax — `AND`, `NEAR`, `-`, `:` — from being read out of a title search.
+/// syntax — `AND`, `NEAR`, `-`, `:` — from being read out of a title search;
+/// the only operators in the expression are the `OR`s written here, between
+/// parenthesised groups of quoted terms.
 pub fn match_expression(input: &str) -> Option<String> {
-    let terms: Vec<String> = input
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|w| !w.is_empty())
-        .map(|w| format!("\"{w}\"*"))
+    let groups: Vec<String> = alternatives(input)
+        .into_iter()
+        .filter_map(|alt| {
+            let terms: Vec<String> = alt
+                .split(|c: char| !c.is_alphanumeric())
+                .filter(|w| !w.is_empty())
+                .map(|w| format!("\"{w}\"*"))
+                .collect();
+            (!terms.is_empty()).then(|| terms.join(" "))
+        })
         .collect();
-    if terms.is_empty() {
-        None
-    } else {
-        Some(terms.join(" "))
+    match groups.len() {
+        0 => None,
+        1 => groups.into_iter().next(),
+        _ => Some(
+            groups
+                .iter()
+                .map(|g| format!("({g})"))
+                .collect::<Vec<_>>()
+                .join(" OR "),
+        ),
     }
 }
 
@@ -236,7 +253,7 @@ pub fn search(
          SELECT {CHANNEL_COLUMNS}, p.start, p.stop, p.title, p.description, p.tier
          FROM placed p
          JOIN channels ch ON ch.stream_id = p.sid
-         LEFT JOIN quality q ON q.stream_id = ch.stream_id
+         {QUALITY_JOIN}
          WHERE p.pick = 1
          ORDER BY p.tier,
                   CASE WHEN p.tier = 1 THEN p.start ELSE -p.start END,
@@ -248,13 +265,14 @@ pub fn search(
         rusqlite::params![expr, at, i64::from(limit), i64::from(offset)],
         |row| {
             let mut channel = channel_from_row(row)?;
+            let at = CHANNEL_COLUMN_COUNT;
             let programme = ProgrammeDto {
-                start: row.get(18)?,
-                stop: row.get(19)?,
-                title: row.get(20)?,
-                description: row.get(21)?,
+                start: row.get(at)?,
+                stop: row.get(at + 1)?,
+                title: row.get(at + 2)?,
+                description: row.get(at + 3)?,
             };
-            let airing = match row.get::<_, i64>(22)? {
+            let airing = match row.get::<_, i64>(at + 4)? {
                 0 => AiringDto::Live,
                 1 => AiringDto::Upcoming,
                 _ => AiringDto::Catchup,
@@ -343,6 +361,32 @@ mod tests {
         );
         assert_eq!(match_expression("  -- ' "), None);
         assert_eq!(match_expression(""), None);
+    }
+
+    #[test]
+    fn alternatives_become_parenthesised_ors() {
+        assert_eq!(
+            match_expression("news|weather").as_deref(),
+            Some(r#"("news"*) OR ("weather"*)"#)
+        );
+        assert_eq!(
+            match_expression("news | weather uk").as_deref(),
+            Some(r#"("news"*) OR ("weather"* "uk"*)"#)
+        );
+        // An alternative with no word in it is no alternative.
+        assert_eq!(match_expression("|news|' |").as_deref(), Some(r#""news"*"#));
+        assert_eq!(match_expression("| -- |"), None);
+    }
+
+    #[test]
+    fn either_title_is_found_and_each_airing_once() {
+        let c = db();
+        let both = hits(&c, "cafe|grey");
+        assert_eq!(both.len(), 2, "{both:?}");
+        // Words within one side still all have to match.
+        assert_eq!(hits(&c, "cafe nothing|grey").len(), 1);
+        // A title matching both sides is one hit, not two.
+        assert_eq!(hits(&c, "harbour|lights").len(), hits(&c, "harbour").len());
     }
 
     #[test]

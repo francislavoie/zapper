@@ -210,6 +210,42 @@ pub fn classify(how: How, shown: bool, clues: Clues) -> Ending {
     }
 }
 
+/// Whether a live channel that never showed a picture failed through a
+/// fault of its own — and if so, why, in a few words for the channel list.
+///
+/// The list dims channels that do not load, so this has to be the channel's
+/// fault and not the account's or the network's, or one bad evening would
+/// dim half the catalogue:
+///
+/// - **Counted**: a refusal of this channel (401, 403 and the like), the
+///   server saying it is not there (404, 410), an answer that is not video,
+///   no picture before the deadline, and a failure mpv could not explain.
+/// - **Not counted**: anything that names or implies the connection limit
+///   (a phrase about connections, 429, 509) — another device has the
+///   account, which says nothing about the channel; the network; a server
+///   error (5xx), which is the server's bad minute, and which is also how an
+///   HDHomeRun says its tuners are busy; and of course a stream that played
+///   and was then taken away.
+///
+/// Only meaningful for an open that never showed a frame; the caller checks
+/// that, since an ending does not record it. `error` is mpv's reason in
+/// words, for the unexplained case.
+pub fn against_channel(e: &Ending, error: Option<&str>) -> Option<String> {
+    let http = |what: &str| match e.status {
+        Some(s) => format!("{what} (HTTP {s})"),
+        None => what.to_owned(),
+    };
+    match e.kind {
+        EndingKind::Refused if e.limit || matches!(e.status, Some(429 | 509)) => None,
+        EndingKind::Refused => Some(http("refused by the provider")),
+        EndingKind::Unavailable => Some(http("not on the server")),
+        EndingKind::NotVideo => Some("the server answered with something that is not video".to_owned()),
+        EndingKind::NoVideo => Some("no picture arrived".to_owned()),
+        EndingKind::Other => Some(error.unwrap_or("it could not be played").to_owned()),
+        EndingKind::Dropped | EndingKind::ServerError | EndingKind::Network => None,
+    }
+}
+
 /// mpv's error codes in words, for the line under the message. mpv's own
 /// rendering of these through libmpv2 is `Raw(-13)`.
 pub fn error_text(code: i32) -> String {
@@ -351,6 +387,35 @@ mod tests {
     fn a_success_status_is_not_a_refusal() {
         let c = Clues { status: Some(200), ..Default::default() };
         assert_eq!(classify(How::Eof, true, c).kind, EndingKind::Dropped);
+    }
+
+    #[test]
+    fn only_the_channels_own_failures_count_against_it() {
+        let end = |kind, status, limit| Ending { kind, status, limit };
+        let counted = |e: Ending| against_channel(&e, Some("the stream could not be opened"));
+        assert_eq!(
+            counted(end(EndingKind::Refused, Some(403), false)).as_deref(),
+            Some("refused by the provider (HTTP 403)")
+        );
+        assert_eq!(
+            counted(end(EndingKind::Unavailable, Some(404), false)).as_deref(),
+            Some("not on the server (HTTP 404)")
+        );
+        assert!(counted(end(EndingKind::NotVideo, None, false)).is_some());
+        assert!(counted(end(EndingKind::NoVideo, None, false)).is_some());
+        assert_eq!(
+            counted(end(EndingKind::Other, None, false)).as_deref(),
+            Some("the stream could not be opened")
+        );
+        // The account's limit, however it is said, is not the channel.
+        assert_eq!(counted(end(EndingKind::Refused, Some(403), true)), None);
+        assert_eq!(counted(end(EndingKind::Refused, Some(509), false)), None);
+        assert_eq!(counted(end(EndingKind::Refused, Some(429), false)), None);
+        assert_eq!(counted(end(EndingKind::Refused, None, true)), None);
+        // Nor the network, a server's bad minute, or a takeover mid-play.
+        assert_eq!(counted(end(EndingKind::Network, None, false)), None);
+        assert_eq!(counted(end(EndingKind::ServerError, Some(503), false)), None);
+        assert_eq!(counted(end(EndingKind::Dropped, None, false)), None);
     }
 
     #[test]

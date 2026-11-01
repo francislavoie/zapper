@@ -4,21 +4,17 @@
 
 <h1 align="center">zapper</h1>
 
-<p align="center">A fast, keyboard-friendly live TV player for IPTV, HDHomeRun and Tvheadend.</p>
+<p align="center">A desktop player for live TV from IPTV services, HDHomeRun tuners and Tvheadend.</p>
 
 ---
 
-zapper is a desktop player for live television. Point it at an Xtream Codes server, an M3U
-playlist, an HDHomeRun tuner or a Tvheadend server, and it mirrors the whole channel list and
-guide locally, so browsing tens of thousands of channels is instant and never interrupts what
-you're watching.
-
-It's named for what it's meant to be good at: zapping. Changing channel should feel immediate,
-browsing should leave the picture playing, and opening the app shouldn't mean waiting on a sync.
+zapper is a desktop player for live TV from Xtream Codes servers, M3U playlists with XMLTV
+guides, HDHomeRun tuners and Tvheadend servers. It keeps a local copy of the channel list and
+guide, so browsing and searching don't wait on the network, and the current channel keeps
+playing in a corner while you browse.
 
 It's built with a Rust core, a React interface and [Tauri](https://tauri.app/), with
-[mpv](https://mpv.io/) (libmpv) doing the playback, drawn straight beneath the window rather than
-through the browser engine.
+[mpv](https://mpv.io/) (libmpv) for playback.
 
 ![zapper's browse view: a football match playing in the picture at the top right, the playing channel's now and next programmes beside it, and below, the category list on the left with the guide's timeline of what's on across the sports channels](docs/images/screenshot.webp)
 
@@ -41,73 +37,69 @@ Download the package for your system from the
 - **Debian and Ubuntu:** `sudo apt install ./zapper_<version>_amd64.deb`
 - **Fedora:** `sudo dnf install ./zapper-<version>-1.x86_64.rpm`
 
-zapper uses your distribution's libmpv and WebKitGTK, which the package pulls in. `SHA256SUMS` in
-each release lists the files' checksums. After that, zapper updates itself (see
+`SHA256SUMS` in each release lists the files' checksums. After that, zapper updates itself (see
 [Updates](#updates)).
 
 ## Features
 
 ### Sources
 
-- **Xtream Codes** servers: a URL, username and password. Live channels, categories, the guide,
-  and catch-up on channels that have an archive.
-- **M3U playlists** from a URL or a file, with one or more **XMLTV** guides. Catch-up through the
-  playlist's `catchup` attributes.
-- **HDHomeRun** tuners, found by address. Channels come from the tuner's lineup, the guide from
-  SiliconDust's or your own XMLTV, and subchannels read as `5.1`. A busy tuner says so.
-- **Tvheadend** servers, with or without a login. Categories come from its channel tags, the
-  guide from its XMLTV export.
+- Xtream Codes: server URL, username and password. Live channels, categories, guide, and
+  catch-up on channels that have an archive.
+- M3U playlists from a URL or a file, with one or more XMLTV guides. Catch-up from the playlist's
+  `catchup` attributes.
+- HDHomeRun tuners by address. Channels from the tuner's lineup, guide from SiliconDust or your
+  own XMLTV; subchannels shown as `5.1`.
+- Tvheadend servers, with or without a login. Categories from its channel tags, guide from its
+  XMLTV export.
+- Settings, favourites and category choices can be exported to a file and imported again.
 
 ### Browsing
 
-- **The whole catalogue, locally.** Every channel and the guide are mirrored into SQLite and
-  refreshed in the background. Startup shows the last mirror at once, without waiting on the
-  network.
-- **Instant search** across every channel name, from the filter box, `/`, or the command palette.
-- **Programme search.** The same box finds shows in the guide: what is on now, every airing
-  coming up, and what a catch-up archive can still play. Pick one to tune in, open the guide on
-  it, or play it from the archive.
-- **List and guide.** Switch with `G`. The guide glides through time with the wheel
-  (`Shift`+wheel), a scrollbar, or an hour at a time with `←`/`→`, and `Home` brings it back to
-  now.
-- **Categories your way.** Pin them to the top, hide the ones you never watch, and sort the rest
-  by the provider's order, A–Z or size. The rail folds away when you want the room.
-- **Favourites**, in their own tab.
-- **Browse without stopping.** The picture stays docked, with its own controls, while you look
-  for the next thing to watch.
-- **Command palette** (`Ctrl+P`) with every action and channel search; every shortcut is listed in
-  Settings › Keyboard.
+- The channel list and guide are stored locally in SQLite and refreshed in the background.
+- Channel search from the filter box, `/` or the command palette, with results grouped by
+  category. `a|b` matches either term.
+- Programme search: finds airings in the guide that are on now, coming up, or still available on
+  catch-up. Opening one tunes in, jumps the guide to it, or plays it from catch-up.
+- List and guide views (`G`). The guide scrolls through time with Shift+wheel, its scrollbar, or
+  an hour at a time with `←`/`→`; `Home` returns to now.
+- Categories can be pinned, hidden, and sorted by the provider's order, name or size.
+- Favourites tab.
+- Each channel's last measured resolution, frame rate and codec is shown in the list; channels
+  that failed to load are dimmed, with the reason.
+- The playing channel stays in a docked picture with its own controls while you browse.
+- Command palette (`Ctrl+P`) with every action. Shortcuts are listed in Settings › Keyboard.
 
 ### Playback
 
 ![The player filling the window: the channel name and programme at the top left, and along the bottom the transport bar with the scrollback timeline, pause, stop, volume, skip back and forward, and the Live marker](docs/images/screenshot-player.webp)
 
-- **libmpv** with hardware decoding (VA-API on Linux, frames kept on the GPU), HEVC, and HDR
-  tone-mapped to your display.
-- **Quick tune-in.** Playback starts a few seconds behind live, so a stream that hiccups doesn't
-  stall, and catches up once the server's opening burst has arrived.
-- **Rewind live TV.** A timeshift buffer whose size you set in megabytes (Settings shows roughly
-  how many minutes that buys), skip back and forward 5 seconds, and `L` to jump to live.
-- **Catch-up** on channels whose source offers an archive.
-- **Volume that sounds right.** The slider follows perceived loudness rather than raw gain, goes
-  up to 200% for quiet channels, and is remembered between launches.
-- **Dynamic range compressor** that evens out loud adverts and quiet dialogue, toggled instantly.
-- **Subtitles** styled your way: font, size, colour and backdrop, with a live preview.
-- **On the picture:** wheel for volume, double-click the middle for fullscreen, double-click
-  either edge to skip. Theater mode (`T`) fills the window with the picture.
-- **Stats for nerds** (`S`): bitrate, buffer, resolution, codec, and dropped frames and stalls
-  on one graph, with the value under the pointer.
+- libmpv with hardware decoding (VA-API on Linux) and HDR tone-mapping.
+- Live rewind buffer, sized in megabytes; Settings shows roughly how many minutes it holds.
+  Skip 5 seconds back or forward, `L` to jump to live.
+- Catch-up on channels whose source has an archive.
+- `P` switches to the previous channel; typing a channel number tunes it.
+- Volume up to 200%, on a perceptual scale, remembered between launches.
+- A compressor that evens out loud and quiet audio.
+- Right-click menu on the picture: audio track, subtitles, aspect ratio, deinterlacing, sleep
+  timer.
+- Subtitle font, size, colour and backdrop.
+- Mouse: wheel for volume, double-click for fullscreen, double-click the edges to skip.
+  Theater mode (`T`).
+- Stats (`S`): bitrate, buffer, resolution, codec, dropped frames and stalls.
+- When a provider ends or refuses a stream (for example because another device took the
+  connection), zapper says so and doesn't reconnect on its own.
+- Optional media keys and desktop media controls (MPRIS on Linux), off by default.
 
-### The app
+### Other
 
-- **Picks up where you left off:** the last channel, the window's size, the volume.
-- **App zoom** (`Ctrl` `+`/`−`/`0`) that scales the whole interface, video placement included.
-- **Updates itself** from GitHub releases, each download checked against the release's checksums.
-- **Your credentials stay yours.** They're stored in your config directory, readable only by you,
-  and redacted from logs.
-- **No telemetry.** Apart from your own sources, the only request zapper makes on its own is the
-  daily update check, which you can turn off.
-- **Free and MIT licensed.**
+- Restores the last channel, window size and volume on launch.
+- Interface zoom (`Ctrl` `+`/`−`/`0`); 12- or 24-hour clock.
+- Updates itself from GitHub releases, verified against the release's checksums.
+- Credentials are stored in your config directory, readable only by you, and kept out of logs.
+- No telemetry. Apart from your sources, the only request zapper makes is the daily update
+  check, which can be turned off.
+- MIT licensed.
 
 ## Performance
 

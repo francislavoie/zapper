@@ -3,9 +3,27 @@
 //! Deliberately not SQLite FTS5: full-text search does token and prefix
 //! matching, which cannot satisfy a picker where "northwindone" should find
 //! "NORTHWIND ONE". Tens of thousands of names is a few MB held resident.
+//!
+//! A query can offer alternatives, separated by `|`: `news|weather` finds
+//! either. The pipe binds loosest, so each alternative is a whole query of
+//! its own and its words must all match: `news|weather uk` is "news", or
+//! "weather" and "uk" together. That is the reading of someone listing the
+//! things they would take — and it lets an alternative be narrowed on its
+//! own, which the other precedence cannot say at all. Programme search reads
+//! the same syntax ([`alternatives`] serves both).
 
 use nucleo::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo::Matcher;
+
+/// The alternatives in a query: split on `|`, trimmed, empty ones dropped.
+/// Empty when there is nothing to look for, pipes or not.
+pub fn alternatives(input: &str) -> Vec<&str> {
+    input
+        .split('|')
+        .map(str::trim)
+        .filter(|a| !a.is_empty())
+        .collect()
+}
 
 pub struct SearchIndex {
     entries: Vec<(i64, String)>,
@@ -29,19 +47,31 @@ impl SearchIndex {
     }
 
     /// Returns ids ranked best-first, at most `limit`.
+    ///
+    /// A name matching several alternatives ranks by its best one: the
+    /// alternatives are separate questions, and a name answering two of them
+    /// is no better an answer to either.
     pub fn query(&self, needle: &str, limit: usize) -> Vec<i64> {
-        if needle.trim().is_empty() {
+        let alts = alternatives(needle);
+        if alts.is_empty() {
             return self.entries.iter().take(limit).map(|(id, _)| *id).collect();
         }
-        let pattern = Pattern::parse(needle, CaseMatching::Ignore, Normalization::Smart);
+        let patterns: Vec<Pattern> = alts
+            .iter()
+            .map(|a| Pattern::parse(a, CaseMatching::Ignore, Normalization::Smart))
+            .collect();
         let mut m = self.matcher.borrow_mut();
+        let mut buf = Vec::new();
         let mut scored: Vec<(u32, i64)> = self
             .entries
             .iter()
             .filter_map(|(id, name)| {
-                let mut buf = Vec::new();
                 let hay = nucleo::Utf32Str::new(name, &mut buf);
-                pattern.score(hay, &mut m).map(|s| (s, *id))
+                patterns
+                    .iter()
+                    .filter_map(|p| p.score(hay, &mut m))
+                    .max()
+                    .map(|s| (s, *id))
             })
             .collect();
         scored.sort_by_key(|a| std::cmp::Reverse(a.0));
@@ -88,5 +118,44 @@ mod tests {
     #[test]
     fn no_match_returns_empty() {
         assert!(idx().query("zzzzzz", 10).is_empty());
+    }
+
+    fn sorted(mut v: Vec<i64>) -> Vec<i64> {
+        v.sort_unstable();
+        v
+    }
+
+    #[test]
+    fn a_pipe_matches_either_side() {
+        assert_eq!(sorted(idx().query("chronicle|harbour", 10)), vec![4, 5]);
+        // Spaces around the pipe are not part of either side.
+        assert_eq!(sorted(idx().query("chronicle | harbour", 10)), vec![4, 5]);
+    }
+
+    #[test]
+    fn words_within_an_alternative_must_all_match() {
+        // "prism 2", or "harbour": not every PRISM.
+        assert_eq!(sorted(idx().query("harbour|prism 2", 10)), vec![2, 4]);
+        // "uk" alone would find nothing to add; with "prism" it is one
+        // alternative needing both, which nothing satisfies.
+        assert_eq!(idx().query("zzz|prism uk", 10), Vec::<i64>::new());
+    }
+
+    #[test]
+    fn a_name_matching_both_sides_appears_once() {
+        assert_eq!(idx().query("prism 1|ca prism 1", 10), vec![1]);
+    }
+
+    #[test]
+    fn empty_alternatives_are_ignored() {
+        assert_eq!(idx().query("|chronicle|", 10), vec![5]);
+        assert_eq!(idx().query(" | ", 10).len(), 5, "only pipes is no query");
+    }
+
+    #[test]
+    fn alternatives_split_and_trim() {
+        assert_eq!(alternatives("news|weather"), vec!["news", "weather"]);
+        assert_eq!(alternatives(" news | weather uk |"), vec!["news", "weather uk"]);
+        assert!(alternatives("||").is_empty());
     }
 }

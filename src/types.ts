@@ -8,14 +8,36 @@ export interface CategoryDto {
   channelCount: number;
 }
 
+/** What playing a channel has shown about it, remembered across restarts
+ *  and resyncs. Measured fields are null until a play got far enough to
+ *  measure them; a channel that has only ever failed has nothing measured. */
 export interface QualityDto {
+  /** mpv's `video-format`: "h264", "hevc", "mpeg2video". */
   codec: string | null;
   width: number | null;
   height: number | null;
   fps: number | null;
+  /** Fields rather than frames; null when it could not be told. */
+  interlaced: boolean | null;
   isHdr: boolean;
+  /** mpv's `audio-codec-name`: "aac", "ac3", "eac3", "mp2". */
+  audioCodec: string | null;
+  audioChannels: number | null;
+  /** Unix seconds of the last measurement: "last checked". */
+  measuredAt: number | null;
   okCount: number;
   failCount: number;
+  /** Unix seconds of the last genuine failure to load, cleared by the next
+   *  play that shows a picture. Such a channel is drawn dimmed. */
+  failedAt: number | null;
+  /** Why, in words. */
+  failReason: string | null;
+}
+
+/** A channel's record after playing it added to it. */
+export interface ChannelQualityDto {
+  streamId: number;
+  quality: QualityDto | null;
 }
 
 export interface ProgrammeDto {
@@ -307,6 +329,7 @@ export const EVENTS = {
   playerOptions: "zapper://player-options",
   update: "zapper://update",
   mediaKey: "zapper://media-key",
+  channelQuality: "zapper://channel-quality",
 } as const;
 
 /** A release the update dialog can show. Mirrors `UpdateReleaseDto`. */

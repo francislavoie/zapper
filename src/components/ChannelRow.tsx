@@ -4,7 +4,14 @@
 // errors and none of them get a warning.
 
 import { memo } from "react";
-import { hhmm, looksBroken, qualityBadge } from "../logic/format";
+import {
+  failedTip,
+  failedToLoad,
+  hhmm,
+  looksBroken,
+  qualityBadge,
+  qualityDetail,
+} from "../logic/format";
 import { ROW_HEIGHT } from "../logic/virtual";
 import type { ChannelDto } from "../types";
 import { Logo } from "./Logo";
@@ -44,11 +51,18 @@ export const ChannelRow = memo(function ChannelRow({
 
   const badge = qualityBadge(channel.quality);
   const now = channel.nowPlaying;
+  // Read at render, not on a clock: "3h ago" in a tooltip is close enough
+  // until the row next renders, and a timer per row would be a strobe.
+  const nowSec = Date.now() / 1000;
+  // Dimmed, never hidden: a channel that failed last night may well play
+  // now, and the only way to find out is to be able to try it.
+  const failed = failedToLoad(channel.quality);
 
   return (
     <button
-      className={`row ${selected ? "sel" : ""} ${pending ? "pending" : ""}`}
+      className={`row ${selected ? "sel" : ""} ${pending ? "pending" : ""} ${failed ? "failed" : ""}`}
       style={style}
+      data-tip={failedTip(channel.quality, nowSec) ?? undefined}
       onClick={() => onPlay(channel)}
       onDoubleClick={() => onOpenFull(channel)}
     >
@@ -77,8 +91,13 @@ export const ChannelRow = memo(function ChannelRow({
           !
         </span>
       ) : null}
-      {/* No badge at all when quality is null: unknown is not bad. */}
-      {badge ? <span className="badge">{badge}</span> : null}
+      {/* No badge at all when quality is null: unknown is not bad. Its tip
+          is everything measured, and when. */}
+      {badge ? (
+        <span className="badge" data-tip={qualityDetail(channel.quality, nowSec) || undefined}>
+          {badge}
+        </span>
+      ) : null}
     </button>
   );
 });

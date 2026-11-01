@@ -5,9 +5,18 @@
 // `api` verbatim; under `vite dev` in a plain browser it is `src/mock.ts`, so
 // the UI can be run and looked at without mpv or the Rust side.
 
-import { api, onMediaKey, onPlayerOptions, onPlayerState, onSyncStatus, onUpdate } from "./api";
+import {
+  api,
+  onChannelQuality,
+  onMediaKey,
+  onPlayerOptions,
+  onPlayerState,
+  onSyncStatus,
+  onUpdate,
+} from "./api";
 import {
   mockBackend,
+  onMockChannelQuality,
   onMockMediaKey,
   onMockPlayerOptions,
   onMockPlayerState,
@@ -15,6 +24,7 @@ import {
   onMockUpdate,
 } from "./mock";
 import type {
+  ChannelQualityDto,
   MediaKey,
   PlayerOptionsDto,
   PlayerStateDto,
@@ -48,3 +58,6 @@ export const subscribeUpdate = (f: (s: UpdateStatusDto) => void): Promise<Unsub>
 
 export const subscribeMediaKey = (f: (k: MediaKey) => void): Promise<Unsub> =>
   inTauri ? onMediaKey(f) : onMockMediaKey(f);
+
+export const subscribeChannelQuality = (f: (q: ChannelQualityDto) => void): Promise<Unsub> =>
+  inTauri ? onChannelQuality(f) : onMockChannelQuality(f);

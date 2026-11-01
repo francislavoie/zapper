@@ -1,7 +1,7 @@
 //! Writing a playlist into the mirror, and reading back what playback needs.
 //!
 //! The same diffing rules as [`crate::catalog::sync`] — upsert, never
-//! truncate, soft-delete what vanished — because `quality` and `activity` are
+//! truncate, soft-delete what vanished — because `channel_quality` and `activity` are
 //! keyed on `stream_id` whichever kind of account produced it. The difference
 //! is shape: an Xtream server hands over a parsed list, and a playlist is a
 //! stream of tens of megabytes that is written as it is read, one entry at a

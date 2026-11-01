@@ -5,7 +5,7 @@
 // window exists. Windowing arithmetic lives in logic/virtual.ts and is
 // checked there; this file is the wiring.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { playChannel } from "../actions";
 import { backend } from "../backend";
 import { registerZapList, type ZapList } from "../mediaKeys";
@@ -18,6 +18,8 @@ import { loadSession, saveSession } from "../session";
 import { ALL_CATEGORIES, useApp, useDispatch } from "../store";
 import type { Async } from "../logic/async";
 import type { SearchTab } from "../logic/programmes";
+import { SEARCH_PLACEHOLDER } from "../logic/searchQuery";
+import { categoryNames, groupByCategory } from "../logic/searchGroups";
 import type { ChannelDto } from "../types";
 import { ChannelRow } from "./ChannelRow";
 import { ViewSwitch } from "./ViewSwitch";
@@ -72,7 +74,17 @@ export function ChannelList() {
   // `/` and Ctrl+P run through the same backend index; the difference is only
   // where the results are shown.
   const results = useSearch(state.query, SEARCH_LIMIT);
-  const source: RowSource = searching ? asSource(results) : paged;
+  const names = useMemo(
+    () => categoryNames(state.categories.status === "ready" ? state.categories.data : []),
+    [state.categories],
+  );
+  // Under their categories, since a name alone does not say where a channel
+  // is; see logic/searchGroups.
+  const grouped = useMemo(() => asSource(results, names), [results, names]);
+  const source: RowSource = searching ? grouped : paged;
+  /** Channels, not rows: a search's headings are not results. */
+  const channelCount =
+    searching && results.status === "ready" ? results.data.length : source.total;
   // Both kinds are searched together, so each tab can say how much it has
   // before it is chosen. Which one is showing outlives the query: someone
   // looking for programmes types one search after another.
@@ -188,10 +200,15 @@ export function ChannelList() {
       rows.push(<div className="row" key={`gap-${i}`} style={{ top, height: ROW_HEIGHT }} />);
       continue;
     }
+    // What playing it has since added to its record, over what the page
+    // was fetched with. A new object only for the few rows that have news,
+    // so the rest keep their memoised render.
+    const news = state.qualityNews;
+    const shown = c.streamId in news ? { ...c, quality: news[c.streamId] } : c;
     rows.push(
       <ChannelRow
         key={c.streamId}
-        channel={c}
+        channel={shown}
         top={top}
         selected={state.player.streamId === c.streamId}
         pending={state.pendingStreamId === c.streamId}
@@ -209,7 +226,7 @@ export function ChannelList() {
           rail's filter box, so the two inputs sit on one line. */}
       <ListHead
         heading={searching ? "Search results" : categoryName}
-        total={showingProgrammes ? programmeCount : source.total}
+        total={showingProgrammes ? programmeCount : channelCount}
         more={showingProgrammes && programmes.hasMore}
         loading={showingProgrammes ? programmes.result.status === "loading" : source.loading}
         railCollapsed={state.railCollapsed}
@@ -218,7 +235,7 @@ export function ChannelList() {
         <SearchField
           className="list-search"
           inputRef={registerSearchInput}
-          placeholder="Search channels    /"
+          placeholder={SEARCH_PLACEHOLDER}
           value={state.query}
           onChange={(text) => dispatch({ type: "query", text })}
           clearLabel="Clear search"
@@ -227,7 +244,7 @@ export function ChannelList() {
           <SearchKind
             tab={tab}
             onTab={setTab}
-            channels={source.total}
+            channels={channelCount}
             programmes={programmeCount}
             moreProgrammes={programmes.hasMore}
           />
@@ -371,9 +388,10 @@ function SearchKind({
   );
 }
 
-/** Search results are a plain array — no paging, the backend caps the count. */
-function asSource(r: Async<ChannelDto[]>): RowSource {
-  const data = r.status === "ready" ? r.data : [];
+/** Search results are a plain array — no paging, the backend caps the count —
+ *  regrouped under a heading per category. */
+function asSource(r: Async<ChannelDto[]>, names: ReadonlyMap<string, string>): RowSource {
+  const data = r.status === "ready" ? groupByCategory(r.data, names) : [];
   return {
     total: data.length,
     rowAt: (i) => data[i],

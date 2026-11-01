@@ -8,23 +8,38 @@ use anyhow::Result;
 use rusqlite::{Connection, Row};
 use std::collections::HashMap;
 
+use crate::catalog::origin::current_origin_sql;
 use crate::ipc::types::{
     ActivityRowDto, CategoryDto, ChannelDto, FavouriteDto, GuideRowDto, ProgrammeDto, QualityDto,
 };
 
 /// The channel columns every listing selects, in the order
-/// [`channel_from_row`] expects. Kept in one place so the two callers cannot
-/// drift out of step with the mapper.
+/// [`channel_from_row`] expects. Kept in one place so the callers cannot
+/// drift out of step with the mapper. Selected from `channels ch`
+/// [`QUALITY_JOIN`]; a caller's own columns follow, from index
+/// [`CHANNEL_COLUMN_COUNT`].
 pub(crate) const CHANNEL_COLUMNS: &str = "ch.stream_id, ch.name, ch.clean_name, ch.num, ch.logo_url,
      ch.category_id, ch.has_archive, ch.archive_days, ch.is_separator,
      q.stream_id, q.codec, q.width, q.height, q.fps, q.is_hdr, q.ok_count, q.fail_count,
-     ch.num_label";
+     ch.num_label,
+     q.interlaced, q.audio_codec, q.audio_channels, q.measured_at, q.failed_at, q.fail_reason";
+
+/// How many columns [`CHANNEL_COLUMNS`] is.
+pub(crate) const CHANNEL_COLUMN_COUNT: usize = 24;
+
+/// What has been learnt about each channel by playing it, for this
+/// catalogue only: the readings are keyed on the account as well as the
+/// channel, see `channel_quality` in [`crate::catalog::schema`].
+pub(crate) const QUALITY_JOIN: &str = concat!(
+    "LEFT JOIN channel_quality q ON q.stream_id = ch.stream_id AND q.origin = ",
+    current_origin_sql!()
+);
 
 pub(crate) fn channel_from_row(row: &Row) -> rusqlite::Result<ChannelDto> {
-    // A missing `quality` row is the normal case, not an error: most of a
-    // large catalogue will never be opened, and unknown is not the same as
-    // bad. The left-joined primary key is the only honest presence test, since
-    // every other quality column is itself nullable.
+    // A missing row is the normal case, not an error: most of a large
+    // catalogue will never be opened, and unknown is not the same as bad.
+    // The left-joined key is the only honest presence test, since every
+    // other column of it is itself nullable.
     let quality = match row.get::<_, Option<i64>>(9)? {
         None => None,
         Some(_) => Some(QualityDto {
@@ -32,9 +47,15 @@ pub(crate) fn channel_from_row(row: &Row) -> rusqlite::Result<ChannelDto> {
             width: row.get(11)?,
             height: row.get(12)?,
             fps: row.get(13)?,
+            interlaced: row.get::<_, Option<i64>>(18)?.map(|v| v != 0),
             is_hdr: row.get::<_, i64>(14)? != 0,
+            audio_codec: row.get(19)?,
+            audio_channels: row.get(20)?,
+            measured_at: row.get(21)?,
             ok_count: row.get(15)?,
             fail_count: row.get(16)?,
+            failed_at: row.get(22)?,
+            fail_reason: row.get(23)?,
         }),
     };
     Ok(ChannelDto {
@@ -131,7 +152,7 @@ pub fn channels_in(
 ) -> Result<Vec<ChannelDto>> {
     let sql = format!(
         "SELECT {CHANNEL_COLUMNS}
-         FROM channels ch LEFT JOIN quality q ON q.stream_id = ch.stream_id
+         FROM channels ch {QUALITY_JOIN}
          WHERE ch.deleted_at IS NULL AND (?1 IS NULL OR ch.category_id = ?1)
          ORDER BY ch.num IS NULL, ch.num, ch.name
          LIMIT ?2 OFFSET ?3"
@@ -213,7 +234,7 @@ pub fn channels_by_ids(conn: &Connection, ids: &[i64]) -> Result<Vec<ChannelDto>
     }
     let sql = format!(
         "SELECT {CHANNEL_COLUMNS}
-         FROM channels ch LEFT JOIN quality q ON q.stream_id = ch.stream_id
+         FROM channels ch {QUALITY_JOIN}
          WHERE ch.stream_id IN ({})",
         placeholders(ids.len())
     );
@@ -359,6 +380,100 @@ pub fn guide_rows(conn: &Connection, ids: &[i64], from: i64, to: i64) -> Result<
     Ok(ids.iter().filter_map(|id| by_id.remove(id)).collect())
 }
 
+// ------------------------------------------------------- channel quality
+
+/// What a few seconds of a live channel showed. Every field is optional:
+/// mpv answers what it can, and a missing answer keeps the last one on
+/// record rather than erasing it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Reading {
+    pub codec: Option<String>,
+    pub width: Option<i64>,
+    pub height: Option<i64>,
+    pub fps: Option<f64>,
+    pub interlaced: Option<bool>,
+    pub is_hdr: bool,
+    pub audio_codec: Option<String>,
+    pub audio_channels: Option<i64>,
+}
+
+/// Records a measurement of a channel, as of `at`, for the catalogue on
+/// record. Overwrites the last one: a provider that moves a channel to 1080p
+/// should be believed the next time it is watched.
+pub fn record_reading(conn: &Connection, stream_id: i64, r: &Reading, at: i64) -> Result<()> {
+    conn.execute(
+        concat!(
+            "INSERT INTO channel_quality
+                 (origin, stream_id, codec, width, height, fps, interlaced, is_hdr,
+                  audio_codec, audio_channels, measured_at)
+             VALUES (",
+            current_origin_sql!(),
+            ", ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+             ON CONFLICT(origin, stream_id) DO UPDATE SET
+                 codec          = COALESCE(excluded.codec, channel_quality.codec),
+                 width          = COALESCE(excluded.width, channel_quality.width),
+                 height         = COALESCE(excluded.height, channel_quality.height),
+                 fps            = COALESCE(excluded.fps, channel_quality.fps),
+                 interlaced     = COALESCE(excluded.interlaced, channel_quality.interlaced),
+                 is_hdr         = excluded.is_hdr,
+                 audio_codec    = COALESCE(excluded.audio_codec, channel_quality.audio_codec),
+                 audio_channels = COALESCE(excluded.audio_channels, channel_quality.audio_channels),
+                 measured_at    = excluded.measured_at"
+        ),
+        rusqlite::params![
+            stream_id,
+            r.codec,
+            r.width,
+            r.height,
+            r.fps,
+            r.interlaced.map(i64::from),
+            i64::from(r.is_hdr),
+            r.audio_codec,
+            r.audio_channels,
+            at,
+        ],
+    )?;
+    Ok(())
+}
+
+/// A live open of the channel reached a picture: one more success, and
+/// whatever failure was on record is over.
+pub fn record_loaded(conn: &Connection, stream_id: i64) -> Result<()> {
+    conn.execute(
+        concat!(
+            "INSERT INTO channel_quality (origin, stream_id, ok_count) VALUES (",
+            current_origin_sql!(),
+            ", ?1, 1)
+             ON CONFLICT(origin, stream_id) DO UPDATE SET
+                 ok_count    = channel_quality.ok_count + 1,
+                 failed_at   = NULL,
+                 fail_reason = NULL"
+        ),
+        [stream_id],
+    )?;
+    Ok(())
+}
+
+/// A live open of the channel genuinely failed to load, for `reason`. What
+/// counts is decided by `ipc::ending::against_channel`; this only writes.
+pub fn record_failed(conn: &Connection, stream_id: i64, reason: &str, at: i64) -> Result<()> {
+    conn.execute(
+        concat!(
+            "INSERT INTO channel_quality
+                 (origin, stream_id, fail_count, failed_at, fail_reason)
+             VALUES (",
+            current_origin_sql!(),
+            ", ?1, 1, ?2, ?3)
+             ON CONFLICT(origin, stream_id) DO UPDATE SET
+                 fail_count  = channel_quality.fail_count + 1,
+                 failed_at   = excluded.failed_at,
+                 fail_reason = excluded.fail_reason"
+        ),
+        rusqlite::params![stream_id, at, reason],
+    )?;
+    Ok(())
+}
+
 // ------------------------------------------------------------------ activity
 
 /// Every channel with watch time against it, unordered.
@@ -378,7 +493,7 @@ pub fn watched(conn: &Connection) -> Result<Vec<FavouriteDto>> {
         "SELECT {CHANNEL_COLUMNS}, a.watch_seconds, a.last_watched, a.open_count
          FROM activity a
          JOIN channels ch ON ch.stream_id = a.stream_id
-         LEFT JOIN quality q ON q.stream_id = ch.stream_id
+         {QUALITY_JOIN}
          WHERE ch.deleted_at IS NULL
            AND ch.is_separator = 0
            AND a.watch_seconds > 0"
@@ -387,9 +502,9 @@ pub fn watched(conn: &Connection) -> Result<Vec<FavouriteDto>> {
     let rows = stmt.query_map([], |row| {
         Ok(FavouriteDto {
             channel: channel_from_row(row)?,
-            watch_seconds: row.get(18)?,
-            last_watched: row.get(19)?,
-            open_count: row.get(20)?,
+            watch_seconds: row.get(CHANNEL_COLUMN_COUNT)?,
+            last_watched: row.get(CHANNEL_COLUMN_COUNT + 1)?,
+            open_count: row.get(CHANNEL_COLUMN_COUNT + 2)?,
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -722,8 +837,9 @@ mod tests {
         chan(&c, 1, "Measured", Some("1"), Some(1));
         chan(&c, 2, "Never opened", Some("1"), Some(2));
         c.execute(
-            "INSERT INTO quality (stream_id, codec, width, height, fps, is_hdr, ok_count, fail_count)
-             VALUES (1,'h264',1920,1080,59.94,0,3,1)",
+            "INSERT INTO channel_quality
+                 (origin, stream_id, codec, width, height, fps, is_hdr, ok_count, fail_count)
+             VALUES ('',1,'h264',1920,1080,59.94,0,3,1)",
             [],
         )
         .unwrap();
@@ -736,6 +852,77 @@ mod tests {
         assert!(!q.is_hdr);
         // Unknown is not bad: most channels will never be opened.
         assert!(got[1].quality.is_none());
+    }
+
+    #[test]
+    fn readings_are_remembered_and_follow_the_channel() {
+        let c = open_in_memory().unwrap();
+        chan(&c, 1, "News", Some("1"), Some(1));
+        let first = Reading {
+            codec: Some("mpeg2video".into()),
+            width: Some(720),
+            height: Some(576),
+            fps: Some(25.0),
+            interlaced: Some(true),
+            is_hdr: false,
+            audio_codec: Some("mp2".into()),
+            audio_channels: Some(2),
+        };
+        record_reading(&c, 1, &first, 100).unwrap();
+        let q = channels_by_ids(&c, &[1]).unwrap()[0].quality.clone().unwrap();
+        assert_eq!((q.width, q.height, q.interlaced), (Some(720), Some(576), Some(true)));
+        assert_eq!(q.audio_codec.as_deref(), Some("mp2"));
+        assert_eq!(q.measured_at, Some(100));
+        // Later the provider upgrades the channel; what mpv could not say
+        // this time is kept from last time.
+        let second = Reading {
+            codec: Some("h264".into()),
+            width: Some(1920),
+            height: Some(1080),
+            interlaced: Some(false),
+            audio_channels: Some(6),
+            ..Reading::default()
+        };
+        record_reading(&c, 1, &second, 200).unwrap();
+        let q = channels_by_ids(&c, &[1]).unwrap()[0].quality.clone().unwrap();
+        assert_eq!((q.width, q.height, q.interlaced), (Some(1920), Some(1080), Some(false)));
+        assert_eq!(q.fps, Some(25.0));
+        assert_eq!((q.audio_codec.as_deref(), q.audio_channels), (Some("mp2"), Some(6)));
+        assert_eq!(q.measured_at, Some(200));
+    }
+
+    #[test]
+    fn a_failure_is_remembered_until_a_play_works() {
+        let c = open_in_memory().unwrap();
+        chan(&c, 1, "Dead", Some("1"), Some(1));
+        record_failed(&c, 1, "refused (HTTP 403)", 50).unwrap();
+        record_failed(&c, 1, "no picture within 8s", 60).unwrap();
+        let q = channels_by_ids(&c, &[1]).unwrap()[0].quality.clone().unwrap();
+        assert_eq!((q.fail_count, q.ok_count), (2, 0));
+        assert_eq!(q.failed_at, Some(60));
+        assert_eq!(q.fail_reason.as_deref(), Some("no picture within 8s"));
+        // Nothing was measured: a failure alone is not a resolution.
+        assert_eq!(q.height, None);
+        record_loaded(&c, 1).unwrap();
+        let q = channels_by_ids(&c, &[1]).unwrap()[0].quality.clone().unwrap();
+        assert_eq!((q.fail_count, q.ok_count), (2, 1));
+        assert_eq!((q.failed_at, q.fail_reason), (None, None));
+    }
+
+    #[test]
+    fn readings_belong_to_the_catalogue_they_were_taken_in() {
+        let c = open_in_memory().unwrap();
+        chan(&c, 1, "Same id, two providers", Some("1"), Some(1));
+        crate::catalog::origin::record(&c, "xtream:aaaa").unwrap();
+        record_failed(&c, 1, "refused (HTTP 403)", 50).unwrap();
+        assert!(channels_by_ids(&c, &[1]).unwrap()[0].quality.is_some());
+        // Another account's channel 1 knows nothing of the first's.
+        crate::catalog::origin::record(&c, "xtream:bbbb").unwrap();
+        assert!(channels_by_ids(&c, &[1]).unwrap()[0].quality.is_none());
+        // And the first's comes back with it.
+        crate::catalog::origin::record(&c, "xtream:aaaa").unwrap();
+        let q = channels_by_ids(&c, &[1]).unwrap()[0].quality.clone().unwrap();
+        assert_eq!(q.failed_at, Some(50));
     }
 
     #[test]

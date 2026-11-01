@@ -54,6 +54,10 @@
      and the rect handed to mpv is measured from the slot. */
   --video-w: 22.25rem;
   --video-h: calc(var(--video-w) * 9 / 16);
+  /* How wide an overlay scrollbar is at its widest, while the pointer is on
+     it. In pixels, not rem: the toolkit draws it, and the app's zoom does
+     not reach it. */
+  --overlay-bar: 12px;
 }
 
 html,
@@ -1262,6 +1266,25 @@ select option {
   visibility: hidden;
 }
 
+/* Room for the scrollbar at the rows' right end, so it never sits on the pin
+   or the count. A classic scrollbar is reserved for by `scrollbar-gutter`,
+   which also keeps the counts from shifting when a filter makes the list too
+   short to scroll. An overlay one has no gutter to reserve — it is drawn over
+   the content — so the component marks the scroller when the bar is that
+   kind, and the pin and count step in by its width. Only they move: the
+   row's highlight still runs to the edge, under the bar, as the list's do. */
+.rail-scroller {
+  scrollbar-gutter: stable;
+}
+
+.rail-scroller.overlay-bar .rail-item {
+  padding-right: calc(0.625rem + var(--overlay-bar));
+}
+
+.rail-scroller.overlay-bar .rail-pin {
+  right: calc(0.25rem + var(--overlay-bar));
+}
+
 /* A hidden category, drawn only because hidden ones are being shown: dimmed,
    and marked in front of its name, so it reads as "not normally here"
    without looking disabled — it can still be opened, pinned and unhidden. */
@@ -1533,6 +1556,12 @@ select option {
   background: var(--bg-3);
 }
 
+/* A channel whose last open failed to load. Its contents fade rather than
+   the row, so hover and selection still read at full strength. */
+.row.failed > * {
+  opacity: 0.42;
+}
+
 .row-logo {
   flex: 0 0 auto;
   width: 1.375rem;
@@ -1730,6 +1759,18 @@ select option {
   white-space: nowrap;
   font-size: 0.75rem;
   color: var(--dim);
+}
+
+/* Where the channel is filed: dimmer than the channel, and the first thing
+   to give way when the row is narrow. */
+.hit-cat {
+  flex: 0 1 18%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.6875rem;
+  color: var(--dimmer);
 }
 
 .hit-num {
@@ -2810,6 +2851,19 @@ button.prog:hover {
   color: var(--dimmer);
 }
 
+/* Where a result is: a channel's category, or a programme's channel and its
+   category. Gives way before the name does. */
+.palette-where {
+  flex: 0 1 auto;
+  max-width: 40%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.6875rem;
+  color: var(--dim);
+}
+
 /* What is on now and what an archive can play are told apart at a glance,
    in the colours the list's programme results use for them. */
 .palette-kind.live {
@@ -3195,6 +3249,17 @@ button.prog:hover {
   display: inline-flex;
   align-items: center;
   gap: 0.25rem;
+}
+
+/* A search typed as it would be typed: the box's own face, not a keycap. */
+.kb-query {
+  padding: 0.125rem 0.375rem;
+  border: 1px solid var(--line);
+  border-radius: 0.25rem;
+  background: var(--bg);
+  color: var(--text);
+  font: 0.75rem/1.4 ui-monospace, "DejaVu Sans Mono", monospace;
+  white-space: nowrap;
 }
 
 .kb-sep,

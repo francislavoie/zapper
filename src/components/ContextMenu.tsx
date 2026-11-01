@@ -153,9 +153,9 @@ export function ContextMenu({
       // A right-click on the menu itself is not a request for another one.
       onContextMenu={(e) => e.preventDefault()}
     >
-      <div className="ctx-head" data-tip-overflow="">
-        {heading}
-      </div>
+      {/* No tip, even when the name is cut short: the menu opens on the
+          thing it is about, which is beside it saying its own name. */}
+      <div className="ctx-head">{heading}</div>
       <SubMenuHost>{children}</SubMenuHost>
     </div>
   );

@@ -511,6 +511,39 @@ impl Player {
         }
     }
 
+    /// What the channel list remembers about a channel, read once a live
+    /// stream has been playing for a few seconds (see `ipc::player_cmds`).
+    ///
+    /// Interlacing depends on the deinterlace mode, because
+    /// `video-frame-info` describes the frame as shown, after any
+    /// deinterlacer has made it progressive (measured: an interlaced clip
+    /// reads `false` there under `auto`, `true` under `no`). Under `auto`
+    /// the filter runs only for interlaced frames, so `deinterlace-active`
+    /// is the answer; with it off, the frame is; forced on, the filter runs
+    /// regardless and nothing can tell.
+    pub fn reading(&self) -> crate::catalog::store::Reading {
+        let interlaced = match self.get_string("deinterlace").as_deref() {
+            Some("auto") => self.get_bool("deinterlace-active"),
+            Some("yes") => None,
+            _ => self.get_bool("video-frame-info/interlaced"),
+        };
+        let gamma = self.get_string("video-params/gamma");
+        crate::catalog::store::Reading {
+            codec: self.get_string("video-format"),
+            width: self.get_i64("video-params/w"),
+            height: self.get_i64("video-params/h"),
+            fps: self
+                .get_f64("container-fps")
+                .or_else(|| self.get_f64("estimated-vf-fps"))
+                .filter(|f| f.is_finite() && *f > 0.0),
+            interlaced,
+            // PQ is HDR10 and its kin, HLG broadcast HDR.
+            is_hdr: matches!(gamma.as_deref(), Some("pq" | "hlg")),
+            audio_codec: self.get_string("audio-codec-name"),
+            audio_channels: self.get_i64("audio-params/channel-count"),
+        }
+    }
+
     /// Just the numbers the diagnostics graphs plot.
     ///
     /// `stats()` reads twenty-odd properties and most of them are static text

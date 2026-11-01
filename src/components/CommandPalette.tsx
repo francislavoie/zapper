@@ -2,7 +2,7 @@
 // locally, channels from the same nucleo index that serves `/`, and
 // programmes from the guide's title index, as the list's Programmes tab has.
 
-import { Fragment, useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { openProgrammeHit, playChannel, runAction } from "../actions";
 import { useClock } from "../hooks/useClock";
 import { useProgrammeSearch } from "../hooks/useProgrammeSearch";
@@ -17,6 +17,7 @@ import {
   type PaletteItem,
 } from "../logic/palette";
 import { airingTag, airingWhen } from "../logic/programmes";
+import { categoryNames, categoryOf } from "../logic/searchGroups";
 import { useApp, useDispatch } from "../store";
 
 /** Enough to pick from without the programmes, which follow the channels,
@@ -33,6 +34,10 @@ export function CommandPalette() {
   const results = useSearch(query, PALETTE_CHANNEL_LIMIT);
   const programmes = useProgrammeSearch(query, PALETTE_PROGRAMME_LIMIT).result;
   const now = useClock(15_000);
+  const names = useMemo(
+    () => categoryNames(state.categories.status === "ready" ? state.categories.data : []),
+    [state.categories],
+  );
 
   const playing = state.player.state !== "stopped";
   const items = paletteItems(
@@ -111,7 +116,7 @@ export function CommandPalette() {
           className="palette-input"
           autoFocus
           spellCheck={false}
-          placeholder="Run a command, or find a channel or programme…"
+          placeholder="Run a command, or find a channel or programme  ·  a|b for either"
           value={query}
           onChange={(e) => {
             setQuery(e.target.value);
@@ -164,12 +169,24 @@ export function CommandPalette() {
                         ? item.channel.name
                         : item.hit.programme.title}
                   </span>
+                  {/* A label per row rather than headings: the palette is
+                      already grouped by kind, and a heading per category
+                      would split twenty results into twenty groups. */}
+                  {item.kind === "channel" ? (
+                    <span className="palette-where" data-tip-overflow="">
+                      {categoryOf(names, item.channel.categoryId)}
+                    </span>
+                  ) : item.kind === "programme" ? (
+                    <span className="palette-where" data-tip-overflow="">
+                      {item.hit.channel.cleanName} · {categoryOf(names, item.hit.channel.categoryId)}
+                    </span>
+                  ) : null}
                   <span className="palette-hint">
                     {item.kind === "action"
                       ? (item.action.hint ?? "")
                       : item.kind === "channel"
                         ? (item.channel.numLabel ?? item.channel.num ?? "")
-                        : `${airingWhen(item.hit, now)} · ${item.hit.channel.cleanName}`}
+                        : airingWhen(item.hit, now)}
                   </span>
                 </button>
               </Fragment>

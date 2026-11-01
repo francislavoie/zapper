@@ -8,12 +8,14 @@
 // the Tauri path at runtime beyond the module load itself.
 
 import { auditLightSurfaces, auditOverVideo } from "./audit";
+import { alternatives } from "./logic/searchQuery";
 import type {
   AccountDto,
   ActivityRowDto,
   BackupFileDto,
   CategoryDto,
   ChannelDto,
+  ChannelQualityDto,
   FavouriteDto,
   GuideRowDto,
   MediaKey,
@@ -180,7 +182,22 @@ export interface MockCatalog {
   span: Map<string, [number, number]>;
 }
 
-function makeQuality(name: string): QualityDto | null {
+/** A second, independent roll per channel, from its id. What the first
+ *  catalogue had is drawn from `rand()`, and drawing more from it would move
+ *  every channel after the first that asked; this leaves them where they are. */
+function idRoll(streamId: number, salt: number): number {
+  const x = Math.imul(streamId ^ salt, 2654435761) >>> 0;
+  return (x % 10007) / 10007;
+}
+
+const FAIL_REASONS = [
+  "refused by the provider (HTTP 403)",
+  "not on the server (HTTP 404)",
+  "the server answered with something that is not video",
+  "no picture arrived",
+];
+
+function makeQuality(name: string, streamId: number, nowSec: number): QualityDto | null {
   // A "4K" in the name means nothing, so the mock carries one channel that
   // claims it and delivers 720p, for the badge to be checked against.
   if (name === "CA: HARBOUR SPORTS 1 4K") {
@@ -189,24 +206,64 @@ function makeQuality(name: string): QualityDto | null {
       width: 1280,
       height: 720,
       fps: 59.94,
+      interlaced: false,
       isHdr: false,
+      audioCodec: "aac",
+      audioChannels: 2,
+      measuredAt: nowSec - 3 * 3600,
       okCount: 12,
       failCount: 1,
+      failedAt: null,
+      failReason: null,
     };
   }
+  // Some channels did not load last time they were tried: dimmed in the
+  // list, and in the mock they fail once more when played, then work.
+  const failed =
+    idRoll(streamId, 0x5eed) < 0.03
+      ? {
+          failedAt: nowSec - Math.floor(idRoll(streamId, 7) * 9 * 86400),
+          failReason: FAIL_REASONS[Math.floor(idRoll(streamId, 11) * FAIL_REASONS.length)],
+        }
+      : null;
   // Most channels have never been opened. `null` is unknown, not bad.
-  if (rand() > 0.09) return null;
+  if (rand() > 0.09) {
+    if (!failed) return null;
+    return {
+      codec: null,
+      width: null,
+      height: null,
+      fps: null,
+      interlaced: null,
+      isHdr: false,
+      audioCodec: null,
+      audioChannels: null,
+      measuredAt: null,
+      okCount: 0,
+      failCount: 1,
+      ...failed,
+    };
+  }
   const r = rand();
   const [w, h] =
     r < 0.5 ? [1920, 1080] : r < 0.85 ? [1280, 720] : r < 0.95 ? [3840, 2160] : [720, 576];
+  const surround = idRoll(streamId, 3) < 0.3;
   return {
     codec: rand() < 0.75 ? "h264" : "hevc",
     width: w,
     height: h,
     fps: rand() < 0.6 ? 50 : 59.94,
+    // Standard definition is broadcast interlaced, and plenty of 1080 too.
+    interlaced: h === 576 || (h === 1080 && idRoll(streamId, 5) < 0.3),
     isHdr: h >= 2160 && rand() < 0.4,
+    audioCodec: surround ? "eac3" : "aac",
+    audioChannels: surround ? 6 : 2,
+    measuredAt: nowSec - Math.floor(idRoll(streamId, 13) * 40 * 86400),
     okCount: Math.floor(rand() * 40),
     failCount: rand() < 0.15 ? Math.floor(rand() * 20) : 0,
+    failedAt: null,
+    failReason: null,
+    ...failed,
   };
 }
 
@@ -326,7 +383,7 @@ function buildCatalog(): MockCatalog {
         hasArchive,
         archiveDays: hasArchive ? (rand() < 0.5 ? 3 : 7) : null,
         isSeparator: false,
-        quality: makeQuality(full),
+        quality: makeQuality(full, streamId - 1, nowSec),
         nowPlaying: rand() < GUIDE_SHARE ? makeProgramme(nowSec) : null,
       });
     }
@@ -347,7 +404,7 @@ function buildCatalog(): MockCatalog {
   if (liar) {
     liar.name = "CA: HARBOUR SPORTS 1 4K";
     liar.cleanName = "HARBOUR SPORTS 1 4K";
-    liar.quality = makeQuality("CA: HARBOUR SPORTS 1 4K");
+    liar.quality = makeQuality("CA: HARBOUR SPORTS 1 4K", liar.streamId, nowSec);
     liar.hasArchive = true;
     liar.archiveDays = 3;
     liar.nowPlaying = makeProgramme(nowSec);
@@ -716,6 +773,38 @@ function startBufferClock() {
   }, 1000);
 }
 
+/** What playing a channel added to its record, as the backend reports it;
+ *  see `remember` in ipc/player_cmds.rs. */
+const qualityEmitter = new Emitter<ChannelQualityDto>({ streamId: -1, quality: null });
+
+/** The backend's ledger, in miniature: the row's record is updated in place,
+ *  so pages fetched later carry it, and the change is announced for the
+ *  pages already on screen. */
+function remember(streamId: number, change: (q: QualityDto) => Partial<QualityDto>) {
+  const row = getCatalog().rows.find((r) => r.streamId === streamId);
+  if (!row) return;
+  const q: QualityDto = row.quality ?? {
+    codec: null,
+    width: null,
+    height: null,
+    fps: null,
+    interlaced: null,
+    isHdr: false,
+    audioCodec: null,
+    audioChannels: null,
+    measuredAt: null,
+    okCount: 0,
+    failCount: 0,
+    failedAt: null,
+    failReason: null,
+  };
+  row.quality = { ...q, ...change(q) };
+  qualityEmitter.emit({ streamId, quality: row.quality });
+}
+
+/** Channels the mock has already failed once this session; see makeQuality. */
+const failedOnce = new Set<number>();
+
 /** Counts the mock's automatic catch-ups, like the backend's `seq`. */
 let mockJumps = 0;
 
@@ -723,7 +812,11 @@ let mockJumps = 0;
  *  land on the next one. */
 let openSeq = 0;
 
-async function openStream(streamId: number, quality: Partial<PlayerStateDto>) {
+async function openStream(
+  streamId: number,
+  quality: Partial<PlayerStateDto>,
+  { live = true, fail = false }: { live?: boolean; fail?: boolean } = {},
+) {
   const mine = ++openSeq;
   patchPlayer({
     state: "opening",
@@ -737,6 +830,21 @@ async function openStream(streamId: number, quality: Partial<PlayerStateDto>) {
   patchOptions({ audio: [], subtitles: [] });
   await delay(700);
   if (openSeq !== mine) return;
+  if (fail) {
+    const reason = "refused by the provider (HTTP 403)";
+    patchPlayer({
+      state: "failed",
+      error: "the stream could not be opened",
+      ending: { kind: "refused", status: 403, limit: false },
+    });
+    remember(streamId, (q) => ({
+      failCount: q.failCount + 1,
+      failedAt: Math.floor(Date.now() / 1000),
+      failReason: reason,
+    }));
+    return;
+  }
+  if (live) remember(streamId, (q) => ({ okCount: q.okCount + 1, failedAt: null, failReason: null }));
   // The connect burst: playback starts well behind live, as the real thing
   // does, and the backend's Settle brings it up once the burst is over —
   // reported as a jump, which is what the picture's corner announces.
@@ -744,6 +852,20 @@ async function openStream(streamId: number, quality: Partial<PlayerStateDto>) {
   patchPlayer({ state: "playing", ...quality, behindLive: behind, bufferedBack: behind, atLiveEdge: false });
   patchOptions(mockTracks(streamId));
   startBufferClock();
+  if (live) {
+    // Measured a few seconds in, as the backend does.
+    window.setTimeout(() => {
+      if (openSeq !== mine || playerEmitter.last.state !== "playing") return;
+      const p = playerEmitter.last;
+      remember(streamId, () => ({
+        width: p.width,
+        height: p.height,
+        fps: p.fps,
+        codec: p.codec,
+        measuredAt: Math.floor(Date.now() / 1000),
+      }));
+    }, 5000);
+  }
   await delay(2500);
   if (openSeq !== mine || playerEmitter.last.state !== "playing") return;
   const cushion = 4;
@@ -792,13 +914,16 @@ export const mockApi = {
 
   search: async (query: string, limit: number) => {
     await delay(60);
-    const q = query.trim().toLowerCase();
-    if (q === "") return [];
+    // Each alternative's words all match, as nucleo's do; any alternative
+    // will do.
+    const alts = alternatives(query.toLowerCase()).map((a) => a.split(/\s+/));
+    if (alts.length === 0) return [];
     const out: ChannelDto[] = [];
     for (const r of getCatalog().rows) {
       // Separators are never search hits.
       if (r.isSeparator) continue;
-      if (subsequence(q, r.name.toLowerCase())) {
+      const name = r.name.toLowerCase();
+      if (alts.some((words) => words.every((w) => subsequence(w, name)))) {
         out.push(r);
         if (out.length >= limit) break;
       }
@@ -808,8 +933,10 @@ export const mockApi = {
 
   searchProgrammes: async (query: string, offset: number, limit: number) => {
     await delay(70);
-    const words = foldWords(query);
-    if (words.length === 0) return [];
+    const alts = alternatives(query)
+      .map(foldWords)
+      .filter((w) => w.length > 0);
+    if (alts.length === 0) return [];
     const nowSec = Math.floor(Date.now() / 1000);
     // A handful of distinct titles, so each is judged once, not per airing.
     const verdicts = new Map<string, boolean>();
@@ -817,7 +944,7 @@ export const mockApi = {
       let v = verdicts.get(title);
       if (v === undefined) {
         const have = foldWords(title);
-        v = words.every((w) => have.some((h) => h.startsWith(w)));
+        v = alts.some((words) => words.every((w) => have.some((h) => h.startsWith(w))));
         verdicts.set(title, v);
       }
       return v;
@@ -929,16 +1056,22 @@ export const mockApi = {
 
   play: async (streamId: number) => {
     const row = getCatalog().rows.find((r) => r.streamId === streamId);
-    void openStream(streamId, {
-      width: row?.quality?.width ?? 1920,
-      height: row?.quality?.height ?? 1080,
-      fps: row?.quality?.fps ?? 50,
-      codec: row?.quality?.codec ?? "h264",
-    });
+    const fail = row?.quality?.failedAt != null && !failedOnce.has(streamId);
+    if (fail) failedOnce.add(streamId);
+    void openStream(
+      streamId,
+      {
+        width: row?.quality?.width ?? 1920,
+        height: row?.quality?.height ?? 1080,
+        fps: row?.quality?.fps ?? 50,
+        codec: row?.quality?.codec ?? "h264",
+      },
+      { fail },
+    );
   },
 
   playCatchup: async (streamId: number, _start: number, _durationMinutes: number) => {
-    void openStream(streamId, { width: 1280, height: 720, fps: 50, codec: "h264" });
+    void openStream(streamId, { width: 1280, height: 720, fps: 50, codec: "h264" }, { live: false });
   },
 
   stop: async () => {
@@ -1569,6 +1702,9 @@ export const onMockPlayerOptions = (f: (s: PlayerOptionsDto) => void) =>
 
 export const onMockUpdate = (f: (s: UpdateStatusDto) => void) =>
   Promise.resolve(updateEmitter.on(f));
+
+export const onMockChannelQuality = (f: (q: ChannelQualityDto) => void) =>
+  Promise.resolve(qualityEmitter.on(f));
 
 /** The desktop's media keys, which a browser has no way to press: a driver
  *  presses one with `__mockMediaKey("next")`. Pressed only when the stored

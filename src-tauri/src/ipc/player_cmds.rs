@@ -23,8 +23,8 @@ use crate::catalog::store;
 use crate::ipc::ending::{self, Clues, How};
 use crate::ipc::tracks;
 use crate::ipc::types::{
-    events, AspectMode, DeinterlaceMode, LiveJumpDto, PlaybackState, PlayerOptionsDto,
-    PlayerStateDto,
+    events, AspectMode, ChannelQualityDto, DeinterlaceMode, LiveJumpDto, PlaybackState,
+    PlayerOptionsDto, PlayerStateDto,
 };
 use crate::surface::mpv::{self, Player, Probe, Signal};
 use crate::surface::VideoRect;
@@ -38,6 +38,17 @@ const FIRST_FRAME_DEADLINE: Duration = Duration::from_secs(8);
 /// State-feed heartbeat. Fast enough that a channel change feels instant,
 /// slow enough that it costs nothing.
 const TICK: Duration = Duration::from_millis(250);
+
+/// How long a live channel plays before its quality is read for the list.
+/// Long enough for a measured frame rate to settle and for the audio to have
+/// been decoded; short enough that a quick look at a channel still counts.
+const MEASURE_AFTER: Duration = Duration::from_secs(5);
+
+/// How long a failure that is only the first-frame deadline waits for mpv's
+/// own account before it is written down. mpv gives up at the same moment
+/// the deadline fires, and its reason — a network timeout, say — may excuse
+/// the channel; see [`Machine::ledger`].
+const FAILURE_SETTLE: Duration = Duration::from_secs(3);
 
 // ---------------------------------------------------------------------------
 // Main-thread access
@@ -121,6 +132,27 @@ struct Machine {
     shown: bool,
     /// What mpv has logged about this stream; see `ipc::ending`.
     clues: Clues,
+    /// When this open failed, for [`FAILURE_SETTLE`].
+    failed_since: Option<Instant>,
+    /// Whether this open's outcome — loaded, or failed — has gone to the
+    /// channel's record. Once per open.
+    noted: bool,
+    /// When to read this open's quality for the channel's record; `None`
+    /// once read, and for anything but a live channel that reached a picture.
+    measure_at: Option<Instant>,
+}
+
+/// What an open has shown about its channel that is worth keeping: see
+/// `channel_quality` in `catalog::schema`. Only ever about live channels —
+/// a catch-up programme that fails says nothing about the channel.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Ledger {
+    /// It reached a picture.
+    Loaded(i64),
+    /// It genuinely failed to load, for this reason.
+    Failed(i64, String),
+    /// It has played long enough to be measured.
+    Measure(i64),
 }
 
 /// Brings a freshly tuned channel up to live once its connect burst is over.
@@ -204,7 +236,50 @@ impl Machine {
             live: true,
             shown: false,
             clues: Clues::default(),
+            failed_since: None,
+            noted: false,
+            measure_at: None,
         }
+    }
+
+    /// What this moment adds to the channel's record, if anything. At most
+    /// one thing per call: loading and measuring are seconds apart, and a
+    /// failure excludes both.
+    ///
+    /// A failure is written once mpv has had its say: at once for anything
+    /// mpv reported, after [`FAILURE_SETTLE`] for a bare deadline, whose
+    /// reason may still arrive and may well excuse the channel.
+    fn ledger(&mut self, now: Instant) -> Option<Ledger> {
+        let id = self.dto.stream_id?;
+        if !self.live {
+            return None;
+        }
+        if self.shown && !self.noted {
+            self.noted = true;
+            return Some(Ledger::Loaded(id));
+        }
+        if self.dto.state == PlaybackState::Failed && !self.shown && !self.noted {
+            let bare_deadline = self
+                .dto
+                .ending
+                .is_some_and(|e| e.kind == ending::EndingKind::NoVideo);
+            let settled = self
+                .failed_since
+                .is_some_and(|t| now.saturating_duration_since(t) >= FAILURE_SETTLE);
+            if bare_deadline && !settled {
+                return None;
+            }
+            self.noted = true;
+            let why = ending::against_channel(&self.dto.ending?, self.dto.error.as_deref())?;
+            return Some(Ledger::Failed(id, why));
+        }
+        if matches!(self.dto.state, PlaybackState::Playing | PlaybackState::Paused)
+            && self.measure_at.is_some_and(|t| now >= t)
+        {
+            self.measure_at = None;
+            return Some(Ledger::Measure(id));
+        }
+        None
     }
 
     /// A live channel is opening. A catch-up programme sets `live` false
@@ -223,6 +298,9 @@ impl Machine {
         self.live = true;
         self.shown = false;
         self.clues = Clues::default();
+        self.failed_since = None;
+        self.noted = false;
+        self.measure_at = None;
         // The previous stream's measurements are not this stream's. Clearing
         // them is what makes the quality readout honest across a zap.
         self.dto.width = None;
@@ -252,9 +330,11 @@ impl Machine {
         self.dto.ending = None;
         self.shown = true;
         // Only on the way out of Opening: a later reconfigure (a resolution
-        // change mid-stream) is not a new connection and has no burst.
+        // change mid-stream) is not a new connection and has no burst, and
+        // has already been measured.
         if self.opened_at.is_some() {
             self.settle = Some(Settle::new());
+            self.measure_at = Some(Instant::now() + MEASURE_AFTER);
         }
         self.opened_at = None;
     }
@@ -270,6 +350,9 @@ impl Machine {
     /// Failed, with words but no account of why: the open itself could not
     /// be sent. [`Machine::ended_with`] is the failure mpv reports.
     fn failed(&mut self, why: impl Into<String>) {
+        if self.dto.state != PlaybackState::Failed {
+            self.failed_since = Some(Instant::now());
+        }
         self.following_live = false;
         self.dto.state = PlaybackState::Failed;
         self.dto.error = Some(why.into());
@@ -464,6 +547,50 @@ fn persist(earned: activity::Earned) {
     });
 }
 
+/// Writes what an open showed about its channel, off the main thread, and
+/// tells the frontend the channel's record as it now stands, so the list
+/// dims or un-dims the row and its badge says what was just measured
+/// without waiting for its page to be fetched again. A failure to write is
+/// logged and dropped, as watch time's is.
+fn remember(app: &AppHandle, ledger: Ledger, reading: Option<store::Reading>) {
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let at = activity::now_secs();
+        let r = crate::catalog::db::with_db(|c| {
+            let id = match &ledger {
+                Ledger::Loaded(id) => {
+                    store::record_loaded(c, *id)?;
+                    *id
+                }
+                Ledger::Failed(id, why) => {
+                    store::record_failed(c, *id, why, at)?;
+                    *id
+                }
+                Ledger::Measure(id) => {
+                    if let Some(r) = &reading {
+                        store::record_reading(c, *id, r, at)?;
+                    }
+                    *id
+                }
+            };
+            let quality = store::channels_by_ids(c, &[id])?
+                .into_iter()
+                .next()
+                .and_then(|ch| ch.quality);
+            Ok(ChannelQualityDto {
+                stream_id: id,
+                quality,
+            })
+        });
+        match r {
+            Ok(news) => {
+                let _ = app.emit(events::CHANNEL_QUALITY, news);
+            }
+            Err(e) => tracing::warn!("could not record what playing a channel showed: {e}"),
+        }
+    });
+}
+
 /// Mutates the state and emits `PLAYER_STATE` if anything visible changed.
 fn commit(app: &AppHandle, f: impl FnOnce(&mut Machine)) {
     let payload = {
@@ -514,6 +641,7 @@ fn tick(app: &AppHandle, p: &Player) {
     let earned;
     let loaded;
     let newly_failed;
+    let ledger;
     // The newest track list this tick, if it moved. Only the last matters.
     let tracks = signals.iter().rev().find_map(|s| match s {
         Signal::Tracks(json) => Some(json.as_str()),
@@ -572,6 +700,7 @@ fn tick(app: &AppHandle, p: &Player) {
         }
         m.apply(&probe);
         m.check_deadline();
+        ledger = m.ledger(Instant::now());
         // Only a stream that never showed a picture: the tuner is asked again,
         // which is a connection, and one that ended mid-play is not a busy
         // tuner to explain but a stream to leave alone.
@@ -665,6 +794,12 @@ fn tick(app: &AppHandle, p: &Player) {
     }
     if let Some(e) = earned {
         persist(e);
+    }
+    if let Some(l) = ledger {
+        // Read here, on the main thread where the player lives; written
+        // elsewhere, like the watch time.
+        let reading = matches!(l, Ledger::Measure(_)).then(|| p.reading());
+        remember(app, l, reading);
     }
     if let Some(payload) = payload {
         let _ = app.emit(events::PLAYER_STATE, payload);
@@ -1729,6 +1864,94 @@ mod tests {
         assert_eq!(m.dto.error.as_deref(), Some("the stream could not be opened"));
         let e = m.dto.ending.unwrap();
         assert_eq!((e.kind, e.status, e.limit), (ending::EndingKind::Refused, Some(509), true));
+    }
+
+    #[test]
+    fn a_channel_that_loads_is_noted_once_then_measured_after_a_while() {
+        let mut m = Machine::new();
+        m.opening(7);
+        let t0 = Instant::now();
+        assert_eq!(m.ledger(t0), None, "opening is not loading");
+        m.playing();
+        assert_eq!(m.ledger(t0), Some(Ledger::Loaded(7)));
+        assert_eq!(m.ledger(t0), None, "once per open");
+        assert_eq!(m.ledger(Instant::now() + MEASURE_AFTER / 2), None);
+        let later = Instant::now() + MEASURE_AFTER;
+        assert_eq!(m.ledger(later), Some(Ledger::Measure(7)));
+        assert_eq!(m.ledger(later), None, "measured once per open");
+        // A resolution change later in the stream is not a second open.
+        m.playing();
+        assert_eq!(m.ledger(later + MEASURE_AFTER), None);
+    }
+
+    #[test]
+    fn a_genuine_failure_to_load_is_noted_with_its_reason() {
+        let mut m = Machine::new();
+        m.opening(9);
+        m.clues.observe("http: HTTP error 404 Not Found");
+        m.ended_with(How::Error(-13));
+        assert_eq!(
+            m.ledger(Instant::now()),
+            Some(Ledger::Failed(9, "not on the server (HTTP 404)".into()))
+        );
+        assert_eq!(m.ledger(Instant::now()), None, "once per open");
+        // Retrying is a new open, with its own outcome.
+        m.opening(9);
+        m.playing();
+        assert_eq!(m.ledger(Instant::now()), Some(Ledger::Loaded(9)));
+    }
+
+    #[test]
+    fn the_account_limit_and_the_network_are_not_held_against_a_channel() {
+        let mut m = Machine::new();
+        m.opening(1);
+        m.clues.observe("http: HTTP error 509 Max Connections Reached");
+        m.ended_with(How::Error(-13));
+        assert_eq!(m.ledger(Instant::now()), None);
+        m.opening(2);
+        m.clues.observe("tcp: Connection to tcp://10.0.0.1:80 failed: Connection timed out");
+        m.ended_with(How::Error(-13));
+        assert_eq!(m.ledger(Instant::now()), None);
+    }
+
+    #[test]
+    fn a_bare_deadline_waits_for_mpvs_reason() {
+        let mut m = Machine::new();
+        m.opening(3);
+        m.ended_with(How::Deadline);
+        assert_eq!(m.ledger(Instant::now()), None, "mpv may yet say why");
+        // mpv's reason arrives, and it is the network: nothing to hold
+        // against the channel.
+        m.clues.observe("Connection timed out");
+        m.ended_with(How::Error(-13));
+        assert_eq!(m.ledger(Instant::now() + FAILURE_SETTLE), None);
+
+        // Without a reason, the deadline stands once mpv has had its time.
+        m.opening(4);
+        m.ended_with(How::Deadline);
+        assert_eq!(
+            m.ledger(Instant::now() + FAILURE_SETTLE),
+            Some(Ledger::Failed(4, "no picture arrived".into()))
+        );
+    }
+
+    #[test]
+    fn a_stream_dropped_mid_play_or_a_catch_up_says_nothing_about_the_channel() {
+        let mut m = Machine::new();
+        m.opening(5);
+        m.playing();
+        assert_eq!(m.ledger(Instant::now()), Some(Ledger::Loaded(5)));
+        m.ended();
+        assert_eq!(m.ledger(Instant::now() + FAILURE_SETTLE), None);
+
+        m.opening(6);
+        m.live = false;
+        m.ended_with(How::Error(-13));
+        assert_eq!(m.ledger(Instant::now() + FAILURE_SETTLE), None);
+        m.opening(6);
+        m.live = false;
+        m.playing();
+        assert_eq!(m.ledger(Instant::now() + MEASURE_AFTER), None);
     }
 
     #[test]

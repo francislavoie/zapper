@@ -31,6 +31,19 @@ use crate::xtream::Credentials;
 
 const KEY: &str = "catalogue_origin";
 
+/// The origin on record, as an SQL expression: for statements that key rows
+/// on the catalogue (`channel_quality`) without a round trip to read it
+/// first. The empty string when none is on record, which is a key like any
+/// other — a mirror that has never synced has nothing to play anyway.
+///
+/// A macro so that it can be `concat!`ed into other constant SQL.
+macro_rules! current_origin_sql {
+    () => {
+        "COALESCE((SELECT value FROM meta WHERE key = 'catalogue_origin'), '')"
+    };
+}
+pub(crate) use current_origin_sql;
+
 /// An Xtream server is its address and account. Not the password: changing it
 /// is the same catalogue.
 pub fn of_xtream(creds: &Credentials) -> String {
@@ -170,6 +183,19 @@ mod tests {
         record(&c, "xtream:1").unwrap();
         assert!(!changed(&c, "xtream:1").unwrap());
         assert!(changed(&c, "m3u:2").unwrap());
+    }
+
+    #[test]
+    fn the_sql_expression_reads_what_was_recorded() {
+        let c = open_in_memory().unwrap();
+        let read = |c: &Connection| -> String {
+            c.query_row(concat!("SELECT ", current_origin_sql!()), [], |r| r.get(0))
+                .unwrap()
+        };
+        assert_eq!(read(&c), "");
+        record(&c, "xtream:abc").unwrap();
+        assert_eq!(read(&c), "xtream:abc");
+        assert!(current_origin_sql!().contains(KEY));
     }
 
     #[test]

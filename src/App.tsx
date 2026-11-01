@@ -9,6 +9,7 @@ import { Activity, useEffect, useLayoutEffect, useRef } from "react";
 import {
   backend,
   isMock,
+  subscribeChannelQuality,
   subscribePlayer,
   subscribePlayerOptions,
   subscribeSync,
@@ -320,6 +321,9 @@ export function App() {
       .then((u) => (live ? unsubs.push(u) : u()))
       .catch(() => {});
     void subscribePlayerOptions((o) => dispatch({ type: "options", value: o }))
+      .then((u) => (live ? unsubs.push(u) : u()))
+      .catch(() => {});
+    void subscribeChannelQuality((q) => dispatch({ type: "channelQuality", value: q }))
       .then((u) => (live ? unsubs.push(u) : u()))
       .catch(() => {});
     backend

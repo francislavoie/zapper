@@ -1,4 +1,4 @@
-//! Diffing sync. Never truncates: `quality` and `activity` rows are keyed on
+//! Diffing sync. Never truncates: `channel_quality` and `activity` rows are keyed on
 //! `stream_id` and must survive a refresh, and channels must not flicker out
 //! of the UI while a sync runs.
 
@@ -180,7 +180,8 @@ mod tests {
         let c = open_in_memory().unwrap();
         sync_channels(&c, &[ch(1, "A")]).unwrap();
         c.execute(
-            "INSERT INTO quality (stream_id, codec, width, height) VALUES (1,'h264',1920,1080)",
+            "INSERT INTO channel_quality (origin, stream_id, codec, width, height)
+             VALUES ('',1,'h264',1920,1080)",
             [],
         )
         .unwrap();
@@ -191,7 +192,7 @@ mod tests {
         .unwrap();
         sync_channels(&c, &[ch(1, "A")]).unwrap();
         let w: i64 = c
-            .query_row("SELECT width FROM quality WHERE stream_id=1", [], |r| {
+            .query_row("SELECT width FROM channel_quality WHERE stream_id=1", [], |r| {
                 r.get(0)
             })
             .unwrap();

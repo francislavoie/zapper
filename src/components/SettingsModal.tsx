@@ -31,6 +31,7 @@ import {
 } from "../logic/settings";
 import { MAX_GUIDE_HOURS, MIN_GUIDE_HOURS } from "../logic/guide";
 import { MOUSE_WORDS, SHORTCUT_GROUPS } from "../logic/shortcuts";
+import { SEARCH_SYNTAX } from "../logic/searchQuery";
 import { VOLUME_MAX, VOLUME_UNITY } from "../logic/volume";
 import { kindLabel, statusLine as updateStatusLine } from "../logic/updates";
 import { checkForUpdates } from "../actions";
@@ -734,6 +735,24 @@ function KeyboardPane() {
           </dl>
         </section>
       ))}
+      {/* Not keys, but where someone looks for how searching works: the `/`
+          and Ctrl+P rows above lead here. */}
+      <section className="kb-group">
+        <h4>
+          Searching
+          <span className="kb-when">channels, programmes and the palette</span>
+        </h4>
+        <dl className="kb-list">
+          {SEARCH_SYNTAX.map((s) => (
+            <div key={s.example} className="kb-row">
+              <dt>
+                <code className="kb-query">{s.example}</code>
+              </dt>
+              <dd>{s.finds}</dd>
+            </div>
+          ))}
+        </dl>
+      </section>
     </div>
   );
 }

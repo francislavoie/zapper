@@ -38,20 +38,6 @@ CREATE TABLE IF NOT EXISTS epg (
 );
 CREATE INDEX IF NOT EXISTS epg_by_time ON epg(channel_ref, start, stop);
 
-CREATE TABLE IF NOT EXISTS quality (
-    stream_id   INTEGER PRIMARY KEY,
-    codec       TEXT,
-    width       INTEGER,
-    height      INTEGER,
-    fps         REAL,
-    pix_fmt     TEXT,
-    is_hdr      INTEGER NOT NULL DEFAULT 0,
-    measured_at INTEGER,
-    ok_count    INTEGER NOT NULL DEFAULT 0,
-    fail_count  INTEGER NOT NULL DEFAULT 0,
-    last_error  TEXT
-);
-
 -- Small key/value store for state that must outlive the process, such as
 -- when the mirror last refreshed. Reported to the UI, so a restart should not
 -- claim the catalogue has never synced.
@@ -111,6 +97,49 @@ const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
     ("channels", "num_label", "TEXT"),
 ];
 
+/// Migration step `channel_quality`: what playing each channel has shown
+/// about it, kept for good.
+///
+/// Keyed on the catalogue as well as the channel — `origin` is
+/// [`crate::catalog::origin`]'s hash of the account — because a server's
+/// stream ids are its own: channel 1234 on one provider is not channel 1234
+/// on the next, and the readings must not cross over when the account
+/// changes. Within one catalogue the key outlives every resync, the way
+/// `activity` does, since sync only ever soft-deletes.
+///
+/// - The measurement — resolution, frame rate, codec, interlacing, HDR, the
+///   audio — is taken a few seconds into each live play and overwrites the
+///   last, so it follows a provider that changes a channel. `measured_at` is
+///   when ("last checked").
+/// - `ok_count` and `fail_count` count opens that reached a picture and
+///   opens that genuinely failed to load. `failed_at` and `fail_reason` are
+///   the latest such failure, cleared by the next play that works; see
+///   `ipc::ending::against_channel` for what counts.
+///
+/// Replaces the `quality` table of the first schema, keyed on the stream id
+/// alone, which nothing ever wrote.
+const CHANNEL_QUALITY: &str = r#"
+CREATE TABLE IF NOT EXISTS channel_quality (
+    origin         TEXT NOT NULL,
+    stream_id      INTEGER NOT NULL,
+    codec          TEXT,
+    width          INTEGER,
+    height         INTEGER,
+    fps            REAL,
+    interlaced     INTEGER,
+    is_hdr         INTEGER NOT NULL DEFAULT 0,
+    audio_codec    TEXT,
+    audio_channels INTEGER,
+    measured_at    INTEGER,
+    ok_count       INTEGER NOT NULL DEFAULT 0,
+    fail_count     INTEGER NOT NULL DEFAULT 0,
+    failed_at      INTEGER,
+    fail_reason    TEXT,
+    PRIMARY KEY (origin, stream_id)
+);
+DROP TABLE IF EXISTS quality;
+"#;
+
 fn add_missing_columns(conn: &Connection) -> Result<()> {
     for (table, column, decl) in ADDED_COLUMNS {
         let present: bool = conn
@@ -132,6 +161,8 @@ fn add_missing_columns(conn: &Connection) -> Result<()> {
 pub fn migrate(conn: &Connection) -> Result<()> {
     conn.execute_batch(SCHEMA).context("applying schema")?;
     add_missing_columns(conn)?;
+    conn.execute_batch(CHANNEL_QUALITY)
+        .context("migrating channel_quality")?;
     crate::catalog::guide_search::install(conn)
 }
 
@@ -180,7 +211,7 @@ mod tests {
             "epg",
             "epg_channel_names",
             "epg_fts",
-            "quality",
+            "channel_quality",
         ] {
             assert!(
                 tables.contains(&t.to_string()),
@@ -228,6 +259,22 @@ mod tests {
                 .unwrap();
             assert_eq!(n, 1, "{col} missing after migrate");
         }
+    }
+
+    #[test]
+    fn the_unused_quality_table_gives_way_to_channel_quality() {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch("CREATE TABLE quality (stream_id INTEGER PRIMARY KEY, codec TEXT);")
+            .unwrap();
+        migrate(&c).unwrap();
+        let names: Vec<String> = c
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%quality'")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(names, ["channel_quality"]);
     }
 
     #[test]

@@ -16,16 +16,33 @@ pub struct CategoryDto {
     pub channel_count: i64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// What playing a channel has shown about it, remembered across restarts
+/// and resyncs (see the `channel_quality` table). Every measured field is
+/// `None` until a play got far enough to measure it; a channel that has only
+/// ever failed has a row with nothing measured.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QualityDto {
+    /// mpv's `video-format`: `h264`, `hevc`, `mpeg2video`.
     pub codec: Option<String>,
     pub width: Option<i64>,
     pub height: Option<i64>,
     pub fps: Option<f64>,
+    /// Fields rather than frames. `None` when it could not be told.
+    pub interlaced: Option<bool>,
     pub is_hdr: bool,
+    /// mpv's `audio-codec-name`: `aac`, `ac3`, `eac3`, `mp2`.
+    pub audio_codec: Option<String>,
+    pub audio_channels: Option<i64>,
+    /// Unix seconds of the last measurement: "last checked".
+    pub measured_at: Option<i64>,
     pub ok_count: i64,
     pub fail_count: i64,
+    /// Unix seconds of the last genuine failure to load, cleared by the next
+    /// play that shows a picture. A channel with this set is drawn dimmed.
+    pub failed_at: Option<i64>,
+    /// Why it failed, in words for the list's tooltip.
+    pub fail_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -310,7 +327,7 @@ impl Default for SubtitleStyleDto {
             color: "#ffffff".into(),
             backdrop: SubtitleBackdrop::Background,
             backdrop_opacity: 0.25,
-            outline_size: 0.0,
+            outline_size: 2.0,
             shadow_offset: 0.0,
         }
     }
@@ -456,6 +473,18 @@ pub mod events {
     pub const UPDATE: &str = "zapper://update";
     /// A [`super::MediaKey`] pressed on the desktop's media controls.
     pub const MEDIA_KEY: &str = "zapper://media-key";
+    /// A [`super::ChannelQualityDto`]: what playing a channel just added to
+    /// its record.
+    pub const CHANNEL_QUALITY: &str = "zapper://channel-quality";
+}
+
+/// A channel's record after playing it added to it, so lists already on
+/// screen can show it without fetching their page again.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChannelQualityDto {
+    pub stream_id: i64,
+    pub quality: Option<QualityDto>,
 }
 
 /// What the desktop's media controls should show: the channel as the title,

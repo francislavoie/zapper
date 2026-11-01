@@ -15,10 +15,12 @@ import {
 import type {
   CategoryDto,
   ChannelDto,
+  ChannelQualityDto,
   LiveJumpDto,
   PlayerOptionsDto,
   PlayerStateDto,
   ProgrammeDto,
+  QualityDto,
   SettingsDto,
   SyncStatusDto,
   UpdateStatusDto,
@@ -139,6 +141,11 @@ export interface State {
   /** Bumped when watch history changes other than by watching — an import —
    *  so the favourites rail knows to ask again. */
   activityVersion: number;
+  /** Channel records that playing has changed since their rows were
+   *  fetched, by stream id: the list draws these over what its pages hold,
+   *  so a channel that just failed dims at once and one that just played
+   *  says what was measured. */
+  qualityNews: Readonly<Record<number, QualityDto | null>>;
   /** The rail's options menu, under the ▾ beside the sort button: where it
    *  opens, in client pixels. In the store for the same reason as
    *  categoryMenu — Escape unwinds it in useGlobalKeys. */
@@ -303,6 +310,7 @@ export const initialState: State = {
   categoryHidden: loadCategoryHidden(),
   categoryShowHidden: false,
   activityVersion: 0,
+  qualityNews: {},
   categoryOptions: null,
   videoMenu: null,
   options: { audio: [], subtitles: [], aspect: "auto", deinterlace: "off" },
@@ -376,6 +384,7 @@ export type Action =
   | { type: "mode"; mode: Mode }
   | { type: "sync"; value: SyncStatusDto }
   | { type: "player"; value: PlayerStateDto }
+  | { type: "channelQuality"; value: ChannelQualityDto }
   | { type: "opening"; channel: ChannelDto }
   /** The channel from last time, restored but deliberately not started, and
    *  the one before it, for P. */
@@ -574,6 +583,11 @@ export function reducer(state: State, action: Action): State {
       };
     case "sync":
       return { ...state, sync: action.value };
+    case "channelQuality":
+      return {
+        ...state,
+        qualityNews: { ...state.qualityNews, [action.value.streamId]: action.value.quality },
+      };
     case "player":
       return {
         ...state,

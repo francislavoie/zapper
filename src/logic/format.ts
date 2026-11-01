@@ -6,20 +6,108 @@ import type { PlayerStateDto, QualityDto } from "../types";
  *  is unknown rather than bad, so it renders nothing at all. Channel names lie
  *  about resolution (`CA: HARBOUR SPORTS 1 4K` may well be 720p); only
  *  measured height is allowed to speak here. */
-export function qualityBadge(q: QualityDto | null): string | null {
+export function qualityBadge(
+  q: Pick<QualityDto, "height" | "isHdr"> & { interlaced?: boolean | null } | null,
+): string | null {
   if (!q) return null;
   const h = q.height;
+  // Fields, not frames: "1080i" is what a broadcaster would call it, and it
+  // is a different picture from 1080p however the deinterlacer does.
+  const scan = q.interlaced ? "i" : "p";
   let label: string | null = null;
   if (h != null) {
     if (h >= 2000) label = "4K";
-    else if (h >= 1400) label = "1440p";
-    else if (h >= 1000) label = "1080p";
-    else if (h >= 700) label = "720p";
-    else if (h >= 500) label = "576p";
-    else label = `${h}p`;
+    else if (h >= 1400) label = `1440${scan}`;
+    else if (h >= 1000) label = `1080${scan}`;
+    else if (h >= 700) label = `720${scan}`;
+    else if (h >= 500) label = `576${scan}`;
+    else label = `${h}${scan}`;
   }
   if (q.isHdr) label = label ? `${label} HDR` : "HDR";
   return label;
+}
+
+/** How long ago an instant was, in words for a tooltip: "just now",
+ *  "12m ago", "3h ago", "yesterday", "5 days ago", "2 months ago". Never a
+ *  date: these say how fresh a record is, and the distance is the point. */
+export function ago(unixSeconds: number, nowSeconds: number): string {
+  const s = Math.max(0, nowSeconds - unixSeconds);
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  const days = Math.floor(s / 86400);
+  if (days === 1) return "yesterday";
+  if (days < 45) return `${days} days ago`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months} months ago`;
+  return "over a year ago";
+}
+
+const VIDEO_CODECS: Record<string, string> = {
+  h264: "H.264",
+  hevc: "HEVC",
+  h265: "HEVC",
+  av1: "AV1",
+  vp9: "VP9",
+  mpeg2video: "MPEG-2",
+  mpeg4: "MPEG-4",
+  vc1: "VC-1",
+};
+
+const AUDIO_CODECS: Record<string, string> = {
+  aac: "AAC",
+  aac_latm: "AAC",
+  ac3: "AC-3",
+  eac3: "E-AC-3",
+  mp2: "MP2",
+  mp3: "MP3",
+  opus: "Opus",
+  dts: "DTS",
+  truehd: "TrueHD",
+  flac: "FLAC",
+};
+
+/** Speaker layouts by channel count, as they are sold. */
+function layout(channels: number): string {
+  if (channels === 1) return "mono";
+  if (channels === 2) return "stereo";
+  if (channels === 6) return "5.1";
+  if (channels === 8) return "7.1";
+  return `${channels}ch`;
+}
+
+/** Everything measured about a channel, for its badge's tooltip:
+ *  "1920×1080 · 50 fps · H.264 · interlaced · AAC stereo · checked 3h ago".
+ *  Empty when nothing has been measured. */
+export function qualityDetail(q: QualityDto | null, nowSeconds: number): string {
+  if (!q || q.measuredAt == null) return "";
+  const bits: string[] = [];
+  if (q.width != null && q.height != null) bits.push(`${q.width}×${q.height}`);
+  if (q.fps != null) bits.push(`${trimFps(q.fps)} fps`);
+  if (q.codec) bits.push(VIDEO_CODECS[q.codec] ?? q.codec);
+  if (q.interlaced) bits.push("interlaced");
+  if (q.isHdr) bits.push("HDR");
+  const audio = [
+    q.audioCodec ? (AUDIO_CODECS[q.audioCodec] ?? q.audioCodec) : null,
+    q.audioChannels != null ? layout(q.audioChannels) : null,
+  ].filter((a) => a !== null);
+  if (audio.length > 0) bits.push(audio.join(" "));
+  bits.push(`checked ${ago(q.measuredAt, nowSeconds)}`);
+  return bits.join(" · ");
+}
+
+/** Whether a channel's last open failed to load and nothing has played on
+ *  it since. Only genuine failures are recorded — the account's connection
+ *  limit and the network are not held against a channel. */
+export function failedToLoad(q: QualityDto | null): boolean {
+  return q?.failedAt != null;
+}
+
+/** What a dimmed row says on hover: when it last failed and why. */
+export function failedTip(q: QualityDto | null, nowSeconds: number): string | null {
+  if (!q || q.failedAt == null) return null;
+  const why = q.failReason ? ` — ${q.failReason}` : "";
+  return `Didn't load ${ago(q.failedAt, nowSeconds)}${why}`;
 }
 
 /** True when a channel has been tried and has failed more often than not.
@@ -247,15 +335,7 @@ export function clampVolume(v: number, max: number): number {
  *  nothing measured means no badge at all. */
 export function playerBadge(p: PlayerStateDto): string | null {
   if (p.width == null && p.height == null) return null;
-  return qualityBadge({
-    codec: p.codec,
-    width: p.width,
-    height: p.height,
-    fps: p.fps,
-    isHdr: false,
-    okCount: 0,
-    failCount: 0,
-  });
+  return qualityBadge({ height: p.height, isHdr: false });
 }
 
 /** The two captions under the scrubber: what the left of the bar is, and
