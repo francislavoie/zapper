@@ -187,6 +187,13 @@ pub fn run() {
             ipc::player_cmds::apply_saved_settings(app.handle());
 
             catalog::sync_engine::spawn_periodic(app.handle().clone());
+            // The recording service on this computer shares the account file
+            // and the catalogue, and a browser signed in to it can change
+            // either: the window hears of both from here.
+            catalog::sync_engine::spawn_watch_elsewhere(
+                app.handle().clone(),
+                ipc::player_cmds::forget_source,
+            );
 
             // Before the frontend can ask: its first `update_status` needs
             // the state to exist. The first check itself waits a minute.

@@ -174,6 +174,32 @@ impl Account {
     }
 }
 
+/// Something that changes whenever the account file does, and `None` while
+/// there is none: for a process that keeps a client built from the file to
+/// notice that another process (the app, or the recording service on the
+/// same computer) has saved a new account. A hash of the contents rather
+/// than the modification time, which can stand still across two saves in
+/// quick succession; the file is a few hundred bytes. Not a secret, and
+/// never shown.
+pub fn fingerprint() -> Option<u64> {
+    std::fs::read(account_path()).ok().map(|b| digest(&b))
+}
+
+/// The [`fingerprint`] of the file as this process last wrote it, if it has:
+/// a change that is this process's own needs no noticing.
+pub fn written_here() -> Option<u64> {
+    *WRITTEN_HERE.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+static WRITTEN_HERE: std::sync::Mutex<Option<u64>> = std::sync::Mutex::new(None);
+
+fn digest(bytes: &[u8]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut h);
+    h.finish()
+}
+
 fn read_file() -> Result<Option<Stored>> {
     let path = account_path();
     let raw = match std::fs::read_to_string(&path) {
@@ -319,6 +345,9 @@ fn write(stored: &Stored) -> Result<()> {
     std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
 
     let body = serde_json::to_string_pretty(stored)?;
+    // Before the write, so a watcher that reads the new file never finds it
+    // unaccounted for.
+    *WRITTEN_HERE.lock().unwrap_or_else(|e| e.into_inner()) = Some(digest(body.as_bytes()));
 
     #[cfg(unix)]
     {
@@ -335,7 +364,7 @@ fn write(stored: &Stored) -> Result<()> {
             .with_context(|| format!("writing {}", path.display()))?;
     }
     #[cfg(not(unix))]
-    std::fs::write(&path, body).with_context(|| format!("writing {}", path.display()))?;
+    std::fs::write(&path, &body).with_context(|| format!("writing {}", path.display()))?;
     Ok(())
 }
 

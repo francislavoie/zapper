@@ -706,6 +706,103 @@ pub fn request_now() {
     WAKE.notify_one();
 }
 
+// --------------------------------------------------- the other process
+
+/// What [`watch_elsewhere`] noticed in one look.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Noticed {
+    /// Another process saved a different account.
+    pub account: bool,
+    /// Another process finished a pass, so the catalogue is not what this
+    /// one last said it was.
+    pub catalogue: bool,
+}
+
+/// What the watcher saw last: the account file's fingerprint and when the
+/// mirror last finished a pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Seen {
+    account: Option<u64>,
+    synced: Option<i64>,
+}
+
+impl Seen {
+    pub fn now() -> Self {
+        Self {
+            account: crate::catalog::credentials::fingerprint(),
+            synced: status::last_synced(),
+        }
+    }
+
+    /// Compares `now` with what was seen, and remembers `now`.
+    ///
+    /// An account written by this process (`written_here`) is its own
+    /// doing and was dealt with when it was saved. A pass is another
+    /// process's when it finished later than this one's last
+    /// (`synced_here`), and none of this one's is running (`own_pass`),
+    /// which reports itself.
+    pub fn look(
+        &mut self,
+        now: Seen,
+        written_here: Option<u64>,
+        synced_here: Option<i64>,
+        own_pass: bool,
+    ) -> Noticed {
+        let account = now.account != self.account && now.account != written_here;
+        let catalogue = now.synced != self.synced && now.synced > synced_here && !own_pass;
+        *self = now;
+        Noticed { account, catalogue }
+    }
+}
+
+/// How often [`watch_elsewhere`] looks: a few seconds, so a change made in
+/// a browser shows in the app about as soon as the browser shows it. Each
+/// look is a read of a small file and one row.
+const WATCH_EVERY: Duration = Duration::from_secs(5);
+
+/// Notices what the other process sharing the account and the mirror does
+/// (the app and the recording service, on one computer), which nothing else
+/// tells this one about:
+///
+/// - **A new account** saved by the other one: `on_account` (the app drops
+///   the client it keeps), and a pass here, since the other one may not be
+///   syncing at all (`zapper-server --no-sync`). If it is, the lease lets
+///   one pass run and the other finds the mirror fresh.
+/// - **A pass it finished**: the status is published again, with the new
+///   `lastSynced` and channel count, which is what makes a window read the
+///   catalogue again (src/logic/catalogueRefresh.ts).
+pub async fn watch_elsewhere<S: StatusSink>(sink: S, on_account: impl Fn()) {
+    let mut seen = Seen::now();
+    loop {
+        tokio::time::sleep(WATCH_EVERY).await;
+        let now = tokio::task::spawn_blocking(Seen::now).await.unwrap_or(seen);
+        let noticed = seen.look(
+            now,
+            crate::catalog::credentials::written_here(),
+            status::synced_here(),
+            RUNNING.load(Ordering::SeqCst),
+        );
+        if noticed.account {
+            tracing::info!("the account was changed by another process; syncing");
+            on_account();
+            request_now();
+        }
+        if noticed.catalogue {
+            tracing::info!("the catalogue was refreshed by another process");
+            let s = status::snapshot();
+            let s = dto(SyncPhase::Idle, s.message, s.channels_total, s.last_synced);
+            status::record(&s);
+            sink.publish(s);
+        }
+    }
+}
+
+/// [`watch_elsewhere`] on the app's runtime, telling its window.
+#[cfg(feature = "gui")]
+pub fn spawn_watch_elsewhere(app: tauri::AppHandle, on_account: impl Fn() + Send + 'static) {
+    tauri::async_runtime::spawn(watch_elsewhere(app, on_account));
+}
+
 /// Fire and forget, for callers with no periodic loop (the harnesses).
 #[cfg(feature = "gui")]
 pub fn spawn(app: tauri::AppHandle) {
@@ -1203,6 +1300,30 @@ mod tests {
         .await;
         assert_eq!(outcome, PassOutcome::Failed);
         assert_eq!(rec.phases().last(), Some(&SyncPhase::Failed));
+    }
+
+    #[test]
+    fn only_the_other_processs_changes_are_noticed() {
+        let at = |account: Option<u64>, synced: Option<i64>| Seen { account, synced };
+        let mut seen = at(Some(1), Some(100));
+        // Nothing moved.
+        assert_eq!(seen.look(at(Some(1), Some(100)), None, Some(100), false), Noticed::default());
+        // This process saved the account: its own doing.
+        assert_eq!(seen.look(at(Some(2), Some(100)), Some(2), Some(100), false), Noticed::default());
+        // Another process saved one.
+        let n = seen.look(at(Some(3), Some(100)), Some(2), Some(100), false);
+        assert!(n.account && !n.catalogue);
+        // ...and once seen, it is not news again.
+        assert!(!seen.look(at(Some(3), Some(100)), Some(2), Some(100), false).account);
+        // The file going away is a change too (an account removed by hand).
+        assert!(seen.look(at(None, Some(100)), Some(2), Some(100), false).account);
+        // A pass of this process's own, while it runs and after.
+        assert!(!seen.look(at(None, Some(200)), None, Some(100), true).catalogue);
+        assert!(!seen.look(at(None, Some(300)), None, Some(300), false).catalogue);
+        // A pass of the other process's.
+        let n = seen.look(at(None, Some(400)), None, Some(300), false);
+        assert!(n.catalogue && !n.account);
+        assert!(!seen.look(at(None, Some(400)), None, Some(300), false).catalogue);
     }
 
     #[test]
