@@ -85,14 +85,19 @@ elif echo " $features " | grep -q ' gpl '; then
 else
   echo "ok  mpv features: $features"
 fi
-# FFmpeg's license and configure line, as libavutil carries them.
+# FFmpeg's license (avutil_license(): "libavutil license: ...") and configure line, as libavutil
+# carries them.
 avutil=$app/Contents/Frameworks/libavutil.60.dylib
-strings -a "$avutil" | grep -qx 'LGPL version 2.1 or later' || bad "libavutil does not say LGPL version 2.1 or later"
+license=$(strings -a "$avutil" | grep -E '^libavutil license: ' | head -1 || true)
 config=$(strings -a "$avutil" | grep -E -- '--prefix=' | head -1 || true)
+ffmpeg_ok=1
+[ "$license" = "libavutil license: LGPL version 2.1 or later" ] ||
+  { bad "libavutil's license is not LGPL version 2.1 or later: ${license:-none found}"; ffmpeg_ok=0; }
+[ -n "$config" ] || { bad "libavutil has no configure line to check"; ffmpeg_ok=0; }
 for flag in --enable-gpl --enable-version3 --enable-nonfree; do
-  case " $config " in *" $flag "*) bad "FFmpeg was configured with $flag" ;; esac
+  case " $config " in *" $flag "*) bad "FFmpeg was configured with $flag"; ffmpeg_ok=0 ;; esac
 done
-echo "ok  FFmpeg: LGPL version 2.1 or later"
+[ $ffmpeg_ok = 0 ] || echo "ok  FFmpeg: $license"
 
 res=$app/Contents/Resources
 for n in LICENSE.txt MPV-FFMPEG-NOTICE.txt THIRD-PARTY-NOTICES-libmpv.txt THIRD-PARTY-NOTICES-rust.txt \
