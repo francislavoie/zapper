@@ -933,6 +933,10 @@ async function openStream(
 const RECORDING_OFF =
   typeof location !== "undefined" &&
   new URLSearchParams(location.search).get("recording") === "off";
+/** `?service=windows`: the service as Windows installs it, a sign-in task. */
+const SERVICE_WINDOWS =
+  typeof location !== "undefined" &&
+  new URLSearchParams(location.search).get("service") === "windows";
 
 let mockRecordings: RecordingDto[] | null = null;
 let mockRecordingId = 100;
@@ -945,16 +949,31 @@ const mockRecordingSettings: RecordingSettingsDto = {
   clockTrack: true,
   defaultOutputDir: "/home/viewer/Videos/zapper",
 };
-let mockService: ServiceStatusDto = {
-  supported: true,
-  installed: true,
-  state: "active",
-  linger: false,
-  binary: "/usr/bin/zapper-server",
-  version: "0.1.0",
-  address: "http://127.0.0.1:8796",
-  versionMismatch: false,
-};
+let mockService: ServiceStatusDto = SERVICE_WINDOWS
+  ? {
+      supported: true,
+      kind: "a scheduled task that starts it when you sign in",
+      installed: true,
+      state: "running",
+      linger: false,
+      canLinger: false,
+      binary: "C:\\Users\\viewer\\AppData\\Local\\zapper\\zapper-server.exe",
+      version: "0.1.0",
+      address: "http://127.0.0.1:8796",
+      versionMismatch: false,
+    }
+  : {
+      supported: true,
+      kind: "a systemd user service",
+      installed: true,
+      state: "active",
+      linger: false,
+      canLinger: true,
+      binary: "/usr/bin/zapper-server",
+      version: "0.1.0",
+      address: "http://127.0.0.1:8796",
+      versionMismatch: false,
+    };
 
 function mockRecording(
   ch: ChannelDto,
@@ -1090,7 +1109,7 @@ function networkView(): NetworkDto {
 }
 
 function recordingsOrRefuse(): RecordingDto[] {
-  if (RECORDING_OFF || mockService.state !== "active") throw "The recording service is not running.";
+  if (RECORDING_OFF || !mockService.installed) throw "The recording service is not running.";
   return (mockRecordings ??= seedRecordings());
 }
 
@@ -1209,7 +1228,13 @@ const mockRecordingApi = {
   },
   installRecordingService: async (linger: boolean): Promise<ServiceStatusDto> => {
     await delay(300);
-    mockService = { ...mockService, installed: true, state: "active", linger, version: "0.1.0" };
+    mockService = {
+      ...mockService,
+      installed: true,
+      state: SERVICE_WINDOWS ? "running" : "active",
+      linger: mockService.canLinger && linger,
+      version: "0.1.0",
+    };
     return { ...mockService };
   },
   removeRecordingService: async (): Promise<ServiceStatusDto> => {

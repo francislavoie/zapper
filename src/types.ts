@@ -647,11 +647,17 @@ export interface RecordingStatusDto {
 export interface ServiceStatusDto {
   supported: boolean;
   unsupportedReason?: string;
+  /** What Install sets up, in words: "a systemd user service". */
+  kind?: string;
   installed: boolean;
-  /** systemd's word: active, inactive, failed… */
+  /** systemd's word (active, inactive, failed…), or Task Scheduler's in the
+   *  same spirit (running, stopped, disabled). */
   state?: string;
   /** Keeps running after logging out. */
   linger: boolean;
+  /** Whether keeping it running after logging out is offered here (not on
+   *  Windows, where the task runs while you are signed in). */
+  canLinger: boolean;
   binary?: string;
   /** Set when the service answered on its API. */
   version?: string;

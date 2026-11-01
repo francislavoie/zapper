@@ -159,7 +159,7 @@ export function RecordingPane({ s }: { s: SettingsControl }) {
               ? service.unsupportedReason
               : service?.supported && !service.installed && !service.binary
                 ? "zapper-server was not found beside zapper or on the PATH, so it cannot be installed from here yet."
-                : `Records what you schedule from the guide, even with zapper closed. It runs as you (a systemd user service), listens on ${service?.address ?? "127.0.0.1"} (and on your network only if you allow it below), and keeps the catalogue current like the app does. Removing it keeps your recordings.`
+                : `Records what you schedule from the guide, even with zapper closed. It runs as you${service?.kind ? ` (${service.kind})` : ""}, listens on ${service?.address ?? "127.0.0.1"} (and on your network only if you allow it below), and keeps the catalogue current like the app does.${service?.supported && !service.canLinger ? " It records while you are signed in to this computer." : ""} Removing it keeps your recordings.`
           }
         >
           {service?.supported ? (
@@ -182,7 +182,7 @@ export function RecordingPane({ s }: { s: SettingsControl }) {
             )
           ) : null}
         </SettingRow>
-        {service?.supported ? (
+        {service?.supported && service.canLinger ? (
           <SettingRow
             label="Keep running when logged out"
             htmlFor="rec-linger"

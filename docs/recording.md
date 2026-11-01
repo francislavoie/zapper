@@ -7,10 +7,17 @@ schedules recordings from the guide and shows them; the service does the recordi
 
 ## Using it
 
-1. **Settings → Recording → Install** runs the service on this computer (Linux: a systemd user
-   service, no root needed). *Keep running when logged out* keeps it recording while nobody is
-   logged in (`loginctl enable-linger`). **Remove** stops and removes it and keeps your
-   recordings. Windows and macOS: not yet — run `zapper-server` yourself.
+1. **Settings → Recording → Install** runs the service on this computer, as you, with no
+   administrator or root needed. **Remove** stops and removes it and keeps your recordings.
+   - **Linux:** a systemd user service. *Keep running when logged out* keeps it recording while
+     nobody is logged in (`loginctl enable-linger`).
+   - **Windows:** a scheduled task, `zapper-server-<your user name>`, that starts
+     `zapper-server.exe` when you sign in and is started right away. It records while you are
+     signed in; recording with nobody signed in would need your password stored with the task, so
+     it isn't offered. Having no window, it logs to `%LOCALAPPDATA%\zapper\zapper-server.log`.
+     Updating zapper stops it to replace it, and zapper starts it again when it reopens.
+     Uninstalling zapper leaves the task behind, doing nothing: remove the service first.
+   - **macOS:** not yet; run `zapper-server` yourself.
 2. **Right-click a programme** in the guide, or in the programme search results, and choose
    **Record**. A red dot marks it; it pulses while recording. Right-click again to cancel, or to
    stop a recording early (what was recorded is kept).
@@ -242,6 +249,11 @@ through the API, then checks that the recording switched to the backup, that it 
 parts that ffprobe reads with the video, the audio and a non-default *Clock* track, that the
 clock reads when it was recorded, and that each feed was asked exactly once.
 
+`service_check` (same features) installs the service the way Settings → Recording does, on a
+scratch home it hands the service (`--home`), checks that it answers there, then removes it. It
+installs a real service for you for those few seconds, so it refuses when one is installed
+already.
+
 ## API
 
 HTTP with JSON bodies: on `127.0.0.1`, and on the network too while network access is on (HTTPS
@@ -303,8 +315,9 @@ a recording is not capturing, such as "waiting for a free connection (1 of 1 in 
 
 - A web client: the app's interface in a browser, served by the service over network access
   (streams proxied, so provider credentials never reach the browser).
-- Installing the service on Windows (a logon task) and macOS (a LaunchAgent); waking the
-  computer from suspend to record.
+- Installing the service on macOS (a LaunchAgent); waking the computer from suspend to record
+  (on Windows, a task per recording with a wake timer); recording on Windows while nobody is
+  signed in.
 - Series rules ("record every episode"), and choosing the backup feed by hand.
 - Season and episode from the guide: the catalogue does not keep XMLTV's episode numbers yet, so
   files are named by date unless a client passes them.

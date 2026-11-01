@@ -572,6 +572,10 @@ impl Updates {
             // check and the installer opening its own file; see the module
             // comment for what that does and does not guarantee.
             let (dir, from, want) = (self.cfg.dir.clone(), file.clone(), digest.clone());
+            // The recording service runs zapper-server.exe from the folder
+            // the installer replaces, and a file in use cannot be: stop it.
+            // zapper starts it again when it reopens (lib.rs).
+            let _ = tokio::task::spawn_blocking(crate::recording::service::stop_for_update).await;
             let staged = match tokio::task::spawn_blocking(move || stage_for_launch(&dir, &from, &want)).await {
                 Ok(Ok(p)) => p,
                 Ok(Err(e)) => {

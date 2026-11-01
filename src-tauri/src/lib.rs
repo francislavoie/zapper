@@ -192,6 +192,13 @@ pub fn run() {
             // off by default.
             media_keys::install(app.handle());
 
+            // The recording service, back on after an update stopped it to
+            // replace its program (Windows; a no-op elsewhere). Not from an
+            // unattended run, whose scratch home is not the service's.
+            if !unattended() {
+                std::thread::spawn(recording::service::resume);
+            }
+
             // Development hooks. Nothing here runs in a normal launch: they
             // exist because the composited window cannot be screenshotted on
             // this desktop, so verification has to drive the real app and
