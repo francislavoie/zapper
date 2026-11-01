@@ -12,6 +12,7 @@ import { alternatives } from "./logic/searchQuery";
 import { patternFor, place, validatePattern } from "./logic/naming";
 import { parsePort, passwordProblem } from "./logic/network";
 import type {
+  AccountCandidateDto,
   AccountDto,
   ActivityRowDto,
   BackupFileDto,
@@ -1690,6 +1691,36 @@ export const mockApi = {
     }
     if (!mockAccount.hasPassword) throw "the server rejected these credentials (no password)";
     return "Active · 1 of 2 connections in use";
+  },
+
+  // The form as typed, checked against nothing but itself: the saved account
+  // is not read and not changed, as with the real command. A password of
+  // "wrong" is refused, so both answers can be seen; a blank one stands for
+  // the one on file, which this kind may not have.
+  testAccountCandidate: async (c: AccountCandidateDto) => {
+    await delay(300);
+    switch (c.kind) {
+      case "hdhomerun":
+        if (c.device.trim() === "") throw "an HDHomeRun address is required";
+        return `HDHomeRun FLEX 4K (HDFX-4K) at ${c.device.trim()}: 62 channels, 4 tuners`;
+      case "tvheadend": {
+        if (c.username.trim() === "nopersist")
+          throw "Tvheadend accepted this login but will not give out stream links that keep working. In Tvheadend, open Configuration → Users → Passwords, edit this user, set “Persistent authentication” to Enable, and save; then sync again.";
+        if (c.password === "wrong") throw "Tvheadend refused this username and password.";
+        const login = c.username.trim() === "" ? " · no login" : "";
+        return `Tvheadend 4.3-2183~g1b5b5ca: 212 channels${login}`;
+      }
+      case "m3u": {
+        const guides = c.epgUrls ?? mockAccount.epgUrls;
+        const guide = guides.length === 0 ? "no guide configured" : `${guides.length} guides OK`;
+        return `Playlist OK: 412 channels in the first 600 lines of 24 MB · ${guide}`;
+      }
+      case "xtream":
+        if (c.password === "" && (!mockAccount.hasPassword || mockAccount.source === "none"))
+          throw "a password is required";
+        if (c.password === "wrong") throw "the server rejected these credentials (Disabled)";
+        return `Active · 1 of 2 connections in use (${c.host.trim()} as ${c.username.trim()})`;
+    }
   },
 
   settings: async () => {

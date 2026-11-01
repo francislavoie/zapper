@@ -28,6 +28,7 @@ import { errorMessage } from "../logic/async";
 import {
   SOURCE_KINDS,
   asKind,
+  candidateFor,
   hdhrChanged,
   hdhrFormFrom,
   kindInfo,
@@ -124,11 +125,22 @@ export function AccountPane() {
     }
   };
 
+  // Tests the form, not the file: a change is tried before it is saved, and
+  // so is a kind that is not in use yet. Blank secret fields stand for what
+  // is on file, as they do for Save, so the answer is about what Save would
+  // keep.
   const test = async () => {
+    if (!account) return;
     setBusy(true);
     setNote(null);
     try {
-      setNote({ kind: "ok", text: await backend.testAccount() });
+      const candidate = candidateFor(
+        kind,
+        { xtream: { host, username, password }, m3u, hdhr, tvh },
+        account,
+      );
+      if ("error" in candidate) throw candidate.error;
+      setNote({ kind: "ok", text: await backend.testAccountCandidate(candidate) });
     } catch (e) {
       setNote({ kind: "bad", text: errorMessage(e) });
     } finally {
@@ -371,14 +383,9 @@ export function AccountPane() {
             <button className="ctl primary" disabled={busy || !changed} onClick={() => void save()}>
               Save
             </button>
-            {/* Tests what is saved, so it would test the other kind while the
-                switch is showing this one. Save first. */}
-            <button
-              className="ctl"
-              disabled={busy || switching}
-              data-tip={switching ? "Save first: the test checks the saved account" : undefined}
-              onClick={() => void test()}
-            >
+            {/* Tests what is in the fields, saved or not; nothing is saved by
+                testing. */}
+            <button className="ctl" disabled={busy || !account} onClick={() => void test()}>
               Test connection
             </button>
           </div>

@@ -7,6 +7,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   EVENTS,
+  type AccountCandidateDto,
   type AccountDto,
   type ActivityRowDto,
   type BackupFileDto,
@@ -110,6 +111,10 @@ export const api = {
   setTvheadendAccount: (url: string, username: string, password: string) =>
     invoke<void>("set_tvheadend_account", { url, username, password }),
   testAccount: () => invoke<string>("test_account"),
+  /** Tests an account as typed, without saving it or touching the one in
+   *  use. */
+  testAccountCandidate: (candidate: AccountCandidateDto) =>
+    invoke<string>("test_account_candidate", { candidate }),
 
   settings: () => invoke<SettingsDto>("settings"),
   setSettings: (settings: SettingsDto) => invoke<void>("set_settings", { settings }),
