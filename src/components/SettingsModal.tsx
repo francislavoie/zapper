@@ -7,7 +7,8 @@
 // ↺ its row shows once it differs from the default.
 
 import { useEffect, useRef, useState } from "react";
-import { backend } from "../backend";
+import { backend, capabilities } from "../backend";
+import { settingsSections, type SettingsSection } from "../logic/capabilities";
 import { useSettings, type SettingsControl } from "../hooks/useSettings";
 import { clampVolume, dateTime, duration, hhmm, systemUses12h, uses12h } from "../logic/format";
 import {
@@ -49,20 +50,11 @@ import { Switch } from "./Switch";
 import { VolumeControl } from "./VolumeControl";
 import type { LiveStart, SubtitleBackdrop, SettingsDto } from "../types";
 
-const SECTIONS = [
-  "Account",
-  "Playback",
-  "Audio",
-  "Subtitles",
-  "Guide",
-  "Recording",
-  "Data",
-  "Updates",
-  "Keyboard",
-  "About",
-] as const;
+/** The pages there is something to do on here: in a browser, not the
+ *  account, the player's, backups or updates (logic/capabilities.ts). */
+const SECTIONS = settingsSections(capabilities);
 
-type Section = (typeof SECTIONS)[number];
+type Section = SettingsSection;
 
 const asSection = (page: string | undefined): Section | undefined =>
   SECTIONS.find((s) => s === page);
@@ -73,9 +65,12 @@ const SUMMARY: Record<Section, string> = {
   Playback: "How much live TV is kept for rewinding, how video is decoded, and the media keys.",
   Audio: "The volume and the compressor, for whatever is playing.",
   Subtitles: "How subtitles look. mpv draws them under this window; the preview stands in.",
-  Guide: "The guide's width, how times are written, and how often the catalogue refreshes.",
-  Recording:
-    "The recording service on this computer, what it does with each recording, and which other devices may reach it.",
+  Guide: capabilities.data
+    ? "The guide's width, how times are written, and how often the catalogue refreshes."
+    : "The guide's width and how times are written, as this browser keeps them.",
+  Recording: capabilities.localService
+    ? "The recording service on this computer, what it does with each recording, and which other devices may reach it."
+    : "The recording service this page comes from, and what it does with each recording.",
   Data: "The catalogue, and backups of your settings and favourites.",
   Updates: "Whether zapper looks for new versions, and which one is installed.",
   Keyboard: "Every shortcut and mouse gesture, grouped by where it works.",
@@ -104,10 +99,13 @@ const WRITES: ReadonlySet<Section> = new Set(["Playback", "Subtitles", "Guide", 
 
 export function SettingsModal() {
   const dispatch = useDispatch();
-  // Account by default: it is the page with something to do on a first run.
-  // A caller that knows why Settings is being opened can name another.
+  // The first page there is: Account where it can be changed, the page with
+  // something to do on a first run. A caller that knows why Settings is
+  // being opened can name another.
   const asked = useApp().settingsPage;
-  const [section, setSection] = useState<Section>(() => asSection(asked?.page) ?? "Account");
+  const [section, setSection] = useState<Section>(
+    () => asSection(asked?.page) ?? SECTIONS[0] ?? "About",
+  );
   useEffect(() => {
     const page = asSection(asked?.page);
     if (page) setSection(page);
@@ -647,25 +645,29 @@ function GuidePage({ s }: { s: SettingsControl }) {
         </SettingRow>
       </SettingsGroup>
 
-      <SettingsGroup heading="Catalogue">
-        <SettingRow
-          label="Refresh the catalogue"
-          htmlFor="set-sync"
-          description="How often the channel list and the guide are fetched again in the background."
-          {...resettable(s, "syncIntervalHours", `every ${d.syncIntervalHours} h`)}
-        >
-          <RangeField
-            id="set-sync"
-            min={SYNC_MIN}
-            max={SYNC_MAX}
-            step={1}
-            value={s.settings.syncIntervalHours}
-            mark={d.syncIntervalHours}
-            format={(v) => `${v} h`}
-            onChange={(v) => s.patch({ syncIntervalHours: v })}
-          />
-        </SettingRow>
-      </SettingsGroup>
+      {/* How often the catalogue refreshes is the app's to say: a browser
+          only reads it. */}
+      {capabilities.data ? (
+        <SettingsGroup heading="Catalogue">
+          <SettingRow
+            label="Refresh the catalogue"
+            htmlFor="set-sync"
+            description="How often the channel list and the guide are fetched again in the background."
+            {...resettable(s, "syncIntervalHours", `every ${d.syncIntervalHours} h`)}
+          >
+            <RangeField
+              id="set-sync"
+              min={SYNC_MIN}
+              max={SYNC_MAX}
+              step={1}
+              value={s.settings.syncIntervalHours}
+              mark={d.syncIntervalHours}
+              format={(v) => `${v} h`}
+              onChange={(v) => s.patch({ syncIntervalHours: v })}
+            />
+          </SettingRow>
+        </SettingsGroup>
+      ) : null}
     </>
   );
 }

@@ -1,6 +1,7 @@
 // The sleep timer as the menus see it: which of its actions apply, and how
 // long is left.
 
+import { capabilities } from "../backend";
 import { availableActions, type PaletteAction } from "../logic/palette";
 import { remainingLabel } from "../logic/sleep";
 import { useApp } from "../store";
@@ -10,6 +11,7 @@ import { useClock } from "./useClock";
 export function useSleepActions(): PaletteAction[] {
   const { player, sleep, sleepProgramme } = useApp();
   return availableActions(player.state !== "stopped", {
+    capabilities,
     sleeping: sleep !== null,
     programme: sleepProgramme !== null,
   }).filter((a) => a.group === "sleep");

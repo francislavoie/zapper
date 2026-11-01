@@ -2,7 +2,7 @@
 // palette, the guide and the chrome all fail the same way.
 
 import type { Dispatch } from "react";
-import { backend } from "./backend";
+import { backend, capabilities, signOut } from "./backend";
 import { toggleFullscreen } from "./fullscreen";
 import { errorMessage, failed, loading, ready } from "./logic/async";
 import { anchorFor, catchupMinutes } from "./logic/guide";
@@ -20,6 +20,7 @@ import type {
   RecordingDto,
 } from "./types";
 import { recordingWhen, scheduleRequest } from "./logic/recordings";
+import { NO_PLAYBACK } from "./logic/web";
 
 export interface PlayOptions {
   /** Take over the window as well as starting the stream. Off by default:
@@ -44,6 +45,12 @@ export async function playChannel(
 ) {
   // Separators are inert by construction; nothing should be able to open one.
   if (ch.isSeparator) return;
+  // Where nothing plays (a browser, for now), say so rather than pretend to
+  // open it: the picture slot would only sit there empty.
+  if (!capabilities.playback) {
+    dispatch({ type: "toast", text: NO_PLAYBACK, kind: "info" });
+    return;
+  }
 
   // Metadata paints immediately — name, logo, programme — while the stream
   // opens, which is the whole trick for perceived latency.
@@ -147,6 +154,12 @@ const HANDLERS: Record<ActionId, (ctx: ActionContext) => void> = {
     void windowControls
       .close()
       .catch((e: unknown) => dispatch({ type: "toast", text: `quit: ${String(e)}` })),
+  // The sign-in page follows by itself (WebGate): the service forgets this
+  // browser, and its answer clears the cookie.
+  signOut: ({ dispatch }) =>
+    void signOut().catch((e: unknown) =>
+      dispatch({ type: "toast", text: `sign out: ${errorMessage(e)}` }),
+    ),
 };
 
 /** Asks GitHub now, whatever the automatic-check setting says: asking is

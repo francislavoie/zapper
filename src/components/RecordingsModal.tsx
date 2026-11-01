@@ -5,7 +5,7 @@
 
 import { useState } from "react";
 import { cancelRecording, deleteRecording } from "../actions";
-import { backend } from "../backend";
+import { backend, capabilities } from "../backend";
 import { useClock } from "../hooks/useClock";
 import { errorMessage } from "../logic/async";
 import { groupRecordings, recordingStatus, recordingWhen } from "../logic/recordings";
@@ -115,7 +115,7 @@ function RecordingRow({ rec, now }: { rec: RecordingDto; now: number }) {
             Stop
           </button>
         ) : null}
-        {rec.state === "recording" || rec.state === "done" ? (
+        {capabilities.localService && (rec.state === "recording" || rec.state === "done") ? (
           <button className="ctl" onClick={() => void openFolder()}>
             Open folder
           </button>

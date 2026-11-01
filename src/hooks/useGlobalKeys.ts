@@ -8,7 +8,7 @@
 // so ⌘F or ⌃T is never mistaken for F or T.
 
 import { useEffect } from "react";
-import { backend } from "../backend";
+import { backend, capabilities } from "../backend";
 import { playPrevious, runAction } from "../actions";
 import { focusSearch, typingInto } from "../focus";
 import { exitFullscreen, toggleFullscreen } from "../fullscreen";
@@ -150,7 +150,7 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
 
       // Stats for nerds, from anywhere: the panel says what it can with
       // nothing playing, and its graphs are already recording when something is.
-      if (e.key === "s" || e.key === "S") {
+      if ((e.key === "s" || e.key === "S") && capabilities.playback) {
         e.preventDefault();
         dispatch({ type: "stats", open: !state.statsOpen });
         return;
@@ -159,7 +159,7 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
       // Recall, from anywhere: a remote's "last" button. Not a player
       // control — after a stop, going back to what was on still makes sense.
       // Ctrl+P never reaches here (the palette, above); Alt+P is the system's.
-      if ((e.key === "p" || e.key === "P") && !e.altKey && !e.metaKey) {
+      if ((e.key === "p" || e.key === "P") && !e.altKey && !e.metaKey && capabilities.playback) {
         e.preventDefault();
         playPrevious(dispatch, state.previousChannel);
         return;

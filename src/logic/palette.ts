@@ -7,6 +7,7 @@
 // Checked in src/__checks__/palette.test.mjs.
 
 import type { ChannelDto, ProgrammeHitDto } from "../types";
+import { allows, DESKTOP, type Capabilities, type Capability } from "./capabilities.ts";
 import { anyAlternative } from "./searchQuery.ts";
 import type { SleepRequest } from "./sleep";
 
@@ -42,6 +43,7 @@ export const ACTION_IDS = [
   "updates",
   "about",
   "quit",
+  "signOut",
 ] as const;
 
 export type ActionId = (typeof ACTION_IDS)[number];
@@ -58,6 +60,8 @@ export interface PaletteAction {
   /** Hidden unless the condition holds: a sleep timer is set, or the guide
    *  knows when the programme on now ends. */
   needs?: "sleeping" | "programme";
+  /** Hidden where the interface cannot do it (logic/capabilities.ts). */
+  needsCapability?: Capability;
   /** A sleep timer action: what it sets, or `null` for off. */
   sleep?: SleepRequest | null;
   /** What it is called inside a submenu that already says what it is part
@@ -65,11 +69,13 @@ export interface PaletteAction {
   short?: string;
 }
 
-/** What `needsPrevious` and `needs` are checked against. */
+/** What `needsPrevious`, `needs` and `needsCapability` are checked against. */
 export interface ActionConditions {
   hasPrevious?: boolean;
   sleeping?: boolean;
   programme?: boolean;
+  /** The app's window when not given. */
+  capabilities?: Capabilities;
 }
 
 export type PaletteItem =
@@ -92,6 +98,7 @@ export const ACTIONS: PaletteAction[] = [
     label: "Previous channel",
     hint: "P · last · recall",
     needsPrevious: true,
+    needsCapability: "playback",
     group: "player",
   },
   {
@@ -120,7 +127,7 @@ export const ACTIONS: PaletteAction[] = [
     group: "player",
   },
   // A view, not a player control: it opens with nothing playing too.
-  { id: "stats", label: "Stats for nerds", hint: "S", group: "view" },
+  { id: "stats", label: "Stats for nerds", hint: "S", group: "view", needsCapability: "playback" },
   // Each length its own entry, so typing "sleep 30" is one Enter away. The
   // hamburger folds the group into one row with a submenu.
   ...([15, 30, 45, 60, 90] as const).map(
@@ -157,9 +164,24 @@ export const ACTIONS: PaletteAction[] = [
   { id: "recordings", label: "Recordings", hint: "record · dvr", group: "data" },
   { id: "settings", label: "Open settings", hint: "⚙", group: "app" },
   // "upgrade" and "version" are what people type looking for this one.
-  { id: "updates", label: "Check for updates", hint: "upgrade · version", group: "app" },
+  {
+    id: "updates",
+    label: "Check for updates",
+    hint: "upgrade · version",
+    group: "app",
+    needsCapability: "updater",
+  },
   { id: "about", label: "About zapper", hint: "", group: "app" },
-  { id: "quit", label: "Quit zapper", hint: "Ctrl+Q", group: "app" },
+  { id: "quit", label: "Quit zapper", hint: "Ctrl+Q", group: "app", needsCapability: "window" },
+  // In a browser signed in to the recording service: forgets this browser's
+  // sign-in there, as revoking it in the app's Settings would.
+  {
+    id: "signOut",
+    label: "Sign out",
+    hint: "log out",
+    group: "app",
+    needsCapability: "signOut",
+  },
 ];
 
 /** The order the menu draws groups in, so a new group cannot land in an
@@ -187,9 +209,11 @@ export function availableActions(
   playing: boolean,
   conditions: ActionConditions = {},
 ): PaletteAction[] {
+  const caps = conditions.capabilities ?? DESKTOP;
   return ACTIONS.filter(
     (a) =>
-      (!a.needsPlayer || playing) &&
+      allows(caps, a.needsCapability) &&
+      (!a.needsPlayer || (playing && caps.playback)) &&
       (!a.needsPrevious || conditions.hasPrevious === true) &&
       (a.needs === undefined ||
         (a.needs === "sleeping" ? conditions.sleeping === true : conditions.programme === true)),

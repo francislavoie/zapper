@@ -13,7 +13,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { refreshRecordings } from "../actions";
-import { backend } from "../backend";
+import { backend, capabilities } from "../backend";
 import { errorMessage } from "../logic/async";
 import { presetLabel } from "../logic/naming";
 import { RECORDING_DEFAULTS, bytes, padMinutes, padSeconds } from "../logic/recordings";
@@ -48,12 +48,16 @@ export function RecordingPane({ s }: { s: SettingsControl }) {
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const load = useCallback(async () => {
-    try {
-      const s = await backend.recordingService();
-      setService(s);
-      setLinger(s.linger);
-    } catch (e) {
-      setError(errorMessage(e));
+    // Installing it is for the computer it runs on; a browser reaches one
+    // that is running already.
+    if (capabilities.localService) {
+      try {
+        const s = await backend.recordingService();
+        setService(s);
+        setLinger(s.linger);
+      } catch (e) {
+        setError(errorMessage(e));
+      }
     }
     try {
       const [st, set] = await Promise.all([backend.recordingStatus(), backend.recordingSettings()]);
@@ -129,15 +133,21 @@ export function RecordingPane({ s }: { s: SettingsControl }) {
   };
 
   const running = status !== null;
-  const stateWord = !service
-    ? "…"
-    : !service.supported
-      ? "Not available here yet"
-      : running
-        ? `Running${service.version ? ` · version ${service.version}` : ""}`
-        : service.installed
-          ? `Installed · ${service.state ?? "not running"}`
-          : "Not installed";
+  // In a browser the service is the one serving the page: running, or not
+  // answering it.
+  const stateWord = !capabilities.localService
+    ? running
+      ? `Running${status.version ? ` · version ${status.version}` : ""}`
+      : "Not answering"
+    : !service
+      ? "…"
+      : !service.supported
+        ? "Not available here yet"
+        : running
+          ? `Running${service.version ? ` · version ${service.version}` : ""}`
+          : service.installed
+            ? `Installed · ${service.state ?? "not running"}`
+            : "Not installed";
   const d = RECORDING_DEFAULTS;
   const minutes = (v: number) => `${v} min`;
 
@@ -151,15 +161,20 @@ export function RecordingPane({ s }: { s: SettingsControl }) {
         </div>
       ) : null}
 
-      <SettingsGroup heading="Service" hint="on this computer">
+      <SettingsGroup
+        heading="Service"
+        hint={capabilities.localService ? "on this computer" : undefined}
+      >
         <SettingRow
           label={stateWord}
           description={
-            service && !service.supported
-              ? service.unsupportedReason
-              : service?.supported && !service.installed && !service.binary
-                ? "zapper-server was not found beside zapper or on the PATH, so it cannot be installed from here yet."
-                : `Records what you schedule from the guide, even with zapper closed. It runs as you${service?.kind ? ` (${service.kind})` : ""}, listens on ${service?.address ?? "127.0.0.1"} (and on your network only if you allow it below), and keeps the catalogue current like the app does.${service?.supported && !service.canLinger ? " It records while you are signed in to this computer." : ""} Removing it keeps your recordings.`
+            !capabilities.localService
+              ? "The recording service this page is served by. It records what you schedule from the guide; installing or removing it is done in the zapper app on its computer."
+              : service && !service.supported
+                ? service.unsupportedReason
+                : service?.supported && !service.installed && !service.binary
+                  ? "zapper-server was not found beside zapper or on the PATH, so it cannot be installed from here yet."
+                  : `Records what you schedule from the guide, even with zapper closed. It runs as you${service?.kind ? ` (${service.kind})` : ""}, listens on ${service?.address ?? "127.0.0.1"} (and on your network only if you allow it below), and keeps the catalogue current like the app does.${service?.supported && !service.canLinger ? " It records while you are signed in to this computer." : ""} Removing it keeps your recordings.`
           }
         >
           {service?.supported ? (
@@ -307,7 +322,9 @@ export function RecordingPane({ s }: { s: SettingsControl }) {
               />
             </SettingRow>
           </SettingsGroup>
-          <NetworkAccess />
+          {/* Network access, the password and the devices are the app's
+              alone; the service refuses them to anyone else. */}
+          {capabilities.networkAdmin ? <NetworkAccess /> : null}
         </>
       )}
 
@@ -315,27 +332,29 @@ export function RecordingPane({ s }: { s: SettingsControl }) {
           Account shows, which the player's reconnects and the service's
           captures both count against. Here because a recording is where a
           second stream is most often wanted. */}
-      <SettingsGroup heading="Connections">
-        <SettingRow
-          label="Simultaneous streams"
-          htmlFor="rec-streams"
-          description="For a playlist, which cannot say how many streams it allows at once (Xtream accounts and HDHomeRun tuners report their own). A recording waits for a free connection rather than take one someone is watching on. The same setting as in Account."
-          modified={streams !== dStreams}
-          onReset={() => s.patch({ simultaneousStreams: dStreams })}
-          resetTo={String(dStreams)}
-        >
-          <RangeField
-            id="rec-streams"
-            min={STREAMS_MIN}
-            max={STREAMS_MAX}
-            step={1}
-            value={streams}
-            mark={dStreams}
-            format={(v) => String(v)}
-            onChange={(simultaneousStreams) => s.patch({ simultaneousStreams })}
-          />
-        </SettingRow>
-      </SettingsGroup>
+      {capabilities.account ? (
+        <SettingsGroup heading="Connections">
+          <SettingRow
+            label="Simultaneous streams"
+            htmlFor="rec-streams"
+            description="For a playlist, which cannot say how many streams it allows at once (Xtream accounts and HDHomeRun tuners report their own). A recording waits for a free connection rather than take one someone is watching on. The same setting as in Account."
+            modified={streams !== dStreams}
+            onReset={() => s.patch({ simultaneousStreams: dStreams })}
+            resetTo={String(dStreams)}
+          >
+            <RangeField
+              id="rec-streams"
+              min={STREAMS_MIN}
+              max={STREAMS_MAX}
+              step={1}
+              value={streams}
+              mark={dStreams}
+              format={(v) => String(v)}
+              onChange={(simultaneousStreams) => s.patch({ simultaneousStreams })}
+            />
+          </SettingRow>
+        </SettingsGroup>
+      ) : null}
     </>
   );
 }

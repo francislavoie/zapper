@@ -38,9 +38,9 @@
 
 import { useCallback, useEffect, useRef, type MouseEvent as ReactMouseEvent } from "react";
 import { runAction } from "../actions";
+import { capabilities } from "../backend";
 import { useClock } from "../hooks/useClock";
 import {
-  ACTIONS,
   actionGroups,
   availableActions,
   type PaletteAction,
@@ -91,7 +91,8 @@ export function Toolbar() {
   // down — `detail === 2` is the second press of the pair, before the drag
   // would begin.
   const dragWindow = (e: ReactMouseEvent) => {
-    if (e.button !== 0) return;
+    // A browser page is not a window to drag.
+    if (e.button !== 0 || !capabilities.window) return;
     if (e.detail >= 2) {
       void (IS_MAC ? windowControls.titleBarDoubleClick() : windowControls.toggleMaximise()).catch(
         (err: unknown) => dispatch({ type: "toast", text: `maximise: ${String(err)}` }),
@@ -108,7 +109,7 @@ export function Toolbar() {
   // becomes a window drag, and one that doesn't stays a click. Once the window
   // manager has the drag it eats the mouse-up, so no click follows a drag.
   const dragOnMove = (e: ReactMouseEvent) => {
-    if (e.button !== 0) return;
+    if (e.button !== 0 || !capabilities.window) return;
     const x = e.clientX;
     const y = e.clientY;
     const stop = () => {
@@ -128,7 +129,7 @@ export function Toolbar() {
     <header className="toolbar">
       {/* The traffic lights' room: AppKit draws them here, and around them
           the bar drags the window like the rest of it. */}
-      {IS_MAC ? <div className="tb-lights" onMouseDown={dragWindow} /> : null}
+      {IS_MAC && capabilities.window ? <div className="tb-lights" onMouseDown={dragWindow} /> : null}
       <div className="tb-lead">
         {/* The outside-click boundary is the button and its menu, and nothing
             else: clicking the status line beside them is outside. */}
@@ -175,7 +176,7 @@ export function Toolbar() {
         {/* Only while there is an update to act on; otherwise nothing at
             all, so an up-to-date app has a title bar like any other. One
             word and an arrow; the sentence is in the tooltip. */}
-        {showsBadge(state.update.state) ? (
+        {capabilities.updater && showsBadge(state.update.state) ? (
           <button
             className={`tb-update ${state.update.state.state === "failed" ? "bad" : ""}`}
             onMouseDown={dragOnMove}
@@ -199,7 +200,26 @@ export function Toolbar() {
         >
           <Gear className="tb-gear" />
         </button>
-        {IS_MAC ? null : <WindowButtons maxLabel={max.label} maxGlyph={max.glyph} />}
+        {/* In a browser, signing out is where the window's buttons are: the
+            one way to leave that is this page's own. */}
+        {capabilities.signOut ? (
+          <button
+            className="tb-btn tb-signout"
+            data-tip="Sign this browser out of the recording service"
+            onClick={() =>
+              runAction("signOut", {
+                dispatch,
+                player: state.player,
+                previous: state.previousChannel,
+              })
+            }
+          >
+            Sign out
+          </button>
+        ) : null}
+        {capabilities.window && !IS_MAC ? (
+          <WindowButtons maxLabel={max.label} maxGlyph={max.glyph} />
+        ) : null}
       </div>
     </header>
   );
@@ -304,8 +324,18 @@ function Menu({ onChoose }: { onChoose: (a: PaletteAction) => void }) {
   // The sleep timer's lengths are one row here, opening a submenu: seven
   // rows of them would outnumber everything else in the menu.
   const groups = actionGroups(
-    availableActions(player.state !== "stopped", { hasPrevious: previousChannel !== null }),
+    availableActions(player.state !== "stopped", {
+      hasPrevious: previousChannel !== null,
+      capabilities,
+    }),
   );
+  // Every action there is here, whether or not it applies right now.
+  const total = availableActions(true, {
+    hasPrevious: true,
+    sleeping: true,
+    programme: true,
+    capabilities,
+  }).length;
   let seen = 0;
 
   return (
@@ -334,7 +364,7 @@ function Menu({ onChoose }: { onChoose: (a: PaletteAction) => void }) {
       ))}
       </SubMenuHost>
       <div className="tb-menu-foot">
-        {ACTIONS.length} actions · <b>{chordLabel(["Ctrl", "P"], IS_MAC)}</b> searches them
+        {total} actions · <b>{chordLabel(["Ctrl", "P"], IS_MAC)}</b> searches them
       </div>
     </div>
   );

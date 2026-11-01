@@ -58,7 +58,8 @@ test("player-only actions are hidden when nothing is playing", () => {
     (a) => a.id,
   );
   assert.ok(live.includes("compressor"));
-  assert.equal(live.length, ACTIONS.length);
+  // Every action but signing out, which only a browser has to do.
+  assert.equal(live.length, ACTIONS.length - 1);
 });
 
 test("the previous channel is offered only when there is one", () => {
