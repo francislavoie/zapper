@@ -362,6 +362,17 @@ define_class!(
         fn resize_subviews(&self, _old: NSSize) {
             place();
         }
+
+        /// The window moved to a screen of another scale: the layer's
+        /// framebuffer follows, or the picture is drawn at the old one's
+        /// resolution and scaled.
+        #[unsafe(method(viewDidChangeBackingProperties))]
+        fn backing_changed(&self) {
+            unsafe {
+                let _: () = msg_send![super(self), viewDidChangeBackingProperties];
+            }
+            place();
+        }
     }
 );
 
