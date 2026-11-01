@@ -34,6 +34,7 @@ export const SHORTCUT_GROUPS: readonly ShortcutGroup[] = [
     title: "Anywhere",
     items: [
       { keys: [["Ctrl", "P"]], does: "Command palette — every action, and channel search" },
+      { keys: [["Ctrl", "Q"]], does: "Quit zapper" },
       { keys: [["/"]], does: "Search channels" },
       { keys: [["G"]], does: "Switch between the list and the guide" },
       { keys: [["S"]], does: "Stats for nerds" },

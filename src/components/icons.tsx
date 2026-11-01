@@ -5,20 +5,17 @@
 type IconProps = { className?: string; title?: string };
 
 /** The compressor icons are one waveform drawn two ways, so the pair reads as
- *  a before and after. "Off" is five bars at their natural, uneven heights,
- *  the loudest reaching nearly the full height of the icon. "On" is the same
- *  five evened out to one short level, with a chevron above and below
- *  pressing in on them: the squeeze is drawn, not left to a difference in
- *  bar heights, which at button size is a pixel or two. Stroked a touch
- *  heavier than the outline icons, so five thin bars carry the same weight
- *  as the filled play and speaker beside them. */
+ *  a before and after: "off" is five bars at their natural, uneven heights,
+ *  "on" is the same five at nearly one height, which is what the compressor
+ *  does to the audio. Nothing else is drawn; the toggle's own "on" face
+ *  carries the state as well. Stroked a touch heavier than the outline
+ *  icons, so five thin bars carry the same weight as the filled play and
+ *  speaker beside them. */
 const WAVE_X = [4.5, 8.25, 12, 15.75, 19.5];
 const WAVE_WEIGHT = "2.2";
 // Half-heights of each bar about the centre line, before the round caps.
 const WAVE_LOUD = [3, 8.25, 5, 7, 2.5];
-const WAVE_EVEN = [3, 3, 3, 3, 3];
-// The chevrons: each spans the middle three bars and points at the centre.
-const SQUEEZE = "M6 2.75 12 5.25 18 2.75M6 21.25 12 18.75 18 21.25";
+const WAVE_EVEN = [5.25, 6, 5.5, 6, 5.25];
 
 function waveBars(halves: number[]): string {
   return WAVE_X.map((x, i) => `M${x} ${12 - halves[i]}V${12 + halves[i]}`).join("");
@@ -30,8 +27,6 @@ export function CompressorOn({ className, title }: IconProps) {
       {title ? <title>{title}</title> : null}
       <path d={waveBars(WAVE_EVEN)} fill="none" stroke="currentColor"
             strokeWidth={WAVE_WEIGHT} strokeLinecap="round" />
-      <path d={SQUEEZE} fill="none" stroke="currentColor" strokeWidth="1.8"
-            strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
@@ -222,6 +217,38 @@ export function Bolt({ className, title }: IconProps) {
     <svg className={className} viewBox="150 30 220 460" aria-hidden={!title} focusable="false">
       {title ? <title>{title}</title> : null}
       <path d="M300 40 L170 285 L258 285 L212 472 L352 232 L268 232 Z" fill="currentColor" />
+    </svg>
+  );
+}
+
+/** A gear: eight square-ish teeth around a ring, with a hole in the middle,
+ *  stroked like the window buttons beside it. The outline is computed so the
+ *  teeth are evenly spaced and the same width at any size. */
+function gearPath(): string {
+  const cx = 8;
+  const cy = 8;
+  const teeth = 8;
+  const outer = 6.6;
+  const inner = 5.1;
+  const half = Math.PI / teeth; // half the angle a tooth and its gap share
+  const tip = half * 0.55; // half the tooth's angular width at the tip
+  const pts: string[] = [];
+  for (let i = 0; i < teeth; i++) {
+    const a = (i * 2 * Math.PI) / teeth;
+    const at = (r: number, t: number) =>
+      `${(cx + r * Math.cos(t)).toFixed(2)} ${(cy + r * Math.sin(t)).toFixed(2)}`;
+    pts.push(at(inner, a - half * 0.95), at(outer, a - tip), at(outer, a + tip), at(inner, a + half * 0.95));
+  }
+  return `M${pts.join("L")}Z`;
+}
+const GEAR = gearPath();
+
+export function Gear({ className, title }: IconProps) {
+  return (
+    <svg className={className} viewBox="0 0 16 16" aria-hidden={!title} focusable="false">
+      {title ? <title>{title}</title> : null}
+      <path d={GEAR} fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+      <circle cx="8" cy="8" r="2" fill="none" stroke="currentColor" strokeWidth="1.4" />
     </svg>
   );
 }

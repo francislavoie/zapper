@@ -416,6 +416,22 @@ select option {
   line-height: 1;
 }
 
+/* The settings gear sits with the window buttons but a little apart from
+   them, so it reads as the app's own control and not a fourth window
+   button. */
+.tb-settings {
+  margin-right: 0.375rem;
+}
+
+.tb-settings.on {
+  color: var(--accent);
+}
+
+.tb-gear {
+  width: 0.9375rem;
+  height: 0.9375rem;
+}
+
 .burger {
   display: flex;
   flex-direction: column;
@@ -4906,9 +4922,14 @@ textarea.field {
     gap: 0.25rem;
   }
 
+  /* A width, not just a flex basis: WebKit sizes the inline-flex volume
+     control from its children's own widths and ignores a basis there, so
+     with only `flex: 0 0 7.5rem` the control came out as wide as the mute
+     button and the slider spilled over the buttons beside it. */
   .mini-volume-inline {
     display: flex;
-    flex: 0 0 7.5rem;
+    flex: none;
+    width: 7.5rem;
   }
 
   .mini-volume-inline .vol {

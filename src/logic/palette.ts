@@ -41,6 +41,7 @@ export const ACTION_IDS = [
   "settings",
   "updates",
   "about",
+  "quit",
 ] as const;
 
 export type ActionId = (typeof ACTION_IDS)[number];
@@ -158,6 +159,7 @@ export const ACTIONS: PaletteAction[] = [
   // "upgrade" and "version" are what people type looking for this one.
   { id: "updates", label: "Check for updates", hint: "upgrade · version", group: "app" },
   { id: "about", label: "About zapper", hint: "", group: "app" },
+  { id: "quit", label: "Quit zapper", hint: "Ctrl+Q", group: "app" },
 ];
 
 /** The order the menu draws groups in, so a new group cannot land in an

@@ -5,7 +5,7 @@
 
 import { useEffect } from "react";
 import { backend } from "../backend";
-import { playPrevious } from "../actions";
+import { playPrevious, runAction } from "../actions";
 import { focusSearch, typingInto } from "../focus";
 import { exitFullscreen, toggleFullscreen } from "../fullscreen";
 import { fullscreenNow, refreshFullscreen } from "./useFullscreen";
@@ -20,6 +20,15 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
       if ((e.ctrlKey || e.metaKey) && (e.key === "p" || e.key === "P")) {
         e.preventDefault();
         dispatch({ type: "palette", open: !state.paletteOpen });
+        return;
+      }
+
+      // Quit, from anywhere, the way desktop apps do. Closing the window is
+      // quitting: there is one window and nothing stays behind it (the
+      // recording service is its own process and keeps its schedule).
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === "q" || e.key === "Q")) {
+        e.preventDefault();
+        runAction("quit", { dispatch, player: state.player, previous: state.previousChannel });
         return;
       }
 

@@ -44,7 +44,7 @@ import { badgeLabel, badgeShort, showsBadge } from "../logic/updates";
 import { useApp, useDispatch } from "../store";
 import { windowControls } from "../window";
 import { useMaximised } from "../hooks/useMaximised";
-import { Bolt, UpdateArrow } from "./icons";
+import { Bolt, Gear, UpdateArrow } from "./icons";
 import { SleepSubMenu } from "./SleepMenu";
 import { SubMenuHost } from "./SubMenu";
 
@@ -175,6 +175,18 @@ export function Toolbar() {
             {badgeShort(state.update.state)}
           </button>
         ) : null}
+        {/* Settings, one click away rather than at the bottom of the menu.
+            Beside the window buttons but set apart from them, so it is not
+            mistaken for one; a press that moves still drags the window. */}
+        <button
+          className={`tb-btn tb-settings ${state.settingsOpen ? "on" : ""}`}
+          aria-label="Settings"
+          data-tip="Settings"
+          onMouseDown={dragOnMove}
+          onClick={() => dispatch({ type: "settings", open: !state.settingsOpen })}
+        >
+          <Gear className="tb-gear" />
+        </button>
         <button
           className="tb-btn"
           aria-label="Minimise"

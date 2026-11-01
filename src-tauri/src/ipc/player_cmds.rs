@@ -371,6 +371,11 @@ impl Machine {
         if self.dto.state == PlaybackState::Opening {
             self.dto.state = PlaybackState::Playing;
             self.settle = Some(Settle::new());
+            // The held first frame already counted as the open, so the
+            // measurement `playing` schedules on the way out of Opening never
+            // happens on this path; it starts from here instead, once the
+            // picture is moving.
+            self.measure_at = Some(Instant::now() + MEASURE_AFTER);
         }
     }
 
@@ -2452,6 +2457,21 @@ mod tests {
         assert_eq!(m.dto.error.as_deref(), Some("the stream could not be opened"));
         let e = m.dto.ending.unwrap();
         assert_eq!((e.kind, e.status, e.limit), (ending::EndingKind::Refused, Some(509), true));
+    }
+
+    #[test]
+    fn a_channel_held_for_live_is_measured_once_it_moves() {
+        let mut m = Machine::new();
+        m.opening(7);
+        m.joining = true;
+        let t0 = Instant::now();
+        m.playing();
+        assert_eq!(m.ledger(t0), Some(Ledger::Loaded(7)), "the held frame is the open");
+        m.joined();
+        assert_eq!(m.ledger(Instant::now() + MEASURE_AFTER / 2), None);
+        let later = Instant::now() + MEASURE_AFTER;
+        assert_eq!(m.ledger(later), Some(Ledger::Measure(7)));
+        assert_eq!(m.ledger(later), None, "measured once per open");
     }
 
     #[test]

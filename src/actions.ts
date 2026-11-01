@@ -10,6 +10,7 @@ import { focusCategory, guideOffsetFor, hitAction, inGuideReach } from "./logic/
 import type { ActionId } from "./logic/palette";
 import type { SleepRequest } from "./logic/sleep";
 import { refreshFullscreen } from "./hooks/useFullscreen";
+import { windowControls } from "./window";
 import { ALL_CATEGORIES, run, type Action, type Mode } from "./store";
 import type {
   ChannelDto,
@@ -140,6 +141,12 @@ const HANDLERS: Record<ActionId, (ctx: ActionContext) => void> = {
     void checkForUpdates(dispatch);
   },
   about: ({ dispatch }) => dispatch({ type: "about", open: true }),
+  // One window, so closing it is quitting; the close path already saves the
+  // session and the window size on the way out.
+  quit: ({ dispatch }) =>
+    void windowControls
+      .close()
+      .catch((e: unknown) => dispatch({ type: "toast", text: `quit: ${String(e)}` })),
 };
 
 /** Asks GitHub now, whatever the automatic-check setting says: asking is
