@@ -33,6 +33,7 @@ pub(super) fn thumbnail_tick() {
         return;
     }
     let generation = trickplay::generation();
+    tracing::debug!("thumbnail: taking one at {at:.1}s");
     // Off the main thread: the screenshot waits on mpv's core, and the
     // interface must not wait with it.
     let spawned = std::thread::Builder::new()
@@ -67,6 +68,7 @@ fn screenshot_thumbnail() -> Option<Vec<u8>> {
     let mut node: mpv_node = unsafe { std::mem::zeroed() };
     let rc = unsafe { mpv_command_ret(handle.ctx.as_ptr(), args.as_mut_ptr(), &mut node) };
     if rc < 0 {
+        tracing::debug!("thumbnail: screenshot-raw failed ({rc})");
         return None;
     }
     let out = if node.format == mpv_format_MPV_FORMAT_NODE_MAP {
@@ -115,6 +117,10 @@ unsafe fn shrink_node(node: &libmpv2_sys::mpv_node) -> Option<Vec<u8>> {
         }
     }
     if format.as_deref() != Some(b"bgr0".as_slice()) {
+        tracing::debug!(
+            "thumbnail: screenshot-raw gave {:?}, not bgr0",
+            format.as_deref().map(String::from_utf8_lossy)
+        );
         return None;
     }
     let (w, h, stride) = (

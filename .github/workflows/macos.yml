@@ -210,36 +210,63 @@ jobs:
       # (tools/make_fixtures.sh, served by tools/fake_stream.py), never a provider, and no sound
       # (ao=null). ffmpeg's command-line tool makes the fixtures and is not part of anything built.
       - name: Test streams
+        id: streams
         run: |
           brew install --quiet ffmpeg
           tools/make_fixtures.sh
+          # And one whose picture says which way up it is: testsrc draws a frame counter.
+          ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc=size=1280x720:rate=25 -t 30 \
+            -c:v libx264 -pix_fmt yuv420p -g 50 -f mpegts ~/.cache/zapper/fixtures/orient.ts
           python3 tools/fake_stream.py --port 8788 > fixtures.log 2>&1 &
           for _ in $(seq 20); do curl -sf --max-time 2 http://127.0.0.1:8788/ >/dev/null && break; sleep 1; done
           curl -sf --max-time 2 http://127.0.0.1:8788/ | grep '\.ts'
 
       # The surface harness against the fixture: the layer draws, mpv paints, the picture is not
       # black, the rect docks the view, thumbnails are taken. Built against the interface the app
-      # embeds (tauri/custom-protocol), so its screenshots show the page over the video.
+      # embeds (tauri/custom-protocol), so its screenshots show the page over the video. The
+      # runners have no GPU: OpenGL is Apple's software renderer there, a few frames a second.
       - name: Surface check
         working-directory: src-tauri
+        env:
+          RUST_LOG: info,zapper_lib::surface::screenshot=debug
         run: |
           mkdir -p ../shots
           CARGO_BUILD_JOBS=$(sysctl -n hw.ncpu) cargo build --release --features harness,tauri/custom-protocol --bin surface_check
-          ZAPPER_SHOTS=$PWD/../shots ./target/release/surface_check 20 2>&1 | tee ../shots/surface_check.log
+          ZAPPER_SHOTS=$PWD/../shots ./target/release/surface_check 30 2>&1 | tee ../shots/surface_check.log
           grep -q '^PASS' ../shots/surface_check.log
 
-      # The app itself, from the bundle, playing the fixture (ZAPPER_AUTOPLAY on a scratch
-      # account, ZAPPER_MUTE): a screenshot of the real interface over real video.
+      # The app itself, from the bundle, playing the orientation fixture (ZAPPER_AUTOPLAY on a
+      # scratch account, ZAPPER_MUTE): a screenshot of the real interface over real video. Its
+      # window is larger than the runner's screen, so the window itself is captured by its id.
       - name: The app, playing
+        if: ${{ !cancelled() && steps.streams.outcome == 'success' }}
         run: |
+          cat > "$RUNNER_TEMP/window-id.swift" <<'SWIFT'
+          import CoreGraphics
+          import Foundation
+          let owner = CommandLine.arguments[1]
+          let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
+          for w in windows where w[kCGWindowOwnerName as String] as? String == owner && w[kCGWindowLayer as String] as? Int == 0 {
+              print(w[kCGWindowNumber as String] as? Int ?? 0)
+              exit(0)
+          }
+          exit(1)
+          SWIFT
+          mkdir -p shots
           app=src-tauri/target/release/bundle/macos/zapper.app/Contents/MacOS/zapper
           ZAPPER_MUTE=1 ZAPPER_AUTOPLAY=1 ZAPPER_FIXTURE_BASE=http://127.0.0.1:8788 \
-            ZAPPER_FIXTURE_NAME=sample1080.ts "$app" > shots/app.log 2>&1 &
+            ZAPPER_FIXTURE_NAME=orient.ts "$app" > shots/app.log 2>&1 &
           pid=$!
-          sleep 15
-          screencapture -x shots/app-playing.png
+          sleep 20
+          screencapture -x shots/app-screen.png
+          if id=$(swift "$RUNNER_TEMP/window-id.swift" zapper); then
+            screencapture -x -o -l"$id" shots/app-window.png
+          else
+            echo "::warning::no zapper window found to capture"
+          fi
           kill -0 "$pid" || { echo "::error::the app exited"; tail -40 shots/app.log; exit 1; }
           kill "$pid"
+          cat shots/app.log | tail -30
           ! grep -E 'panicked at|CAPTURE FAILED|creating mpv render context' shots/app.log
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

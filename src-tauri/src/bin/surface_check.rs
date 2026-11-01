@@ -297,7 +297,7 @@ fn main() {
             // Small enough for a CI runner's 1024x768 screen, so the
             // screenshots show the whole window.
             window.set_size(tauri::LogicalSize::new(1000.0, 680.0))?;
-            window.center()?;
+            window.set_position(tauri::LogicalPosition::new(12.0, 40.0))?;
             surface::install(&window)?;
             // `ao=null` before anything is loaded: this runs unattended and
             // must never make noise.
@@ -313,7 +313,10 @@ fn main() {
                 let n = t.get() + 1;
                 t.set(n);
                 let (draws, painted, peak) = macos::stats();
-                tracing::info!("t+{n}s: draws={draws} mpv_painted={painted} peak_sample={peak}");
+                let thumbs = zapper_lib::surface::trickplay::count();
+                tracing::info!(
+                    "t+{n}s: draws={draws} mpv_painted={painted} peak_sample={peak} thumbs={thumbs}"
+                );
                 if n == seconds / 2 {
                     shot("full");
                     if let Err(e) = surface::set_video_rect(DOCKED) {
