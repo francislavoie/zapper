@@ -11,19 +11,24 @@ import { backend } from "../backend";
 import { registerZapList, type ZapList } from "../mediaKeys";
 import { registerSearchInput } from "../focus";
 import { useChannelPages, type RowSource } from "../hooks/useChannelPages";
+import { useProgrammeSearch } from "../hooks/useProgrammeSearch";
 import { useSearch } from "../hooks/useSearch";
 import { OVERSCAN, ROW_HEIGHT, computeWindow, stickyIndex } from "../logic/virtual";
 import { loadSession, saveSession } from "../session";
 import { ALL_CATEGORIES, useApp, useDispatch } from "../store";
 import type { Async } from "../logic/async";
+import type { SearchTab } from "../logic/programmes";
 import type { ChannelDto } from "../types";
 import { ChannelRow } from "./ChannelRow";
 import { ViewSwitch } from "./ViewSwitch";
+import { ProgrammeResults } from "./ProgrammeResults";
 import { SearchField } from "./SearchField";
 import { RailExpand } from "./Rail";
 
 /** The backend caps search at a sane number; 100 is plenty to scan. */
 const SEARCH_LIMIT = 100;
+/** Programme results per page; "More results" fetches the next. */
+const PROGRAMME_PAGE = 100;
 
 /** Stable identities so the window effect does not re-run every render. */
 const NOOP = () => {};
@@ -68,6 +73,14 @@ export function ChannelList() {
   // where the results are shown.
   const results = useSearch(state.query, SEARCH_LIMIT);
   const source: RowSource = searching ? asSource(results) : paged;
+  // Both kinds are searched together, so each tab can say how much it has
+  // before it is chosen. Which one is showing outlives the query: someone
+  // looking for programmes types one search after another.
+  const programmes = useProgrammeSearch(state.query, PROGRAMME_PAGE);
+  const [tab, setTab] = useState<SearchTab>("channels");
+  const showingProgrammes = searching && tab === "programmes";
+  const programmeCount =
+    programmes.result.status === "ready" ? programmes.result.data.length : 0;
 
   // What the media keys' next and previous step through. Updated on every
   // render, hidden ones included: behind the player this list still follows
@@ -195,8 +208,9 @@ export function ChannelList() {
           rail's filter box, so the two inputs sit on one line. */}
       <ListHead
         heading={searching ? "Search results" : categoryName}
-        total={source.total}
-        loading={source.loading}
+        total={showingProgrammes ? programmeCount : source.total}
+        more={showingProgrammes && programmes.hasMore}
+        loading={showingProgrammes ? programmes.result.status === "loading" : source.loading}
         railCollapsed={state.railCollapsed}
       />
       <div className="pane-head">
@@ -208,9 +222,20 @@ export function ChannelList() {
           onChange={(text) => dispatch({ type: "query", text })}
           clearLabel="Clear search"
         />
+        {searching ? (
+          <SearchKind
+            tab={tab}
+            onTab={setTab}
+            channels={source.total}
+            programmes={programmeCount}
+            moreProgrammes={programmes.hasMore}
+          />
+        ) : null}
       </div>
 
-      {source.error ? (
+      {showingProgrammes ? <ProgrammeResults search={programmes} query={state.query} /> : null}
+
+      {source.error && !showingProgrammes ? (
         <div className="pane-error">
           <span>Channels unavailable — {source.error}</span>
           <button className="link" onClick={source.retry}>
@@ -221,6 +246,9 @@ export function ChannelList() {
 
       <div
         className="viewport"
+        // Hidden rather than unmounted while programmes show: its size
+        // observer is attached once, on mount, and would not come back.
+        hidden={showingProgrammes}
         ref={viewportRef}
         onScroll={(e) => {
           const top = e.currentTarget.scrollTop;
@@ -268,11 +296,14 @@ export function ChannelList() {
 function ListHead({
   heading,
   total,
+  more = false,
   loading,
   railCollapsed,
 }: {
   heading: string;
   total: number;
+  /** There are more than `total`, not yet fetched. */
+  more?: boolean;
   loading: boolean;
   railCollapsed: boolean;
 }) {
@@ -282,12 +313,59 @@ function ListHead({
       <span className="list-title" data-tip-overflow="">
         {heading}
       </span>
-      <span className="list-count">{total.toLocaleString()}</span>
+      <span className="list-count">
+        {total.toLocaleString()}
+        {more ? "+" : ""}
+      </span>
       {loading ? <span className="list-count">loading…</span> : null}
       <span className="spring" />
       {/* Beside the list's own title: the guide is the same channels as a
           timeline, so the switch belongs to the list, not the window. */}
       <ViewSwitch current="browse" />
+    </div>
+  );
+}
+
+/** Channels | Programmes, beside the search box while there is a search. A
+ *  tab rather than one mixed list, because the two answer different
+ *  questions — "where is this channel" and "when is this on" — and each
+ *  ranks its own way. */
+function SearchKind({
+  tab,
+  onTab,
+  channels,
+  programmes,
+  moreProgrammes,
+}: {
+  tab: SearchTab;
+  onTab: (tab: SearchTab) => void;
+  channels: number;
+  programmes: number;
+  moreProgrammes: boolean;
+}) {
+  const kinds: { id: SearchTab; label: string; count: string }[] = [
+    { id: "channels", label: "Channels", count: channels.toLocaleString() },
+    {
+      id: "programmes",
+      label: "Programmes",
+      count: `${programmes.toLocaleString()}${moreProgrammes ? "+" : ""}`,
+    },
+  ];
+  return (
+    <div className="view-switch search-kind" role="tablist" aria-label="Search for">
+      {kinds.map((k) => (
+        <button
+          key={k.id}
+          role="tab"
+          aria-selected={tab === k.id}
+          className={tab === k.id ? "on" : ""}
+          // Keeps focus in the search box, so typing carries on after a switch.
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => onTab(k.id)}
+        >
+          {k.label} <span className="search-kind-n">{k.count}</span>
+        </button>
+      ))}
     </div>
   );
 }

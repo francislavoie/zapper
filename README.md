@@ -64,6 +64,9 @@ each release lists the files' checksums. After that, zapper updates itself (see
   refreshed in the background. Startup shows the last mirror at once, without waiting on the
   network.
 - **Instant search** across every channel name, from the filter box, `/`, or the command palette.
+- **Programme search.** The same box finds shows in the guide: what is on now, every airing
+  coming up, and what a catch-up archive can still play. Pick one to tune in, open the guide on
+  it, or play it from the archive.
 - **List and guide.** Switch with `G`. The guide glides through time with the wheel
   (`Shift`+wheel), a scrollbar, or an hour at a time with `←`/`→`, and `Home` brings it back to
   now.

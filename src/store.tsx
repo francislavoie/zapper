@@ -96,6 +96,13 @@ export interface VideoMenu {
  *  grid, which covers the window while the stream keeps playing underneath. */
 export type Mode = "browse" | "watch" | "guide";
 
+/** See `State.guideFocus`. */
+export interface GuideFocus {
+  streamId: number;
+  index: number | null;
+  seq: number;
+}
+
 export interface Toast {
   id: number;
   text: string;
@@ -201,6 +208,13 @@ export interface State {
    *  has drawn. Kept so the offset can be carried across the clock rolling
    *  over — the grid reports each new anchor with `guideRebase`. */
   guideAnchor: number | null;
+  /** A channel the guide was sent to — by choosing an upcoming programme in
+   *  search — to be scrolled into view and marked. `index` is its row in the
+   *  category the guide shows, or null when that could not be found and the
+   *  guide can only mark it if it happens to be on screen. `seq` makes a
+   *  second trip to the same channel a new request. Cleared by choosing a
+   *  category, which is somewhere else entirely. */
+  guideFocus: GuideFocus | null;
   /** Always a usable value: the contract's documented defaults until the
    *  backend answers. The load state is kept beside it rather than wrapping
    *  it in an Async, because the guide has to draw something either way. */
@@ -310,6 +324,7 @@ export const initialState: State = {
   liveJump: null,
   guideOffset: 0,
   guideAnchor: null,
+  guideFocus: null,
   settings: DEFAULT_SETTINGS,
   settingsStatus: idle(),
   settingsSaveError: null,
@@ -376,6 +391,16 @@ export type Action =
   | { type: "guideSeek"; offset: number; anchor: number }
   | { type: "guideRebase"; anchor: number }
   | { type: "guideNow" }
+  /** Open the guide on `categoryId` at `offset` from `anchor`, with the
+   *  channel at row `index` scrolled to and marked. */
+  | {
+      type: "guideFocus";
+      categoryId: string;
+      streamId: number;
+      index: number | null;
+      offset: number;
+      anchor: number;
+    }
   | { type: "settingsStatus"; value: Async<null> }
   | { type: "settingsValue"; value: SettingsDto }
   | { type: "settingsSaveError"; message: string | null }
@@ -399,7 +424,26 @@ export function reducer(state: State, action: Action): State {
     case "selectCategory":
       // Choosing a category is also a way out of a search: the two are one
       // list, and leaving the query up would make the choice look ignored.
-      return { ...state, categoryId: action.id, query: "" };
+      return { ...state, categoryId: action.id, query: "", guideFocus: null };
+    case "guideFocus":
+      // The guide, at a time, on a channel's row. The query is kept: the
+      // search this came from is still there to go back to.
+      return {
+        ...state,
+        mode: "guide",
+        categoryId: action.categoryId,
+        guideOffset: clampOffset(action.offset, state.settings.guideHours),
+        guideAnchor: action.anchor,
+        guideFocus: {
+          streamId: action.streamId,
+          index: action.index,
+          seq: (state.guideFocus?.seq ?? 0) + 1,
+        },
+        menuOpen: false,
+        favouriteMenu: null,
+        categoryMenu: null,
+        categoryOptions: null,
+      };
     case "categoryFilter":
       return { ...state, categoryFilter: action.text };
     case "fullscreenFrom":

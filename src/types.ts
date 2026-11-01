@@ -237,6 +237,19 @@ export type MediaPlayback = "playing" | "paused" | "stopped";
 /** A media key, pushed as `EVENTS.mediaKey`. Mirrors `MediaKey`. */
 export type MediaKey = "play" | "pause" | "toggle" | "next" | "previous" | "stop";
 
+/** Where a programme found by search sits relative to now, which decides what
+ *  choosing it does. `catchup` is finished but still in the channel's
+ *  archive; finished programmes nothing can play are never search results. */
+export type AiringDto = "live" | "upcoming" | "catchup";
+
+/** One airing of a programme, with the channel that carries it. A live hit's
+ *  channel carries the programme as its `nowPlaying`. */
+export interface ProgrammeHitDto {
+  channel: ChannelDto;
+  programme: ProgrammeDto;
+  airing: AiringDto;
+}
+
 /** One channel's row in the guide, programmes included, so the grid needs no
  *  second round trip per row. */
 export interface GuideRowDto {

@@ -131,7 +131,8 @@ fn add_missing_columns(conn: &Connection) -> Result<()> {
 
 pub fn migrate(conn: &Connection) -> Result<()> {
     conn.execute_batch(SCHEMA).context("applying schema")?;
-    add_missing_columns(conn)
+    add_missing_columns(conn)?;
+    crate::catalog::guide_search::install(conn)
 }
 
 fn tune(conn: &Connection) -> Result<()> {
@@ -172,7 +173,15 @@ mod tests {
             .unwrap()
             .map(Result::unwrap)
             .collect();
-        for t in ["activity", "categories", "channels", "epg", "epg_channel_names", "quality"] {
+        for t in [
+            "activity",
+            "categories",
+            "channels",
+            "epg",
+            "epg_channel_names",
+            "epg_fts",
+            "quality",
+        ] {
             assert!(
                 tables.contains(&t.to_string()),
                 "missing table {t}; got {tables:?}"

@@ -5,12 +5,13 @@ import type { Dispatch } from "react";
 import { backend } from "./backend";
 import { toggleFullscreen } from "./fullscreen";
 import { errorMessage, failed, loading, ready } from "./logic/async";
-import { catchupMinutes } from "./logic/guide";
+import { anchorFor, catchupMinutes } from "./logic/guide";
+import { focusCategory, guideOffsetFor, hitAction, inGuideReach } from "./logic/programmes";
 import type { ActionId } from "./logic/palette";
 import type { SleepRequest } from "./logic/sleep";
 import { refreshFullscreen } from "./hooks/useFullscreen";
-import { run, type Action, type Mode } from "./store";
-import type { ChannelDto, PlayerStateDto, ProgrammeDto } from "./types";
+import { ALL_CATEGORIES, run, type Action, type Mode } from "./store";
+import type { ChannelDto, PlayerStateDto, ProgrammeDto, ProgrammeHitDto } from "./types";
 
 export interface PlayOptions {
   /** Take over the window as well as starting the stream. Off by default:
@@ -167,6 +168,66 @@ export async function playCatchupProgramme(
     backend.playCatchup(ch.streamId, programme.start, catchupMinutes(programme)),
   );
   if (!ok) dispatch({ type: "mode", mode: back });
+}
+
+/** What opening a programme hit needs to know about where the user is. */
+export interface HitContext {
+  /** The category on screen, so the guide keeps it when the channel is in it. */
+  categoryId: string;
+  /** Where a catch-up that fails to open should leave the user. */
+  mode: Mode;
+  guideHours: number;
+}
+
+/** Chooses a programme search result: tunes to it if it is on, plays it from
+ *  the archive if it has finished, and otherwise opens the guide at its time
+ *  with its channel's row scrolled to and marked. */
+export async function openProgrammeHit(
+  dispatch: Dispatch<Action>,
+  hit: ProgrammeHitDto,
+  ctx: HitContext,
+): Promise<void> {
+  const action = hitAction(hit.airing);
+  if (action === "tune") {
+    void playChannel(dispatch, { ...hit.channel, nowPlaying: hit.programme });
+    return;
+  }
+  if (action === "catchup") {
+    void playCatchupProgramme(dispatch, hit.channel, hit.programme, ctx.mode);
+    return;
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  const anchor = anchorFor(now);
+  const categoryId = focusCategory(ctx.categoryId, hit.channel.categoryId, ALL_CATEGORIES);
+  // The row is looked up rather than paged to: the guide lists a category a
+  // screenful at a time and the channel may be thousands of rows down. Not
+  // finding it still opens the guide at the right time, which is most of
+  // the answer.
+  let index: number | null = null;
+  try {
+    index = await backend.channelIndex(
+      categoryId === ALL_CATEGORIES ? null : categoryId,
+      hit.channel.streamId,
+    );
+  } catch {
+    index = null;
+  }
+  dispatch({
+    type: "guideFocus",
+    categoryId,
+    streamId: hit.channel.streamId,
+    index,
+    offset: guideOffsetFor(hit.programme.start, anchor, ctx.guideHours),
+    anchor,
+  });
+  if (!inGuideReach(hit.programme.start, now)) {
+    dispatch({
+      type: "toast",
+      kind: "info",
+      text: `The guide shows two days ahead; ${hit.programme.title} is later than that`,
+    });
+  }
 }
 
 /** Fetches the category list into the store.

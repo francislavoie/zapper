@@ -8,6 +8,7 @@ pub mod credentials;
 pub mod db;
 pub mod epg;
 pub mod epg_match;
+pub mod guide_search;
 pub mod index;
 pub mod origin;
 pub mod playlist;

@@ -24,6 +24,7 @@ import type {
   TrackDto,
   AspectMode,
   DeinterlaceMode,
+  ProgrammeHitDto,
   QualityDto,
   SettingsDto,
   SubtitleStyleDto,
@@ -165,6 +166,8 @@ const PROGRAMMES = [
   "Grand Prix: Practice 2",
   "Hockey: Third Period",
   "Breaking News Special",
+  // Accented, so a search for "cafe" has something to fold onto.
+  "Le Café des Étoiles",
 ] as const;
 
 // -------------------------------------------------------------- data building
@@ -781,6 +784,61 @@ export const mockApi = {
       }
     }
     return out;
+  },
+
+  searchProgrammes: async (query: string, offset: number, limit: number) => {
+    await delay(70);
+    const words = foldWords(query);
+    if (words.length === 0) return [];
+    const nowSec = Math.floor(Date.now() / 1000);
+    // A handful of distinct titles, so each is judged once, not per airing.
+    const verdicts = new Map<string, boolean>();
+    const matches = (title: string) => {
+      let v = verdicts.get(title);
+      if (v === undefined) {
+        const have = foldWords(title);
+        v = words.every((w) => have.some((h) => h.startsWith(w)));
+        verdicts.set(title, v);
+      }
+      return v;
+    };
+    const tier = { live: 0, upcoming: 1, catchup: 2 } as const;
+    const hits: ProgrammeHitDto[] = [];
+    for (const r of getCatalog().rows) {
+      if (r.isSeparator || !r.nowPlaying) continue;
+      // Finished airings only where an archive can still play them, as the
+      // backend has it; two days ahead, as far as the guide scrolls.
+      const back = r.hasArchive ? (r.archiveDays ?? 7) * 86400 : 0;
+      for (const p of schedule(r, nowSec - back, nowSec + 2 * 86400)) {
+        if (!matches(p.title)) continue;
+        const airing = p.start > nowSec ? "upcoming" : p.stop > nowSec ? "live" : "catchup";
+        hits.push({
+          channel: airing === "live" ? { ...r, nowPlaying: p } : r,
+          programme: p,
+          airing,
+        });
+      }
+    }
+    hits.sort(
+      (a, b) =>
+        tier[a.airing] - tier[b.airing] ||
+        (a.airing === "upcoming"
+          ? a.programme.start - b.programme.start
+          : b.programme.start - a.programme.start) ||
+        (a.channel.num ?? 0) - (b.channel.num ?? 0),
+    );
+    return hits.slice(offset, offset + limit);
+  },
+
+  channelIndex: async (categoryId: string | null, streamId: number) => {
+    await delay(20);
+    const c = getCatalog();
+    const [start, len] =
+      categoryId === null ? [0, c.rows.length] : (c.span.get(categoryId) ?? [0, 0]);
+    for (let i = 0; i < len; i++) {
+      if (c.rows[start + i].streamId === streamId) return i;
+    }
+    return null;
   },
 
   guide: async (streamIds: number[], from: number, _to: number) => {
@@ -1493,6 +1551,17 @@ const mediaKeyEmitter = new Emitter<MediaKey>("toggle");
 
 export const onMockMediaKey = (f: (k: MediaKey) => void) =>
   Promise.resolve(mediaKeyEmitter.on(f));
+
+/** Words with case and accents folded away, split and folded the way the
+ *  backend's FTS5 tokenizer treats titles. */
+function foldWords(text: string): string[] {
+  return text
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "")
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((w) => w !== "");
+}
 
 /** Cheap subsequence match, standing in for nucleo. Ranking is not modelled;
  *  the real matcher lives in Rust and the UI must not reimplement it. */

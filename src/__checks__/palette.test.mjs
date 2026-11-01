@@ -6,6 +6,7 @@ import {
   availableActions,
   clampIndex,
   filterActions,
+  groupHeading,
   moveIndex,
   paletteItems,
 } from "../logic/palette.ts";
@@ -71,6 +72,43 @@ test("actions come before channels", () => {
   const items = paletteItems(filterActions(ACTIONS, "s"), [chan(1, "MERIDIAN")]);
   assert.equal(items[0].kind, "action");
   assert.equal(items[items.length - 1].kind, "channel");
+});
+
+const hit = (streamId, title, airing = "upcoming") => ({
+  channel: chan(streamId, `CH ${streamId}`),
+  programme: { start: 1000, stop: 2000, title, description: null },
+  airing,
+});
+
+test("programmes follow the channels, in the order they came", () => {
+  const items = paletteItems(
+    filterActions(ACTIONS, "s"),
+    [chan(1, "MERIDIAN")],
+    [hit(2, "Harbour Lights", "live"), hit(3, "Harbour Lights")],
+  );
+  const kinds = items.map((i) => i.kind);
+  assert.equal(kinds.indexOf("channel"), kinds.lastIndexOf("action") + 1);
+  assert.deepEqual(kinds.slice(-2), ["programme", "programme"]);
+  assert.deepEqual(
+    items.filter((i) => i.kind === "programme").map((i) => i.hit.airing),
+    ["live", "upcoming"],
+  );
+  // Without programmes, the list is what it always was.
+  assert.equal(paletteItems([], [chan(1, "M")]).length, 1);
+});
+
+test("search groups are headed where they start, actions are not", () => {
+  const items = paletteItems(
+    filterActions(ACTIONS, "s").slice(0, 2),
+    [chan(1, "A"), chan(2, "B")],
+    [hit(3, "Show"), hit(4, "Show")],
+  );
+  const headings = items.map((_, i) => groupHeading(items, i));
+  assert.deepEqual(headings, [null, null, "Channels", null, "Programmes", null]);
+  // Programmes straight after the actions still get their heading.
+  const noChannels = paletteItems(ACTIONS.slice(0, 1), [], [hit(3, "Show")]);
+  assert.equal(groupHeading(noChannels, 1), "Programmes");
+  assert.equal(groupHeading(noChannels, 5), null);
 });
 
 test("separators never reach the palette", () => {

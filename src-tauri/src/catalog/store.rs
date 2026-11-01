@@ -15,12 +15,12 @@ use crate::ipc::types::{
 /// The channel columns every listing selects, in the order
 /// [`channel_from_row`] expects. Kept in one place so the two callers cannot
 /// drift out of step with the mapper.
-const CHANNEL_COLUMNS: &str = "ch.stream_id, ch.name, ch.clean_name, ch.num, ch.logo_url,
+pub(crate) const CHANNEL_COLUMNS: &str = "ch.stream_id, ch.name, ch.clean_name, ch.num, ch.logo_url,
      ch.category_id, ch.has_archive, ch.archive_days, ch.is_separator,
      q.stream_id, q.codec, q.width, q.height, q.fps, q.is_hdr, q.ok_count, q.fail_count,
      ch.num_label";
 
-fn channel_from_row(row: &Row) -> rusqlite::Result<ChannelDto> {
+pub(crate) fn channel_from_row(row: &Row) -> rusqlite::Result<ChannelDto> {
     // A missing `quality` row is the normal case, not an error: most of a
     // large catalogue will never be opened, and unknown is not the same as
     // bad. The left-joined primary key is the only honest presence test, since
@@ -166,6 +166,42 @@ pub fn channel_numbers(conn: &Connection) -> Result<Vec<(String, i64)>> {
     )?;
     let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// Where a channel sits in [`channels_in`]'s listing of `category_id`: how
+/// many rows come before it, separators included, since the list draws them.
+/// `None` when the channel is not in that listing.
+///
+/// For taking a list or the guide straight to one channel without paging
+/// through everything above it. The comparison spells out the listing's
+/// `ORDER BY num IS NULL, num, name` term by term; channels that tie on all
+/// three are in no defined order there, and this places a channel at the
+/// first of its ties.
+pub fn channel_index(
+    conn: &Connection,
+    category_id: Option<&str>,
+    stream_id: i64,
+) -> Result<Option<u32>> {
+    let found = conn.query_row(
+        "SELECT (SELECT COUNT(*) FROM channels ch
+                  WHERE ch.deleted_at IS NULL
+                    AND (?1 IS NULL OR ch.category_id = ?1)
+                    AND ((ch.num IS NULL) < (t.num IS NULL)
+                         OR ((ch.num IS NULL) = (t.num IS NULL)
+                             AND (ch.num < t.num
+                                  OR (ch.num IS t.num AND ch.name < t.name)))))
+         FROM channels t
+         WHERE t.stream_id = ?2
+           AND t.deleted_at IS NULL
+           AND (?1 IS NULL OR t.category_id = ?1)",
+        rusqlite::params![category_id, stream_id],
+        |r| r.get::<_, i64>(0),
+    );
+    match found {
+        Ok(n) => Ok(u32::try_from(n).ok()),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(e.into()),
+    }
 }
 
 /// Channels in the order the ids were given, because search hands back ranked
@@ -915,6 +951,37 @@ mod tests {
         assert_eq!(channels_by_ids(&c, &[1]).unwrap().len(), 1);
         // And forgetting something unknown is a no-op, not a failure.
         forget_activity(&c, 9999).unwrap();
+    }
+
+    #[test]
+    fn channel_index_agrees_with_the_listing() {
+        let c = open_in_memory().unwrap();
+        // Out of order on purpose, with a numberless tail, a tie on number
+        // broken by name, a separator, and a deleted row that must not count.
+        chan(&c, 1, "Zed", Some("1"), None);
+        chan(&c, 2, "Beta", Some("1"), Some(5));
+        chan(&c, 3, "Alpha", Some("1"), Some(5));
+        separator(&c, 4, "###### NEWS ######", Some("1"));
+        chan(&c, 5, "Gone", Some("1"), Some(1));
+        soft_delete(&c, 5);
+        chan(&c, 6, "First", Some("1"), Some(2));
+        chan(&c, 7, "Elsewhere", Some("2"), Some(1));
+        chan(&c, 8, "Able", Some("1"), None);
+
+        for category in [Some("1"), None] {
+            let listing = channels_in(&c, category, 0, 100).unwrap();
+            for (i, ch) in listing.iter().enumerate() {
+                assert_eq!(
+                    channel_index(&c, category, ch.stream_id).unwrap(),
+                    Some(i as u32),
+                    "{} in {category:?}",
+                    ch.name
+                );
+            }
+        }
+        assert_eq!(channel_index(&c, Some("1"), 7).unwrap(), None);
+        assert_eq!(channel_index(&c, Some("1"), 5).unwrap(), None);
+        assert_eq!(channel_index(&c, None, 999).unwrap(), None);
     }
 
     #[test]

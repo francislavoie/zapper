@@ -63,6 +63,7 @@ import {
   withinArchive,
   type TimeWindow,
 } from "../logic/guide";
+import { centredScrollTop } from "../logic/programmes";
 import { OVERSCAN, computeWindow } from "../logic/virtual";
 import { ALL_CATEGORIES, useApp, useDispatch } from "../store";
 import type { ChannelDto, ProgrammeDto } from "../types";
@@ -172,9 +173,32 @@ export function GuideGrid({ besideRail = false }: { besideRail?: boolean }) {
     setScrollTop(0);
   }, [state.categoryId]);
 
+  const { ensure } = source;
+
+  // Sent here to a channel, by choosing an upcoming programme in search:
+  // scroll its row to the middle. After the reset above, which runs on the
+  // same category change. It waits for a measured height, and for the row
+  // to exist — a category's length is only a floor until its pages load, so
+  // a row past the estimate has its page asked for first. Applied once per
+  // request, so scrolling away afterwards is not fought.
+  const focus = state.guideFocus;
+  const appliedFocus = useRef<number | null>(null);
+  useEffect(() => {
+    if (!focus || focus.index === null || appliedFocus.current === focus.seq) return;
+    const body = bodyRef.current;
+    if (!body || height <= 0) return;
+    if (source.total <= focus.index) {
+      ensure(focus.index, focus.index + 1);
+      return;
+    }
+    appliedFocus.current = focus.seq;
+    const top = centredScrollTop(focus.index, GUIDE_ROW_HEIGHT, height);
+    body.scrollTo({ top });
+    setScrollTop(top);
+  }, [focus, height, source.total, ensure]);
+
   const rows = computeWindow(scrollTop, height, GUIDE_ROW_HEIGHT, source.total, OVERSCAN);
 
-  const { ensure } = source;
   useEffect(() => {
     if (rows.end > rows.start) ensure(rows.start, rows.end);
   }, [ensure, rows.start, rows.end]);
@@ -321,6 +345,7 @@ export function GuideGrid({ besideRail = false }: { besideRail?: boolean }) {
                 width={trackWidth}
                 now={now}
                 selected={state.player.streamId === channel.streamId}
+                focused={focus?.streamId === channel.streamId}
                 onPlay={onPlay}
                 onCatchup={onCatchup}
               />
@@ -480,6 +505,7 @@ function GuideRow({
   width,
   now,
   selected,
+  focused,
   onPlay,
   onCatchup,
 }: {
@@ -490,6 +516,8 @@ function GuideRow({
   width: number;
   now: number;
   selected: boolean;
+  /** The channel search sent the guide to. */
+  focused: boolean;
   onPlay: (c: ChannelDto, p: ProgrammeDto) => void;
   onCatchup: (c: ChannelDto, p: ProgrammeDto) => void;
 }) {
@@ -504,7 +532,7 @@ function GuideRow({
   }
 
   return (
-    <div className={`guide-row ${selected ? "sel" : ""}`} style={style}>
+    <div className={`guide-row ${selected ? "sel" : ""} ${focused ? "focus" : ""}`} style={style}>
       <div className="guide-chan">
         <span className="guide-num">{channel.numLabel ?? channel.num ?? ""}</span>
         <span className="guide-name" data-tip-overflow={channel.name}>

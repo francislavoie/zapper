@@ -1,11 +1,12 @@
 // The command palette's list model. Channel matching is the backend's job —
 // one nucleo index serves both the filter and the palette, and reimplementing
-// fuzzy ranking in TypeScript would just make the two disagree. Only the small
-// fixed action list is filtered here.
+// fuzzy ranking in TypeScript would just make the two disagree — and so is
+// programme matching, from the guide's title index. Only the small fixed
+// action list is filtered here.
 //
 // Checked in src/__checks__/palette.test.mjs.
 
-import type { ChannelDto } from "../types";
+import type { ChannelDto, ProgrammeHitDto } from "../types";
 import type { SleepRequest } from "./sleep";
 
 /** Where an action sits when the list is drawn as a menu rather than filtered
@@ -70,7 +71,8 @@ export interface ActionConditions {
 
 export type PaletteItem =
   | { kind: "action"; action: PaletteAction }
-  | { kind: "channel"; channel: ChannelDto };
+  | { kind: "channel"; channel: ChannelDto }
+  | { kind: "programme"; hit: ProgrammeHitDto };
 
 /** The one list. The command palette filters it; the toolbar's hamburger menu
  *  groups it. Adding an action here puts it in both, and `runAction` in
@@ -210,10 +212,12 @@ export function filterActions(
 }
 
 /** Actions first: they are few, they are exact, and burying them under 100
- *  channel hits would make the palette useless as a command surface. */
+ *  channel hits would make the palette useless as a command surface. Then
+ *  channels, then programmes, each in the backend's order. */
 export function paletteItems(
   actions: PaletteAction[],
   channels: ChannelDto[],
+  programmes: ProgrammeHitDto[] = [],
 ): PaletteItem[] {
   return [
     ...actions.map((action): PaletteItem => ({ kind: "action", action })),
@@ -221,7 +225,18 @@ export function paletteItems(
       // Separators are never search hits, and never selectable here either.
       .filter((c) => !c.isSeparator)
       .map((channel): PaletteItem => ({ kind: "channel", channel })),
+    ...programmes.map((hit): PaletteItem => ({ kind: "programme", hit })),
   ];
+}
+
+/** The heading drawn above item `i`, where a group of search results begins.
+ *  Actions lead the list and need none; channels and programmes are labelled
+ *  where they start, since a programme row and a channel row can carry the
+ *  same name. */
+export function groupHeading(items: PaletteItem[], i: number): string | null {
+  const kind = items[i]?.kind;
+  if (kind === undefined || kind === "action" || items[i - 1]?.kind === kind) return null;
+  return kind === "channel" ? "Channels" : "Programmes";
 }
 
 export function clampIndex(index: number, length: number): number {

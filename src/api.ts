@@ -17,6 +17,7 @@ import {
   type AspectMode,
   type DeinterlaceMode,
   type ProgrammeDto,
+  type ProgrammeHitDto,
   type SettingsDto,
   type SubtitleStyleDto,
   type FavouriteDto,
@@ -45,6 +46,15 @@ export const api = {
 
   search: (query: string, limit: number) =>
     invoke<ChannelDto[]>("search", { query, limit }),
+
+  /** Airings whose title matches: on now, then upcoming, then catch-up. */
+  searchProgrammes: (query: string, offset: number, limit: number) =>
+    invoke<ProgrammeHitDto[]>("search_programmes", { query, offset, limit }),
+
+  /** Where a channel sits in a category's listing; `null` when it is not in
+   *  it. `categoryId` null is every channel. */
+  channelIndex: (categoryId: string | null, streamId: number) =>
+    invoke<number | null>("channel_index", { categoryId, streamId }),
 
   guide: (streamIds: number[], from: number, to: number) =>
     invoke<[number, ProgrammeDto[]][]>("guide", { streamIds, from, to }),

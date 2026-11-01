@@ -7,9 +7,10 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::catalog::settings as settings_store;
-use crate::catalog::{activity, db, index, status, store, sync_engine};
+use crate::catalog::{activity, db, guide_search, index, status, store, sync_engine};
 use crate::ipc::types::{
-    CategoryDto, ChannelDto, FavouriteDto, GuideRowDto, ProgrammeDto, SettingsDto, SyncStatusDto,
+    CategoryDto, ChannelDto, FavouriteDto, GuideRowDto, ProgrammeDto, ProgrammeHitDto, SettingsDto,
+    SyncStatusDto,
 };
 
 fn now() -> i64 {
@@ -107,6 +108,38 @@ pub async fn search(query: String, limit: u32) -> Result<Vec<ChannelDto>, String
         Ok(hits)
     })
     .map_err(|e| e.to_string())
+}
+
+/// The most one page of programme search returns, whatever is asked for.
+const PROGRAMME_PAGE_MAX: u32 = 500;
+
+/// Airings whose title matches, on now first, then upcoming, then what can
+/// still be played from an archive — see [`guide_search::search`]. Paged,
+/// because a common word can match thousands of airings across a week.
+#[tauri::command]
+pub async fn search_programmes(
+    query: String,
+    offset: u32,
+    limit: u32,
+) -> Result<Vec<ProgrammeHitDto>, String> {
+    // Blank finds nothing, as channel search does.
+    if query.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    let limit = limit.min(PROGRAMME_PAGE_MAX);
+    db::with_db(|conn| guide_search::search(conn, &query, now(), offset, limit))
+        .map_err(|e| e.to_string())
+}
+
+/// Where a channel sits in a category's listing, so the guide can be opened
+/// at its row. `None` when it is not in that category.
+#[tauri::command]
+pub async fn channel_index(
+    category_id: Option<String>,
+    stream_id: i64,
+) -> Result<Option<u32>, String> {
+    db::with_db(|conn| store::channel_index(conn, category_id.as_deref(), stream_id))
+        .map_err(|e| e.to_string())
 }
 
 /// Programmes overlapping `[from, to]` for the given channels.
@@ -267,6 +300,35 @@ mod tests {
         assert_eq!(rows[0].name, "Beta");
         assert_eq!(rows[1].programmes.len(), 1);
         assert_eq!(rows[1].programmes[0].title, "Show");
+    }
+
+    #[tokio::test]
+    async fn programme_search_reaches_the_guide_through_its_index() {
+        seed(12000, "cmd-programmes");
+        let t = now();
+        db::with_db(|c| {
+            c.execute(
+                "INSERT INTO epg (channel_ref, start, stop, title, description)
+                 VALUES ('epg-12002', ?1, ?2, 'Zygomorphic Hour', NULL)",
+                rusqlite::params![t + 3600, t + 7200],
+            )?;
+            // What every guide writer does before committing.
+            guide_search::index_changes(c)?;
+            Ok(())
+        })
+        .unwrap();
+
+        let hits = search_programmes("zygomorph".into(), 0, 10).await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].channel.stream_id, 12002);
+        assert_eq!(hits[0].airing, crate::ipc::types::AiringDto::Upcoming);
+        assert!(search_programmes("  ".into(), 0, 10).await.unwrap().is_empty());
+
+        // And the guide can find the row it is on.
+        assert_eq!(
+            channel_index(Some("cmd-programmes".into()), 12002).await.unwrap(),
+            Some(1)
+        );
     }
 
     #[tokio::test]

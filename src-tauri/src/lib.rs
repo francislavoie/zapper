@@ -72,6 +72,8 @@ pub fn run() {
             ipc::catalog_cmds::channels_by_ids,
             ipc::catalog_cmds::channel_numbers,
             ipc::catalog_cmds::search,
+            ipc::catalog_cmds::search_programmes,
+            ipc::catalog_cmds::channel_index,
             ipc::catalog_cmds::guide,
             ipc::catalog_cmds::sync_status,
             ipc::catalog_cmds::sync_now,

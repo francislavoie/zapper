@@ -63,6 +63,27 @@ pub struct ChannelDto {
     pub now_playing: Option<ProgrammeDto>,
 }
 
+/// Where a programme found by search sits relative to now, which decides what
+/// choosing it does: tune in, look ahead in the guide, or play the archive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AiringDto {
+    Live,
+    Upcoming,
+    /// Finished, on a channel whose archive still reaches back to it.
+    /// Finished programmes nobody can play are not search results.
+    Catchup,
+}
+
+/// One airing of a programme, with the channel that carries it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProgrammeHitDto {
+    pub channel: ChannelDto,
+    pub programme: ProgrammeDto,
+    pub airing: AiringDto,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SyncPhase {

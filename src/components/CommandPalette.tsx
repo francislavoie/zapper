@@ -1,20 +1,28 @@
-// Ctrl+P. One input, two kinds of result: the fixed action list filtered
-// locally, and channels from the same nucleo index that serves `/`.
+// Ctrl+P. One input, three kinds of result: the fixed action list filtered
+// locally, channels from the same nucleo index that serves `/`, and
+// programmes from the guide's title index, as the list's Programmes tab has.
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { playChannel, runAction } from "../actions";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
+import { openProgrammeHit, playChannel, runAction } from "../actions";
+import { useClock } from "../hooks/useClock";
+import { useProgrammeSearch } from "../hooks/useProgrammeSearch";
 import { useSearch } from "../hooks/useSearch";
 import {
   availableActions,
   clampIndex,
   filterActions,
+  groupHeading,
   moveIndex,
   paletteItems,
   type PaletteItem,
 } from "../logic/palette";
+import { airingTag, airingWhen } from "../logic/programmes";
 import { useApp, useDispatch } from "../store";
 
-const PALETTE_CHANNEL_LIMIT = 50;
+/** Enough to pick from without the programmes, which follow the channels,
+ *  sitting a long scroll down. The list's own search shows more of both. */
+const PALETTE_CHANNEL_LIMIT = 20;
+const PALETTE_PROGRAMME_LIMIT = 20;
 
 export function CommandPalette() {
   const state = useApp();
@@ -23,6 +31,8 @@ export function CommandPalette() {
   const [index, setIndex] = useState(0);
   const listRef = useRef<HTMLDivElement | null>(null);
   const results = useSearch(query, PALETTE_CHANNEL_LIMIT);
+  const programmes = useProgrammeSearch(query, PALETTE_PROGRAMME_LIMIT).result;
+  const now = useClock(15_000);
 
   const playing = state.player.state !== "stopped";
   const items = paletteItems(
@@ -35,7 +45,9 @@ export function CommandPalette() {
       query,
     ),
     results.status === "ready" ? results.data : [],
+    programmes.status === "ready" ? programmes.data : [],
   );
+  const searching = results.status === "loading" || programmes.status === "loading";
   const active = clampIndex(index, items.length);
 
   // A fresh palette every time: leaving yesterday's query in it turns Ctrl+P
@@ -60,6 +72,14 @@ export function CommandPalette() {
         void playChannel(dispatch, item.channel);
         return;
       }
+      if (item.kind === "programme") {
+        void openProgrammeHit(dispatch, item.hit, {
+          categoryId: state.categoryId,
+          mode: state.mode,
+          guideHours: state.settings.guideHours,
+        });
+        return;
+      }
       // Shared with the toolbar's hamburger, which draws this same list: one
       // behaviour per action, wherever it was picked from.
       runAction(item.action.id, {
@@ -68,7 +88,15 @@ export function CommandPalette() {
         previous: state.previousChannel,
       });
     },
-    [close, dispatch, state.player, state.previousChannel],
+    [
+      close,
+      dispatch,
+      state.player,
+      state.previousChannel,
+      state.categoryId,
+      state.mode,
+      state.settings.guideHours,
+    ],
   );
 
   return (
@@ -83,7 +111,7 @@ export function CommandPalette() {
           className="palette-input"
           autoFocus
           spellCheck={false}
-          placeholder="Run a command, or find a channel…"
+          placeholder="Run a command, or find a channel or programme…"
           value={query}
           onChange={(e) => {
             setQuery(e.target.value);
@@ -116,34 +144,46 @@ export function CommandPalette() {
         />
 
         <div className="palette-list" ref={listRef}>
-          {items.map((item, i) => (
-            <button
-              key={item.kind === "action" ? `a-${item.action.id}` : `c-${item.channel.streamId}`}
-              className={`palette-item ${i === active ? "active" : ""}`}
-              onMouseMove={() => setIndex(i)}
-              onClick={() => choose(item)}
-            >
-              <span className="palette-kind">
-                {item.kind === "action" ? "action" : "channel"}
-              </span>
-              <span className="palette-label" data-tip-overflow="">
-                {item.kind === "action" ? item.action.label : item.channel.name}
-              </span>
-              <span className="palette-hint">
-                {item.kind === "action"
-                  ? (item.action.hint ?? "")
-                  : (item.channel.numLabel ?? item.channel.num ?? "")}
-              </span>
-            </button>
-          ))}
+          {items.map((item, i) => {
+            const heading = groupHeading(items, i);
+            return (
+              <Fragment key={itemKey(item)}>
+                {heading ? <div className="palette-group">{heading}</div> : null}
+                <button
+                  className={`palette-item ${i === active ? "active" : ""}`}
+                  onMouseMove={() => setIndex(i)}
+                  onClick={() => choose(item)}
+                >
+                  <span className={`palette-kind ${item.kind === "programme" ? item.hit.airing : ""}`}>
+                    {item.kind === "programme" ? airingTag(item.hit.airing) : item.kind}
+                  </span>
+                  <span className="palette-label" data-tip-overflow="">
+                    {item.kind === "action"
+                      ? item.action.label
+                      : item.kind === "channel"
+                        ? item.channel.name
+                        : item.hit.programme.title}
+                  </span>
+                  <span className="palette-hint">
+                    {item.kind === "action"
+                      ? (item.action.hint ?? "")
+                      : item.kind === "channel"
+                        ? (item.channel.numLabel ?? item.channel.num ?? "")
+                        : `${airingWhen(item.hit, now)} · ${item.hit.channel.cleanName}`}
+                  </span>
+                </button>
+              </Fragment>
+            );
+          })}
 
-          {results.status === "loading" ? (
-            <div className="palette-empty">Searching…</div>
-          ) : null}
+          {searching ? <div className="palette-empty">Searching…</div> : null}
           {results.status === "error" ? (
             <div className="palette-empty">Search failed — {results.message}</div>
           ) : null}
-          {items.length === 0 && results.status !== "loading" ? (
+          {programmes.status === "error" ? (
+            <div className="palette-empty">Programme search failed — {programmes.message}</div>
+          ) : null}
+          {items.length === 0 && !searching ? (
             <div className="palette-empty">
               {query.trim() === "" ? "Type to search." : `Nothing matches “${query}”.`}
             </div>
@@ -152,4 +192,10 @@ export function CommandPalette() {
       </div>
     </div>
   );
+}
+
+function itemKey(item: PaletteItem): string {
+  if (item.kind === "action") return `a-${item.action.id}`;
+  if (item.kind === "channel") return `c-${item.channel.streamId}`;
+  return `p-${item.hit.channel.streamId}-${item.hit.programme.start}`;
 }

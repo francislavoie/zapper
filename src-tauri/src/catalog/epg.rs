@@ -197,6 +197,8 @@ pub fn parse_xmltv_into<R: BufRead>(
 
     drop(stmt);
     drop(name_stmt);
+    // In the same transaction, so a guide that lands is a guide search finds.
+    crate::catalog::guide_search::index_changes(&tx)?;
     tx.commit()?;
     Ok(count)
 }

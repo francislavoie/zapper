@@ -162,6 +162,8 @@ pub fn land(conn: &rusqlite::Connection, channels: &[GuideChannel]) -> Result<us
             }
         }
     }
+    // As the XMLTV parser does: searchable from the moment it is committed.
+    crate::catalog::guide_search::index_changes(&tx)?;
     tx.commit()?;
     Ok(n)
 }
@@ -233,5 +235,19 @@ mod tests {
             )
             .unwrap();
         assert_eq!((count, desc.as_deref()), (1, Some("Otters at Herons.")));
+    }
+
+    #[test]
+    fn landed_programmes_are_searchable_at_once() {
+        let c = crate::catalog::open_in_memory().unwrap();
+        land(&c, &parse(GUIDE).unwrap()).unwrap();
+        let n: i64 = c
+            .query_row(
+                "SELECT COUNT(*) FROM epg_fts WHERE epg_fts MATCH '\"rowing\"*'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1);
     }
 }
