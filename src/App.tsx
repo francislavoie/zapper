@@ -8,6 +8,7 @@
 import { Activity, useEffect, useLayoutEffect, useRef } from "react";
 import {
   backend,
+  capabilities,
   isMock,
   subscribeChannelQuality,
   subscribePlayer,
@@ -408,7 +409,7 @@ export function App() {
           close, move or resize the window. It has to survive whatever the
           content does. */}
       {fullscreen ? null : <Toolbar />}
-      <ResizeEdges fullscreen={fullscreen} />
+      {capabilities.window ? <ResizeEdges fullscreen={fullscreen} /> : null}
 
       <div className="stage" ref={stageRef}>
         {/* Everything below the toolbar. If a pane throws, the window is
@@ -434,14 +435,16 @@ export function App() {
             view takes the whole width. */}
         <Activity mode={browsing || guiding ? "visible" : "hidden"}>
           <div
-            className={`browse ${state.railCollapsed ? "rail-collapsed" : ""}`}
+            className={`browse ${state.railCollapsed ? "rail-collapsed" : ""} ${capabilities.playback ? "" : "no-band"}`}
             data-view={guiding ? "guide" : "list"}
           >
             {/* First in the DOM as well as on screen: the band owns the top of
                 the stage, and what is below it scrolls under a picture that
                 never moves. mpv draws beneath the webview, so in both views
-                the band is where the hole for the picture is. */}
-            <WatchBand videoRef={dockRef} />
+                the band is where the hole for the picture is. Where nothing
+                plays (a browser, for now) there is no picture to show, and
+                the list and the guide take its room. */}
+            {capabilities.playback ? <WatchBand videoRef={dockRef} /> : null}
             <Activity mode={state.railCollapsed ? "hidden" : "visible"}>
               <Rail />
             </Activity>

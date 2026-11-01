@@ -606,6 +606,12 @@ select option {
   grid-template-columns: minmax(0, 1fr);
 }
 
+/* No band where nothing plays (App.tsx): its row closes up, and the rail and
+   the views below keep their places in the second one. */
+.browse.no-band {
+  grid-template-rows: 0 minmax(0, 1fr);
+}
+
 /* Placed rather than flowed: the list and the guide are the same cell, and
    which of them is showing must not change which column it lands in. */
 .browse > .rail {
@@ -5783,4 +5789,107 @@ textarea.field {
   display: flex;
   gap: 0.375rem;
   flex: 0 0 auto;
+}
+
+/* ---------------------------------------------------------------- web access
+
+   In a browser served by the recording service (src/web.ts) there is no dark
+   window behind the page and no picture beneath it, so the page paints its
+   own background. Only there: in the app this would hide mpv. */
+html[data-backend="web"] {
+  background: var(--bg);
+  color-scheme: dark;
+}
+
+/* The sign-in (WebGate): one card in the middle of the page. */
+.signin {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  padding: 1rem;
+  box-sizing: border-box;
+}
+
+.signin-card {
+  width: min(22rem, 100%);
+  padding: 1.5rem 1.5rem 1.25rem;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  box-sizing: border-box;
+}
+
+.signin-title {
+  display: flex;
+  align-items: center;
+  font-size: 1.125rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  margin-bottom: 0.75rem;
+}
+
+.signin-bolt {
+  width: 0.875rem;
+  height: 1.25rem;
+  margin-right: 0.5rem;
+  color: var(--accent);
+}
+
+.signin-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.signin-lead,
+.signin-foot,
+.signin-note,
+.signin-error {
+  margin: 0;
+  color: var(--dim);
+}
+
+.signin-foot {
+  margin-top: 0.25rem;
+  font-size: 0.6875rem;
+  color: var(--dimmer);
+}
+
+.signin-note {
+  color: var(--text);
+}
+
+.signin-error {
+  color: var(--bad);
+}
+
+.signin-label {
+  margin-top: 0.25rem;
+  font-size: 0.75rem;
+  color: var(--dim);
+  user-select: none;
+}
+
+.signin .field {
+  flex: 0 0 auto;
+  font: inherit;
+  color: var(--text);
+}
+
+.signin-submit {
+  align-self: flex-start;
+  margin-top: 0.25rem;
+  font-size: 0.8125rem;
+  padding: 0.3125rem 0.875rem;
+}
+
+.signin-submit:disabled {
+  opacity: 0.55;
+}
+
+/* The toolbar's own sign-out, where the app has its window buttons. */
+.tb-signout {
+  padding: 0 0.625rem;
+  font-size: 0.75rem;
+  width: auto;
 }

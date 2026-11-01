@@ -4,6 +4,7 @@
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { openProgrammeHit, playChannel, runAction } from "../actions";
+import { capabilities } from "../backend";
 import { useClock } from "../hooks/useClock";
 import { useProgrammeSearch } from "../hooks/useProgrammeSearch";
 import { useSearch } from "../hooks/useSearch";
@@ -45,6 +46,7 @@ export function CommandPalette() {
   const items = paletteItems(
     filterActions(
       availableActions(playing, {
+        capabilities,
         hasPrevious: state.previousChannel !== null,
         sleeping: state.sleep !== null,
         programme: state.sleepProgramme !== null,
