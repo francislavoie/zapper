@@ -1,9 +1,38 @@
 # zapper on Windows
 
-zapper builds and runs on Windows 10 and 11 (x64). The interface is the same
-WebView2 page as on Linux; video is drawn by libmpv into a window of its own
-beneath the page. This covers what a Windows build needs, how to run it, and
-what is not there yet.
+zapper builds and runs on Windows 10 and 11 (x64), and each release carries
+two installers for it. The interface is the same WebView2 page as on Linux;
+video is drawn by libmpv into a window of its own beneath the page. This
+covers the installers, what a Windows build needs, how to run it, and what is
+not there yet.
+
+## The installers
+
+Built by the release workflow on every tag (docs/releasing.md), from one
+build:
+
+| File | Installs |
+|---|---|
+| `zapper_<version>_x64-setup.exe` | NSIS: for the current user, no administrator, into `%LOCALAPPDATA%\zapper` |
+| `zapper_<version>_x64_en-US.msi` | for every user, as an administrator, into `Program Files\zapper` |
+
+Both put `zapper.exe`, `zapper-server.exe` (the recording service), libmpv
+and FFmpeg's DLLs side by side, the license notices in `licenses\`, and an
+`install-kind` file (`nsis` or `msi`) the updater reads to download the same
+kind next time. They are not signed yet: SmartScreen warns on the first run
+(**More info** → **Run anyway**).
+
+`scripts/check-windows.ps1` checks a pair of them, and the release workflow
+runs it on every build: the files above, nothing imported from outside the
+installer but Windows' own DLLs (no Visual C++ redistributable: both
+programs link its runtime in), FFmpeg's libraries and libmpv asked for their
+licenses (LGPL, `-Dgpl=false`), and `zapper-server.exe --version` answering.
+With `-Install` it really installs the NSIS setup, silently, to see its hook
+write `nsis`, and uninstalls it; leave that off on a computer you use.
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-windows.ps1 -Dir out -Version 0.2.0
+```
 
 ## What you need
 
@@ -66,8 +95,7 @@ into libmpv), D3D11VA and DXVA2 decoding and SChannel for HTTPS, and need
 nothing but Windows' own DLLs and each other. Checked so far headless, on
 Windows: playback through libmpv (D3D11VA copy-back, HLS over HTTPS, the
 compressor's filters) and a recording by zapper-server through the same
-FFmpeg. Not yet: video on screen through Direct3D 11, and installing the
-service (Settings → Recording says "not yet" on Windows).
+FFmpeg. Not yet checked by a person: video on screen through Direct3D 11.
 
 ## Building and running
 
@@ -85,6 +113,48 @@ itself. `packaging/windows/installers.conf.json` adds only what a release
 needs on top (docs/releasing.md).
 
 A debug build opens a console beside the window, with zapper's log in it.
+
+`zapper-server.exe` has no window and no console of its own, so that the
+sign-in task that runs it opens nothing. Started from a terminal it prints to
+that terminal, but the terminal does not wait for it: `start /wait /b
+zapper-server.exe` in `cmd`, or `zapper-server.exe | Out-Host` in
+PowerShell, keeps it in the foreground. Started by the task, it logs to
+`%LOCALAPPDATA%\zapper\zapper-server.log`.
+
+### The recording service
+
+Settings → Recording → Install registers a scheduled task for the signed-in
+user, `zapper-server-<user>`, through Task Scheduler's COM interface: at that
+user's sign-in, run `zapper-server.exe` from beside `zapper.exe`, unelevated,
+with no stored password, with no time limit and on battery too
+(`recording::service`, `task_xml`). Install also starts it, and Remove stops
+and deletes it. It runs while the user is signed in. Not offered: recording
+with nobody signed in (the task would need the account's password), and
+waking the computer to record (a task per recording, with a wake timer).
+
+A running `zapper-server.exe` cannot be replaced, so the updater stops the
+task before it starts an installer, and zapper starts it again when it opens;
+the NSIS setup stops it too, and starts the task again once installed. The
+MSI does neither (it runs elevated, outside the user's tasks): before
+installing a newer MSI by hand, end the task (Task Scheduler, or quit by
+Remove and Install again after), or Windows finds the file in use.
+
+`service_check` installs it, checks it answers, and removes it, on a scratch
+home, with no window:
+
+```powershell
+cargo build --manifest-path src-tauri\Cargo.toml --features harness,server --bin zapper-server --bin service_check
+src-tauri\target\debug\service_check.exe
+```
+
+### The harnesses on Windows
+
+`ending_check` (with the GUI features), `recording_check` and
+`service_check` run on Windows as on Linux, headless and silent. They need the
+fixtures (copy them from a Linux `tools/make_fixtures.sh` run and point
+`ZAPPER_FIXTURES` at the folder) and Python, ffprobe and ffmpeg on `PATH`, or
+named by `ZAPPER_PYTHON3`, `ZAPPER_FFPROBE` and `ZAPPER_FFMPEG`. A scoop shim
+on `PATH` is fine: the harnesses start the program it points at.
 
 ### Trying it without sound
 
@@ -158,10 +228,10 @@ itself was installed.
 - **Updates**: only the release build (`just package-windows`, which adds
   `packaging/windows/installers.conf.json`) carries the `install-kind` marker
   the updater reads. A plain `npx tauri build` installer has none and counts
-  as a build from source, pointed at the release page. Neither has been
-  installed and updated end to end yet.
-- **Two updater unit tests** assume Unix paths and fail under `cargo test` on
-  Windows; the rest of the suite passes there.
+  as a build from source, pointed at the release page. Updating one
+  installed copy to the next has not been tried end to end yet: the first
+  release with Windows installers is the first that can be updated from.
+- **Signing**: the installers are unsigned (SmartScreen warns once).
 
 ## Where things are kept
 

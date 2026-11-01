@@ -18,15 +18,15 @@ It's built with a Rust core, a React interface and [Tauri](https://tauri.app/), 
 
 ![zapper's browse view: a football match playing in the picture at the top right, the playing channel's now and next programmes beside it, and below, the category list on the left with the guide's timeline of what's on across the sports channels](docs/images/screenshot.webp)
 
-> **Status:** used day to day on Linux. Windows builds and runs; its installers aren't published
-> yet. macOS isn't supported yet.
+> **Status:** used day to day on Linux. Windows installers are published from the next release
+> on, newer and less tried than the Linux packages. macOS isn't supported yet.
 
 ## Platforms
 
 | Platform | Status |
 |---|---|
 | Linux | Supported: `.deb`, `.rpm` and Arch Linux packages |
-| Windows | Builds and runs (10 and 11); installers not published yet |
+| Windows | Supported (10 and 11, x64): a setup for you alone or an MSI for the whole computer |
 | macOS | Not supported yet |
 
 ## Installing
@@ -37,6 +37,15 @@ Download the package for your system from the
 - **Debian and Ubuntu:** `sudo apt install ./zapper_<version>_amd64.deb`
 - **Fedora:** `sudo dnf install ./zapper-<version>-1.x86_64.rpm`
 - **Arch Linux:** `sudo pacman -U ./zapper-<version>-1-x86_64.pkg.tar.zst`
+- **Windows:** `zapper_<version>_x64-setup.exe` installs it for you alone, no administrator
+  needed (in `%LOCALAPPDATA%\zapper`); `zapper_<version>_x64_en-US.msi` installs it for everyone
+  on the computer (in `Program Files`, asking for an administrator). Either carries its own
+  libmpv and FFmpeg, and needs WebView2, which Windows 11 has and Windows 10 has had since 2021.
+
+  The installers aren't signed yet, so the first run of one gets a SmartScreen warning ("Windows
+  protected your PC"): choose **More info**, then **Run anyway**. Check the file against
+  `SHA256SUMS` first (`Get-FileHash .\zapper_<version>_x64-setup.exe` in PowerShell) if you'd
+  like to know it's the one the release built.
 
 `SHA256SUMS` in each release lists the files' checksums. After that, zapper updates itself (see
 [Updates](#updates)).
@@ -108,7 +117,7 @@ Download the package for your system from the
   to record it with zapper closed, copying the stream into a Matroska file named the way Jellyfin
   and Plex expect (or by channel, by date, or a pattern of your own), with an optional wall-clock
   subtitle track. It switches to a backup feed if the channel's fails, and never takes a
-  connection someone is watching on. Linux only for now; see [docs/recording.md](docs/recording.md).
+  connection someone is watching on. On Linux and Windows; see [docs/recording.md](docs/recording.md).
 
 ## Performance
 
@@ -137,6 +146,8 @@ only if the release's `SHA256SUMS` lists it with the same digest, and installs i
   The package is copied somewhere only root can write and checked again before apt, dnf,
   zypper, rpm or pacman sees it. If you installed zapper through an AUR helper, update it there
   instead.
+- **Windows:** runs the new setup or MSI (the MSI asks for an administrator), after checking it
+  again, and quits so it can replace zapper.
 - **Restart** then starts the new version.
 
 A build from source only links to the release page. Settings › Updates turns the automatic check

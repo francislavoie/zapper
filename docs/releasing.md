@@ -2,16 +2,15 @@
 
 A release is a tag. `just release <version>` prepares the release commit and tag locally;
 pushing the tag starts [.github/workflows/release.yml](../.github/workflows/release.yml), which
-builds the `.deb`, the `.rpm` and the Arch package, checks them, and uploads them with
-`SHA256SUMS` to a **draft** GitHub release. You review the draft and publish it. Nothing is
+builds the `.deb`, the `.rpm` and the Arch package and the two Windows installers, checks them,
+and uploads them with `SHA256SUMS` to a **draft** GitHub release. You review the draft and publish it. Nothing is
 published automatically.
 
 Installed copies of zapper find a published release by themselves (the updater, below), so
 publishing is the moment a release reaches people: everything before it is reversible.
 
-Releases carry Linux packages only: no AppImage, no signing. Windows and macOS
-are wired in but disabled
-([Windows and macOS](#windows-and-macos)).
+Releases carry the Linux packages and the Windows installers: no AppImage, no signing. macOS is
+wired in but disabled ([Windows and macOS](#windows-and-macos)).
 
 ## One-time setup
 
@@ -92,10 +91,11 @@ Until this is done, `just release` refuses to run, and the updater in any build 
    has no section for the version.
 
 4. **Review the draft** under Releases. It's titled "zapper 0.2.0", has the changelog section as
-   its notes, and carries the `.deb`, the `.rpm`, the Arch package and `SHA256SUMS`. A version
-   with a pre-release part (`-rc.1`) is marked pre-release. Edit the notes if needed, and install
-   the packages from the draft to try them (`sudo apt install ./zapper_0.2.0_amd64.deb`,
-   `sudo pacman -U ./zapper-0.2.0-1-x86_64.pkg.tar.zst`).
+   its notes, and carries the `.deb`, the `.rpm`, the Arch package, the NSIS setup, the MSI and
+   `SHA256SUMS`. A version with a pre-release part (`-rc.1`) is marked pre-release. Edit the
+   notes if needed, and install the packages from the draft to try them
+   (`sudo apt install ./zapper_0.2.0_amd64.deb`,
+   `sudo pacman -U ./zapper-0.2.0-1-x86_64.pkg.tar.zst`, `zapper_0.2.0_x64-setup.exe`).
 
 5. **Publish** the draft. Installed copies see it at their next check (a minute after they
    start, then daily) or when someone chooses Check for updates.
@@ -125,7 +125,8 @@ zapper updates itself without Tauri's updater plugin
      copy. The download sits in a folder this user owns, so
      this is what stops another process running as this user from swapping in a different
      package while the password prompt is up;
-   - Windows (not built yet): copies the installer into a folder made for that attempt, checks
+   - Windows: stops the recording service's task (its program is in use while it runs; zapper
+     starts it again when it reopens), copies the installer into a folder made for that attempt, checks
      it again, runs it (the NSIS installer, or `msiexec /i` for the MSI) and quits so it can
      replace the files. This narrows the swap window but can't close it: there is no
      privilege boundary to copy across first. Code signing is the real fix;
@@ -153,8 +154,8 @@ release: a package `SHA256SUMS` doesn't list is never installed.
 | `.deb` | `zapper_<version>_amd64.deb` |
 | `.rpm` (Fedora, openSUSE) | `zapper-<version>-1.x86_64.rpm` (SemVer in the name; the package's own Version is `0.2.0~rc.1` for a pre-release) |
 | Arch Linux | `zapper-<pkgver>-1-x86_64.pkg.tar.zst` (pacman's own name for it: `<pkgver>` is the version without the pre-release's `-`, `0.2.0rc.1`) |
-| Windows NSIS (not built yet) | `zapper_<version>_x64-setup.exe` |
-| Windows MSI (not built yet) | `zapper_<version>_x64_en-US.msi` |
+| Windows NSIS (per-user setup) | `zapper_<version>_x64-setup.exe` |
+| Windows MSI (per-machine) | `zapper_<version>_x64_en-US.msi` (the full version in the name; the MSI's own version is `X.Y.Z`, below) |
 | macOS (not built yet) | `zapper_<version>_aarch64.dmg` (an Intel Mac would look for `_x64.dmg`) |
 | all | `SHA256SUMS` (`sha256sum` output listing each package) |
 
@@ -174,7 +175,7 @@ app reads at run time, `install-kind`
 - the Arch package is made from the `.deb` by `scripts/package-arch.sh`, which writes
   [packaging/install-kind-arch](../packaging/install-kind-arch) (`arch`) over the `.deb`'s marker
   and refuses a `.deb` without one;
-- Windows (not built yet): `packaging/windows/installers.conf.json` ships `install-kind` = `msi`
+- Windows: `packaging/windows/installers.conf.json` ships `install-kind` = `msi`
   beside `zapper.exe` as a resource, and the NSIS installer's post-install hook
   (`packaging/windows/installer-hooks.nsh`) overwrites it with `nsis`;
 - macOS (not built yet): `packaging/macos/dmg.conf.json` puts `install-kind` = `dmg` in
@@ -219,8 +220,18 @@ that starts with a letter before the release (`0.2.0rc.1` < `0.2.0`) but one tha
    (`package-arch.sh`, its file times the release commit's). `just check-arch-pkg` then installs
    that in an `archlinux:latest` container and checks it. Writes `SHA256SUMS` and keeps
    everything as a workflow artifact for 3 days.
-3. **Windows and macOS:** skipped (below).
-4. **Release** (`contents: write`): verifies each job's checksums and merges them into one
+3. **Windows** (`windows-latest`, read-only, beside the Linux job): checks the tag against
+   `tauri.conf.json`'s version, fetches libmpv (`tools/fetch-libmpv.ps1`), writes the Rust
+   license notices, builds `zapper-server.exe`, then `npx tauri build` with
+   `packaging/windows/installers.conf.json`: the NSIS setup and the MSI. A pre-release's MSI is
+   given the numeric version an MSI needs (`bundle.windows.wix.version` = `X.Y.Z`; every build of
+   `X.Y.Z` shares it, and Tauri's MSI replaces whatever version it finds). Then
+   `scripts/check-windows.ps1 -Install` (docs/windows.md, "The installers") unpacks the MSI and
+   installs and uninstalls the setup on the runner, and fails on a missing file or marker, an
+   import from outside the installer and Windows, or a GPL library. Writes `SHA256SUMS` and keeps
+   both as a workflow artifact for 3 days. The release waits for it.
+4. **macOS:** skipped (below).
+5. **Release** (`contents: write`): verifies each job's checksums and merges them into one
    `SHA256SUMS`, attests the packages' build provenance (public repositories, or
    `ZAPPER_ATTEST`), and creates the draft release, or updates it on a re-run.
 
@@ -241,34 +252,30 @@ packages need Ubuntu 24.04, Debian 13, Fedora 40 or later (Arch, rolling, is alw
 
 ## Windows and macOS
 
-Windows builds and links (docs/windows.md: libmpv is zapper's own LGPL build, fetched by
-`tools/fetch-libmpv.ps1`, which the `windows` job runs), but has not been tested on screen or
-released; macOS has only a stub
-surface. What is in place:
+Windows is released: every tag and every dry run builds and checks both installers, and a
+release is drafted only when they pass (docs/windows.md). They are unsigned, so SmartScreen
+warns on their first run (README.md); signing needs a certificate and a signing step in the
+`windows` job. Updating from one installed Windows release to the next is first possible from
+the release after the first one that carries them.
 
-- the updater already knows the NSIS, MSI and `.dmg` installs (asset names, install commands,
-  the bundle swap), and its tests cover them;
-- `packaging/windows/` and `packaging/macos/` hold the install-kind wiring, and
-  `just package-windows` / `just package-macos` build with it;
-- `release.yml` has `windows` and `macos` jobs that run only on Run workflow with **Also build
-  Windows and macOS** ticked. A tag push skips them. The macOS one fails until that port
-  exists, and a failure holds that run's draft back.
+macOS has only a stub surface. What is in place:
 
-Neither Windows installer has been tested end to end, and the macOS packaging is untested.
-Things to settle when the port lands:
+- the updater already knows the `.dmg` install (asset name, the bundle swap), and its tests
+  cover it;
+- `packaging/macos/` holds the install-kind wiring, and `just package-macos` builds with it;
+- `release.yml` has a `macos` job that runs only on Run workflow with **Also build macOS**
+  ticked. A tag push skips it. It fails until that port exists, and a failure holds that run's
+  draft back.
 
-- an MSI needs a numeric version: a pre-release needs `bundle.windows.wix.version` set
-  (for example, every build of `X.Y.Z` mapped to `X.Y.Z.0`);
-- the installers are unsigned (SmartScreen warns), and the `.app` is ad-hoc signed and not
-  notarized (Gatekeeper asks once): code signing needs a certificate and a signing hook in the
-  bundle config;
-- turn the jobs on for tags: drop `inputs.windows_macos == true` from their `if:`.
+When that port lands: the `.app` is ad-hoc signed and not notarized (Gatekeeper asks once), and
+the job is turned on for tags by dropping `inputs.macos == true` from its `if:`.
 
 ## Dry run
 
-Actions → Release → **Run workflow**, with the tag left empty. It builds and checks the
-packages from the branch's version and keeps them as a workflow artifact (3 days). It creates no
-release. A missing CHANGELOG section or a placeholder `RELEASES_REPO` is only a warning.
+Actions → Release → **Run workflow**, with the tag left empty (or
+`gh workflow run release.yml --ref <branch>`). It builds and checks the Linux packages and the
+Windows installers from the branch's version and keeps them as workflow artifacts (3 days),
+`zapper-<version>-linux` and `zapper-<version>-windows`. It creates no release. A missing CHANGELOG section or a placeholder `RELEASES_REPO` is only a warning.
 
 ## Re-running and fixing
 
