@@ -31,8 +31,32 @@
 ; another installer is replacing this one; anything else is a real uninstall.
 ; Recordings, the service's settings and its list of recordings stay, like
 ; the rest of zapper's data.
+;
+; Before any of that, a recording in progress is not cut off unannounced: the
+; installed zapper-server.exe (the old one; its files are still in place) is
+; asked whether this user's service is recording (--busy, exit 3 and "recording
+; until 21:05" if so). An interactive run then asks whether to stop it, and
+; cancels if not; a silent or passive one, or one zapper's updater started
+; (which has asked already), does not ask. Either way the service is then
+; stopped cleanly (--stop-for-setup): what it recorded is finished into
+; playable files, and it carries on when it runs again if the programme is
+; still on. taskkill comes after, for a zapper-server that did not answer.
 
 !macro ZAPPER_STOP_SERVER
+  ${If} ${FileExists} "$INSTDIR\zapper-server.exe"
+    nsExec::ExecToStack '"$INSTDIR\zapper-server.exe" --busy'
+    Pop $0
+    Pop $1
+    ${If} $0 = 3
+    ${AndIfNot} ${Silent}
+    ${AndIf} $PassiveMode <> 1
+    ${AndIf} $UpdateMode <> 1
+      MessageBox MB_OKCANCEL|MB_ICONEXCLAMATION "zapper's recording service is $1.$\r$\n$\r$\nStop it now and continue? What it has recorded so far is kept." /SD IDOK IDOK +2
+        Abort
+    ${EndIf}
+    nsExec::Exec '"$INSTDIR\zapper-server.exe" --stop-for-setup'
+    Pop $0
+  ${EndIf}
   nsExec::Exec '"$SYSDIR\taskkill.exe" /F /IM zapper-server.exe'
   Pop $0
   ; The process may take a moment to let go of its file.
@@ -53,6 +77,9 @@
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL
+  ; Stopped cleanly first (asking, if it records), then its task deleted:
+  ; ending the task would cut the recording off.
+  !insertmacro ZAPPER_STOP_SERVER
   ${If} $UpdateMode <> 1
   ${AndIf} $EXEDIR != $INSTDIR
     ReadEnvStr $0 USERNAME
@@ -61,10 +88,7 @@
     ReadEnvStr $0 USERNAME
     nsExec::Exec '"$SYSDIR\schtasks.exe" /Delete /TN "zapper-server-$0" /F'
     Pop $0
-    !insertmacro ZAPPER_STOP_SERVER
     Delete "$LOCALAPPDATA\zapper\zapper-server.log"
     Delete "$LOCALAPPDATA\zapper\zapper-server.old.log"
-  ${Else}
-    !insertmacro ZAPPER_STOP_SERVER
   ${EndIf}
 !macroend

@@ -235,14 +235,23 @@ if ($Install) {
         while ((Test-Path $file) -and (Get-Date) -lt $deadline) { Start-Sleep 1 }
     }
     function Install-Service([string]$at) {
-        $out = (& (Join-Path $at "zapper-server.exe") --install-service 2>&1 | Out-String).Trim()
+        $exe = Join-Path $at "zapper-server.exe"
+        if (-not (Test-Path $exe)) { Fail "no $exe"; return $null }
+        $out = (& $exe --install-service 2>&1 | Out-String).Trim()
         Write-Host "  zapper-server --install-service: $out"
         $t = Task
         if (-not $t) { Fail "no task $task after --install-service from $at"; return $null }
         Write-Host "  task $task`: $($t.State), runs $($t.Actions[0].Execute)"
         return $t.State
     }
-    $env:ZAPPER_HOME = Join-Path $work "home"
+    # On a CI runner, the account's own home, which is empty there: the
+    # installers' hooks ask the service about itself without a home of their
+    # own, so only there can they be seen stopping it cleanly. Anywhere else,
+    # a scratch home the service is handed, and the hooks fall back to
+    # stopping it outright.
+    $ownHome = $env:CI -eq "true"
+    if (-not $ownHome) { $env:ZAPPER_HOME = Join-Path $work "home" }
+    $serverLog = Join-Path $env:LOCALAPPDATA "zapper\zapper-server.log"
     if (Task) { throw "a task $task is already registered here; not touching it" }
 
     Step "NSIS: the recording service survives an upgrade"
@@ -254,6 +263,13 @@ if ($Install) {
     if (-not $t) { Fail "installing over the install deleted the task" }
     elseif ($state -eq "Running" -and $t.State -ne "Running") { Fail "the task is $($t.State) after installing over the install, not started again" }
     else { Write-Host "  after installing over it: $($t.State)" }
+    if ($ownHome) {
+        # The setup asked it to stop (zapper-server --stop-for-setup) rather
+        # than killing it.
+        $asked = Select-String -Path $serverLog -Pattern "stopping \(asked\)" -Quiet
+        if (-not $asked) { Fail "the setup did not ask the service to stop: $(Get-Content $serverLog -Tail 5)" }
+        else { Write-Host "  the setup stopped it cleanly, and started it again" }
+    }
     # The old uninstaller as a newer setup runs it ("uninstall before
     # installing"): in place, from the install folder.
     $p = Start-Process -Wait -PassThru (Join-Path $nsisDir "uninstall.exe") -ArgumentList "/S", "_?=$nsisDir"
@@ -266,6 +282,7 @@ if ($Install) {
     Wait-Gone (Join-Path $nsisDir "zapper.exe")
     if (Test-Path (Join-Path $nsisDir "zapper.exe")) { Fail "the NSIS uninstaller left zapper.exe behind" }
     if (Task) { Fail "the NSIS uninstall left the task $task" } else { Write-Host "  task gone" }
+    if ($ownHome -and (Test-Path $serverLog)) { Fail "the NSIS uninstall left $serverLog" }
     if (Get-Process zapper-server -ErrorAction SilentlyContinue) { Fail "zapper-server still runs after the uninstall" }
 
     Step "MSI: installed, then uninstalled with the recording service"
@@ -273,7 +290,11 @@ if ($Install) {
     $p = Start-Process -Wait -PassThru msiexec.exe -ArgumentList "/i", "`"$msi`"", "/qn", "/L*v", "`"$log`""
     if ($p.ExitCode -ne 0) { Fail "msiexec /i failed with $($p.ExitCode)" }
     else {
-        $at = Join-Path $env:ProgramFiles "zapper"
+        # Where it went: Program Files, unless a folder an earlier install
+        # left in the registry says otherwise (Tauri's MSI looks there first).
+        $m = Select-String -Path $log -Pattern 'Property\(S\): INSTALLDIR = (.+)$' | Select-Object -Last 1
+        $at = if ($m) { $m.Matches[0].Groups[1].Value.Trim().TrimEnd('\') } else { Join-Path $env:ProgramFiles "zapper" }
+        Write-Host "  installed in $at"
         Install-Service $at | Out-Null
         $log = Join-Path $work "msi-remove.log"
         $p = Start-Process -Wait -PassThru msiexec.exe -ArgumentList "/x", "`"$msi`"", "/qn", "/L*v", "`"$log`""
@@ -284,7 +305,7 @@ if ($Install) {
             Select-String -Path $log -Pattern "ZapperRemoveServiceTasks" | ForEach-Object { Write-Host "  $($_.Line)" }
         } else { Write-Host "  task gone" }
     }
-    Remove-Item Env:ZAPPER_HOME
+    Remove-Item Env:ZAPPER_HOME -ErrorAction SilentlyContinue
 }
 
 Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
