@@ -53,6 +53,11 @@ pub fn mark_synced(at: i64) {
     });
 }
 
+/// When this process's own last pass finished, if it has run one.
+pub fn synced_here() -> Option<i64> {
+    lock().last_synced
+}
+
 /// The later of this process's last pass and the one on record.
 ///
 /// The record wins when it is newer because another process may share the

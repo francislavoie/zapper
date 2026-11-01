@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 
 use crate::catalog::activity::{self, Accumulator};
+use crate::catalog::credentials;
 use crate::catalog::store;
 use crate::connections::{self, Limit, Verdict};
 use crate::ipc::ending::{self, Clues, Ending, EndingKind, Flow, How};
@@ -1151,7 +1152,7 @@ fn tick(app: &AppHandle, p: &Player) {
 /// account file, and a failure on a source nobody has built yet cannot be
 /// an HDHomeRun stream.
 fn explain_failure(app: &AppHandle, stream_id: i64) {
-    let cached = CLIENT.read().ok().and_then(|slot| *slot);
+    let cached = CLIENT.read().ok().and_then(|slot| slot.map(|(s, _)| s));
     let Some(Source::HdHomeRun(tuner)) = cached else {
         return;
     };
@@ -1198,7 +1199,14 @@ fn fixture_url(stream_id: i64) -> Option<String> {
 /// A `OnceLock` would be simpler, but the account is editable: saving new
 /// credentials has to take effect without a restart, and a lock that can
 /// only be written once cannot do that.
-static CLIENT: std::sync::RwLock<Option<&'static Source>> = std::sync::RwLock::new(None);
+///
+/// Kept beside the account file's [`credentials::fingerprint`] as it was when
+/// the source was built. The app is not the only writer of that file: the
+/// recording service on this computer saves it too, when a browser signed in
+/// to it changes the account, and nothing tells the app. So [`source`] looks
+/// at the file each time and builds again when it has changed.
+type Cached = (&'static Source, Option<u64>);
+static CLIENT: std::sync::RwLock<Option<Cached>> = std::sync::RwLock::new(None);
 
 /// Drops the cached client so the next call builds one from whatever is on
 /// file now. Called when the account changes.
@@ -1230,9 +1238,19 @@ pub fn xtream() -> Result<&'static XtreamClient, String> {
 /// Errors are mapped to plain strings that reach the UI, so they are
 /// scrubbed: a playlist URL can carry the account.
 pub fn source() -> Result<&'static Source, String> {
+    // Before the load, so a save landing between the two is seen next time
+    // rather than missed.
+    let now_on_file = credentials::fingerprint();
     if let Ok(slot) = CLIENT.read() {
-        if let Some(c) = *slot {
-            return Ok(c);
+        match *slot {
+            Some((c, built_from)) if built_from == now_on_file => return Ok(c),
+            Some(_) => {
+                tracing::info!("the account file changed; using the account now on file");
+                // What was known of the old account's connections is not
+                // this one's.
+                connections::forget();
+            }
+            None => {}
         }
     }
     let built = Source::load().map_err(|e| crate::catalog::sync_engine::scrub(&e.to_string()))?;
@@ -1241,7 +1259,7 @@ pub fn source() -> Result<&'static Source, String> {
     // caller. An account can only be changed a handful of times by hand.
     let leaked: &'static Source = Box::leak(Box::new(built));
     if let Ok(mut slot) = CLIENT.write() {
-        *slot = Some(leaked);
+        *slot = Some((leaked, now_on_file));
     }
     Ok(leaked)
 }
