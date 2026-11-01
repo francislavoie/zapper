@@ -30,8 +30,6 @@
 
 pub mod mpv;
 pub mod png;
-#[cfg(any(windows, target_os = "macos"))]
-mod screenshot;
 pub mod trickplay;
 
 #[cfg(target_os = "linux")]
