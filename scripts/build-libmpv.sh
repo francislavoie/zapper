@@ -439,7 +439,10 @@ case $family in
   # FFmpeg's.
   windows) ffmpeg_args+=(--enable-w32threads --enable-zlib --enable-schannel --enable-d3d11va --enable-dxva2
              --extra-ldflags="-static -static-libgcc -static-libstdc++") ;;
-  macos) ffmpeg_args+=(--enable-pthreads --enable-zlib --enable-iconv --enable-securetransport --enable-videotoolbox) ;;
+  # iconv is a library of its own on macOS, not part of libc, and FFmpeg's configure finds the
+  # header without adding the library to the link.
+  macos) ffmpeg_args+=(--enable-pthreads --enable-zlib --enable-iconv --enable-securetransport --enable-videotoolbox
+           --extra-libs=-liconv) ;;
 esac
 log "ffmpeg"
 mkdir -p "$build/ffmpeg"
