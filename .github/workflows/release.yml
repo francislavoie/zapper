@@ -303,6 +303,10 @@ jobs:
           PYTHON: python
         run: scripts/licenses.sh
 
+      # The interface, which zapper-server compiles in to serve to browsers (src-tauri/build.rs).
+      - name: Build the interface
+        run: npm run build
+
       # zapper-server, the recording service, built against the same FFmpeg; the installers put
       # it beside zapper.exe (packaging/windows/installers.conf.json).
       - name: Build zapper-server

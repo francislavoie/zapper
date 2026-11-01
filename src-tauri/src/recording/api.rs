@@ -311,6 +311,10 @@ pub struct LoginRequest {
     /// What to call the device in Settings; its browser's name otherwise.
     #[serde(default)]
     pub name: Option<String>,
+    /// A browser: the token goes into a cookie its page cannot read, and the
+    /// answer is `{device}` alone. Needs the `X-Zapper: 1` header.
+    #[serde(default)]
+    pub cookie: bool,
 }
 
 /// `POST /api/login`'s answer: the device's token, sent as

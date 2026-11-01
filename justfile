@@ -70,18 +70,21 @@ package:
       python3 scripts/version.py check "$ZAPPER_RELEASE_VERSION"
       [ "$ZAPPER_RELEASE_VERSION" = "$v" ] || { echo "package: ZAPPER_RELEASE_VERSION=$ZAPPER_RELEASE_VERSION doesn't match tauri.conf.json's $v" >&2; exit 1; }
     fi
-    # The bundled libmpv and FFmpeg the packages carry in /usr/lib/zapper (docs/licensing.md),
-    # then zapper-server, the recording service they install as /usr/bin/zapper-server, built
-    # against that FFmpeg (src-tauri/build.rs).
+    # The bundled libmpv and FFmpeg the packages carry in /usr/lib/zapper (docs/licensing.md).
     scripts/fetch-libmpv.sh linux-x86_64
+    # The license notices the packages ship (docs/licensing.md): the Rust crates' and the .deb's
+    # copyright file into src-tauri/target/licenses, unless Cargo.lock, the manifest, about.toml
+    # and LICENSE are as they were for the last ones; the interface's come from the UI build.
+    # Either fails the build on a license outside about.toml's allow-list.
+    scripts/licenses.sh --if-changed
+    # The interface, before zapper-server: the service compiles it in to serve it to browsers
+    # (src-tauri/build.rs). `tauri build` builds it again for the app, to the same files.
+    npm run build
+    # zapper-server, the recording service the packages install as /usr/bin/zapper-server, built
+    # against that FFmpeg (src-tauri/build.rs).
     cargo build --release --manifest-path src-tauri/Cargo.toml --no-default-features --features server --bin zapper-server
     # Old packages first, so the globs below match only this build's.
     rm -f src-tauri/target/release/bundle/deb/zapper_*.deb src-tauri/target/release/bundle/rpm/zapper-*.rpm
-    # The license notices the packages ship (docs/licensing.md): the Rust crates' and the .deb's
-    # copyright file into src-tauri/target/licenses, unless Cargo.lock, the manifest, about.toml
-    # and LICENSE are as they were for the last ones; the interface's come from the UI build
-    # `tauri build` runs. Either fails the build on a license outside about.toml's allow-list.
-    scripts/licenses.sh --if-changed
     npx tauri build --bundles deb,rpm
     deb=(src-tauri/target/release/bundle/deb/zapper_*.deb)
     [ ${#deb[@]} = 1 ] || { echo "package: expected one .deb, found: ${deb[*]}" >&2; exit 1; }
@@ -110,8 +113,9 @@ check-arch-pkg:
 # Windows' bash, with Windows' crate graph; it needs cargo-about and Python.
 package-windows:
     & ./tools/fetch-libmpv.ps1; if ($LASTEXITCODE) { exit $LASTEXITCODE }
-    cargo build --release --manifest-path src-tauri/Cargo.toml --no-default-features --features server --bin zapper-server; if ($LASTEXITCODE) { exit $LASTEXITCODE }
     $env:PYTHON = 'python'; & "$env:ProgramFiles\Git\bin\bash.exe" scripts/licenses.sh --if-changed; if ($LASTEXITCODE) { exit $LASTEXITCODE }
+    npm run build; if ($LASTEXITCODE) { exit $LASTEXITCODE }
+    cargo build --release --manifest-path src-tauri/Cargo.toml --no-default-features --features server --bin zapper-server; if ($LASTEXITCODE) { exit $LASTEXITCODE }
     npx tauri build --config packaging/windows/installers.conf.json
 
 # On macOS (Apple Silicon; not released yet, docs/macos.md): zapper.app and the .dmg, with

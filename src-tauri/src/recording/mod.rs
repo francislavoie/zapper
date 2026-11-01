@@ -13,8 +13,9 @@
 //!
 //! The service itself — the store of recordings, the capture loop, the
 //! remuxer, the HTTP server with its listeners ([`listen`]), who may use it
-//! ([`access`]) and its HTTPS certificate ([`tls`]) — is in the `server`
-//! feature, so the app links none of it.
+//! ([`access`]), its HTTPS certificate ([`tls`]), and the web interface it
+//! serves ([`web`]) with the catalogue API that interface reads ([`browse`])
+//! — is in the `server` feature, so the app links none of it.
 
 pub mod api;
 pub mod budget;
@@ -31,6 +32,8 @@ pub mod store;
 #[cfg(feature = "server")]
 pub mod access;
 #[cfg(feature = "server")]
+pub mod browse;
+#[cfg(feature = "server")]
 pub mod capture;
 #[cfg(feature = "server")]
 pub mod http;
@@ -42,6 +45,8 @@ pub mod remux;
 pub mod server;
 #[cfg(feature = "server")]
 pub mod tls;
+#[cfg(feature = "server")]
+pub mod web;
 
 /// Unix seconds now.
 pub fn now() -> i64 {
