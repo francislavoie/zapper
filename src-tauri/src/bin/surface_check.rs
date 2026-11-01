@@ -294,6 +294,10 @@ fn main() {
     tauri::Builder::default()
         .setup(move |app| {
             let window = app.get_webview_window("main").unwrap();
+            // Small enough for a CI runner's 1024x768 screen, so the
+            // screenshots show the whole window.
+            window.set_size(tauri::LogicalSize::new(1000.0, 680.0))?;
+            window.center()?;
             surface::install(&window)?;
             // `ao=null` before anything is loaded: this runs unattended and
             // must never make noise.
