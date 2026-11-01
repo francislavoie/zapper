@@ -1,17 +1,94 @@
-//! Playback surface: the only module aware that GTK exists.
+//! Playback surface: where video is drawn, and the only module that knows
+//! which windowing toolkit draws it.
+//!
+//! The rest of the app sees a boundary with no toolkit in it:
+//!
+//! - [`install`] puts a video surface beneath the main window's webview and
+//!   creates the player that draws into it. Once, from `setup`.
+//! - [`set_video_rect`] moves that surface; the frontend animates the picture
+//!   into a corner and back through it.
+//! - [`repeat_on_main`] is a main-thread timer, which is what the player's
+//!   heartbeat runs on.
+//! - [`request_capture`] is the development self-capture (`ZAPPER_CAPTURE`).
+//! - [`mpv`] is the player itself and [`trickplay`] the scrollback
+//!   thumbnails; both are portable, and neither names a toolkit.
+//!
+//! Behind it, one module per platform, chosen at compile time:
+//!
+//! - `linux`: GTK. A GtkGLArea under WebKitGTK's webview, mpv rendering into
+//!   it through the OpenGL render API. Everything that knows GTK, GL or
+//!   WebKit exists lives there and nowhere else.
+//! - `windows`: a child window beneath WebView2's, which mpv draws into by
+//!   itself (`wid` embedding); the webview is transparent over it.
+//! - `macos`: a slot, not an implementation. [`install`] fails with a clear
+//!   error, so a macOS build compiles and says why it cannot play.
+//!
+//! Every platform function is main-thread-only, for the same reason on each:
+//! the toolkit's objects are not `Send`. Commands on worker threads hop with
+//! `AppHandle::run_on_main_thread` and carry plain data across.
 
-pub mod capture;
-pub mod gl;
 pub mod mpv;
-pub mod overlay;
+pub mod png;
 pub mod trickplay;
+
+#[cfg(target_os = "linux")]
+pub mod linux;
+#[cfg(target_os = "linux")]
+use linux as platform;
+
+#[cfg(windows)]
+pub mod windows;
+#[cfg(windows)]
+use self::windows as platform;
+
+#[cfg(target_os = "macos")]
+pub mod macos;
+#[cfg(target_os = "macos")]
+use macos as platform;
+
+#[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
+compile_error!("zapper has a playback surface for Linux and Windows (and a stub for macOS) only");
+
+use std::path::PathBuf;
+use std::time::Duration;
+
+/// Puts the video surface beneath `window`'s webview and creates the player
+/// drawing into it.
+///
+/// Failing is fatal to the caller on purpose: a running app with no surface
+/// is worse than no app. Must be called on the main thread, which is where
+/// Tauri's `setup` hook runs.
+pub fn install(window: &tauri::WebviewWindow) -> anyhow::Result<()> {
+    platform::install(window)
+}
+
+/// Moves the video surface. Main thread only; `Err` before [`install`].
+pub fn set_video_rect(rect: VideoRect) -> Result<(), String> {
+    platform::set_video_rect(rect)
+}
+
+/// Calls `f` on the main thread every `interval` until it returns `false`.
+///
+/// The toolkit's own timer on each platform, so the callback runs between
+/// the event loop's other work and may touch main-thread-only state. Must be
+/// called on the main thread.
+pub fn repeat_on_main(interval: Duration, f: impl FnMut() -> bool + 'static) {
+    platform::repeat_on_main(interval, f)
+}
+
+/// Writes a reconstruction of the window to `path` after `after`, then exits
+/// the process. Development only (`ZAPPER_CAPTURE`); a platform that cannot
+/// do it says so and carries on.
+pub fn request_capture(path: PathBuf, after: Duration) {
+    platform::request_capture(path, after)
+}
 
 use serde::{Deserialize, Serialize};
 
 /// Where video should be drawn, in normalised window coordinates.
 ///
 /// Video is not a DOM element and cannot be positioned with CSS, so the
-/// frontend sends this and GTK applies it. Docking the video into a corner
+/// frontend sends this and the platform applies it. Docking the video into a corner
 /// while browsing is an animation over this rect.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct VideoRect {
@@ -32,7 +109,7 @@ impl VideoRect {
     }
 
     /// Clamps into the window and never returns a zero-sized viewport, which
-    /// GL rejects.
+    /// GL rejects and a zero-sized window would simply hide.
     pub fn to_pixels(&self, win_w: i32, win_h: i32) -> (i32, i32, i32, i32) {
         let clamp01 = |v: f64| v.clamp(0.0, 1.0);
         let x = (clamp01(self.x) * win_w as f64) as i32;
@@ -94,27 +171,4 @@ mod tests {
         let (_, _, w, h) = r.to_pixels(1000, 800);
         assert!(w >= 1 && h >= 1, "GL would fail on a zero-sized viewport");
     }
-}
-
-use std::cell::RefCell;
-
-thread_local! {
-    /// The installed overlay, reachable only from the GTK main thread.
-    ///
-    /// It cannot live in Tauri's managed state: it holds `Rc` and GTK objects,
-    /// so it is neither `Send` nor `Sync`. Commands arriving on other threads
-    /// must hop across with `AppHandle::run_on_main_thread` before calling
-    /// [`with_overlay`].
-    static INSTALLED: RefCell<Option<overlay::Overlay>> = const { RefCell::new(None) };
-}
-
-/// Records the overlay for later command access. Call once, from `setup`.
-pub fn set_installed(o: overlay::Overlay) {
-    INSTALLED.with(|i| *i.borrow_mut() = Some(o));
-}
-
-/// Runs `f` against the overlay. Returns `None` off the GTK main thread or
-/// before installation.
-pub fn with_overlay<R>(f: impl FnOnce(&overlay::Overlay) -> R) -> Option<R> {
-    INSTALLED.with(|i| i.borrow().as_ref().map(f))
 }

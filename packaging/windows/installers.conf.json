@@ -1,6 +1,5 @@
 {
   "bundle": {
-    "targets": ["nsis", "msi"],
     "resources": {
       "../packaging/install-kind-msi": "install-kind"
     },

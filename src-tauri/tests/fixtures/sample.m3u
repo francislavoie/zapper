@@ -1,0 +1,20 @@
+#EXTM3U x-tvg-url="http://epg.example/guide.xml.gz,http://epg2.example/more.xml" catchup-days="3"
+#EXTINF:-1 tvg-id="nwn1.uk" tvg-name="NWN One" tvg-logo="http://logo.example/nwn1.png" group-title="UK",NWN One HD
+http://stream.example/live/nwn1.m3u8
+#EXTINF:-1 tvg-id="nwn1.uk" tvg-name="NWN One" group-title="UK",NWN One SD (backup)
+http://backup.example/sample1080.ts
+#EXTINF:-1 tvg-id="" group-title="News;Europe" catchup="default" catchup-source="http://archive.example/continent news/{Y}/{m}/{d}/{H}-{M}.ts?dur={duration}",Continent News, English
+http://stream.example/continent news.m3u8
+#EXTINF:-1 tvg-chno="7" catchup="shift" group-title="News",Riviera 24
+#EXTVLCOPT:http-user-agent=Mozilla/5.0 zapper-test
+#EXTVLCOPT:http-referrer=https://riviera24.example/
+http://stream.example/f24/index.m3u8
+#EXTINF:-1 catchup="xc" group-title="Panel",Panel Channel
+http://panel.example:8080/live/someuser/somepass/12345.ts
+#KODIPROP:inputstream=inputstream.adaptive
+#EXTINF:-1 group-title="Music" catchup="vod",Unsupported Catchup
+http://stream.example/music.ts
+#EXTGRP:Radio
+#EXTINF:-1,Radio Uno
+http://stream.example/radio1.aac
+http://stream.example/bare-entry.ts

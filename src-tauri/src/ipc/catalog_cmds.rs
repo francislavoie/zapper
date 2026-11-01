@@ -399,6 +399,50 @@ mod tests {
         let s = sync_status().await.unwrap();
         assert!(s.channels_total >= 0);
     }
+
+    fn on_file_playlist() -> crate::m3u::M3uAccount {
+        crate::m3u::M3uAccount {
+            playlist: "http://p.example/get.php?username=u&password=pw".into(),
+            epg_urls: vec!["http://p.example/xmltv.php?username=u&password=pw".into()],
+            user_agent: Some("Old/1".into()),
+        }
+    }
+
+    #[test]
+    fn an_untouched_redacted_playlist_and_guide_are_kept() {
+        let got = resolve_m3u_form(Some(on_file_playlist()), None, None, "".into()).unwrap();
+        assert_eq!(got.playlist, on_file_playlist().playlist);
+        assert_eq!(got.epg_urls, on_file_playlist().epg_urls);
+        // The agent is not secret, so it is always sent, and empty clears it.
+        assert_eq!(got.user_agent, None);
+    }
+
+    #[test]
+    fn typed_values_replace_and_an_empty_guide_list_clears() {
+        let got = resolve_m3u_form(
+            Some(on_file_playlist()),
+            Some("  /home/me/tv.m3u ".into()),
+            Some(vec![" ".into()]),
+            " Kodi/21 ".into(),
+        )
+        .unwrap();
+        assert_eq!(got.playlist, "/home/me/tv.m3u");
+        assert!(got.epg_urls.is_empty());
+        assert_eq!(got.user_agent.as_deref(), Some("Kodi/21"));
+    }
+
+    #[test]
+    fn a_playlist_is_required_and_redacted_text_is_refused() {
+        assert!(resolve_m3u_form(None, None, None, "".into()).is_err());
+        let err = resolve_m3u_form(
+            None,
+            Some("http://p.example/get.php?username=<redacted>".into()),
+            None,
+            "".into(),
+        )
+        .unwrap_err();
+        assert!(err.contains("redacted"), "{err}");
+    }
 }
 
 /// Settings as stored. Defaults on first run; never fails for a missing row.
@@ -409,9 +453,20 @@ mod tests {
 /// The Xtream account, without the password.
 #[tauri::command]
 pub async fn account() -> Result<crate::ipc::types::AccountDto, String> {
-    use crate::catalog::credentials::{account_path, summary, Source};
+    use crate::catalog::credentials::{account_path, on_file, summary, Source};
+    use crate::m3u::redact::redact_url;
     let (creds, source) = summary();
+    let f = on_file();
+    let m3u = f.m3u.unwrap_or_default();
+    let (playlist, playlist_redacted) = redact_url(&m3u.playlist);
+    let epg: Vec<(String, bool)> = m3u.epg_urls.iter().map(|u| redact_url(u)).collect();
     Ok(crate::ipc::types::AccountDto {
+        kind: f.kind.as_str().to_owned(),
+        playlist,
+        playlist_redacted,
+        epg_redacted: epg.iter().any(|(_, r)| *r),
+        epg_urls: epg.into_iter().map(|(u, _)| u).collect(),
+        user_agent: m3u.user_agent.unwrap_or_default(),
         host: creds.as_ref().map(|c| c.host.clone()).unwrap_or_default(),
         username: creds.as_ref().map(|c| c.username.clone()).unwrap_or_default(),
         has_password: creds.as_ref().is_some_and(|c| !c.password.is_empty()),
@@ -470,6 +525,63 @@ pub async fn set_account(
     Ok(())
 }
 
+/// Makes an M3U playlist the account in use.
+///
+/// `playlist` and `epg_urls` of `None` mean "keep what is on file" — the
+/// pane sends that when the stored value had credentials redacted out of it
+/// and nobody typed a new one, which is the playlist equivalent of an empty
+/// password field. An empty list of guide URLs is a real value: use the
+/// guide the playlist names for itself, if any.
+#[tauri::command]
+pub async fn set_m3u_account(
+    playlist: Option<String>,
+    epg_urls: Option<Vec<String>>,
+    user_agent: String,
+) -> Result<(), String> {
+    use crate::catalog::credentials;
+    let existing = credentials::on_file().m3u;
+    let account = resolve_m3u_form(existing, playlist, epg_urls, user_agent)?;
+    credentials::save_m3u(&account).map_err(|e| e.to_string())?;
+    crate::ipc::player_cmds::forget_panel();
+    sync_engine::request_now();
+    Ok(())
+}
+
+/// The account `set_m3u_account` would save. Pure, so the keep-or-replace
+/// rules can be tested without an account file.
+fn resolve_m3u_form(
+    existing: Option<crate::m3u::M3uAccount>,
+    playlist: Option<String>,
+    epg_urls: Option<Vec<String>>,
+    user_agent: String,
+) -> Result<crate::m3u::M3uAccount, String> {
+    let existing = existing.unwrap_or_default();
+    let playlist = match playlist.map(|p| p.trim().to_owned()).filter(|p| !p.is_empty()) {
+        Some(p) => p,
+        None if !existing.playlist.is_empty() => existing.playlist,
+        None => return Err("a playlist URL or file is required".to_owned()),
+    };
+    let epg_urls = match epg_urls {
+        Some(list) => list
+            .into_iter()
+            .map(|u| u.trim().to_owned())
+            .filter(|u| !u.is_empty())
+            .collect(),
+        None => existing.epg_urls,
+    };
+    // A redacted value sent back verbatim would replace the real one with
+    // `<redacted>`; refuse it rather than save something that cannot work.
+    if playlist.contains("<redacted>") || epg_urls.iter().any(|u| u.contains("<redacted>")) {
+        return Err("type the full address, including the parts shown as <redacted>".to_owned());
+    }
+    let user_agent = Some(user_agent.trim().to_owned()).filter(|u| !u.is_empty());
+    Ok(crate::m3u::M3uAccount {
+        playlist,
+        epg_urls,
+        user_agent,
+    })
+}
+
 /// Asks the server who we are. The one honest test of an account: it either
 /// answers or it does not.
 ///
@@ -477,7 +589,18 @@ pub async fn set_account(
 /// it was given and that URL carries the username and password.
 #[tauri::command]
 pub async fn test_account() -> Result<String, String> {
-    let panel = crate::ipc::player_cmds::panel()?;
+    use crate::source::Source;
+    let panel = match crate::ipc::player_cmds::source()? {
+        Source::Xtream(panel) => panel,
+        // A playlist has nobody to ask "who am I"; the honest test is
+        // whether it can be fetched and parsed, and whether its guide answers.
+        Source::M3u(m) => {
+            return m
+                .probe()
+                .await
+                .map_err(|e| crate::catalog::sync_engine::scrub(&format!("{e:#}")));
+        }
+    };
     let info = panel
         .login()
         .await

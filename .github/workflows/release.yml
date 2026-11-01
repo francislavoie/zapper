@@ -7,10 +7,10 @@
 #   a release); without one it is a dry run: the same build and checks, the packages kept as a
 #   workflow artifact, no release.
 #
-# Windows and macOS: the jobs are here, but zapper does not build
-# on either yet (libmpv and the GTK surface are Linux-only so far). They run only on a manual
-# run with "Also build Windows and macOS" ticked, and are expected to fail until the port
-# exists. A tag push never runs them, so they can never hold a release back. When the port
+# Windows and macOS: the jobs are here and wired up. Windows builds but is not
+# yet tested on screen (docs/windows.md); macOS has only a stub surface. They run only on a
+# manual run with "Also build Windows and macOS" ticked, and the macOS one is expected to fail
+# until that port exists. A tag push never runs them, so they can never hold a release back. When the port
 # lands: make them run on tag pushes too (drop the `inputs.windows_macos` condition) and list
 # their assets in docs/releasing.md.
 #
@@ -204,8 +204,8 @@ jobs:
           compression-level: 0
           overwrite: true # a re-run replaces the earlier attempt's artifact
 
-  # NOT SUPPORTED YET: zapper does not build on Windows. Runs only when asked for on a manual
-  # run (see the top of this file). Unsigned: set a signing step here when there's a certificate.
+  # EXPERIMENTAL: zapper builds on Windows (docs/windows.md) but has not been tested on screen.
+  # Runs only when asked for on a manual run (see the top of this file). Unsigned: set a signing step here when there's a certificate.
   windows:
     name: Build the Windows installers (experimental)
     needs: [plan, linux]
@@ -235,6 +235,12 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci
+
+      # libmpv-2.dll and the mpv.lib import library the link needs, into src-tauri/lib/windows
+      # (docs/windows.md). Pinned, so a release does not change libmpv behind anyone's back:
+      # move the tag forward on purpose.
+      - name: Fetch libmpv
+        run: ./tools/fetch-libmpv.ps1 -Tag 20261101
 
       # The NSIS installer and the MSI, with the install-kind markers (packaging/windows/).
       - name: Build the installers

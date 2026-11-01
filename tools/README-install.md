@@ -3,27 +3,34 @@
 ## A real install
 
 ```sh
-npx tauri build                     # writes a .deb under src-tauri/target/release/bundle/deb/
-sudo dpkg -i src-tauri/target/release/bundle/deb/zapper_*_amd64.deb
+just package                        # .deb and .rpm under src-tauri/target/release/bundle/
+sudo apt install --reinstall ./src-tauri/target/release/bundle/deb/zapper_*_amd64.deb
 ```
 
-That puts `zapper` on `PATH`, its desktop entry in `/usr/share/applications/`
-and its icons in the hicolor theme, so it appears in the launcher like any
-other application. `sudo apt -f install` afterwards if dpkg reports a missing
-dependency.
+`--reinstall` because a rebuild of the same version is otherwise "already
+installed" and skipped. That puts `zapper` on `PATH`, its desktop entry in
+`/usr/share/applications/` and its icons in the hicolor theme, so it appears in
+the launcher like any other application.
 
-If you previously ran `tools/install-desktop.sh`, remove its entry first or
-you will have two:
+**Remove any entry `tools/install-desktop.sh` made first.** Both are
+`zapper.desktop`, and the per-user one wins: the launcher keeps starting
+whatever build it points at in this tree, with the old icon, while the package
+sits unused.
 
 ```sh
 tools/install-desktop.sh --uninstall
 ```
 
+If GNOME's search still shows nothing afterwards, the shell is holding a stale
+view of the id; logging out and back in rebuilds it.
+
 ## Running from the tree
 
-`npm run app` builds and runs a development build. It has no desktop entry of
-its own, so the dock shows a placeholder icon — `tools/install-desktop.sh`
-installs one pointing at `src-tauri/target/debug/zapper`.
+`npm run app` builds and runs a development build. With the package installed
+its window already takes the package's icon, so nothing more is needed.
+Without it, the dock shows a placeholder — `tools/install-desktop.sh` installs
+a per-user entry pointing at `src-tauri/target/debug/zapper`, and refuses to
+while the package is installed (`--force` overrides).
 
 ## Why a desktop entry is needed at all
 

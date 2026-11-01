@@ -455,4 +455,21 @@ pub struct AccountDto {
     /// Where the account is kept, so the answer to "where is this?" is on
     /// screen rather than in a commit message.
     pub path: String,
+    /// "xtream" or "m3u": which of the two sets of fields is in use. Both
+    /// are reported, so switching kinds in the pane shows the other set
+    /// filled in as it was left.
+    pub kind: String,
+    /// The playlist location, with any credentials in it redacted. A
+    /// provider's playlist URL usually *is* the account
+    /// (`get.php?username=…&password=…`), so it gets the password's rule.
+    pub playlist: String,
+    /// True when `playlist` had something taken out, and so cannot be sent
+    /// back as it stands: the pane shows it as set and keeps it unless a
+    /// new one is typed.
+    pub playlist_redacted: bool,
+    /// Guide locations, redacted the same way.
+    pub epg_urls: Vec<String>,
+    pub epg_redacted: bool,
+    /// Empty for "the default".
+    pub user_agent: String,
 }

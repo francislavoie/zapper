@@ -294,4 +294,17 @@ export interface AccountDto {
   source: string;
   /** Where it is kept, so "where is this?" is answerable on screen. */
   path: string;
+  /** Which set of fields is in use. Both sets are reported, so switching
+   *  kinds in the pane shows the other one filled in as it was left. */
+  kind: "xtream" | "m3u";
+  /** The playlist location, with any credentials in it redacted. */
+  playlist: string;
+  /** True when `playlist` had credentials taken out: it is shown as set and
+   *  kept unless a new one is typed, like the password. */
+  playlistRedacted: boolean;
+  /** XMLTV locations, redacted the same way. */
+  epgUrls: string[];
+  epgRedacted: boolean;
+  /** Empty for the default. */
+  userAgent: string;
 }

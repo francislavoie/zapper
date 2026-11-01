@@ -9,7 +9,7 @@
 //! lives here. GTK3's `render` signal is `RUN_LAST` with a boolean
 //! accumulator, so a handler returning `Propagation::Stop` halts emission and
 //! any later-connected handler never runs. mpv therefore does not connect its
-//! own; it exposes [`crate::surface::mpv::draw`], which this handler calls.
+//! own; it exposes [`super::render::draw`], which this handler calls.
 
 use anyhow::{anyhow, Result};
 use gtk::prelude::*;
@@ -18,7 +18,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use webkit2gtk::WebViewExt;
 
-use crate::surface::gl;
+use super::gl;
 
 thread_local! {
     /// `with_webview` demands a `Send` closure while every GTK object is
@@ -172,13 +172,13 @@ pub fn install(window: &tauri::WebviewWindow) -> Result<Overlay> {
             counter.set(n);
             // The ONLY render handler. mpv draws through this hook once it
             // exists; until then we clear to black.
-            let painted = crate::surface::mpv::draw(area);
+            let painted = super::render::draw(area);
             // Read back here rather than inside mpv's draw: this handler runs
             // every frame, so a capture still works when nothing is playing
             // and the surface is only being cleared.
             {
                 let scale = area.scale_factor();
-                crate::surface::capture::maybe_grab(
+                super::capture::maybe_grab(
                     area.allocated_width() * scale,
                     area.allocated_height() * scale,
                 );
@@ -196,7 +196,7 @@ pub fn install(window: &tauri::WebviewWindow) -> Result<Overlay> {
                     {
                         let scale = area.scale_factor();
                         unsafe {
-                            crate::surface::trickplay::capture(
+                            super::thumbs::capture(
                                 area.allocated_width() * scale,
                                 area.allocated_height() * scale,
                                 at,

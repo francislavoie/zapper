@@ -1,59 +1,50 @@
-//! libmpv handle plus its OpenGL render context.
+//! libmpv: the one player, its tuned options, its event queue, and the
+//! properties the interface reads.
 //!
-//! Everything here is main-thread-only: `RenderContext` is `!Send`, and the
-//! context can only be created while a GL context is current, which is true
-//! inside the GLArea's render signal and nowhere earlier.
+//! Portable. How the picture reaches the screen is the platform's business
+//! and enters here in exactly two places: the `video_out` options handed to
+//! [`Player::new`] (Linux asks for `vo=libmpv` and renders through GL itself;
+//! Windows gives mpv a window to draw into), and the readiness gate in
+//! [`Player::load`].
 //!
-//! No `connect_render` handler lives here on purpose. GTK3's `render` signal
-//! stops emitting once a handler returns `TRUE`, so a second handler would be
-//! a silent black screen. [`draw`] is called by the single handler in
-//! [`crate::surface::overlay`] instead.
+//! Main-thread-only by convention: commands reach the player through
+//! `AppHandle::run_on_main_thread` and [`with_player`], which answers `None`
+//! anywhere else. The mpv handle itself is thread-safe, and is shared with
+//! [`handle`] only for work that must not block the main thread.
 
 use anyhow::{anyhow, Context, Result};
-use gtk::prelude::*;
-use libmpv2::render::{OpenGLInitParams, RenderContext, RenderParam, RenderParamApiType};
 use libmpv2::Mpv;
 use std::cell::{Cell, RefCell};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
 
-use crate::surface::gl;
-
-/// Set by mpv's update callback, cleared as we render. Must be `Send`, which
-/// is why it is an atomic static and not part of the thread-local state.
-static FRAME_READY: AtomicBool = AtomicBool::new(true);
-
-/// One-shot so the render target is reported once, not sixty times a second.
-static FBO_LOGGED: AtomicBool = AtomicBool::new(false);
-
-/// Hand mpv an upside-down target: GL's origin is bottom-left, video's is
-/// top-left.
-///
-/// Measured rather than assumed, because the wrong value renders perfectly and
-/// is simply upside down. Played a clip whose top half is white into the
-/// GLArea and read the framebuffer back: with `true`, the screen-top strip
-/// reads 255 and the screen-bottom 0; with `false` that inverts exactly.
-const FLIP_Y: bool = true;
+/// The process's mpv. Leaked deliberately: Linux's render context borrows it
+/// for `'static`, and the player outlives everything anyway, so a
+/// self-referential struct is avoided. `Mpv` is `Send + Sync` (libmpv's
+/// client API is thread-safe), which is what lets it be a plain static.
+static MPV: OnceLock<&'static Mpv> = OnceLock::new();
 
 thread_local! {
-    static MPV: RefCell<Option<&'static Mpv>> = const { RefCell::new(None) };
-    static CTX: RefCell<Option<RenderContext<'static>>> = const { RefCell::new(None) };
-    static AREA: RefCell<Option<gtk::GLArea>> = const { RefCell::new(None) };
-    /// A URL asked for before the render context existed. See [`Player::load`].
+    /// A URL asked for before the surface could show it. See [`Player::load`].
     static PENDING: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
 /// A handle to the process-wide mpv instance.
 ///
-/// Zero-sized: the real state lives in thread-locals because `RenderContext`
-/// is `!Send` and must never leave the GTK main thread.
+/// Zero-sized: the real state is the static above, plus whatever the
+/// platform's surface keeps in its own main-thread locals.
 pub struct Player;
 
 impl Player {
-    /// Creates the mpv handle. The render context is deferred to first draw,
-    /// because `mpv_render_context_create` needs a *current* GL context and
-    /// the GLArea is not realized during Tauri's `setup`.
-    pub fn new(area: &gtk::GLArea) -> Result<Self> {
-        force_c_numeric_locale();
+    /// Creates the mpv handle with zapper's options, then `video_out`'s.
+    ///
+    /// `video_out` is the platform's say in how video is presented — the
+    /// `vo`, and whatever goes with it — applied after the shared options so
+    /// that a platform can override one of them where it must. Called by the
+    /// platform's surface, never by command code.
+    pub fn new(
+        video_out: impl FnOnce(&libmpv2::MpvInitializer) -> libmpv2::Result<()>,
+    ) -> Result<Self> {
         let mpv = Mpv::with_initializer(|init| {
             // Live rewind: ~512 MiB, roughly 3.7 minutes at 18 Mbps.
             init.set_property("cache", "yes".to_owned())?;
@@ -82,16 +73,14 @@ impl Player {
             // accepted.
             init.set_property("user-agent", "VLC/3.0.20 LibVLC/3.0.20".to_owned())?;
             init.set_property("network-timeout", 8i64)?;
-            init.set_property("vo", "libmpv".to_owned())?;
+            video_out(&init)?;
             Ok(())
         })
         .context("initialising mpv")?;
 
-        // Leaked deliberately: RenderContext borrows Mpv for 'a, and the
-        // player outlives everything anyway. Avoids a self-referential struct.
         let mpv: &'static Mpv = Box::leak(Box::new(mpv));
-        MPV.with(|m| *m.borrow_mut() = Some(mpv));
-        AREA.with(|a| *a.borrow_mut() = Some(area.clone()));
+        MPV.set(mpv)
+            .map_err(|_| anyhow!("mpv is already initialised in this process"))?;
         // Register on the way out so command code can reach the player without
         // `lib.rs` having to remember a second call.
         set_installed(Player);
@@ -99,28 +88,24 @@ impl Player {
     }
 
     fn mpv() -> Result<&'static Mpv> {
-        MPV.with(|m| *m.borrow())
-            .ok_or_else(|| anyhow!("mpv not initialised on this thread"))
+        handle().ok_or_else(|| anyhow!("mpv is not initialised"))
     }
 
-    /// Starts playback, deferring if the GL surface is not ready yet.
+    /// Starts playback, deferring if the surface is not ready yet.
     ///
-    /// mpv initialises its video output as soon as a file opens. If that
-    /// happens before the render context exists, the VO fails outright -
-    /// "Error opening/initializing the selected video_out (--vo) device" - and
-    /// nothing ever decodes. A network stream hides this by taking a second to
-    /// open, which is long enough for the first frame to have been drawn; a
-    /// local file opens instantly and fails every time. So a load requested
-    /// before the first draw is held until the context is up.
+    /// mpv initialises its video output as soon as a file opens. On Linux,
+    /// if that happens before the render context exists, the VO fails
+    /// outright - "Error opening/initializing the selected video_out (--vo)
+    /// device" - and nothing ever decodes. A network stream hides this by
+    /// taking a second to open, which is long enough for the first frame to
+    /// have been drawn; a local file opens instantly and fails every time. So
+    /// a load requested before the surface is ready is held until it is (see
+    /// [`load_pending`]). Windows hands mpv a window up front and is always
+    /// ready.
     pub fn load(&self, url: &str) -> Result<()> {
-        let ready = CTX.with(|c| c.borrow().is_some());
-        if !ready {
+        if !crate::surface::platform::video_ready() {
             PENDING.with(|p| *p.borrow_mut() = Some(url.to_owned()));
-            AREA.with(|a| {
-                if let Some(a) = a.borrow().as_ref() {
-                    a.queue_render();
-                }
-            });
+            crate::surface::platform::request_frame();
             return Ok(());
         }
         Self::mpv()?
@@ -144,140 +129,39 @@ impl Player {
     }
 }
 
-/// glibc's `LC_NUMERIC`. Stable at 1 on Linux since forever; hardcoded
-/// because binding libc for one integer is not worth a dependency.
-const LC_NUMERIC: i32 = 1;
-
-/// libmpv refuses to initialise unless `LC_NUMERIC` is `C`.
-///
-/// GTK calls `setlocale(LC_ALL, "")` during init, which on a machine with a
-/// non-C locale makes `mpv_create` fail with "Non-C locale detected" — an
-/// error that surfaces only as a generic init failure. `setlocale` is already
-/// in the process (libc is always loaded), so it is resolved from there rather
-/// than by pulling in a libc crate.
-fn force_c_numeric_locale() {
-    use libloading::os::unix::Library;
-
-    let this = Library::this();
-    let f = unsafe {
-        this.get::<unsafe extern "C" fn(i32, *const std::ffi::c_char) -> *mut std::ffi::c_char>(
-            b"setlocale\0",
-        )
-    };
-    match f {
-        Ok(setlocale) => unsafe {
-            setlocale(LC_NUMERIC, c"C".as_ptr());
-        },
-        Err(e) => tracing::warn!("could not resolve setlocale; mpv may refuse to start: {e}"),
-    }
+/// The mpv handle, for the platform's surface: Linux's render context is
+/// created from it, and Windows takes thumbnails through it off the main
+/// thread. `None` before [`Player::new`].
+pub fn handle() -> Option<&'static Mpv> {
+    MPV.get().copied()
 }
 
-/// Draws mpv's current frame. Returns false if mpv is not ready, so the
-/// caller can clear instead. Called only from the GLArea render signal, where
-/// a GL context is guaranteed current.
-pub(crate) fn draw(area: &gtk::GLArea) -> bool {
-    let Some(mpv) = MPV.with(|m| *m.borrow()) else {
-        return false;
+/// Opens the URL held back by [`Player::load`], now that the surface can show
+/// it. Called by the platform once its video output can succeed.
+pub fn load_pending() {
+    let Some(url) = PENDING.with(|p| p.borrow_mut().take()) else {
+        return;
     };
-
-    // Capture the render target FIRST, before anything else touches GL.
-    //
-    // NOT framebuffer 0. GtkGLArea binds its own FBO before emitting `render`
-    // (gtk_gl_area_attach_buffers) and composites only that; the default
-    // framebuffer is never shown, so drawing into 0 yields a black window with
-    // a healthy render count, frames "painted", and no GL error.
-    //
-    // And it must be read *here* rather than just before `render()`: creating
-    // mpv's render context leaves framebuffer 0 bound, so a query made after
-    // that reports 0 on the first frame. Measured: 1 at entry,
-    // 0 immediately after `create_render_context`.
-    let fbo = unsafe { gl::get_integer(gl::DRAW_FRAMEBUFFER_BINDING) };
-
-    CTX.with(|slot| {
-        let mut slot = slot.borrow_mut();
-        if slot.is_none() {
-            match mpv.create_render_context(vec![
-                RenderParam::ApiType(RenderParamApiType::OpenGl),
-                RenderParam::InitParams(OpenGLInitParams {
-                    get_proc_address: |_: &(), name: &str| gl::get_proc_address(name),
-                    ctx: (),
-                }),
-            ]) {
-                Ok(mut ctx) => {
-                    // Must only touch Send data: flag it and let the GTK main
-                    // loop find the area, because GLArea is !Send.
-                    ctx.set_update_callback(|| {
-                        if !FRAME_READY.swap(true, Ordering::AcqRel) {
-                            gtk::glib::idle_add_once(|| {
-                                AREA.with(|a| {
-                                    if let Some(a) = a.borrow().as_ref() {
-                                        a.queue_render();
-                                    }
-                                });
-                            });
-                        }
-                    });
-                    *slot = Some(ctx);
-                    // Now that a video output can succeed, start anything that
-                    // was asked for while the surface was still coming up.
-                    if let Some(url) = PENDING.with(|p| p.borrow_mut().take()) {
-                        if let Err(e) = mpv.command("loadfile", &[&url, "replace"]) {
-                            tracing::error!("deferred loadfile: {e}");
-                        }
-                    }
-                }
-                Err(e) => {
-                    tracing::error!("creating mpv render context: {e}");
-                    return false;
-                }
-            }
-        }
-
-        FRAME_READY.store(false, Ordering::Release);
-        let scale = area.scale_factor();
-        // gtk-rs 0.18 is GTK3: width()/height() are GTK4 APIs.
-        let w = (area.allocated_width() * scale).max(1);
-        let h = (area.allocated_height() * scale).max(1);
-
-        if !FBO_LOGGED.swap(true, Ordering::AcqRel) {
-            tracing::info!("mpv render target: GTK-bound FBO {fbo} at {w}x{h} (scale {scale})");
-        }
-
-        let rendered = slot.as_mut().unwrap().render::<()>(fbo, w, h, FLIP_Y);
-
-        // mpv renders through its own FBOs and does not put GTK's back when it
-        // finishes. GTK expects to own that binding for the rest of the frame,
-        // and anything the caller does afterwards - reading the surface back,
-        // clearing it - would otherwise land on whichever framebuffer mpv left
-        // behind. Restoring it is also what stops mpv seeing a stale
-        // INVALID_FRAMEBUFFER_OPERATION from someone else's read on its next
-        // frame.
-        unsafe { gl::bind_framebuffer(gl::FRAMEBUFFER, fbo) };
-
-        match rendered {
-            Ok(()) => true,
-            Err(e) => {
-                tracing::error!("mpv render: {e}");
-                false
-            }
-        }
-    })
+    let Some(mpv) = handle() else { return };
+    if let Err(e) = mpv.command("loadfile", &[&url, "replace"]) {
+        tracing::error!("deferred loadfile: {e}");
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Command-facing API: registry, event pump, and property probe.
 //
-// Everything below is main-thread-only for the same reason as the rest of this
-// module: `MPV` is a thread-local. Tauri commands reach it through
-// `AppHandle::run_on_main_thread` and [`with_player`].
+// Everything below is main-thread-only: the registry is a thread-local of the
+// main thread, so the player is reachable only there. Tauri commands reach it
+// through `AppHandle::run_on_main_thread` and [`with_player`].
 // ---------------------------------------------------------------------------
 
 thread_local! {
-    /// The installed player, reachable only from the GTK main thread.
+    /// The installed player, reachable only from the main thread.
     ///
-    /// `Player` is zero-sized, but the registry still has to exist: the real
-    /// state is in `MPV`/`CTX`/`AREA`, which are thread-locals of *this*
-    /// thread, so "is there a player here" is a per-thread question.
+    /// `Player` is zero-sized, but the registry still has to exist: the
+    /// surface it draws into is main-thread state on every platform, so "is
+    /// there a player here" is a per-thread question.
     static INSTALLED: RefCell<Option<Player>> = const { RefCell::new(None) };
 
     /// One ticker per process. A second one would double every state update
@@ -291,7 +175,7 @@ pub fn set_installed(p: Player) {
     INSTALLED.with(|i| *i.borrow_mut() = Some(p));
 }
 
-/// Runs `f` against the player. Returns `None` off the GTK main thread or
+/// Runs `f` against the player. Returns `None` off the main thread or
 /// before the player is created - never blocks, so a command that arrives
 /// early fails fast instead of hanging.
 pub fn with_player<R>(f: impl FnOnce(&Player) -> R) -> Option<R> {
@@ -305,19 +189,19 @@ pub fn with_player<R>(f: impl FnOnce(&Player) -> R) -> Option<R> {
 /// undrained queue eventually overflows. Idempotent - a second call is a
 /// no-op, because two tickers would each emit a state event per change.
 ///
-/// Must be called on the GTK main thread.
+/// Must be called on the main thread.
 pub fn start_ticker(interval: std::time::Duration, mut f: impl FnMut(&Player) + 'static) {
     if TICKING.with(|t| t.replace(true)) {
         return;
     }
-    gtk::glib::timeout_add_local(interval, move || {
+    crate::surface::repeat_on_main(interval, move || {
         with_player(&mut f);
-        gtk::glib::ControlFlow::Continue
+        true
     });
 }
 
 /// What mpv reported since the last pump. Plain data: it crosses back to the
-/// command thread, where GTK types may not go.
+/// command thread, where the surface's types may not go.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Signal {
     StartFile,
@@ -441,8 +325,8 @@ impl Player {
             return Vec::new();
         };
         let mut out = Vec::new();
-        // 0.0 polls rather than waits; this runs on the GTK main thread and
-        // must never block it.
+        // 0.0 polls rather than waits; this runs on the main thread and must
+        // never block it.
         while let Some(ev) = mpv.wait_event(0.0) {
             match ev {
                 Ok(libmpv2::events::Event::StartFile) => out.push(Signal::StartFile),
@@ -628,7 +512,7 @@ impl Player {
             "demuxer-cache-state",
         ];
         let Ok(m) = Self::mpv() else {
-            return "no mpv on this thread".to_owned();
+            return "no mpv in this process".to_owned();
         };
         KEYS.iter()
             .map(|k| match m.get_property::<String>(k) {
@@ -646,7 +530,7 @@ mod tests {
 
     #[test]
     fn a_thread_with_no_player_gets_none_rather_than_a_hang() {
-        // Every command hops to the GTK main thread; one that arrives before
+        // Every command hops to the main thread; one that arrives before
         // `setup` has built the player must fail immediately, not block on a
         // reply that will never come.
         assert!(with_player(|_| ()).is_none());

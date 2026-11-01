@@ -66,10 +66,65 @@ CREATE TABLE IF NOT EXISTS activity (
     last_watched  INTEGER,
     open_count    INTEGER NOT NULL DEFAULT 0
 );
+
+-- The names an XMLTV guide gives its channels, for matching playlist entries
+-- whose tvg-id does not say which guide channel they are. Filled only for
+-- M3U accounts: a panel names its guide channels itself.
+CREATE TABLE IF NOT EXISTS epg_channel_names (
+    channel_id TEXT NOT NULL,
+    name       TEXT NOT NULL,
+    PRIMARY KEY (channel_id, name)
+);
 "#;
 
+/// Columns added after the tables above first shipped.
+///
+/// `CREATE TABLE IF NOT EXISTS` does nothing to a table that exists, so a
+/// mirror created by an older build would never get them; each is added with
+/// `ALTER TABLE` when `pragma_table_info` says it is missing. Additive only,
+/// nullable only, and idempotent like the rest of `migrate` — no version
+/// number to keep in step, and an older build opening a newer mirror simply
+/// ignores columns it does not select.
+///
+/// All of these belong to playlist (M3U) channels and stay NULL for a panel's:
+/// a panel builds its stream URLs from the account, a playlist states each one.
+const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
+    // Where the channel plays from. Its presence is what marks a row as a
+    // playlist channel.
+    ("channels", "stream_url", "TEXT"),
+    // The playlist's own guide identifiers, kept apart from `epg_channel_id`
+    // (the *resolved* guide channel) so matching can be redone.
+    ("channels", "tvg_id", "TEXT"),
+    ("channels", "tvg_name", "TEXT"),
+    // `m3u::catchup::Mode` spelling and the template it uses.
+    ("channels", "catchup_mode", "TEXT"),
+    ("channels", "catchup_source", "TEXT"),
+    // Per-channel HTTP headers from `#EXTVLCOPT` / `#EXTHTTP`, handed to mpv.
+    ("channels", "http_user_agent", "TEXT"),
+    ("channels", "http_referrer", "TEXT"),
+];
+
+fn add_missing_columns(conn: &Connection) -> Result<()> {
+    for (table, column, decl) in ADDED_COLUMNS {
+        let present: bool = conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM pragma_table_info(?1) WHERE name = ?2",
+                [table, column],
+                |r| r.get(0),
+            )
+            .with_context(|| format!("inspecting {table}"))?;
+        if !present {
+            // Identifiers cannot be bound; these are constants above.
+            conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"))
+                .with_context(|| format!("adding {table}.{column}"))?;
+        }
+    }
+    Ok(())
+}
+
 pub fn migrate(conn: &Connection) -> Result<()> {
-    conn.execute_batch(SCHEMA).context("applying schema")
+    conn.execute_batch(SCHEMA).context("applying schema")?;
+    add_missing_columns(conn)
 }
 
 fn tune(conn: &Connection) -> Result<()> {
@@ -110,7 +165,7 @@ mod tests {
             .unwrap()
             .map(Result::unwrap)
             .collect();
-        for t in ["activity", "categories", "channels", "epg", "quality"] {
+        for t in ["activity", "categories", "channels", "epg", "epg_channel_names", "quality"] {
             assert!(
                 tables.contains(&t.to_string()),
                 "missing table {t}; got {tables:?}"
@@ -123,6 +178,40 @@ mod tests {
         let c = open_in_memory().unwrap();
         migrate(&c).unwrap();
         migrate(&c).unwrap();
+    }
+
+    #[test]
+    fn a_mirror_from_before_playlists_gains_their_columns() {
+        // The channels table as the first release created it.
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(
+            "CREATE TABLE channels (
+                stream_id INTEGER PRIMARY KEY, category_id TEXT, name TEXT NOT NULL,
+                clean_name TEXT NOT NULL DEFAULT '', num INTEGER, logo_url TEXT,
+                epg_channel_id TEXT, has_archive INTEGER NOT NULL DEFAULT 0,
+                archive_days INTEGER, is_separator INTEGER NOT NULL DEFAULT 0,
+                deleted_at INTEGER);
+             INSERT INTO channels (stream_id, name) VALUES (7, 'kept');",
+        )
+        .unwrap();
+        migrate(&c).unwrap();
+        migrate(&c).unwrap();
+        let (name, url): (String, Option<String>) = c
+            .query_row("SELECT name, stream_url FROM channels WHERE stream_id = 7", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!((name.as_str(), url), ("kept", None));
+        for (_, col, _) in ADDED_COLUMNS {
+            let n: i64 = c
+                .query_row(
+                    "SELECT COUNT(*) FROM pragma_table_info('channels') WHERE name = ?1",
+                    [col],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(n, 1, "{col} missing after migrate");
+        }
     }
 
     #[test]

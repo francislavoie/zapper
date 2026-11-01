@@ -2172,6 +2172,54 @@ button.prog:hover {
   gap: 0.375rem;
 }
 
+/* What the chosen account type needs, said once under the switch. */
+.settings-body p.source-blurb {
+  margin: 0.375rem 0 0.5rem;
+}
+
+/* Xtream and M3U side by side. A table because it is one: the same five
+   questions, answered twice. Small and dim so it informs the choice without
+   outshouting the form under it; the chosen column is lifted to the normal
+   text colour, which is enough to say "this is what you get". */
+.source-compare {
+  width: 100%;
+  max-width: 40rem;
+  margin-bottom: 0.75rem;
+  border-collapse: collapse;
+  font-size: 0.6875rem;
+  line-height: 1.4;
+  color: var(--dim);
+}
+
+.source-compare th,
+.source-compare td {
+  padding: 0.25rem 0.5rem 0.25rem 0;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.source-compare thead th {
+  font-weight: 600;
+}
+
+.source-compare tbody th {
+  font-weight: 500;
+  white-space: nowrap;
+  width: 6.5rem;
+}
+
+.source-compare .sel {
+  color: var(--text);
+}
+
+/* The guide box takes several addresses, one per line. */
+textarea.field {
+  resize: vertical;
+  font: inherit;
+  color: inherit;
+}
+
 .swatches {
   display: flex;
   align-items: center;

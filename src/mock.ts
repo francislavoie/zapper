@@ -9,6 +9,7 @@
 
 import { auditLightSurfaces, auditOverVideo } from "./audit";
 import type {
+  AccountDto,
   CategoryDto,
   ChannelDto,
   FavouriteDto,
@@ -497,12 +498,20 @@ let mockDropped = 0;
 /** Samples in the mock's synthetic history. Matches HISTORY_LENGTH in
  *  src/logic/stats.ts, so the graphs are drawn full. */
 const MOCK_HISTORY = 120;
-let mockAccount = {
+let mockAccount: AccountDto = {
   host: "http://panel.example.com:8080",
   username: "demo",
   hasPassword: true,
   source: "zapper",
   path: "~/.config/zapper/account.json",
+  kind: "xtream",
+  // A provider-style playlist on file, so the redacted-field path is what
+  // the mock shows when switched to M3U.
+  playlist: "http://panel.example.com:8080/get.php?username=<redacted>&password=<redacted>&type=m3u_plus",
+  playlistRedacted: true,
+  epgUrls: [],
+  epgRedacted: false,
+  userAgent: "",
 };
 let bufferTimer: number | undefined;
 
@@ -850,16 +859,47 @@ export const mockApi = {
     if (username.trim() === "") throw "a username is required";
     if (password === "" && !mockAccount.hasPassword) throw "a password is required";
     mockAccount = {
+      ...mockAccount,
       host: host.trim(),
       username: username.trim(),
       hasPassword: mockAccount.hasPassword || password !== "",
       source: "zapper",
       path: "~/.config/zapper/account.json",
+      kind: "xtream",
+    };
+  },
+
+  setM3uAccount: async (playlist: string | null, epgUrls: string[] | null, userAgent: string) => {
+    await delay(60);
+    if (playlist === null && mockAccount.playlist === "") throw "a playlist URL or file is required";
+    // The mock's own redaction, so a saved secret-bearing URL comes back the
+    // way the real backend would send it.
+    const redact = (u: string) =>
+      u.replace(/((?:username|password|token|key)=)[^&]*/gi, "$1<redacted>");
+    const nextPlaylist = playlist ?? mockAccount.playlist;
+    const nextEpg = epgUrls ?? mockAccount.epgUrls;
+    mockAccount = {
+      ...mockAccount,
+      source: "zapper",
+      kind: "m3u",
+      playlist: redact(nextPlaylist),
+      // Kept means whatever it was; typed means whether it needed redacting.
+      playlistRedacted:
+        playlist === null ? mockAccount.playlistRedacted : redact(nextPlaylist) !== nextPlaylist,
+      epgUrls: nextEpg.map(redact),
+      epgRedacted:
+        epgUrls === null ? mockAccount.epgRedacted : nextEpg.some((u) => redact(u) !== u),
+      userAgent: userAgent.trim(),
     };
   },
 
   testAccount: async () => {
     await delay(300);
+    if (mockAccount.kind === "m3u") {
+      const guide =
+        mockAccount.epgUrls.length === 0 ? "no guide configured" : `${mockAccount.epgUrls.length} guides OK`;
+      return `Playlist OK: 412 channels in the first 600 lines of 24 MB · ${guide}`;
+    }
     if (!mockAccount.hasPassword) throw "the panel rejected these credentials (no password)";
     return "Active · 1 of 1 connections in use";
   },

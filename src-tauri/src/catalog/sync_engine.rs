@@ -10,8 +10,12 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use crate::catalog::{db, index, status, sync};
+use crate::catalog::credentials::Account;
+use crate::catalog::playlist::{self, PlaylistStats, PlaylistWriter};
+use crate::catalog::{db, index, origin, status, sync};
 use crate::ipc::types::{events, SyncPhase, SyncStatusDto};
+use crate::m3u::fetch;
+use crate::source::M3uSource;
 use crate::xtream::XtreamClient;
 
 
@@ -57,28 +61,14 @@ fn dto(
 /// `reqwest` puts the failing URL in its `Display`, and every Xtream URL
 /// carries `username` and `password` in the query string. The host and the
 /// reason are worth keeping; the values are not.
+///
+/// Playlist and guide URLs put the account in more places — `user:pass@`
+/// userinfo, `token=` and friends — so the work is
+/// [`crate::m3u::redact`]'s, which knows all of them. (Those requests also
+/// drop the URL from their errors outright; this is the second line.)
 pub fn scrub(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some(hit) = ["username=", "password=", "pass=", "user="]
-        .iter()
-        .filter_map(|k| rest.find(k).map(|i| (i, k.len())))
-        .min_by_key(|(i, _)| *i)
-    {
-        let (at, key_len) = hit;
-        let value_start = at + key_len;
-        out.push_str(&rest[..value_start]);
-        out.push_str("<redacted>");
-        // A query value ends at the next separator; everything after it —
-        // including the closing bracket reqwest wraps the URL in — stays.
-        let end = rest[value_start..]
-            .find(['&', ')', ' ', '"'])
-            .map(|i| value_start + i)
-            .unwrap_or(rest.len());
-        rest = &rest[end..];
-    }
-    out.push_str(rest);
-    out
+    use crate::m3u::redact;
+    redact::redact_query(&redact::redact_userinfo(text))
 }
 
 fn publish<S: StatusSink>(sink: &S, phase: SyncPhase, message: impl Into<String>) {
@@ -186,16 +176,45 @@ async fn run_steps<'a, S: StatusSink>(
     }
 }
 
-async fn step_categories(client: &XtreamClient) -> Result<String> {
+async fn step_categories(client: &XtreamClient, switched: bool) -> Result<String> {
     let cats = client.categories().await.context("fetching categories")?;
     let n = cats.len();
-    db::with_write_db(|conn| sync::sync_categories(conn, &cats))?;
+    db::with_write_db(|conn| land_categories(conn, &cats, switched))?;
     Ok(format!("{n} categories"))
 }
 
-async fn step_channels(client: &XtreamClient) -> Result<String> {
+/// A server's categories into the mirror. `switched` is [`origin::changed`]:
+/// only then is anything the server did not list dropped, so a server that
+/// has filled the mirror all along is synced exactly as before.
+fn land_categories(
+    conn: &rusqlite::Connection,
+    cats: &[crate::xtream::Category],
+    switched: bool,
+) -> Result<()> {
+    sync::sync_categories(conn, cats)?;
+    if switched {
+        let keep: Vec<&str> = cats.iter().map(|c| c.category_id.as_str()).collect();
+        origin::prune_categories(conn, &keep)?;
+    }
+    Ok(())
+}
+
+/// A server's channels into the mirror, and the server noted as the mirror's
+/// origin — after the channels, so a pass that pruned the old categories but
+/// failed here prunes again next time rather than calling the swap done.
+fn land_channels(
+    conn: &rusqlite::Connection,
+    chans: &[crate::xtream::Channel],
+    origin: &str,
+) -> Result<sync::SyncStats> {
+    let stats = sync::sync_channels(conn, chans)?;
+    origin::record(conn, origin)?;
+    Ok(stats)
+}
+
+async fn step_channels(client: &XtreamClient, origin: &str) -> Result<String> {
     let chans = client.channels().await.context("fetching channels")?;
-    let stats = db::with_write_db(|conn| sync::sync_channels(conn, &chans))?;
+    let stats = db::with_write_db(|conn| land_channels(conn, &chans, origin))?;
     // Rebuilt here rather than as a phase of its own: it is local work, and
     // `SyncPhase` has no name for it because the UI has nothing to say.
     let indexed = db::with_write_db(index::rebuild)?;
@@ -290,8 +309,8 @@ pub async fn run_once(app: &tauri::AppHandle) -> Result<Option<PassOutcome>> {
         return Ok(None);
     }
     let _running = RunningGuard;
-    let creds = match crate::catalog::credentials::load() {
-        Ok(c) => c,
+    let account = match crate::catalog::credentials::load_account() {
+        Ok(a) => a,
         Err(e) => {
             // Scrubbed even here: the path is safe but the parse error may
             // not be, and this string reaches the UI.
@@ -299,17 +318,268 @@ pub async fn run_once(app: &tauri::AppHandle) -> Result<Option<PassOutcome>> {
             return Err(e);
         }
     };
+    let creds = match account {
+        Account::Xtream(c) => c,
+        Account::M3u(a) => {
+            let src = M3uSource::new(a)?;
+            return Ok(Some(run_m3u_pass(app, &src).await));
+        }
+    };
+    // Which catalogue this is, and whether the mirror holds a different one.
+    let from = origin::of_xtream(&creds);
+    let switched = db::with_write_db(|conn| origin::changed(conn, &from))?;
     let client = XtreamClient::new(creds)?;
     let outcome = run_steps(
         app,
         vec![
-            (SyncPhase::Categories, Box::pin(step_categories(&client))),
-            (SyncPhase::Channels, Box::pin(step_channels(&client))),
+            (SyncPhase::Categories, Box::pin(step_categories(&client, switched))),
+            (SyncPhase::Channels, Box::pin(step_channels(&client, &from))),
             (SyncPhase::Epg, Box::pin(step_epg(&client))),
         ],
     )
     .await;
     Ok(Some(outcome))
+}
+
+// ------------------------------------------------------------- M3U playlists
+
+/// The same three phases an Xtream server gets, so the toolbar says the same
+/// things.
+///
+/// The playlist is downloaded once, in the categories phase, because one
+/// document carries both categories and channels: fetching it twice to keep
+/// the phases tidy would double a 60 MB download. The channels phase then
+/// reports what landed and rebuilds the search index. If the download failed,
+/// the channels phase fails with the same reason rather than claiming
+/// success — a pass where nothing new arrived must not count as a refresh,
+/// or the backoff would never apply.
+async fn run_m3u_pass<S: StatusSink>(sink: &S, src: &M3uSource) -> PassOutcome {
+    let landed: Landed = std::sync::Mutex::new(None);
+    run_steps(
+        sink,
+        vec![
+            (SyncPhase::Categories, Box::pin(step_m3u_playlist(src, &landed))),
+            (SyncPhase::Channels, Box::pin(step_m3u_channels(&landed))),
+            (SyncPhase::Epg, Box::pin(step_m3u_epg(src))),
+        ],
+    )
+    .await
+}
+
+/// What the playlist phase hands the channels phase: `(new, gone)`, or the
+/// failure to repeat.
+type Landed = std::sync::Mutex<Option<std::result::Result<(usize, usize), String>>>;
+
+async fn step_m3u_playlist(src: &M3uSource, landed: &Landed) -> Result<String> {
+    let r = load_playlist(src).await;
+    // A playlist's write replaces categories and soft-deletes unseen channels
+    // whatever came before, so it needs no `switched`; it only has to say
+    // that it is now the origin, for the server that may come after it.
+    let r = r.and_then(|s| {
+        let from = origin::of_playlist(&src.account().playlist);
+        db::with_write_db(|conn| origin::record(conn, &from))?;
+        Ok(s)
+    });
+    let handoff = match &r {
+        Ok(s) => Ok((s.channels.inserted, s.channels.deleted)),
+        Err(e) => Err(failure_message(e)),
+    };
+    *landed.lock().unwrap_or_else(|e| e.into_inner()) = Some(handoff);
+    let s = r?;
+    Ok(format!("{} categories", s.categories))
+}
+
+async fn step_m3u_channels(landed: &Landed) -> Result<String> {
+    let handoff = landed.lock().unwrap_or_else(|e| e.into_inner()).take();
+    match handoff {
+        Some(Ok((new, gone))) => {
+            let indexed = db::with_write_db(index::rebuild)?;
+            Ok(format!("{indexed} channels ({new} new, {gone} gone)"))
+        }
+        Some(Err(why)) => Err(anyhow::anyhow!(why)),
+        None => Err(anyhow::anyhow!("the playlist was not read")),
+    }
+}
+
+async fn load_playlist(src: &M3uSource) -> Result<PlaylistStats> {
+    let location = src.account().playlist.clone();
+    match fetch::open(src.http(), &location, "the playlist").await? {
+        fetch::Opened::Http(mut resp) => {
+            let ct = resp
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_owned);
+            let Some(first) = fetch::next_chunk(&mut resp, "the playlist").await? else {
+                anyhow::bail!("the playlist was empty");
+            };
+            if fetch::looks_like_stream(&first, ct.as_deref()) {
+                // A stream, not a list. Stop downloading it.
+                drop(resp);
+                return tokio::task::spawn_blocking(move || {
+                    db::with_write_db(|conn| write_single(conn, &location))
+                })
+                .await
+                .context("joining the playlist writer")?;
+            }
+            pump_into(resp, "the playlist", Some(first), move |r| {
+                db::with_write_db(|conn| write_playlist_from(conn, r, &location))
+            })
+            .await
+        }
+        fetch::Opened::File(f) => tokio::task::spawn_blocking(move || {
+            db::with_write_db(|conn| write_playlist_from(conn, Box::new(f), &location))
+        })
+        .await
+        .context("joining the playlist writer")?,
+    }
+}
+
+/// One channel, for a "playlist" that turned out to be a stream.
+fn write_single(conn: &rusqlite::Connection, location: &str) -> Result<PlaylistStats> {
+    let mut w = PlaylistWriter::begin(conn)?;
+    w.push(crate::m3u::Entry {
+        name: crate::m3u::parse::name_from_url(location),
+        url: location.to_owned(),
+        ..Default::default()
+    })?;
+    w.finish(&crate::m3u::Header::default())
+}
+
+fn write_playlist_from(
+    conn: &rusqlite::Connection,
+    src: Box<dyn Read + Send>,
+    location: &str,
+) -> Result<PlaylistStats> {
+    use std::io::BufRead;
+    let mut r = fetch::decompressing(src)?;
+    // A local file that is MPEG-TS; HTTP streams were caught by their
+    // headers before getting here.
+    if r.fill_buf()?.first() == Some(&0x47) {
+        return write_single(conn, location);
+    }
+    let mut w = PlaylistWriter::begin(conn)?;
+    let header = crate::m3u::parse::parse(r, |e| w.push(e))?;
+    if header.hls {
+        // An HLS playlist is one stream, however many segments it lists.
+        // Dropping the writer rolls the segments back.
+        drop(w);
+        return write_single(conn, location);
+    }
+    w.finish(&header)
+}
+
+async fn step_m3u_epg(src: &M3uSource) -> Result<String> {
+    let locations = src.guide_locations();
+    if locations.is_empty() {
+        return Ok("no guide configured".to_owned());
+    }
+    let mut programmes = 0;
+    let mut loaded = 0;
+    let mut first_err = None;
+    for loc in &locations {
+        // The first guide to load replaces the stored channel names; later
+        // ones add to them, so two guides for two regions both count.
+        match load_guide(src, loc, loaded == 0).await {
+            Ok(n) => {
+                programmes += n;
+                loaded += 1;
+            }
+            Err(e) => {
+                tracing::warn!("a guide failed: {}", scrub(&format!("{e:#}")));
+                first_err.get_or_insert(e);
+            }
+        }
+    }
+    if loaded == 0 {
+        // Every guide failed; the first reason stands for all of them, and
+        // carries its status so a refusal is still recognised as one.
+        return Err(first_err.unwrap_or_else(|| anyhow::anyhow!("no guide loaded")));
+    }
+    let (matched, total) = db::with_write_db(playlist::match_epg)?;
+    let mut msg = format!("{programmes} programmes, guide for {matched} of {total} channels");
+    if loaded < locations.len() {
+        msg.push_str(&format!(" ({} of {} guides failed)", locations.len() - loaded, locations.len()));
+    }
+    Ok(msg)
+}
+
+async fn load_guide(src: &M3uSource, location: &str, replace: bool) -> Result<usize> {
+    let names = crate::catalog::epg::ChannelNames::Collect { replace };
+    let parse = move |r: Box<dyn Read + Send>| {
+        db::with_write_db(|conn| {
+            let r = fetch::decompressing(r)?;
+            crate::catalog::epg::parse_xmltv_into(r, conn, names)
+        })
+    };
+    match fetch::open(src.http(), location, "the guide").await? {
+        fetch::Opened::Http(resp) => pump_into(resp, "the guide", None, parse).await,
+        fetch::Opened::File(f) => tokio::task::spawn_blocking(move || parse(Box::new(f)))
+            .await
+            .context("joining the guide parser")?,
+    }
+}
+
+/// A [`ChunkReader`] that turns an abandoned download into a read error.
+///
+/// Without it a connection that drops halfway looks, to the parser, exactly
+/// like the end of the document — and a playlist cut off at channel 40,000
+/// of 100,000 would commit, soft-deleting the other 60,000. The error makes
+/// the parse fail and its transaction roll back instead.
+struct Abortable {
+    inner: ChunkReader,
+    aborted: std::sync::Arc<AtomicBool>,
+}
+
+impl Read for Abortable {
+    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.inner.read(out)?;
+        if n == 0 && !out.is_empty() && self.aborted.load(Ordering::SeqCst) {
+            return Err(std::io::Error::other("the download was cut short"));
+        }
+        Ok(n)
+    }
+}
+
+/// Streams a response into `work`, which runs on a blocking thread and
+/// reads it as a `Read`. The same bridge as [`step_epg`], plus [`Abortable`].
+async fn pump_into<T: Send + 'static>(
+    mut resp: reqwest::Response,
+    what: &'static str,
+    first: Option<Vec<u8>>,
+    work: impl FnOnce(Box<dyn Read + Send>) -> Result<T> + Send + 'static,
+) -> Result<T> {
+    let (tx, rx) = tokio::sync::mpsc::channel::<Vec<u8>>(8);
+    let aborted = std::sync::Arc::new(AtomicBool::new(false));
+    let reader = Abortable {
+        inner: ChunkReader::new(rx),
+        aborted: aborted.clone(),
+    };
+    let job = tokio::task::spawn_blocking(move || work(Box::new(reader)));
+    let pumped: Result<()> = async {
+        if let Some(f) = first {
+            if tx.send(f).await.is_err() {
+                return Ok(());
+            }
+        }
+        while let Some(chunk) = fetch::next_chunk(&mut resp, what).await? {
+            // The parser having gone away is reported by the join below.
+            if tx.send(chunk).await.is_err() {
+                break;
+            }
+        }
+        Ok(())
+    }
+    .await;
+    if pumped.is_err() {
+        // Before the sender drops, so the reader sees it at the end.
+        aborted.store(true, Ordering::SeqCst);
+    }
+    drop(tx);
+    let out = job.await.context("joining the parser")?;
+    // The network's reason, when there is one, is the real one.
+    pumped?;
+    out
 }
 
 /// Asks for a pass now, through the periodic loop.
@@ -488,6 +758,199 @@ mod tests {
         assert!(!safe.contains("hunter2"), "password leaked: {safe}");
         assert!(safe.contains("panel.example"), "host is useful, keep it: {safe}");
         assert!(safe.contains("timed out"), "reason is useful, keep it: {safe}");
+    }
+
+    #[test]
+    fn playlist_credentials_never_reach_a_status_message() {
+        for raw in [
+            "error sending request for url (http://bob:hunter2@cdn.example/list.m3u): timed out",
+            "error decoding response body for url (http://p.example/get.php?username=bob&password=hunter2&type=m3u_plus)",
+            "HTTP status 403 for url (https://cdn.example/x.m3u?token=hunter2)",
+        ] {
+            let safe = scrub(raw);
+            assert!(!safe.contains("hunter2"), "secret leaked: {safe}");
+            assert!(!safe.contains("bob"), "user leaked: {safe}");
+            assert!(safe.contains(".example"), "host is useful, keep it: {safe}");
+        }
+    }
+
+    fn gz(data: &[u8]) -> Vec<u8> {
+        use std::io::Write;
+        let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        e.write_all(data).unwrap();
+        e.finish().unwrap()
+    }
+
+    // These write to a connection of their own, never the shared test
+    // database: a playlist write soft-deletes every channel it did not see,
+    // which would pull the floor out from under every other test.
+
+    #[test]
+    fn a_gzipped_playlist_is_read_like_a_plain_one() {
+        let c = crate::catalog::open_in_memory().unwrap();
+        let body = gz(include_bytes!("../../tests/fixtures/sample.m3u"));
+        let s = write_playlist_from(&c, Box::new(std::io::Cursor::new(body)), "x").unwrap();
+        assert_eq!(s.channels.inserted, 8);
+    }
+
+    #[test]
+    fn a_stream_or_an_hls_playlist_becomes_one_channel() {
+        let c = crate::catalog::open_in_memory().unwrap();
+        let ts = vec![0x47u8, 0x40, 0x11, 0x10];
+        let s = write_playlist_from(&c, Box::new(std::io::Cursor::new(ts)), "http://cdn.example/live/news.ts")
+            .unwrap();
+        assert_eq!(s.channels.inserted, 1);
+        let name: String = c
+            .query_row("SELECT name FROM channels WHERE deleted_at IS NULL", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(name, "news");
+
+        let hls = b"#EXTM3U\n#EXT-X-VERSION:3\n#EXTINF:6.0,\nseg1.ts\n#EXTINF:6.0,\nseg2.ts\n".to_vec();
+        let url = "https://cdn.example/arte/index.m3u8";
+        write_playlist_from(&c, Box::new(std::io::Cursor::new(hls)), url).unwrap();
+        let urls: Vec<String> = c
+            .prepare("SELECT stream_url FROM channels WHERE deleted_at IS NULL")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(urls, [url]);
+    }
+
+    /// What the rail would show: category ids, and the live channels' ids.
+    fn mirror(c: &rusqlite::Connection) -> (Vec<String>, Vec<i64>) {
+        let cats = c
+            .prepare("SELECT id FROM categories ORDER BY id")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        let chans = c
+            .prepare("SELECT stream_id FROM channels WHERE deleted_at IS NULL ORDER BY stream_id")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        (cats, chans)
+    }
+
+    /// One panel pass, through the same functions `run_once` uses.
+    fn panel_pass(c: &rusqlite::Connection, from: &str) {
+        let cats: Vec<crate::xtream::Category> = serde_json::from_str(
+            r#"[{"category_id":"1","category_name":"News"},
+                {"category_id":"2","category_name":"Sport"}]"#,
+        )
+        .unwrap();
+        let chans: Vec<crate::xtream::Channel> = serde_json::from_str(
+            r#"[{"stream_id":101,"name":"NWN News","category_id":"1"},
+                {"stream_id":102,"name":"Summit Sports","category_id":"2"}]"#,
+        )
+        .unwrap();
+        let switched = origin::changed(c, from).unwrap();
+        land_categories(c, &cats, switched).unwrap();
+        land_channels(c, &chans, from).unwrap();
+    }
+
+    /// One playlist pass: the write, then the origin, as `step_m3u_playlist`.
+    fn playlist_pass(c: &rusqlite::Connection, location: &str) {
+        let mut w = PlaylistWriter::begin(c).unwrap();
+        let fixture = include_str!("../../tests/fixtures/sample.m3u");
+        let header = crate::m3u::parse::parse(fixture.as_bytes(), |e| w.push(e)).unwrap();
+        w.finish(&header).unwrap();
+        origin::record(c, &origin::of_playlist(location)).unwrap();
+    }
+
+    #[test]
+    fn panel_to_playlist_to_panel_leaves_nothing_of_the_playlist_behind() {
+        let c = crate::catalog::open_in_memory().unwrap();
+        let panel = origin::of_xtream(&crate::xtream::Credentials {
+            host: "http://p.example".into(),
+            username: "me".into(),
+            password: "pw".into(),
+        });
+
+        panel_pass(&c, &panel);
+        let panel_mirror = mirror(&c);
+        assert_eq!(panel_mirror, (vec!["1".into(), "2".into()], vec![101, 102]));
+        crate::catalog::store::record_activity(&c, 101, 7200, true, 1_000).unwrap();
+
+        playlist_pass(&c, "http://cdn.example/list.m3u?token=a");
+        let (cats, chans) = mirror(&c);
+        assert!(cats.iter().all(|id| id.starts_with("m3u-")), "{cats:?}");
+        assert!(!chans.contains(&101) && !chans.contains(&102));
+        // The Xtream favourite is hidden while its channel is gone…
+        let watched = crate::catalog::store::watched(&c).unwrap();
+        assert!(!watched.iter().any(|f| f.channel.stream_id == 101));
+
+        panel_pass(&c, &panel);
+        // …and nothing of the playlist is left: no empty groups in the rail.
+        assert_eq!(mirror(&c), panel_mirror);
+        // The history was kept, not forgotten, and comes back with the channel.
+        let watched = crate::catalog::store::watched(&c).unwrap();
+        let nwn = watched.iter().find(|f| f.channel.stream_id == 101).unwrap();
+        assert_eq!(nwn.watch_seconds, 7200);
+    }
+
+    #[test]
+    fn a_panel_that_filled_the_mirror_all_along_is_synced_as_before() {
+        // No pruning on an unchanged origin: a category the panel stopped
+        // listing stays, exactly as `sync_categories` always left it.
+        let c = crate::catalog::open_in_memory().unwrap();
+        let panel = "xtream:0000000000000001";
+        panel_pass(&c, panel);
+        c.execute("INSERT INTO categories (id, name) VALUES ('9', 'Legacy')", [])
+            .unwrap();
+        panel_pass(&c, panel);
+        assert!(mirror(&c).0.contains(&"9".to_owned()));
+        // A different panel is a different catalogue.
+        panel_pass(&c, "xtream:0000000000000002");
+        assert!(!mirror(&c).0.contains(&"9".to_owned()));
+    }
+
+    #[test]
+    fn a_different_playlist_replaces_the_last_ones_groups() {
+        let c = crate::catalog::open_in_memory().unwrap();
+        playlist_pass(&c, "/home/me/a.m3u");
+        let mut w = PlaylistWriter::begin(&c).unwrap();
+        let header = crate::m3u::parse::parse(
+            "#EXTM3U\n#EXTINF:-1 group-title=\"Only\",Solo\nhttp://s/solo\n".as_bytes(),
+            |e| w.push(e),
+        )
+        .unwrap();
+        w.finish(&header).unwrap();
+        let (cats, chans) = mirror(&c);
+        assert_eq!(cats, [crate::m3u::ids::category_id("Only")]);
+        assert_eq!(chans.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_download_cut_short_is_an_error_not_an_end_of_file() {
+        let (tx, rx) = tokio::sync::mpsc::channel::<Vec<u8>>(1);
+        let aborted = std::sync::Arc::new(AtomicBool::new(false));
+        let mut r = Abortable {
+            inner: ChunkReader::new(rx),
+            aborted: aborted.clone(),
+        };
+        let joined = tokio::task::spawn_blocking(move || {
+            let mut s = String::new();
+            r.read_to_string(&mut s).map(|_| s)
+        });
+        tx.send(b"#EXTM3U\n".to_vec()).await.unwrap();
+        aborted.store(true, Ordering::SeqCst);
+        drop(tx);
+        assert!(joined.await.unwrap().is_err());
+    }
+
+    #[tokio::test]
+    async fn the_channels_phase_repeats_a_failed_download_rather_than_succeeding() {
+        let landed: Landed = std::sync::Mutex::new(Some(Err("the server refused the playlist".into())));
+        let err = step_m3u_channels(&landed).await.unwrap_err().to_string();
+        assert_eq!(err, "the server refused the playlist");
+        let none: Landed = std::sync::Mutex::new(None);
+        assert!(step_m3u_channels(&none).await.is_err());
     }
 
     #[test]

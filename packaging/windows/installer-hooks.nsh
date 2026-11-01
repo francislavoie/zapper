@@ -6,7 +6,8 @@
 ; the files are in place, which is how the updater tells the two apart and
 ; downloads the right installer (src-tauri/src/updates/install.rs).
 ;
-; NOT VERIFIED: zapper does not build on Windows yet.
+; Bundled (makensis accepts it, and `npx tauri build --config` with this folder's
+; installers.conf.json produced both installers), but not yet run by an install.
 
 !macro NSIS_HOOK_POSTINSTALL
   FileOpen $0 "$INSTDIR\install-kind" w

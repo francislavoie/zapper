@@ -4927,10 +4927,12 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "cairo-rs",
+ "flate2",
  "glib",
  "gtk",
  "libloading 0.8.9",
  "libmpv2",
+ "libmpv2-sys",
  "nucleo",
  "quick-xml",
  "reqwest",
@@ -4945,6 +4947,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "webkit2gtk",
+ "windows",
 ]
 
 [[package]]

@@ -220,18 +220,20 @@ packages need Ubuntu 24.04, Debian 13, Fedora 40 or later.
 
 ## Windows and macOS
 
-Not supported yet: libmpv and the GTK surface (`src-tauri/src/surface/`) are Linux-only. What
-is in place for the port:
+Windows builds and links (docs/windows.md: libmpv comes from `tools/fetch-libmpv.ps1`, which
+the `windows` job runs), but has not been tested on screen or released; macOS has only a stub
+surface. What is in place:
 
 - the updater already knows the NSIS, MSI and `.dmg` installs (asset names, install commands,
   the bundle swap), and its tests cover them;
 - `packaging/windows/` and `packaging/macos/` hold the install-kind wiring, and
   `just package-windows` / `just package-macos` build with it;
 - `release.yml` has `windows` and `macos` jobs that run only on Run workflow with **Also build
-  Windows and macOS** ticked. A tag push skips them. Until the port builds, they fail, and a
-  failure holds that run's draft back.
+  Windows and macOS** ticked. A tag push skips them. The macOS one fails until that port
+  exists, and a failure holds that run's draft back.
 
-None of the Windows or macOS packaging has been run. Things to settle when the port lands:
+The Windows installers have been built once, by hand (`just package-windows`), and neither has been
+installed yet; the macOS packaging has never run. Things to settle when the port lands:
 
 - an MSI needs a numeric version: a pre-release needs `bundle.windows.wix.version` set
   (every build of `X.Y.Z` maps to `X.Y.Z.0`);

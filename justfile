@@ -66,7 +66,7 @@ package:
     scripts/check-deb.sh "${deb[0]}" "$v"
     ls -l src-tauri/target/release/bundle/deb/zapper_*.deb src-tauri/target/release/bundle/rpm/zapper-*.rpm
 
-# On Windows (NOT SUPPORTED YET: zapper doesn't build there): the NSIS installer and the MSI,
+# On Windows (builds; not yet tested on screen or released): the NSIS installer and the MSI,
 # with the install-kind markers the updater reads (packaging/windows/).
 package-windows:
     npx tauri build --config packaging/windows/installers.conf.json

@@ -742,15 +742,7 @@ fn install_output(out: &str) -> String {
 /// under it because a downloaded package is disposable: the next check can
 /// always fetch it again.
 pub fn cache_dir() -> PathBuf {
-    let env = |k: &str| std::env::var_os(k).filter(|v| !v.is_empty()).map(PathBuf::from);
-    let home = || env("HOME").unwrap_or_default();
-    if cfg!(windows) {
-        return env("LOCALAPPDATA").unwrap_or_else(home).join("zapper");
-    }
-    if cfg!(target_os = "macos") {
-        return home().join("Library/Caches/zapper");
-    }
-    env("XDG_CACHE_HOME").unwrap_or_else(|| home().join(".cache")).join("zapper")
+    crate::paths::cache_dir()
 }
 
 /// The app's runner: real processes.

@@ -40,8 +40,8 @@ fn main() {
     tauri::Builder::default()
         .setup(move |app| {
             let window = app.get_webview_window("main").unwrap();
-            let ov = zapper_lib::surface::overlay::install(&window)?;
-            let player = zapper_lib::surface::mpv::Player::new(&ov.gl_area)?;
+            let ov = zapper_lib::surface::linux::overlay::install(&window)?;
+            let player = zapper_lib::surface::linux::render::new_player(&ov.gl_area)?;
             player.set_property("ao", "null")?;
             player.load(&url)?;
 
@@ -66,13 +66,13 @@ fn main() {
             let shot = ov.clone();
             let out2 = out.clone();
             gtk::glib::timeout_add_seconds_local_once(seconds, move || {
-                zapper_lib::surface::capture::request(&out2);
+                zapper_lib::surface::linux::capture::request(&out2);
                 // The grab happens inside the next render; give it frames, then
                 // composite and write.
                 let finish = shot.clone();
                 let path = out2.clone();
                 gtk::glib::timeout_add_seconds_local_once(2, move || {
-                    match zapper_lib::surface::capture::finish(&finish) {
+                    match zapper_lib::surface::linux::capture::finish(&finish) {
                         Ok(p) => {
                             println!(
                                 "PASS: wrote {} ({}x{}, peak sample {})",

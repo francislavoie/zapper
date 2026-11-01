@@ -61,6 +61,9 @@ export const api = {
   account: () => invoke<AccountDto>("account"),
   setAccount: (host: string, username: string, password: string) =>
     invoke<void>("set_account", { host, username, password }),
+  /** `null` keeps what is on file — the redacted playlist or guides. */
+  setM3uAccount: (playlist: string | null, epgUrls: string[] | null, userAgent: string) =>
+    invoke<void>("set_m3u_account", { playlist, epgUrls, userAgent }),
   testAccount: () => invoke<string>("test_account"),
 
   settings: () => invoke<SettingsDto>("settings"),

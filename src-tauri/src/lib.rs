@@ -1,10 +1,14 @@
 //! zapper — a fast Xtream live-TV client.
 //!
 //! Module boundaries are fixed here deliberately: `surface` owns everything
-//! that knows GTK exists, `xtream` owns the wire protocol, `catalog` owns
-//! persistence, `updates` owns zapper's own releases (checking, downloading,
-//! installing), and `ipc` is the only thing that talks to the frontend.
-//! Nothing else may reach across those lines.
+//! that knows which windowing toolkit exists (GTK on Linux, Win32 on
+//! Windows), and keeps each one in its own `surface/<platform>` module
+//! behind a boundary of plain functions; `xtream` owns the server's wire
+//! protocol and `m3u` the playlist/XMLTV one, `source` chooses between the
+//! two for the account in use, `catalog` owns persistence, `paths` says where
+//! on disk each platform keeps it, `updates` owns zapper's own releases
+//! (checking, downloading, installing), and `ipc` is the only thing that
+//! talks to the frontend. Nothing else may reach across those lines.
 
 /// Names the process so the compositor can identify the window.
 ///
@@ -28,6 +32,9 @@ fn set_app_id() {}
 
 pub mod catalog;
 pub mod ipc;
+pub mod m3u;
+pub mod paths;
+pub mod source;
 pub mod surface;
 pub mod updates;
 pub mod window_state;
@@ -44,6 +51,7 @@ pub mod xtream;
 /// So the `app_id` has to be a known, stable string rather than whatever
 /// GTK infers from argv, and `tools/install-desktop.sh` installs
 /// `zapper.desktop` under that exact name.
+#[cfg(target_os = "linux")]
 const APP_ID: &str = "zapper";
 
 pub fn run() {
@@ -63,6 +71,7 @@ pub fn run() {
             ipc::catalog_cmds::settings,
             ipc::catalog_cmds::account,
             ipc::catalog_cmds::set_account,
+            ipc::catalog_cmds::set_m3u_account,
             ipc::catalog_cmds::test_account,
             ipc::catalog_cmds::set_settings,
             ipc::catalog_cmds::guide_rows,
@@ -101,17 +110,13 @@ pub fn run() {
             window_state::install(&window);
             // Video lives beneath the webview, not in it. Failing here is
             // fatal: a running app with no surface is worse than no app.
-            let overlay = surface::overlay::install(&window)?;
-            surface::mpv::Player::new(&overlay.gl_area)?;
-            // Not app.manage(): the overlay holds Rc and GTK objects, so it is
-            // !Send. It lives in a GTK-main-thread local instead.
-            surface::set_installed(overlay);
+            surface::install(&window)?;
 
             // Refresh the mirror in the background. Startup never waits on it:
             // reads answer from SQLite, and a week-old cache opens as fast as
             // a fresh one.
             // Settings must take effect at launch, not only when changed.
-            // Infallible and non-blocking; already on the GTK main thread.
+            // Infallible and non-blocking; already on the main thread.
             ipc::player_cmds::apply_saved_settings(app.handle());
 
             catalog::sync_engine::spawn_periodic(app.handle().clone());
@@ -131,17 +136,22 @@ pub fn run() {
         .expect("failed to start zapper");
 }
 
-/// Auto-play and self-capture, both opt-in through the environment.
+/// Auto-play, self-capture and silence, all opt-in through the environment.
 ///
 /// `ZAPPER_AUTOPLAY=<stream_id>` starts a channel once the window is up, and
 /// `ZAPPER_CAPTURE=<path>` writes a reconstruction of the window a few seconds
 /// later and exits. Together they let a screenshot of the real application -
 /// real interface over real video - be taken with nobody watching.
+/// `ZAPPER_MUTE=1` only silences, for looking at the picture on a machine
+/// whose speakers must stay quiet; it is also implied by the other two.
 fn dev_hooks(app: &tauri::AppHandle) {
-    let Ok(_) = std::env::var("ZAPPER_AUTOPLAY").or_else(|_| std::env::var("ZAPPER_CAPTURE"))
-    else {
+    let wanted = |k: &str| std::env::var_os(k).is_some_and(|v| !v.is_empty());
+    if !["ZAPPER_AUTOPLAY", "ZAPPER_CAPTURE", "ZAPPER_MUTE"]
+        .into_iter()
+        .any(wanted)
+    {
         return;
-    };
+    }
 
     // Anything driven by these hooks runs unattended, so kill the audio path
     // outright before a stream can open. `ao=null` cannot be undone by a later
@@ -168,33 +178,6 @@ fn dev_hooks(app: &tauri::AppHandle) {
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(14);
-        gtk::glib::timeout_add_seconds_local_once(after as u32, move || {
-            surface::capture::request(&path);
-            // The surface only redraws when mpv has a new frame, which is
-            // right for an idle GPU and wrong for a capture: with nothing
-            // playing the render handler would never run and the grab would
-            // never happen. Nudge it for a second.
-            let mut nudges = 0;
-            gtk::glib::timeout_add_local(std::time::Duration::from_millis(50), move || {
-                surface::with_overlay(|ov| {
-                    gtk::prelude::GLAreaExt::queue_render(&ov.gl_area);
-                });
-                nudges += 1;
-                if nudges < 20 {
-                    gtk::glib::ControlFlow::Continue
-                } else {
-                    gtk::glib::ControlFlow::Break
-                }
-            });
-            gtk::glib::timeout_add_seconds_local_once(2, move || {
-                match surface::with_overlay(surface::capture::finish) {
-                    Some(Ok(p)) => println!("CAPTURED {}", p.display()),
-                    Some(Err(e)) => eprintln!("CAPTURE FAILED: {e}"),
-                    None => eprintln!("CAPTURE FAILED: no overlay on this thread"),
-                }
-                let _ = std::io::Write::flush(&mut std::io::stdout());
-                std::process::exit(0);
-            });
-        });
+        surface::request_capture(path.into(), std::time::Duration::from_secs(after));
     }
 }

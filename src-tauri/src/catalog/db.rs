@@ -8,15 +8,10 @@ use std::sync::{Mutex, OnceLock};
 static DB: OnceLock<Mutex<Connection>> = OnceLock::new();
 static WRITER: OnceLock<Mutex<Connection>> = OnceLock::new();
 
-fn db_path_under(home: &Path) -> PathBuf {
-    home.join(".local/share/zapper/zapper.db")
-}
-
-/// `$HOME`-relative rather than via a `dirs` crate: one environment variable
-/// is not worth a dependency.
+/// `~/.local/share/zapper/zapper.db` on Linux, `%LOCALAPPDATA%\zapper` on
+/// Windows; see [`crate::paths`].
 pub fn db_path() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_default();
-    db_path_under(Path::new(&home))
+    crate::paths::data_dir().join("zapper.db")
 }
 
 /// Opens (and migrates) a database at an explicit path, creating the
@@ -98,6 +93,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(target_os = "linux")]
     fn db_path_lands_under_the_xdg_data_dir() {
         let p = db_path();
         assert!(
@@ -108,20 +104,11 @@ mod tests {
     }
 
     #[test]
-    fn db_path_is_built_from_home() {
-        let p = db_path_under(Path::new("/tmp/fake-home"));
-        assert_eq!(
-            p,
-            PathBuf::from("/tmp/fake-home/.local/share/zapper/zapper.db")
-        );
-    }
-
-    #[test]
     fn open_creates_missing_parent_directories() {
         // Deliberately not the real path: a unit test must not write into $HOME.
         let root = std::env::temp_dir().join(format!("zapper-db-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
-        let path = db_path_under(&root);
+        let path = root.join("zapper/zapper.db");
 
         let conn = open_path(&path).unwrap();
         assert!(path.exists(), "database file was not created");

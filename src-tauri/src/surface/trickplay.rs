@@ -5,29 +5,34 @@
 //! looking for. These are the small images the scrubber shows under the
 //! cursor so it does.
 //!
-//! **Nothing here decodes anything.** That is the entire reason this is
-//! affordable. The frames have already been decoded and are already on the
-//! GPU, because they have just been drawn; a thumbnail is a copy of one that
-//! was going to be thrown away. There is no second decoder, no second
-//! connection to the panel — which matters, because the account permits
-//! exactly one — and no re-reading of the demuxer cache, which mpv does not
-//! expose anyway.
+//! **Nothing decodes anything for these.** That is the entire reason they are
+//! affordable. A thumbnail is a copy of a frame that has already been decoded
+//! for the screen. There is no second decoder, no second connection to the
+//! server — which matters, because many accounts allow only one — and no
+//! re-reading of the demuxer cache, which mpv does not expose anyway.
 //!
-//! The cost is a hardware downscale and a small readback, a few times a
-//! minute. The downscale is the important half: reading a fullscreen surface
-//! back to shrink it on the CPU would move about 14MB and stall the pipeline
-//! waiting on the GPU, where blitting to 160x90 first and reading *that* back
-//! moves 57KB.
+//! This file is the portable half: the store, the clock that says when the
+//! next one is due, and the encoding the scrubber receives. Taking the copy
+//! is the platform's job, because it depends on how the frame was drawn:
 //!
-//! The store is a plain mutex rather than the thread-local the rest of this
-//! module uses, because the capture happens on the GTK thread and the lookup
-//! answers an IPC command on another. The data is bytes, so it can simply
-//! move; a write every few seconds contends with nothing.
+//! - Linux (`surface::linux::thumbs`): the frame is on the GPU in GTK's GL
+//!   framebuffer, so it is blitted down to 160x90 there and only that is read
+//!   back — 57KB, where reading a fullscreen surface back to shrink it on the
+//!   CPU would move about 14MB and stall the pipeline.
+//! - Windows (`surface::windows`): mpv draws into its own window, so there is
+//!   no framebuffer of ours to read. mpv's `screenshot-raw` hands over the
+//!   current frame instead, off the main thread, and [`shrink_bgr0`] reduces
+//!   it here.
+//!
+//! The store is a plain mutex rather than a thread-local, because the capture
+//! happens on one thread and the lookup answers an IPC command on another.
+//! The data is bytes, so it can simply move; a write every few seconds
+//! contends with nothing.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::Instant;
 
-use crate::surface::gl;
 
 /// Thumbnail size. Small on purpose: it answers "roughly what was on screen",
 /// and at scrubber size nothing larger is legible anyway. 16:9 because that
@@ -70,6 +75,14 @@ struct Store {
 
 static STORE: Mutex<Option<Store>> = Mutex::new(None);
 
+/// Bumped by every [`clear`], under the store's lock.
+///
+/// A capture that runs off the main thread (Windows takes its screenshot on
+/// a worker) can finish after the channel has changed, and would otherwise
+/// file the previous channel's picture into the new channel's buffer. It
+/// carries the generation it started in and is dropped if that has passed.
+static GENERATION: AtomicU64 = AtomicU64::new(0);
+
 /// Wall-clock gate for the capture, so the common path costs one comparison.
 ///
 /// Reading mpv's clock is cheap but not free, and the render handler runs
@@ -87,122 +100,36 @@ fn due(last: &mut Option<Instant>) -> bool {
 }
 
 thread_local! {
-    /// The offscreen target, built once on the GTK thread and kept. `None`
-    /// once the driver has told us it cannot do this, so a missing entry
-    /// point is asked about once rather than every four seconds.
-    static TARGET: std::cell::RefCell<Option<Option<Target>>> =
-        const { std::cell::RefCell::new(None) };
     static LAST: std::cell::Cell<Option<Instant>> = const { std::cell::Cell::new(None) };
 }
 
-struct Target {
-    fbo: u32,
+/// Files a thumbnail taken at `at` (mpv's `playback-time`). `rgba` is
+/// [`THUMB_W`] x [`THUMB_H`], top-down; anything else is dropped rather than
+/// encoded wrong.
+pub fn record(at: f64, rgba: Vec<u8>) {
+    record_for(generation(), at, rgba);
 }
 
-/// Builds the small offscreen framebuffer. `None` when the driver lacks the
-/// framebuffer-object entry points, which is a reason to do without
-/// thumbnails and not a reason to fail.
-///
-/// # Safety
-/// Requires a current GL context.
-unsafe fn make_target() -> Option<Target> {
-    let fbo = gl::gen_framebuffer();
-    let rb = gl::gen_renderbuffer();
-    if fbo == 0 || rb == 0 {
-        return None;
-    }
-    gl::bind_renderbuffer(rb);
-    gl::renderbuffer_storage(gl::RGBA8, THUMB_W, THUMB_H);
-    gl::bind_renderbuffer(0);
-
-    let prev = gl::get_integer(gl::DRAW_FRAMEBUFFER_BINDING);
-    gl::bind_framebuffer(gl::DRAW_FRAMEBUFFER, fbo as i32);
-    gl::framebuffer_renderbuffer(gl::DRAW_FRAMEBUFFER, rb);
-    let status = gl::check_framebuffer_status(gl::DRAW_FRAMEBUFFER);
-    gl::bind_framebuffer(gl::DRAW_FRAMEBUFFER, prev);
-
-    if status != gl::FRAMEBUFFER_COMPLETE {
-        tracing::warn!("thumbnail framebuffer incomplete (0x{status:x}); no scrollback previews");
-        return None;
-    }
-    Some(Target { fbo })
+/// The current generation, for a capture that will finish later. See
+/// [`GENERATION`].
+pub fn generation() -> u64 {
+    GENERATION.load(Ordering::Acquire)
 }
 
-/// Takes a thumbnail of the frame just drawn, if one is due.
-///
-/// Called from the render handler, where the GLArea's framebuffer is bound
-/// and a context is current. `surface` is the size of that framebuffer, and
-/// `playback_time` is read lazily by the caller only when this says it is
-/// time — see [`due`].
-///
-/// # Safety
-/// Requires a current GL context, with the surface's framebuffer bound for
-/// drawing, exactly as inside GTK's `render` signal.
-pub unsafe fn capture(surface_w: i32, surface_h: i32, at: f64) {
-    if surface_w < 16 || surface_h < 16 || !at.is_finite() {
+/// [`record`], for a capture begun in `generation`: dropped if the store has
+/// been cleared since.
+pub fn record_for(generation: u64, at: f64, rgba: Vec<u8>) {
+    if !at.is_finite() || rgba.len() != (THUMB_W * THUMB_H * 4) as usize {
         return;
     }
-
-    let fbo = TARGET.with(|t| {
-        let mut slot = t.borrow_mut();
-        let built = slot.get_or_insert_with(|| make_target());
-        built.as_ref().map(|x| x.fbo)
-    });
-    let Some(fbo) = fbo else { return };
-
-    // GTK has its own framebuffer bound for drawing and expects it still
-    // bound when this returns; mpv has already caught us out once by not
-    // restoring it.
-    let prev_draw = gl::get_integer(gl::DRAW_FRAMEBUFFER_BINDING);
-    let prev_read = gl::get_integer(gl::READ_FRAMEBUFFER_BINDING);
-
-    gl::bind_framebuffer(gl::READ_FRAMEBUFFER, prev_draw);
-    gl::bind_framebuffer(gl::DRAW_FRAMEBUFFER, fbo as i32);
-    let blitted = gl::blit_framebuffer(
-        0, 0, surface_w, surface_h, //
-        0, 0, THUMB_W, THUMB_H,
-    );
-
-    let mut rgba = vec![0u8; (THUMB_W * THUMB_H * 4) as usize];
-    let read = if blitted {
-        gl::bind_framebuffer(gl::READ_FRAMEBUFFER, fbo as i32);
-        gl::read_pixels_rgba(0, 0, THUMB_W, THUMB_H, &mut rgba)
-    } else {
-        false
-    };
-
-    gl::bind_framebuffer(gl::READ_FRAMEBUFFER, prev_read);
-    gl::bind_framebuffer(gl::DRAW_FRAMEBUFFER, prev_draw);
-
-    if !blitted {
-        // No blit entry point: record the refusal once by dropping the target
-        // so nothing retries every four seconds.
-        TARGET.with(|t| *t.borrow_mut() = Some(None));
-        tracing::warn!("glBlitFramebuffer is unavailable; no scrollback previews");
-        return;
-    }
-    if !read {
-        return;
-    }
-
-    // GL's origin is bottom-left, so the rows come back upside down.
-    flip_rows(&mut rgba, THUMB_W as usize, THUMB_H as usize);
-    insert(Thumb { at, rgba });
+    insert(generation, Thumb { at, rgba });
 }
 
-/// Turns a bottom-up readback into a top-down image.
-fn flip_rows(rgba: &mut [u8], w: usize, h: usize) {
-    let stride = w * 4;
-    for y in 0..h / 2 {
-        let (top, bottom) = rgba.split_at_mut((y + 1) * stride);
-        let a = &mut top[y * stride..];
-        let b = &mut bottom[(h - 2 * y - 2) * stride..][..stride];
-        a[..stride].swap_with_slice(b);
-    }
-}
-
-fn insert(thumb: Thumb) {
+fn insert(generation: u64, thumb: Thumb) {
     let Ok(mut guard) = STORE.lock() else { return };
+    if GENERATION.load(Ordering::Acquire) != generation {
+        return;
+    }
     let store = guard.get_or_insert_with(Store::default);
 
     // Rewatching a stretch that is already covered must not stack duplicates
@@ -252,7 +179,7 @@ pub fn nearest_png(at: f64) -> Option<(f64, Vec<u8>)> {
     }
     Some((
         best.at,
-        crate::surface::capture::png_bytes(THUMB_W as u32, THUMB_H as u32, &best.rgba),
+        crate::surface::png::png_bytes(THUMB_W as u32, THUMB_H as u32, &best.rgba),
     ))
 }
 
@@ -261,6 +188,7 @@ pub fn nearest_png(at: f64) -> Option<(f64, Vec<u8>)> {
 /// under the cursor would be worse than showing none.
 pub fn clear() {
     if let Ok(mut guard) = STORE.lock() {
+        GENERATION.fetch_add(1, Ordering::AcqRel);
         *guard = None;
     }
     LAST.with(|l| l.set(None));
@@ -285,6 +213,54 @@ pub fn is_due() -> bool {
         l.set(last);
         yes
     })
+}
+
+/// Reduces a `bgr0` frame (mpv's `screenshot-raw` default: B, G, R, padding)
+/// to a [`THUMB_W`] x [`THUMB_H`] RGBA thumbnail, letterboxed to keep its
+/// shape.
+///
+/// Each thumbnail pixel is the average of the source pixels it covers, not a
+/// sample of one of them: point sampling a 1080p frame down to 160 columns
+/// keeps one pixel in twelve and turns text and fine edges into noise.
+/// `None` for a frame too small or a buffer too short to be what it claims.
+pub fn shrink_bgr0(src: &[u8], w: usize, h: usize, stride: usize) -> Option<Vec<u8>> {
+    if w == 0 || h == 0 || stride < w * 4 || src.len() < stride * (h - 1) + w * 4 {
+        return None;
+    }
+    let (tw, th) = (THUMB_W as usize, THUMB_H as usize);
+    // Fit inside the thumbnail, centred, like mpv letterboxes on screen.
+    let (fw, fh) = if w * th >= h * tw {
+        (tw, (h * tw / w).clamp(1, th))
+    } else {
+        ((w * th / h).clamp(1, tw), th)
+    };
+    let (ox, oy) = ((tw - fw) / 2, (th - fh) / 2);
+
+    let mut out = vec![0u8; tw * th * 4];
+    for px in out.as_chunks_mut::<4>().0 {
+        px[3] = 255;
+    }
+    for ty in 0..fh {
+        let (y0, y1) = (ty * h / fh, ((ty + 1) * h / fh).max(ty * h / fh + 1));
+        for tx in 0..fw {
+            let (x0, x1) = (tx * w / fw, ((tx + 1) * w / fw).max(tx * w / fw + 1));
+            let (mut r, mut g, mut b) = (0u32, 0u32, 0u32);
+            for y in y0..y1.min(h) {
+                let row = &src[y * stride..];
+                for x in x0..x1.min(w) {
+                    b += u32::from(row[x * 4]);
+                    g += u32::from(row[x * 4 + 1]);
+                    r += u32::from(row[x * 4 + 2]);
+                }
+            }
+            let n = ((y1.min(h) - y0) * (x1.min(w) - x0)).max(1) as u32;
+            let o = ((oy + ty) * tw + ox + tx) * 4;
+            out[o] = (r / n) as u8;
+            out[o + 1] = (g / n) as u8;
+            out[o + 2] = (b / n) as u8;
+        }
+    }
+    Some(out)
 }
 
 /// Base64, for a `data:` URL. Written out rather than pulled in: it is
@@ -332,14 +308,44 @@ mod tests {
     }
 
     #[test]
-    fn flipping_rows_turns_a_readback_the_right_way_up() {
-        // Two rows of one pixel: GL hands back the bottom one first.
-        let mut px = vec![1, 1, 1, 255, 2, 2, 2, 255];
-        flip_rows(&mut px, 1, 2);
-        assert_eq!(px, vec![2, 2, 2, 255, 1, 1, 1, 255]);
-        // An odd height leaves the middle row alone and is not an error.
-        let mut three = vec![1, 1, 1, 255, 9, 9, 9, 255, 3, 3, 3, 255];
-        flip_rows(&mut three, 1, 3);
-        assert_eq!(three, vec![3, 3, 3, 255, 9, 9, 9, 255, 1, 1, 1, 255]);
+    fn a_frame_shrinks_to_the_thumbnail_size_in_rgba() {
+        // A 16:9 frame, pure blue in bgr0: B first.
+        let (w, h) = (320usize, 180usize);
+        let src: Vec<u8> = (0..w * h).flat_map(|_| [200u8, 0, 0, 0]).collect();
+        let out = shrink_bgr0(&src, w, h, w * 4).unwrap();
+        assert_eq!(out.len(), (THUMB_W * THUMB_H * 4) as usize);
+        assert_eq!(&out[..4], &[0, 0, 200, 255], "bgr0 must come out as rgba");
+    }
+
+    #[test]
+    fn a_square_frame_is_pillarboxed_rather_than_stretched() {
+        let (w, h) = (90usize, 90usize);
+        let src = vec![255u8; w * h * 4];
+        let out = shrink_bgr0(&src, w, h, w * 4).unwrap();
+        let at = |x: usize, y: usize| out[(y * THUMB_W as usize + x) * 4];
+        assert_eq!(at(0, 45), 0, "the left bar is black");
+        assert_eq!(at(80, 45), 255, "the picture is in the middle");
+        assert_eq!(at(159, 45), 0, "the right bar is black");
+    }
+
+    #[test]
+    fn a_short_buffer_is_refused_rather_than_read_past() {
+        assert!(shrink_bgr0(&[0u8; 16], 4, 4, 16).is_none());
+        assert!(shrink_bgr0(&[], 0, 0, 0).is_none());
+    }
+
+    #[test]
+    fn a_capture_from_before_a_clear_is_not_filed() {
+        let stale = generation();
+        clear();
+        record_for(stale, 2.0e9, vec![0u8; (THUMB_W * THUMB_H * 4) as usize]);
+        assert!(nearest_png(2.0e9).is_none(), "the previous channel's picture leaked through");
+    }
+
+    #[test]
+    fn only_a_thumbnail_sized_image_is_recorded() {
+        // Wrong size: silently dropped, never filed under a time.
+        record(1.0e9, vec![0u8; 4]);
+        assert!(nearest_png(1.0e9).is_none());
     }
 }

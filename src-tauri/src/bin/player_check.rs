@@ -52,8 +52,8 @@ fn main() {
     tauri::Builder::default()
         .setup(move |app| {
             let window = app.get_webview_window("main").unwrap();
-            let ov = zapper_lib::surface::overlay::install(&window)?;
-            let player = zapper_lib::surface::mpv::Player::new(&ov.gl_area)?;
+            let ov = zapper_lib::surface::linux::overlay::install(&window)?;
+            let player = zapper_lib::surface::linux::render::new_player(&ov.gl_area)?;
             // Kill the audio path entirely before anything is loaded. Muting
             // or zeroing the volume still opens the device and still leaks
             // sound on any path that resets it; `ao=null` cannot.

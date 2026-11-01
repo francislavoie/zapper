@@ -6,9 +6,10 @@
 //! current demuxer before opening the next.
 //!
 //! **Threading.** Commands arrive on Tauri's async worker threads. The player
-//! and the overlay are `!Send` and live in GTK-main-thread locals, so every
-//! command that touches them hops with [`tauri::AppHandle::run_on_main_thread`]
-//! and carries plain data across - never a GTK handle. The shared state that
+//! and the video surface live in main-thread locals (the surface's toolkit
+//! objects are `!Send` on every platform), so every command that touches them
+//! hops with [`tauri::AppHandle::run_on_main_thread`] and carries plain data
+//! across - never a toolkit handle. The shared state that
 //! both sides read is a `Mutex<Machine>` here, which is ordinary `Send` data.
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -22,7 +23,8 @@ use crate::catalog::store;
 use crate::ipc::types::{events, PlaybackState, PlayerStateDto};
 use crate::surface::mpv::{self, Player, Probe, Signal};
 use crate::surface::VideoRect;
-use crate::xtream::{Credentials, XtreamClient};
+use crate::source::{Playable, Source};
+use crate::xtream::XtreamClient;
 
 /// How long a stream gets to produce its first frame before it is called dead.
 /// Matches mpv's own `network-timeout`, set in [`Player::new`].
@@ -36,7 +38,7 @@ const TICK: Duration = Duration::from_millis(250);
 // Main-thread access
 // ---------------------------------------------------------------------------
 
-/// Runs `f` on the GTK main thread and waits for its result.
+/// Runs `f` on the main thread and waits for its result.
 ///
 /// Blocking here is deliberate and bounded: the command is already on a worker
 /// thread, and a hop that never answers must fail rather than wedge the
@@ -49,13 +51,13 @@ async fn on_main<R: Send + 'static>(
     app.run_on_main_thread(move || {
         let _ = tx.send(f());
     })
-    .map_err(|e| format!("could not reach the GTK main thread: {e}"))?;
+    .map_err(|e| format!("could not reach the main thread: {e}"))?;
     rx.recv_timeout(Duration::from_secs(5))
-        .map_err(|_| "the GTK main thread did not answer".to_owned())?
+        .map_err(|_| "the main thread did not answer".to_owned())?
 }
 
-/// Runs `f` on the GTK main thread and waits for its result.
-/// Commands arrive on worker threads; the player is !Send and lives there.
+/// Runs `f` against the player on the main thread and waits for its result.
+/// Commands arrive on worker threads; the player lives on the main thread.
 async fn on_player<R: Send + 'static>(
     app: &AppHandle,
     f: impl FnOnce(&Player) -> Result<R, String> + Send + 'static,
@@ -68,24 +70,12 @@ async fn on_player<R: Send + 'static>(
     .await
 }
 
-/// Runs `f` against the overlay on the GTK main thread.
-async fn on_overlay(
-    app: &AppHandle,
-    f: impl FnOnce(&crate::surface::overlay::Overlay) + Send + 'static,
-) -> Result<(), String> {
-    on_main(app, move || {
-        crate::surface::with_overlay(f)
-            .ok_or_else(|| "the video surface is not installed".to_owned())
-    })
-    .await
-}
-
 // ---------------------------------------------------------------------------
 // Shared state
 // ---------------------------------------------------------------------------
 
 /// Everything the frontend sees, plus the bookkeeping that decides when it
-/// changes. Held behind a `Mutex` so worker threads and the GTK ticker can
+/// changes. Held behind a `Mutex` so worker threads and the main-thread ticker can
 /// both drive it.
 struct Machine {
     dto: PlayerStateDto,
@@ -277,7 +267,7 @@ static STATE: LazyLock<Mutex<Machine>> = LazyLock::new(|| Mutex::new(Machine::ne
 /// [`crate::catalog::activity::Accumulator`], and is pure.
 static WATCHED: LazyLock<Mutex<Accumulator>> = LazyLock::new(|| Mutex::new(Accumulator::new()));
 
-/// Writes earned watch time, off the GTK main thread.
+/// Writes earned watch time, off the main thread.
 ///
 /// Never inline: this runs from the heartbeat, and the shared connection can
 /// be held by a catalogue read for as long as that read takes. Blocking the
@@ -332,7 +322,7 @@ fn ensure_ticker(app: &AppHandle) {
     }
 }
 
-/// One heartbeat, on the GTK main thread.
+/// One heartbeat, on the main thread.
 fn tick(app: &AppHandle, p: &Player) {
     let signals = p.pump();
     let probe = p.probe();
@@ -439,16 +429,6 @@ fn tick(app: &AppHandle, p: &Player) {
 // Credentials and URLs
 // ---------------------------------------------------------------------------
 
-/// Reads the first Xtream profile.
-///
-/// Delegates to `catalog::credentials`, which is the single loader: two
-/// copies would drift, and this one is on the path that turns a profile into
-/// a playable URL. Errors are mapped to plain strings that reach the UI, so
-/// they must never carry a credential.
-fn credentials() -> Result<Credentials, String> {
-    crate::catalog::credentials::load().map_err(|e| e.to_string())
-}
-
 /// Development override pointing playback at a locally served fixture.
 ///
 /// Many accounts allow only a single connection and real streams are
@@ -466,13 +446,13 @@ fn fixture_url(stream_id: i64) -> Option<String> {
     }
 }
 
-/// The process-wide panel client, cached but replaceable.
+/// The process-wide source — Xtream client or playlist — cached but
+/// replaceable.
 ///
 /// A `OnceLock` would be simpler, but the account is editable: saving new
 /// credentials has to take effect without a restart, and a lock that can
 /// only be written once cannot do that.
-static CLIENT: std::sync::RwLock<Option<&'static XtreamClient>> =
-    std::sync::RwLock::new(None);
+static CLIENT: std::sync::RwLock<Option<&'static Source>> = std::sync::RwLock::new(None);
 
 /// Drops the cached client so the next call builds one from whatever is on
 /// file now. Called when the account changes.
@@ -489,16 +469,27 @@ pub fn forget_panel() {
 /// a second copy of the credential loader - and without a stream URL ever
 /// reaching a command line, where it would be world-readable through `/proc`.
 pub fn panel() -> Result<&'static XtreamClient, String> {
+    match source()? {
+        Source::Xtream(c) => Ok(c),
+        Source::M3u(_) => Err("the account is an M3U playlist, not an Xtream panel".to_owned()),
+    }
+}
+
+/// The account in use, of whichever kind, built on demand like [`xtream()`].
+///
+/// Errors are mapped to plain strings that reach the UI, so they are
+/// scrubbed: a playlist URL can carry the account.
+pub fn source() -> Result<&'static Source, String> {
     if let Ok(slot) = CLIENT.read() {
         if let Some(c) = *slot {
             return Ok(c);
         }
     }
-    let built = XtreamClient::new(credentials()?).map_err(|e| e.to_string())?;
+    let built = Source::load().map_err(|e| crate::catalog::sync_engine::scrub(&e.to_string()))?;
     // Leaked on purpose: the client lives for the process, and the few bytes
     // a replaced one costs are not worth threading a lifetime through every
     // caller. An account can only be changed a handful of times by hand.
-    let leaked: &'static XtreamClient = Box::leak(Box::new(built));
+    let leaked: &'static Source = Box::leak(Box::new(built));
     if let Ok(mut slot) = CLIENT.write() {
         *slot = Some(leaked);
     }
@@ -511,11 +502,13 @@ pub fn panel() -> Result<&'static XtreamClient, String> {
 
 #[tauri::command]
 pub async fn play(app: AppHandle, stream_id: i64) -> Result<(), String> {
-    let url = match fixture_url(stream_id) {
-        Some(u) => u,
-        None => panel()?.live_url(stream_id),
+    let target = match fixture_url(stream_id) {
+        Some(u) => Playable::plain(u),
+        None => source()?
+            .live(stream_id)
+            .map_err(|e| crate::catalog::sync_engine::scrub(&e.to_string()))?,
     };
-    open(&app, stream_id, url).await
+    open(&app, stream_id, target).await
 }
 
 /// Replays a past programme on an archive-enabled channel.
@@ -527,15 +520,62 @@ pub async fn play_catchup(
     start: i64,
     duration_minutes: u32,
 ) -> Result<(), String> {
-    // The panel reads the timestamp in its own wall clock, which is the
-    // machine's: sending UTC replays the wrong hour for most of the world.
-    let stamp = timeshift_stamp(start, local_utc_offset(start));
-    let url = panel()?.timeshift_url(stream_id, &stamp, duration_minutes);
-    open(&app, stream_id, url).await
+    let target = match source()? {
+        Source::Xtream(panel) => {
+            // The panel reads the timestamp in its own wall clock, which is the
+            // machine's: sending UTC replays the wrong hour for most of the world.
+            let stamp = timeshift_stamp(start, local_utc_offset(start));
+            Playable::plain(panel.timeshift_url(stream_id, &stamp, duration_minutes))
+        }
+        // A playlist's archive is whatever its entry's template says; the
+        // local offset is there for templates written in wall-clock time.
+        Source::M3u(m) => m
+            .catchup(
+                stream_id,
+                start,
+                duration_minutes,
+                activity::now_secs(),
+                local_utc_offset(start),
+            )
+            .map_err(|e| crate::catalog::sync_engine::scrub(&e.to_string()))?,
+    };
+    open(&app, stream_id, target).await
+}
+
+/// Whether the last stream opened set its own HTTP headers. See
+/// [`apply_http_headers`].
+static CUSTOM_HEADERS: AtomicBool = AtomicBool::new(false);
+
+/// Hands a stream's user agent and referrer to mpv before it is opened.
+///
+/// These are global options in mpv, read when a file opens, so they have to
+/// be put back for the next stream that does not set them — a playlist
+/// channel's referrer must not follow the viewer to the next channel. An
+/// Xtream channel never sets either, and while nothing has set them there is
+/// nothing to undo, so on an Xtream account this makes no mpv calls at all.
+///
+/// Failures are logged rather than returned: a stream that wanted a header
+/// may still play without one, and refusing to try would be worse.
+fn apply_http_headers(p: &Player, target: &Playable) {
+    let custom = target.user_agent.is_some() || target.referrer.is_some();
+    if !custom && !CUSTOM_HEADERS.load(Ordering::Acquire) {
+        return;
+    }
+    let ua = target
+        .user_agent
+        .as_deref()
+        .unwrap_or(crate::m3u::fetch::DEFAULT_USER_AGENT);
+    let referrer = target.referrer.as_deref().unwrap_or("");
+    for (key, value) in [("user-agent", ua), ("referrer", referrer)] {
+        if let Err(e) = p.set_property(key, value) {
+            tracing::warn!("could not set {key} for this stream: {e}");
+        }
+    }
+    CUSTOM_HEADERS.store(custom, Ordering::Release);
 }
 
 /// Shared by live and catchup: state first, then the one connection.
-async fn open(app: &AppHandle, stream_id: i64, url: String) -> Result<(), String> {
+async fn open(app: &AppHandle, stream_id: i64, target: Playable) -> Result<(), String> {
     ensure_ticker(app);
     // The scrollback previews describe a buffer that is about to be closed.
     // Keeping them would put the previous channel's picture under the cursor.
@@ -544,9 +584,10 @@ async fn open(app: &AppHandle, stream_id: i64, url: String) -> Result<(), String
     crate::ipc::health::clear();
     commit(app, |m| m.opening(stream_id));
     let r = on_player(app, move |p| {
+        apply_http_headers(p, &target);
         // `replace` closes the current demuxer before opening the next, which
         // is what keeps this a one-connection client.
-        p.load(&url).map_err(|e| e.to_string())
+        p.load(&target.url).map_err(|e| e.to_string())
     })
     .await;
     if let Err(e) = &r {
@@ -741,7 +782,7 @@ pub async fn set_compressor(app: AppHandle, enabled: bool) -> Result<(), String>
 /// Video is not a DOM element; the frontend sends where it should be drawn.
 #[tauri::command]
 pub async fn set_video_rect(app: AppHandle, rect: VideoRect) -> Result<(), String> {
-    on_overlay(&app, move |o| o.set_video_rect(rect)).await
+    on_main(&app, move || crate::surface::set_video_rect(rect)).await
 }
 
 /// The scrollback preview nearest a point in the buffer.
@@ -950,14 +991,16 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 /// Seconds east of UTC at `unix`, from the C library.
 ///
 /// std has no local time and the dependency set is pinned, so `localtime_r`
-/// is resolved out of the already-loaded libc - the same trick
-/// [`crate::surface::mpv`] uses for `setlocale`. Only the offset is taken;
-/// the calendar arithmetic stays in Rust where it can be tested.
+/// is resolved out of the already-loaded libc - the same trick the Linux
+/// surface uses for `setlocale`. Only the offset is taken; the calendar
+/// arithmetic stays in Rust where it can be tested.
+#[cfg(unix)]
 fn local_utc_offset(unix: i64) -> i64 {
     use libloading::os::unix::Library;
     use std::ffi::{c_char, c_int, c_long};
 
-    /// glibc's `struct tm`: nine ints, then `tm_gmtoff` and `tm_zone`.
+    /// glibc's `struct tm`: nine ints, then `tm_gmtoff` and `tm_zone`. The
+    /// BSDs, macOS among them, lay it out the same way.
     #[repr(C)]
     struct Tm {
         sec: c_int,
@@ -985,6 +1028,46 @@ fn local_utc_offset(unix: i64) -> i64 {
         return 0;
     }
     tm.gmtoff as i64
+}
+
+/// Seconds east of UTC at `unix`, from Windows' own time-zone rules.
+///
+/// There is no `tm_gmtoff` here. Instead the instant is converted to local
+/// time with `SystemTimeToTzSpecificLocalTime`, which applies the daylight
+/// rule in force *at that instant* rather than now (a catch-up programme from
+/// before the clocks changed must be asked for in the offset it aired in),
+/// and the two wall-clock readings are subtracted.
+#[cfg(windows)]
+fn local_utc_offset(unix: i64) -> i64 {
+    use windows::Win32::Foundation::{FILETIME, SYSTEMTIME};
+    use windows::Win32::System::Time::{
+        FileTimeToSystemTime, SystemTimeToFileTime, SystemTimeToTzSpecificLocalTime,
+    };
+
+    /// 100ns ticks between 1601-01-01 (FILETIME's epoch) and 1970-01-01.
+    const EPOCH_DELTA: i64 = 116_444_736_000_000_000;
+    const TICKS_PER_SEC: i64 = 10_000_000;
+
+    let ticks = unix.saturating_mul(TICKS_PER_SEC).saturating_add(EPOCH_DELTA);
+    let utc_ft = FILETIME {
+        dwLowDateTime: ticks as u32,
+        dwHighDateTime: (ticks >> 32) as u32,
+    };
+    let mut utc = SYSTEMTIME::default();
+    let mut local = SYSTEMTIME::default();
+    let mut local_ft = FILETIME::default();
+    let converted = unsafe {
+        FileTimeToSystemTime(&utc_ft, &mut utc).is_ok()
+            && SystemTimeToTzSpecificLocalTime(None, &utc, &mut local).is_ok()
+            && SystemTimeToFileTime(&local, &mut local_ft).is_ok()
+    };
+    if !converted {
+        tracing::warn!("could not read the local time zone; catchup times will be sent as UTC");
+        return 0;
+    }
+    let local_ticks =
+        (i64::from(local_ft.dwHighDateTime) << 32) | i64::from(local_ft.dwLowDateTime);
+    (local_ticks - ticks) / TICKS_PER_SEC
 }
 
 #[cfg(test)]
@@ -1202,6 +1285,19 @@ mod tests {
         assert_eq!(timeshift_stamp(0, 0), "1970-01-01:00-00");
         // 2024-02-29T23:59:00Z.
         assert_eq!(timeshift_stamp(1_709_251_140, 0), "2024-02-29:23-59");
+    }
+
+    #[test]
+    fn the_local_offset_is_a_real_time_zone() {
+        // Whatever zone the machine is in, the platform's answer has to look
+        // like one: within UTC-12..UTC+14 and on a quarter hour. A unit or
+        // epoch mistake (Windows counts 100ns ticks from 1601) fails this
+        // by orders of magnitude.
+        for t in [0, 1_709_251_140, 1_788_831_000] {
+            let off = local_utc_offset(t);
+            assert!((-12 * 3600..=14 * 3600).contains(&off), "offset {off}s at {t}");
+            assert_eq!(off % 900, 0, "offset {off}s at {t} is not on a quarter hour");
+        }
     }
 
     // -----------------------------------------------------------------
@@ -1648,7 +1744,7 @@ pub async fn apply_playback_settings(
 /// silently reset every launch. `lib.rs` calls this from `setup`, after the
 /// player is built.
 ///
-/// Deliberately infallible and non-blocking: it queues onto the GTK main
+/// Deliberately infallible and non-blocking: it queues onto the main
 /// thread and returns, so it is safe to call from `setup` (which is already
 /// on that thread) without deadlocking on itself. Nothing here is worth
 /// failing a launch over — the defaults mpv was initialised with are a
@@ -1665,7 +1761,7 @@ pub fn apply_saved_settings(app: &tauri::AppHandle) {
             Some(Ok(())) => tracing::info!("saved settings applied"),
         }
     }) {
-        tracing::warn!("could not reach the GTK main thread to apply saved settings: {e}");
+        tracing::warn!("could not reach the main thread to apply saved settings: {e}");
     }
 
 

@@ -51,13 +51,47 @@ pub fn parse_xmltv_time(s: &str) -> Result<i64> {
     Ok(t)
 }
 
+/// What to do with a guide's `<channel>` elements.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChannelNames {
+    /// Skip them. An Xtream server's channels already say which guide channel
+    /// they are, so there is nothing to match and nothing to store.
+    Ignore,
+    /// Record each `<display-name>` in `epg_channel_names`, for matching
+    /// playlist entries by name. `replace` clears what an earlier pass
+    /// stored first — inside this parse's transaction, so a guide that fails
+    /// halfway leaves the previous names in place rather than none.
+    Collect { replace: bool },
+}
+
 pub fn parse_xmltv<R: BufRead>(src: R, conn: &Connection) -> Result<usize> {
+    parse_xmltv_into(src, conn, ChannelNames::Ignore)
+}
+
+pub fn parse_xmltv_into<R: BufRead>(
+    src: R,
+    conn: &Connection,
+    names: ChannelNames,
+) -> Result<usize> {
     // Text is deliberately not trimmed by the reader: an entity splits a
     // title into several text events, and trimming each one would weld
     // "Court &amp; Council" into "Court&Council". Fields are trimmed once, whole.
     let mut reader = Reader::from_reader(src);
 
     let tx = conn.unchecked_transaction()?;
+    let collect = matches!(names, ChannelNames::Collect { .. });
+    if names == (ChannelNames::Collect { replace: true }) {
+        tx.execute("DELETE FROM epg_channel_names", [])?;
+    }
+    let mut name_stmt = if collect {
+        Some(tx.prepare(
+            "INSERT OR IGNORE INTO epg_channel_names (channel_id, name) VALUES (?1, ?2)",
+        )?)
+    } else {
+        None
+    };
+    // The `<channel id>` whose display names are being read, if any.
+    let mut in_channel: Option<String> = None;
     let mut stmt = tx.prepare(
         "INSERT INTO epg (channel_ref, start, stop, title, description)
          VALUES (?1,?2,?3,?4,?5)
@@ -75,6 +109,18 @@ pub fn parse_xmltv<R: BufRead>(src: R, conn: &Connection) -> Result<usize> {
 
     loop {
         match reader.read_event_into(&mut buf)? {
+            Event::Start(e) if collect && e.name().as_ref() == "channel" => {
+                in_channel = e
+                    .attributes()
+                    .flatten()
+                    .find(|a| a.key.as_ref() == "id")
+                    .map(|a| a.normalized_value(XML).map(|v| v.into_owned()))
+                    .transpose()?;
+            }
+            Event::Start(e) if in_channel.is_some() && e.name().as_ref() == "display-name" => {
+                field = Some("display-name");
+                acc.clear();
+            }
             Event::Start(e) if e.name().as_ref() == "programme" => {
                 in_programme = true;
                 title.clear();
@@ -127,6 +173,20 @@ pub fn parse_xmltv<R: BufRead>(src: R, conn: &Connection) -> Result<usize> {
                     desc = if d.is_empty() { None } else { Some(d) };
                     field = None;
                 }
+                "display-name" if field == Some("display-name") => {
+                    let n = acc.trim();
+                    if let (Some(id), Some(st)) = (&in_channel, name_stmt.as_mut()) {
+                        if !n.is_empty() {
+                            st.execute(params![id, n])?;
+                        }
+                    }
+                    acc.clear();
+                    field = None;
+                }
+                "channel" if collect => {
+                    in_channel = None;
+                    field = None;
+                }
                 _ => field = None,
             },
             Event::Eof => break,
@@ -136,6 +196,7 @@ pub fn parse_xmltv<R: BufRead>(src: R, conn: &Connection) -> Result<usize> {
     }
 
     drop(stmt);
+    drop(name_stmt);
     tx.commit()?;
     Ok(count)
 }
@@ -265,6 +326,65 @@ mod tests {
             .map(Result::unwrap)
             .collect();
         println!("titles containing '&': {sample:?}");
+    }
+
+    const WITH_CHANNELS: &str = r#"<tv>
+  <channel id="nwn1.uk"><display-name lang="en">NWN One</display-name>
+    <display-name>NWN 1 London</display-name><icon src="x"/></channel>
+  <channel id="r24.fr"><display-name>Riviera 24 &amp; Co</display-name></channel>
+  <programme start="20260908010000 +0000" stop="20260908020000 +0000" channel="nwn1.uk">
+    <title>Breakfast</title>
+  </programme>
+</tv>"#;
+
+    fn names(c: &Connection) -> Vec<(String, String)> {
+        c.prepare("SELECT channel_id, name FROM epg_channel_names ORDER BY 1, 2")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    }
+
+    #[test]
+    fn display_names_are_collected_when_asked() {
+        let c = open_in_memory().unwrap();
+        let n = parse_xmltv_into(
+            WITH_CHANNELS.as_bytes(),
+            &c,
+            ChannelNames::Collect { replace: true },
+        )
+        .unwrap();
+        assert_eq!(n, 1);
+        assert_eq!(
+            names(&c),
+            [
+                ("nwn1.uk".to_owned(), "NWN 1 London".to_owned()),
+                ("nwn1.uk".to_owned(), "NWN One".to_owned()),
+                ("r24.fr".to_owned(), "Riviera 24 & Co".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_panels_guide_stores_no_names() {
+        // The Xtream path is unchanged: channels are read past, not stored.
+        let c = open_in_memory().unwrap();
+        assert_eq!(parse_xmltv(WITH_CHANNELS.as_bytes(), &c).unwrap(), 1);
+        assert!(names(&c).is_empty());
+    }
+
+    #[test]
+    fn replacing_clears_the_previous_guides_names_and_adding_does_not() {
+        let c = open_in_memory().unwrap();
+        c.execute("INSERT INTO epg_channel_names VALUES ('old', 'Old Name')", [])
+            .unwrap();
+        let keep = ChannelNames::Collect { replace: false };
+        parse_xmltv_into(WITH_CHANNELS.as_bytes(), &c, keep).unwrap();
+        assert!(names(&c).iter().any(|(id, _)| id == "old"));
+        let replace = ChannelNames::Collect { replace: true };
+        parse_xmltv_into(WITH_CHANNELS.as_bytes(), &c, replace).unwrap();
+        assert!(!names(&c).iter().any(|(id, _)| id == "old"));
     }
 
     #[test]
