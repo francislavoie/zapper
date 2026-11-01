@@ -9,9 +9,15 @@
 //  - a channel with no EPG — often most of them — gets one deliberate muted
 //    band saying so, not an empty row that reads as a loading bug.
 //
+// Sideways, the guide scrolls through time rather than across a wide strip:
+// the position is an offset in seconds in the store, and every render draws
+// the window that offset names. A wheel, a tilt wheel, a touchpad swipe or
+// Shift+wheel moves it by exactly the pixels the gesture reported, at once —
+// no glide, for the same reasons logic/wheel.ts gives for vertical scrolling.
+//
 // The pixel arithmetic is all in logic/guide.ts and checked there.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { playCatchupProgramme, playChannel } from "../actions";
 import { useChannelPages } from "../hooks/useChannelPages";
 import { useClock } from "../hooks/useClock";
@@ -19,14 +25,19 @@ import { useGuideRows } from "../hooks/useGuideRows";
 import { hhmm } from "../logic/format";
 import {
   GUIDE_ROW_HEIGHT,
+  anchorFor,
   clampHours,
+  dayLabel,
+  guideWindow,
+  horizontalPixels,
   nowLineX,
   playability,
   programmeSpan,
   programmeStatus,
-  shiftWindow,
+  rebaseOffset,
+  secondsForPixels,
+  showsNow,
   ticks,
-  windowAt,
   withinArchive,
   type TimeWindow,
 } from "../logic/guide";
@@ -45,10 +56,16 @@ export function GuideGrid() {
   const now = useClock(15_000);
 
   const hours = clampHours(state.settings.guideHours);
-  const win = useMemo(
-    () => shiftWindow(windowAt(now, hours), state.guideOffsetHours),
-    [now, hours, state.guideOffsetHours],
-  );
+  // The offset is relative to the half hour the clock is in. When the clock
+  // moves on, the store is told so it can carry the offset across; until it
+  // has been, this render carries it itself, so no frame is drawn half an
+  // hour out.
+  const anchor = anchorFor(now);
+  const offset = rebaseOffset(state.guideOffset, state.guideAnchor, anchor, hours);
+  useLayoutEffect(() => {
+    if (state.guideAnchor !== anchor) dispatch({ type: "guideRebase", anchor });
+  }, [anchor, state.guideAnchor, dispatch]);
+  const win = useMemo(() => guideWindow(now, hours, offset), [now, hours, offset]);
 
   const categoryId = state.categoryId === ALL_CATEGORIES ? null : state.categoryId;
   const estimate =
@@ -83,6 +100,30 @@ export function GuideGrid() {
     return () => ro.disconnect();
   }, []);
 
+  // Sideways wheel movement is the guide's own. A native listener because
+  // React's onWheel is passive and could not stop the engine acting on the
+  // event too. Vertical movement is not touched here: it bubbles on to the
+  // page's wheel handling (useWheelSteps), which scrolls the rows exactly as
+  // it scrolls every other list. The scale is read through a ref so the
+  // listener is installed once rather than on every resize.
+  const scale = useRef({ hours, trackWidth });
+  scale.current = { hours, trackWidth };
+  useEffect(() => {
+    const body = bodyRef.current;
+    if (!body) return;
+    const onWheel = (e: WheelEvent) => {
+      if (e.defaultPrevented) return;
+      const { hours, trackWidth } = scale.current;
+      const px = horizontalPixels(e, trackWidth);
+      if (px === null) return;
+      e.preventDefault();
+      const seconds = secondsForPixels(px, hours, trackWidth);
+      if (seconds !== 0) dispatch({ type: "guideScroll", seconds });
+    };
+    body.addEventListener("wheel", onWheel, { passive: false });
+    return () => body.removeEventListener("wheel", onWheel);
+  }, [dispatch]);
+
   // A different category is a different list: start at the top.
   useEffect(() => {
     bodyRef.current?.scrollTo({ top: 0 });
@@ -104,6 +145,7 @@ export function GuideGrid() {
   const guide = useGuideRows(
     visible.filter((c) => !c.isSeparator).map((c) => c.streamId),
     win,
+    state.sync.lastSynced,
   );
 
   const onPlay = useCallback(
@@ -119,6 +161,7 @@ export function GuideGrid() {
 
   const nowX = nowLineX(now, win, trackWidth);
   const marks = ticks(win);
+  const day = dayLabel(win.from, now);
   const categoryName =
     categoryId === null
       ? "All channels"
@@ -131,26 +174,27 @@ export function GuideGrid() {
       <header className="guide-head">
         <h2>{categoryName}</h2>
         <span className="guide-window">
+          {day ? `${day} ` : ""}
           {hhmm(win.from)}–{hhmm(win.to)} · {hours}h
         </span>
         <span className="spring" />
         <button
           className="ctl"
-          title="Back one screen (←)"
+          data-tip="Back one screen (←)"
           onClick={() => dispatch({ type: "guideShift", hours: -hours })}
         >
           ‹
         </button>
         <button
-          className={`ctl ${state.guideOffsetHours === 0 ? "on" : ""}`}
-          title="Back to now (Home)"
+          className={`ctl ${showsNow(now, win) ? "on" : ""}`}
+          data-tip="Back to now (Home)"
           onClick={() => dispatch({ type: "guideNow" })}
         >
           Now
         </button>
         <button
           className="ctl"
-          title="Forward one screen (→)"
+          data-tip="Forward one screen (→)"
           onClick={() => dispatch({ type: "guideShift", hours })}
         >
           ›
@@ -276,10 +320,12 @@ function GuideRow({
 
   return (
     <div className={`guide-row ${selected ? "sel" : ""}`} style={style}>
-      <div className="guide-chan" title={channel.name}>
+      <div className="guide-chan">
         <span className="guide-num">{channel.num ?? ""}</span>
-        <span className="guide-name">{channel.cleanName}</span>
-        {channel.hasArchive ? <span className="guide-arch" title="has catchup">⏱</span> : null}
+        <span className="guide-name" data-tip-overflow={channel.name}>
+          {channel.cleanName}
+        </span>
+        {channel.hasArchive ? <span className="guide-arch" data-tip="Has catch-up">⏱</span> : null}
       </div>
       <div className="guide-track">
         {programmes === undefined ? (
@@ -288,9 +334,11 @@ function GuideRow({
           // The common case, and it must look deliberate.
           <div className="prog none">no guide data</div>
         ) : (
-          programmes.map((p, i) => (
+          // Keyed by start, which programmesFor() makes unique: an index key
+          // would shift as blocks scroll off the left and remount every row.
+          programmes.map((p) => (
             <Programme
-              key={`${p.start}-${i}`}
+              key={p.start}
               channel={channel}
               programme={p}
               win={win}
@@ -355,7 +403,7 @@ function Programme({
           ? `Older than the ${channel.archiveDays ?? "?"}-day archive`
           : "Already finished, and this channel has no catchup";
     return (
-      <div className={classes} style={style} title={`${time}  ${programme.title} — ${why}`}>
+      <div className={classes} style={style} data-tip={`${time}  ${programme.title} — ${why}`}>
         <span className="prog-title">{label}</span>
       </div>
     );
@@ -365,7 +413,7 @@ function Programme({
     <button
       className={classes}
       style={style}
-      title={`${time}  ${programme.title} — ${act === "play" ? "on now: play" : "play from the archive"}`}
+      data-tip={`${time}  ${programme.title} — ${act === "play" ? "on now: play" : "play from the archive"}`}
       onClick={() => (act === "play" ? onPlay(channel, programme) : onCatchup(channel, programme))}
     >
       <span className="prog-title">{label}</span>

@@ -23,6 +23,7 @@ import { fittedVideoWidth } from "./logic/videoSize";
 import { useVideoRoom } from "./hooks/useVideoRoom";
 import { applyRailWidth, saveRailWidth } from "./railWidth";
 import { saveStacked } from "./stacked";
+import { saveCategoryPins, saveCategorySort } from "./categoryPrefs";
 import { AboutModal } from "./components/AboutModal";
 import { Rail } from "./components/Rail";
 import { ChannelList } from "./components/ChannelList";
@@ -40,6 +41,7 @@ import { Toasts } from "./components/Toasts";
 import { Boundary } from "./components/Crashed";
 import { StatsPanel } from "./components/StatsPanel";
 import { VideoMenu } from "./components/VideoMenu";
+import { TooltipHost } from "./components/TooltipHost";
 
 export function App() {
   const state = useApp();
@@ -182,6 +184,16 @@ export function App() {
   useEffect(() => {
     saveRailWidth(state.railWidthRem);
   }, [state.railWidthRem]);
+
+  // Here rather than in the rail: the rail sits inside an <Activity> that
+  // unmounts its effects while the Favourites tab is showing.
+  useEffect(() => {
+    saveCategoryPins(state.categoryPins);
+  }, [state.categoryPins]);
+
+  useEffect(() => {
+    saveCategorySort(state.categorySort);
+  }, [state.categorySort]);
 
   // Read once at boot rather than when the modal opens: the guide needs
   // guideHours whether or not anyone has been to the settings pane.
@@ -372,6 +384,10 @@ export function App() {
 
       <ZoomBadge />
       <Toasts />
+      {/* Once, for every tip in the app: targets carry `data-tip` and this
+          finds them. Outside every boundary for the same reason as the
+          toolbar — it is part of how the app is used, not of one view. */}
+      <TooltipHost />
     </div>
   );
 }

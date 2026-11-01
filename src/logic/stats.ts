@@ -92,7 +92,7 @@ export function rate(bps: number | null | undefined): string {
 
 export function seconds(s: number | null | undefined, places = 2): string {
   if (s === null || s === undefined || !Number.isFinite(s)) return NONE;
-  return `${s.toFixed(places)} s`;
+  return `${s.toFixed(places)}s`;
 }
 
 export function count(n: number | null | undefined): string {

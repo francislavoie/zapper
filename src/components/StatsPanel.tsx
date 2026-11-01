@@ -24,6 +24,7 @@ import {
   sparkline,
   text,
 } from "../logic/stats";
+import { duration, span } from "../logic/format";
 import { useApp } from "../store";
 import type { StatsDto } from "../types";
 
@@ -111,7 +112,7 @@ export function StatsPanel({ onClose }: { onClose: () => void }) {
 
         <Graph
           label="Buffer health"
-          reading={`${seconds(stats?.cacheDuration, 1)}${stats?.buffering ? " · STARVED" : ""}`}
+          reading={`${span(stats?.cacheDuration, 1)}${stats?.buffering ? " · STARVED" : ""}`}
           path={sparkline(history.map((s) => s.buffer), GRAPH_W, GRAPH_H, bufferCeiling)}
           tone={stats?.buffering ? "bad" : "good"}
         />
@@ -129,12 +130,26 @@ export function StatsPanel({ onClose }: { onClose: () => void }) {
           path={sparkline(history.map((s) => s.dropped), GRAPH_W, GRAPH_H)}
           tone="warn"
         />
+        {/* Its own graph, because a stall is not a dropped frame: playback
+            freezes and waits for data, every frame is still shown, and the
+            counter above stays at zero through the stutter people notice
+            most. Each raised step is a moment the picture was frozen. */}
+        <Graph
+          label="Stalls"
+          reading={`${count(stats?.stalls ?? 0)} since tuning in`}
+          path={sparkline(history.map((s) => (s.starved ? 1 : 0)), GRAPH_W, GRAPH_H, 1)}
+          tone={(stats?.stalls ?? 0) > 0 ? "bad" : "good"}
+        />
 
         <Row label="A/V sync" value={seconds(stats?.avsync, 3)} />
         <Row label="Demuxed" value={bytes(stats?.demuxerBytes)} />
+        {/* Two rows with their own names. "0.0 s behind · 541 s back" made
+            the reader work out what "back" meant; the watch band already
+            calls the second one the rewind buffer, in words. */}
+        <Row label="Behind live" value={span(stats?.behindLive, 1)} />
         <Row
-          label="Position"
-          value={`${seconds(stats?.behindLive, 1)} behind · ${seconds(stats?.bufferedBack, 0)} back`}
+          label="Rewind buffer"
+          value={stats?.bufferedBack != null ? duration(stats.bufferedBack) : "—"}
         />
       </dl>
 

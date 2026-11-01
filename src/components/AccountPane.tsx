@@ -268,7 +268,7 @@ export function AccountPane() {
         <button
           className="ctl"
           disabled={busy || switching}
-          title={switching ? "Save first: the test checks the saved account" : undefined}
+          data-tip={switching ? "Save first: the test checks the saved account" : undefined}
           onClick={() => void test()}
         >
           Test connection

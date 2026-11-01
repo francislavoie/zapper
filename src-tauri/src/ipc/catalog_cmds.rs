@@ -267,14 +267,14 @@ mod tests {
 
         let want = SettingsDto {
             guide_hours: 9,
-            rewind_minutes: 15.0,
+            rewind_mb: 1500,
             ..Default::default()
         };
         set_settings(want).await.unwrap();
 
         let got = settings().await.unwrap();
         assert_eq!(got.guide_hours, 9);
-        assert_eq!(got.rewind_minutes, 15.0);
+        assert_eq!(got.rewind_mb, 1500);
     }
 
     #[tokio::test]

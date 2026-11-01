@@ -7,6 +7,7 @@ path — HTTP, MPEG-TS, mpv's cache — with none of those problems.
 
   tools/fake_stream.py                       # serves every fixture on :8788
   tools/fake_stream.py --port 9000 --rate 2  # burst at 2x realtime
+  tools/fake_stream.py --gap-every 4         # 1.5s gaps, then a burst
 
 Then point the player at:  http://127.0.0.1:8788/sample1080.ts
 """
@@ -25,6 +26,8 @@ class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     rate = 1.0
     quiet = True
+    gap_every = 0.0
+    gap_for = 0.0
 
     def log_message(self, *a):
         if not Handler.quiet:
@@ -64,6 +67,13 @@ class Handler(BaseHTTPRequestHandler):
         chunk = 64 * 1024
         delay = chunk / bps
 
+        # Delivery gaps, off unless asked for. Real servers often do not deliver
+        # evenly: it goes quiet for a second or two and then sends what it owes
+        # in a burst. Playing right at the live edge survives an even feed and
+        # stalls on that one, so testing the edge needs the gaps.
+        next_gap = time.monotonic() + Handler.gap_every if Handler.gap_every else None
+        owed = 0  # chunks to send without pacing, to catch up after a gap
+
         try:
             while True:  # loop the segment forever
                 for i in range(0, len(data), chunk):
@@ -71,7 +81,15 @@ class Handler(BaseHTTPRequestHandler):
                     self.wfile.write(f"{len(part):X}\r\n".encode())
                     self.wfile.write(part)
                     self.wfile.write(b"\r\n")
-                    time.sleep(delay)
+                    if next_gap is not None and time.monotonic() >= next_gap:
+                        self.wfile.flush()
+                        time.sleep(Handler.gap_for)
+                        owed += int(Handler.gap_for / delay)
+                        next_gap = time.monotonic() + Handler.gap_every
+                    if owed > 0:
+                        owed -= 1
+                    else:
+                        time.sleep(delay)
         except (BrokenPipeError, ConnectionResetError):
             pass  # client went away; normal
 
@@ -104,10 +122,16 @@ def main():
     ap.add_argument("--port", type=int, default=8788)
     ap.add_argument("--rate", type=float, default=1.0,
                     help="playback rate multiplier; 2.0 mimics the panel's burst")
+    ap.add_argument("--gap-every", type=float, default=0.0, metavar="SECONDS",
+                    help="go quiet every SECONDS of delivery, like a live server")
+    ap.add_argument("--gap-for", type=float, default=1.5, metavar="SECONDS",
+                    help="how long each gap lasts; the backlog follows in a burst")
     ap.add_argument("--verbose", action="store_true")
     a = ap.parse_args()
 
     Handler.rate = a.rate
+    Handler.gap_every = a.gap_every
+    Handler.gap_for = a.gap_for
     Handler.quiet = not a.verbose
 
     fixtures = sorted(FIXTURES.glob("*.ts"))

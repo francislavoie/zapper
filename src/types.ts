@@ -114,8 +114,9 @@ export interface SubtitleStyleDto {
 }
 
 export interface SettingsDto {
-  /** Minutes of live rewind; converted to mpv's byte budget behind the scenes. */
-  rewindMinutes: number;
+  /** Rewind buffer in megabytes (10^6 bytes): mpv's back-buffer budget as
+   *  is. How long it lasts depends on the channel's bitrate. */
+  rewindMb: number;
   hardwareDecode: boolean;
   /** Tone-map HDR to SDR. Off leaves HDR washed out on an SDR panel. */
   toneMapHdr: boolean;
@@ -264,6 +265,9 @@ export interface StatsDto {
    *  the player's own heartbeat rather than by whoever is asking, so the
    *  graphs are already drawn the moment the panel opens. */
   history: StatsSampleDto[];
+  /** Times playback stopped to wait for data since the stream started. A
+   *  stall drops no frames, so the dropped-frame counters never see it. */
+  stalls: number;
 }
 
 /** One point on a diagnostics graph. Mirrors `ipc::health::SampleDto`. */

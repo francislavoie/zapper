@@ -38,7 +38,7 @@ export function ZoomBadge() {
       ) : (
         <button
           className="ctl ghost"
-          title="Back to 100% (Ctrl+0)"
+          data-tip="Back to 100% (Ctrl+0)"
           onClick={() => stepZoom(dispatch, "reset")}
         >
           Reset

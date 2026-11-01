@@ -27,7 +27,7 @@ export function Toasts() {
           key={t.id}
           className={`toast ${t.kind}`}
           onClick={() => dispatch({ type: "dismissToast", id: t.id })}
-          title="dismiss"
+          data-tip="dismiss"
         >
           {t.text}
         </button>

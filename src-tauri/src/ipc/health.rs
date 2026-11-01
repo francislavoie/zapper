@@ -74,6 +74,18 @@ pub struct Recorder {
     /// once.
     last_dropped: Option<i64>,
     ticks: u32,
+    /// Times playback has stopped to wait for data since the stream started.
+    ///
+    /// Kept apart from dropped frames on purpose: a stall drops nothing — the
+    /// picture freezes and waits, and every frame is eventually shown — so
+    /// the dropped-frame counter stays at zero through exactly the stutter a
+    /// viewer notices most. Counted per heartbeat rather than per sample, so
+    /// a stall shorter than a sample is not missed.
+    stalls: i64,
+    was_starved: bool,
+    /// Whether any heartbeat since the last sample was starved, so the
+    /// sample marks a stall that started and ended between two samples.
+    starved_since_sample: bool,
 }
 
 impl Recorder {
@@ -84,6 +96,12 @@ impl Recorder {
     /// Takes a heartbeat's reading, recording a sample every
     /// `TICKS_PER_SAMPLE`th one. Returns whether it recorded.
     pub fn observe(&mut self, r: Reading) -> bool {
+        if r.buffering && !self.was_starved {
+            self.stalls += 1;
+        }
+        self.was_starved = r.buffering;
+        self.starved_since_sample |= r.buffering;
+
         self.ticks += 1;
         if self.ticks < TICKS_PER_SAMPLE {
             return false;
@@ -105,13 +123,18 @@ impl Recorder {
             buffer: r.cache_duration.unwrap_or(0.0).max(0.0),
             speed: r.cache_speed.unwrap_or(0.0).max(0.0),
             dropped,
-            starved: r.buffering,
+            starved: std::mem::take(&mut self.starved_since_sample),
         });
         true
     }
 
     pub fn samples(&self) -> Vec<SampleDto> {
         self.samples.iter().copied().collect()
+    }
+
+    /// Stalls since the stream started; see the field.
+    pub fn stalls(&self) -> i64 {
+        self.stalls
     }
 
     /// Forgets everything, for a new stream.
@@ -124,6 +147,9 @@ impl Recorder {
         self.samples.clear();
         self.last_dropped = None;
         self.ticks = 0;
+        self.stalls = 0;
+        self.was_starved = false;
+        self.starved_since_sample = false;
     }
 }
 
@@ -142,6 +168,10 @@ pub fn observe(r: Reading) {
 
 pub fn samples() -> Vec<SampleDto> {
     with(|rec| rec.samples())
+}
+
+pub fn stalls() -> i64 {
+    with(|rec| rec.stalls())
 }
 
 pub fn clear() {
@@ -264,5 +294,56 @@ mod tests {
             },
         );
         assert!(rec.samples()[0].starved);
+    }
+
+    #[test]
+    fn each_stall_is_counted_once_however_long_it_lasts() {
+        let mut rec = Recorder::new();
+        let starved = Reading {
+            buffering: true,
+            ..reading(0.0, 0)
+        };
+        // Playing, a long stall, playing, a short one, playing.
+        beat(&mut rec, 4, reading(3.0, 0));
+        beat(&mut rec, 6, starved);
+        beat(&mut rec, 4, reading(3.0, 0));
+        beat(&mut rec, 1, starved);
+        beat(&mut rec, 3, reading(3.0, 0));
+        assert_eq!(rec.stalls(), 2);
+        // And none of it is a dropped frame: a stall freezes, it drops nothing.
+        assert!(rec.samples().iter().all(|s| s.dropped == 0));
+    }
+
+    #[test]
+    fn a_stall_between_samples_still_marks_the_graph() {
+        let mut rec = Recorder::new();
+        // Sampled every second heartbeat: a one-heartbeat stall on the odd
+        // beat would otherwise fall between samples and vanish.
+        beat(&mut rec, 1, reading(3.0, 0));
+        beat(
+            &mut rec,
+            1,
+            Reading {
+                buffering: true,
+                ..reading(0.0, 0)
+            },
+        );
+        beat(&mut rec, 2, reading(3.0, 0));
+        assert!(rec.samples().iter().any(|s| s.starved));
+    }
+
+    #[test]
+    fn a_new_stream_starts_with_no_stalls() {
+        let mut rec = Recorder::new();
+        beat(
+            &mut rec,
+            2,
+            Reading {
+                buffering: true,
+                ..reading(0.0, 0)
+            },
+        );
+        rec.clear();
+        assert_eq!(rec.stalls(), 0);
     }
 }

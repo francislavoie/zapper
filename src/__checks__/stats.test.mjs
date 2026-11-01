@@ -7,6 +7,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { span } from "../logic/format.ts";
 import {
   HISTORY_LENGTH,
   NONE,
@@ -69,7 +70,7 @@ test("rates and sizes read the way people say them", () => {
   assert.equal(bytes(1536), "2 KB");
   assert.equal(bytes(5 * 1024 ** 2), "5.0 MB");
   assert.equal(rate(1_048_576), "1.0 MB/s");
-  assert.equal(seconds(14.567, 1), "14.6 s");
+  assert.equal(seconds(14.567, 1), "14.6s");
   assert.equal(count(285_728), (285728).toLocaleString());
 });
 
@@ -80,4 +81,10 @@ test("the resolution line shows the measured rate beside the declared one", () =
   assert.equal(resolutionLine(1280, 720, null, null), "1280×720");
   // Before anything has been measured.
   assert.equal(resolutionLine(null, null, 50, 50), NONE);
+});
+
+test("span keeps decimals under a minute and says minutes past it", () => {
+  assert.equal(span(4.24, 1), "4.2s");
+  assert.equal(span(640, 1), "10m40s");
+  assert.equal(span(null), NONE);
 });

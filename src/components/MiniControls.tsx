@@ -79,7 +79,7 @@ export function MiniControls({ volumeNudge = 0 }: { volumeNudge?: number }) {
     >
       <button
         className="ctl icon"
-        title={playing ? "Pause (Space)" : "Play (Space)"}
+        data-tip={playing ? "Pause (Space)" : "Play (Space)"}
         aria-label={playing ? "Pause" : "Play"}
         onClick={(e) => act(e, () => void run(dispatch, "pause", backend.togglePause()))}
       >
@@ -88,7 +88,7 @@ export function MiniControls({ volumeNudge = 0 }: { volumeNudge?: number }) {
 
       <button
         className="ctl icon"
-        title="Stop"
+        data-tip="Stop"
         aria-label="Stop"
         onClick={(e) => act(e, () => void run(dispatch, "stop", backend.stop()))}
       >
@@ -98,7 +98,7 @@ export function MiniControls({ volumeNudge = 0 }: { volumeNudge?: number }) {
       <span className={`mini-volume ${nudged ? "open" : ""}`}>
         <button
           className="ctl icon"
-          title={player.muted ? "Unmute" : "Mute"}
+          data-tip={player.muted ? "Unmute" : "Mute"}
           aria-label={player.muted ? "Unmute" : "Mute"}
           aria-pressed={player.muted}
           onClick={(e) =>
@@ -126,7 +126,7 @@ export function MiniControls({ volumeNudge = 0 }: { volumeNudge?: number }) {
 
       <button
         className={`ctl icon ${player.compressor ? "on" : ""}`}
-        title="Dynamic range compressor"
+        data-tip="Dynamic range compressor"
         aria-label="Dynamic range compressor"
         aria-pressed={player.compressor}
         onClick={(e) =>
@@ -145,7 +145,7 @@ export function MiniControls({ volumeNudge = 0 }: { volumeNudge?: number }) {
 
       <button
         className="ctl icon"
-        title={`Back ${SKIP_SECONDS} seconds (Left)`}
+        data-tip={`Back ${SKIP_SECONDS} seconds (Left)`}
         aria-label={`Back ${SKIP_SECONDS} seconds`}
         onClick={(e) =>
           act(e, () => void run(dispatch, "seek", backend.seekRelative(-SKIP_SECONDS)))
@@ -156,7 +156,7 @@ export function MiniControls({ volumeNudge = 0 }: { volumeNudge?: number }) {
 
       <button
         className="ctl icon"
-        title={`Forward ${SKIP_SECONDS} seconds (Right)`}
+        data-tip={`Forward ${SKIP_SECONDS} seconds (Right)`}
         aria-label={`Forward ${SKIP_SECONDS} seconds`}
         onClick={(e) =>
           act(e, () => void run(dispatch, "seek", backend.seekRelative(SKIP_SECONDS)))
@@ -170,7 +170,7 @@ export function MiniControls({ volumeNudge = 0 }: { volumeNudge?: number }) {
           row has a fifth of the width to spend. */}
       <button
         className={`ctl live mini-live ${live.live ? "at-edge" : ""}`}
-        title={live.canJump ? `${live.label} — jump to live (L)` : live.label}
+        data-tip={live.canJump ? `${live.label} — jump to live (L)` : live.label}
         aria-label={live.label}
         disabled={!live.canJump}
         onClick={(e) => act(e, () => void run(dispatch, "live", backend.seekLive()))}
@@ -191,7 +191,7 @@ export function MiniControls({ volumeNudge = 0 }: { volumeNudge?: number }) {
           the picture still in the corner of it. */}
       <button
         className="ctl icon rightmost"
-        title="Fullscreen (F)"
+        data-tip="Fullscreen (F)"
         aria-label="Fullscreen"
         onClick={(e) =>
           act(e, () => {

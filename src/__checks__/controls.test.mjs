@@ -190,7 +190,7 @@ test("at the edge there is nowhere to jump, and the control says so", () => {
 test("the control says its state out loud, so colour is not the only signal", () => {
   assert.equal(liveState(true, 0.2).label, "Live");
   assert.equal(liveState(false, 12).label, "Behind live by 12s");
-  assert.equal(liveState(false, 95).label, "Behind live by 1:35");
+  assert.equal(liveState(false, 95).label, "Behind live by 1m35s");
   assert.equal(behindGap(-3), "0s");
 });
 

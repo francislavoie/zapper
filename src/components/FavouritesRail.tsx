@@ -107,7 +107,6 @@ export function FavouritesRail() {
               className={`fav-item ${player.streamId === f.channel.streamId ? "sel" : ""} ${
                 pendingStreamId === f.channel.streamId ? "pending" : ""
               }`}
-              title={f.channel.name}
               onClick={() => open(f)}
               onContextMenu={(e) => {
                 // WebKit's own menu is suppressed at the GTK level, so this
@@ -130,9 +129,13 @@ export function FavouritesRail() {
                 {/* Where it lives, first: it is the coarsest thing about the
                     row and the one that groups a column of them. */}
                 {categoryName(f.channel.categoryId) ? (
-                  <span className="fav-cat">{categoryName(f.channel.categoryId)}</span>
+                  <span className="fav-cat" data-tip-overflow="">
+                    {categoryName(f.channel.categoryId)}
+                  </span>
                 ) : null}
-                <span className="fav-name">{f.channel.cleanName}</span>
+                <span className="fav-name" data-tip-overflow={f.channel.name}>
+                  {f.channel.cleanName}
+                </span>
                 <span className="fav-meta">
                   <span className="fav-watched">{watchedLabel(f.watchSeconds)}</span>
                   <span className="fav-ago">{lastWatchedLabel(f.lastWatched, now)}</span>

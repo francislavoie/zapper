@@ -27,8 +27,8 @@ import { backend } from "../backend";
 import { useClock } from "../hooks/useClock";
 import { useNowNext } from "../hooks/useNowNext";
 import {
-  clock,
   hhmm,
+  duration,
   liveOffset,
   measuredLine,
   playerBadge,
@@ -41,7 +41,7 @@ import {
   widthAfterDrag,
 } from "../logic/videoSize";
 import { run, useApp, useDispatch } from "../store";
-import { ResizeHandle } from "./icons";
+import { Fullscreen, ResizeHandle, Stop } from "./icons";
 import { MiniControls } from "./MiniControls";
 import type { ChannelDto, ProgrammeDto } from "../types";
 
@@ -128,6 +128,19 @@ export function WatchBand({ videoRef }: WatchBandProps) {
     }
   };
 
+  // What clicking the slot does, as its accessible name: a role="button" with
+  // no text inside has nothing else for a screen reader to call it. Not shown
+  // as a hover tip — a box of text floating over the picture is in the way
+  // of the one thing this slot is for, and clicking it is self-explanatory.
+  const videoTip =
+    player.state === "paused"
+      ? "Click to resume"
+      : live
+        ? "Back to full screen"
+        : ready
+          ? "Click to start this channel"
+          : undefined;
+
   return (
     <section className="watch-band" aria-label="Now watching">
       <div className="watch-info">
@@ -167,7 +180,7 @@ export function WatchBand({ videoRef }: WatchBandProps) {
         aria-orientation="vertical"
         aria-valuenow={Math.round(videoWidthRem * 4) / 4}
         tabIndex={0}
-        title={
+        data-tip={
           isDefaultVideoWidth(videoWidthRem)
             ? "Drag to resize the picture"
             : "Drag to resize · double-click to reset"
@@ -204,15 +217,7 @@ export function WatchBand({ videoRef }: WatchBandProps) {
         ref={videoRef}
         role={live || ready ? "button" : undefined}
         tabIndex={live || ready ? 0 : undefined}
-        title={
-          player.state === "paused"
-            ? "Click to resume"
-            : live
-              ? "Back to full screen"
-              : ready
-                ? "Click to start this channel"
-                : undefined
-        }
+        aria-label={videoTip}
         // The slot looks like the picture, so it has to behave like it: while
         // something is playing it goes full screen, and while a channel is
         // merely restored it starts it. Doing nothing was the worst of the
@@ -294,12 +299,12 @@ function Ready({
   return (
     <div className="watch-col identity">
       <p className="watch-state">Where you left off</p>
-      <h2 title={channel.name}>{channel.cleanName}</h2>
+      <h2 data-tip-overflow={channel.name}>{channel.cleanName}</h2>
       <div className="watch-sub">
         {channel.num != null ? <span className="watch-num">#{channel.num}</span> : null}
-        {onNow ? <span className="watch-now">{onNow.title}</span> : null}
+        {onNow ? <span className="watch-now" data-tip-overflow="">{onNow.title}</span> : null}
         {channel.hasArchive ? (
-          <span className="badge archive" title={`${channel.archiveDays ?? "?"}-day catchup`}>
+          <span className="badge archive" data-tip={`${channel.archiveDays ?? "?"}-day catchup`}>
             ⏱ {channel.archiveDays ?? "?"}d catchup
           </span>
         ) : null}
@@ -335,12 +340,31 @@ function Playing({
   return (
     <>
       <div className="watch-col identity">
-        <h2 title={channel.name}>{channel.cleanName}</h2>
+        {/* The name and, at the right of the same line, what you can do
+            with it. Icons rather than worded buttons: two words-in-boxes
+            under the name took a row of their own for two actions everybody
+            recognises by shape. The name gives way first when it is long. */}
+        <div className="watch-head">
+          <h2 data-tip-overflow={channel.name}>{channel.cleanName}</h2>
+          <div className="watch-head-actions">
+            <button
+              className="ctl icon"
+              aria-label="Full screen"
+              data-tip="Full screen (F)"
+              onClick={onFullScreen}
+            >
+              <Fullscreen className="i" />
+            </button>
+            <button className="ctl icon" aria-label="Stop" data-tip="Stop" onClick={onStop}>
+              <Stop className="i" />
+            </button>
+          </div>
+        </div>
         <div className="watch-sub">
           {channel.num != null ? <span className="watch-num">#{channel.num}</span> : null}
           {badge ? <span className="badge">{badge}</span> : null}
           {channel.hasArchive ? (
-            <span className="badge archive" title={`${channel.archiveDays ?? "?"}-day catchup`}>
+            <span className="badge archive" data-tip={`${channel.archiveDays ?? "?"}-day catchup`}>
               ⏱ {channel.archiveDays ?? "?"}d catchup
             </span>
           ) : null}
@@ -350,14 +374,6 @@ function Playing({
         ) : player.state === "failed" ? (
           <p className="watch-state bad">{player.error ?? "Stream failed"}</p>
         ) : null}
-        <div className="watch-actions">
-          <button className="ctl" onClick={onFullScreen}>
-            Full screen
-          </button>
-          <button className="ctl ghost" onClick={onStop}>
-            Stop
-          </button>
-        </div>
       </div>
 
       <div className="watch-col epg">
@@ -369,13 +385,13 @@ function Playing({
                 {hhmm(onNow.start)}–{hhmm(onNow.stop)}
               </span>
             </div>
-            <div className="watch-title">{onNow.title}</div>
+            <div className="watch-title" data-tip-overflow="">{onNow.title}</div>
             <div className="watch-progress">
               <span
                 style={{ width: `${programmeProgress(onNow.start, onNow.stop, now) * 100}%` }}
               />
             </div>
-            {onNow.description ? <p className="watch-desc">{onNow.description}</p> : null}
+            {onNow.description ? <p className="watch-desc" data-tip-overflow="">{onNow.description}</p> : null}
           </div>
         ) : (
           // 15% EPG coverage: this is the common case, and it is not an error.
@@ -388,7 +404,7 @@ function Playing({
               <span className="watch-when">NEXT</span>
               <span className="watch-time">{hhmm(next.start)}</span>
             </div>
-            <div className="watch-title">{next.title}</div>
+            <div className="watch-title" data-tip-overflow="">{next.title}</div>
           </div>
         ) : null}
       </div>
@@ -400,11 +416,11 @@ function Playing({
         </div>
         <div>
           <dt>Position</dt>
-          <dd>{liveOffset(player.behindLive)}</dd>
+          <dd>{liveOffset(player.atLiveEdge, player.behindLive)}</dd>
         </div>
         <div>
           <dt>Rewind buffer</dt>
-          <dd>{clock(player.bufferedBack)}</dd>
+          <dd>{duration(player.bufferedBack)}</dd>
         </div>
       </dl>
     </>

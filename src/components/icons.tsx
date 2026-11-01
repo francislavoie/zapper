@@ -287,3 +287,38 @@ export function ResizeHandle({ className, title }: IconProps) {
     </svg>
   );
 }
+
+/** A pushpin, upright. Outlined where it offers to pin, filled where the
+ *  category already is — the same shape both ways, so the row's button and
+ *  the pinned marker read as one idea. */
+export function Pin({ className, title, filled }: IconProps & { filled?: boolean }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" aria-hidden={!title} focusable="false">
+      {title ? <title>{title}</title> : null}
+      <path
+        d="M8.5 3.5h7l-1 6 3.25 3.5v1.75H6.25V13L9.5 9.5z"
+        fill={filled ? "currentColor" : "none"}
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinejoin="round"
+      />
+      <path d="M12 14.75v6" fill="none" stroke="currentColor" strokeWidth="1.8"
+            strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/** Sort: a downward arrow beside three bars getting shorter. Generic on
+ *  purpose — the button's label says which order, the icon only says that
+ *  this is the thing that orders. */
+export function SortOrder({ className, title }: IconProps) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" aria-hidden={!title} focusable="false">
+      {title ? <title>{title}</title> : null}
+      <path d="M6 4.5v14M2.75 15.25 6 18.5l3.25-3.25" fill="none" stroke="currentColor"
+            strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M12.5 6.5h9M12.5 12h6.5M12.5 17.5h4" fill="none" stroke="currentColor"
+            strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}

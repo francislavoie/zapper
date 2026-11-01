@@ -22,6 +22,7 @@ import type {
 } from "./types";
 import { errorMessage, idle, type Async } from "./logic/async";
 import { DEFAULT_SETTINGS, clampSettings } from "./logic/settings";
+import { HOUR, clampOffset, rebaseOffset } from "./logic/guide";
 import { clampZoom, nextZoom, type ZoomCommand } from "./logic/zoom";
 import { loadZoom } from "./zoom";
 import { loadStacked } from "./stacked";
@@ -30,6 +31,8 @@ import { loadVideoWidth } from "./videoSize";
 import { loadRailWidth } from "./railWidth";
 import { clampRailWidth } from "./logic/railWidth";
 import { clampVideoWidth } from "./logic/videoSize";
+import { setPinned, type CategorySort } from "./logic/categoryOrder";
+import { loadCategoryPins, loadCategorySort } from "./categoryPrefs";
 
 export const ALL_CATEGORIES = "*all*";
 
@@ -48,6 +51,20 @@ export interface FavouriteMenu {
   name: string;
   x: number;
   y: number;
+}
+
+/** An open context menu over one category row — pin or unpin it. Here for
+ *  the same reason as FavouriteMenu: Escape unwinds it in useGlobalKeys.
+ *
+ *  `keyboard` when it was opened with the menu key or Shift+F10, so it takes
+ *  focus — a menu that appears at a row the keyboard is on and cannot be
+ *  reached from the keyboard is no menu at all — and hands it back on close. */
+export interface CategoryMenu {
+  id: string;
+  name: string;
+  x: number;
+  y: number;
+  keyboard: boolean;
 }
 
 /** Browse shows the rail and the list with the picture in the watch panel;
@@ -70,6 +87,13 @@ export interface State {
   /** Which half of the rail is showing. */
   railTab: RailTab;
   favouriteMenu: FavouriteMenu | null;
+  categoryMenu: CategoryMenu | null;
+  /** Category ids pinned to the top of the rail, in the order they were
+   *  pinned. May name categories that no longer exist; see
+   *  logic/categoryOrder.ts for why those are kept. Local like zoom. */
+  categoryPins: readonly string[];
+  /** How the unpinned categories are ordered. Local like zoom. */
+  categorySort: CategorySort;
   /** Where a right-click on the picture landed, in client pixels. */
   videoMenu: { x: number; y: number } | null;
   /** The diagnostics panel. Off by default and polled only while open. */
@@ -101,8 +125,17 @@ export interface State {
   /** Metadata for whatever is playing, painted immediately from SQLite while
    *  the stream opens. */
   nowChannel: ChannelDto | null;
-  /** How far the guide has been paged away from now, in hours. */
-  guideOffsetHours: number;
+  /** How far the guide has been scrolled away from now, in seconds from
+   *  `guideAnchor`; zero follows the clock. Seconds rather than a scrollLeft
+   *  because the guide never has a wide strip to scroll — see "scrolling in
+   *  time" in logic/guide.ts. Here rather than in the grid so that the keys,
+   *  which live in useGlobalKeys, and a guide closed and reopened agree on
+   *  where it was. */
+  guideOffset: number;
+  /** The half hour `guideOffset` is measured from, or null before the guide
+   *  has drawn. Kept so the offset can be carried across the clock rolling
+   *  over — the grid reports each new anchor with `guideRebase`. */
+  guideAnchor: number | null;
   /** Always a usable value: the contract's documented defaults until the
    *  backend answers. The load state is kept beside it rather than wrapping
    *  it in an Async, because the guide has to draw something either way. */
@@ -179,6 +212,11 @@ export const initialState: State = {
   categoryFilter: "",
   railTab: loadSession().railTab,
   favouriteMenu: null,
+  categoryMenu: null,
+  // Read before the first render, like the rail's width, so the rail draws in
+  // its remembered order once rather than reshuffling a frame later.
+  categoryPins: loadCategoryPins(),
+  categorySort: loadCategorySort(),
   videoMenu: null,
   statsOpen: false,
   fullscreenFrom: null,
@@ -193,7 +231,8 @@ export const initialState: State = {
   player: initialPlayer,
   pendingStreamId: null,
   nowChannel: null,
-  guideOffsetHours: 0,
+  guideOffset: 0,
+  guideAnchor: null,
   settings: DEFAULT_SETTINGS,
   settingsStatus: idle(),
   settingsSaveError: null,
@@ -213,6 +252,9 @@ export type Action =
   | { type: "categoryFilter"; text: string }
   | { type: "railTab"; tab: RailTab }
   | { type: "favouriteMenu"; menu: FavouriteMenu | null }
+  | { type: "categoryMenu"; menu: CategoryMenu | null }
+  | { type: "categoryPin"; id: string; pinned: boolean }
+  | { type: "categorySort"; sort: CategorySort }
   | { type: "videoMenu"; at: { x: number; y: number } | null }
   | { type: "stats"; open: boolean }
   | { type: "fullscreenFrom"; mode: Mode | null }
@@ -230,7 +272,11 @@ export type Action =
   | { type: "opening"; channel: ChannelDto }
   /** The channel from last time, restored but deliberately not started. */
   | { type: "ready"; channel: ChannelDto }
+  /** A page: ‹ › and the arrow keys, by whole screens. */
   | { type: "guideShift"; hours: number }
+  /** A wheel or swipe, by however far it moved. */
+  | { type: "guideScroll"; seconds: number }
+  | { type: "guideRebase"; anchor: number }
   | { type: "guideNow" }
   | { type: "settingsStatus"; value: Async<null> }
   | { type: "settingsValue"; value: SettingsDto }
@@ -268,9 +314,21 @@ export function reducer(state: State, action: Action): State {
     case "railTab":
       // A menu belongs to the list it was opened over; changing the list
       // leaves it pointing at a row that is no longer there.
-      return { ...state, railTab: action.tab, favouriteMenu: null };
+      return { ...state, railTab: action.tab, favouriteMenu: null, categoryMenu: null };
     case "favouriteMenu":
       return { ...state, favouriteMenu: action.menu };
+    case "categoryMenu":
+      return { ...state, categoryMenu: action.menu };
+    case "categoryPin":
+      // Written to local storage by App, like the rail's width. The menu it
+      // may have been chosen from has done its job either way.
+      return {
+        ...state,
+        categoryPins: setPinned(state.categoryPins, action.id, action.pinned),
+        categoryMenu: null,
+      };
+    case "categorySort":
+      return { ...state, categorySort: action.sort };
     case "stacked":
       // Written to local storage by App, the same way zoom is: a reducer that
       // touched storage would do it twice under StrictMode and could not be
@@ -300,7 +358,13 @@ export function reducer(state: State, action: Action): State {
     case "mode":
       // Any view change closes the menu, whoever asked for it — the menu is
       // one of the two places a view change comes from.
-      return { ...state, mode: action.mode, menuOpen: false, favouriteMenu: null };
+      return {
+        ...state,
+        mode: action.mode,
+        menuOpen: false,
+        favouriteMenu: null,
+        categoryMenu: null,
+      };
     case "sync":
       return { ...state, sync: action.value };
     case "player":
@@ -314,10 +378,29 @@ export function reducer(state: State, action: Action): State {
             ? null
             : state.pendingStreamId,
       };
+    // Clamped here as well as where it is drawn, so that holding ← at the
+    // far edge does not wind up an offset that then takes as many presses of
+    // → to unwind before anything moves.
     case "guideShift":
-      return { ...state, guideOffsetHours: state.guideOffsetHours + action.hours };
+    case "guideScroll": {
+      const by = action.type === "guideShift" ? action.hours * HOUR : action.seconds;
+      const offset = clampOffset(state.guideOffset + by, state.settings.guideHours);
+      return offset === state.guideOffset ? state : { ...state, guideOffset: offset };
+    }
+    case "guideRebase":
+      if (state.guideAnchor === action.anchor) return state;
+      return {
+        ...state,
+        guideAnchor: action.anchor,
+        guideOffset: rebaseOffset(
+          state.guideOffset,
+          state.guideAnchor,
+          action.anchor,
+          state.settings.guideHours,
+        ),
+      };
     case "guideNow":
-      return { ...state, guideOffsetHours: 0 };
+      return state.guideOffset === 0 ? state : { ...state, guideOffset: 0 };
     case "settingsStatus":
       return { ...state, settingsStatus: action.value };
     case "settingsValue":

@@ -521,7 +521,7 @@ let bufferTimer: number | undefined;
  *  returned and painted its own defaults, these values would show it. */
 let storedSettings: SettingsDto = {
   language: "auto",
-  rewindMinutes: 8,
+  rewindMb: 546,
   hardwareDecode: true,
   toneMapHdr: false,
   guideHours: 3,
@@ -817,6 +817,9 @@ export const mockApi = {
       behindLive: p.behindLive,
       bufferedBack: p.bufferedBack,
       history,
+      // Counted the way the backend does: each run of starved samples is one.
+      stalls: history.filter((s, i) => s.starved && !(history[i - 1]?.starved ?? false))
+        .length,
     };
   },
 
@@ -943,7 +946,7 @@ export const mockApi = {
   applyPlaybackSettings: async (next: SettingsDto) => {
     await delay(20);
     (globalThis as Record<string, unknown>).__mockPlaybackApplied = {
-      rewindMinutes: next.rewindMinutes,
+      rewindMb: next.rewindMb,
       hardwareDecode: next.hardwareDecode,
       toneMapHdr: next.toneMapHdr,
     };

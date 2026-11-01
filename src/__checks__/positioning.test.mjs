@@ -29,7 +29,8 @@ function ruleFor(selector) {
 const ANCHORS = [
   [".watch-video", ".mini-controls", "the hover controls on the docked picture"],
   [".rail", ".rail-grip", "the divider between the rail and the list"],
-  [".rail-spacer", ".rail-item", "the windowed category rows"],
+  [".rail-spacer", ".rail-row", "the windowed category rows"],
+  [".rail-row", ".rail-pin", "the pin button over a category row's count"],
   [".scrubber", ".scrub-hint", "the scrubber's hover preview"],
 ];
 

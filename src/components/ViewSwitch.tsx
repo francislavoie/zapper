@@ -22,7 +22,7 @@ export function ViewSwitch({ current }: { current: "browse" | "guide" }) {
           role="tab"
           aria-selected={current === mode}
           className={current === mode ? "on" : ""}
-          title={title}
+          data-tip={title}
           onClick={() => {
             if (current !== mode) dispatch({ type: "mode", mode });
           }}

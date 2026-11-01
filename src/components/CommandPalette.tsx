@@ -115,7 +115,7 @@ export function CommandPalette() {
               <span className="palette-kind">
                 {item.kind === "action" ? "action" : "channel"}
               </span>
-              <span className="palette-label">
+              <span className="palette-label" data-tip-overflow="">
                 {item.kind === "action" ? item.action.label : item.channel.name}
               </span>
               <span className="palette-hint">

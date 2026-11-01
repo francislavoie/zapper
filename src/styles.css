@@ -642,6 +642,27 @@ select option {
   gap: 0.1875rem;
 }
 
+/* Name on the left, Full screen and Stop at the right of the same line. The
+   name is the one that gives way: it shrinks and ellipsizes, the buttons
+   never move off the line. */
+.watch-head {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-width: 0;
+}
+
+.watch-head h2 {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.watch-head-actions {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 0.25rem;
+}
+
 .watch-col.identity h2 {
   margin: 0;
   font-size: 0.9375rem;
@@ -970,16 +991,23 @@ select option {
   position: relative;
 }
 
-.rail-item {
+/* One row: the category's button, and the pin button laid over its right
+   end. The row is what the windowing places, so it is the box with the exact
+   height; everything inside fills it. */
+.rail-row {
   position: absolute;
   left: 0;
   right: 0;
   height: 1.625rem;
-  box-sizing: border-box;
   /* Same containment as a channel row: the box is fully described by the
      rules above, so the browser need not consider anything inside it when
      laying out or painting the rest of the rail. */
   contain: content;
+}
+
+.rail-item {
+  height: 100%;
+  box-sizing: border-box;
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -990,15 +1018,31 @@ select option {
   border-left: 0.125rem solid transparent;
 }
 
-.rail-item:hover {
+/* Inset, because the row's containment clips anything drawn outside it. */
+.rail-item:focus-visible {
+  outline-offset: -1px;
+}
+
+/* On the row rather than the button, so the highlight holds while the
+   pointer is over the pin, which is part of the row but not of the button. */
+.rail-row:hover .rail-item {
   background: var(--bg-2);
   color: var(--text);
 }
 
-.rail-item.sel {
+.rail-item.sel,
+.rail-row:hover .rail-item.sel {
   background: var(--accent-dim);
   color: var(--text);
   border-left-color: var(--accent);
+}
+
+/* The hairline under the pinned block. An inset shadow on the button rather
+   than a border on the row: it is drawn above the button's own background,
+   so it survives hover and selection, and it takes no height, so the row
+   stays exactly ROW_HEIGHT and the window arithmetic never hears of it. */
+.rail-row.pin-end .rail-item {
+  box-shadow: inset 0 -1px 0 var(--line);
 }
 
 .rail-name {
@@ -1008,11 +1052,108 @@ select option {
   white-space: nowrap;
 }
 
+/* At least as wide as the pin button that replaces it on hover, so a short
+   count ("5") does not leave the end of the name under the pin. Fixed for
+   every row, so revealing the pin moves no text. */
 .rail-count {
   flex: 0 0 auto;
+  min-width: 1.5rem;
+  text-align: right;
   font-variant-numeric: tabular-nums;
   font-size: 0.6875rem;
   color: var(--dimmer);
+}
+
+/* The marker in front of a pinned category's name. Accent-coloured but
+   small: it says which rows are pinned without competing with the
+   selection, which is the same colour and much louder. */
+.rail-pinned {
+  flex: 0 0 auto;
+  width: 0.6875rem;
+  height: 0.6875rem;
+  margin-right: -0.1875rem;
+  color: var(--accent);
+}
+
+/* Over the count, inside the row's right padding. Invisible rather than
+   absent until the row is hovered or has keyboard focus, so it stays in the
+   tab order and appearing does not lay anything out. */
+.rail-pin {
+  position: absolute;
+  top: 0;
+  right: 0.25rem;
+  width: 1.75rem;
+  height: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--dim);
+  opacity: 0;
+}
+
+.rail-pin:hover {
+  color: var(--text);
+}
+
+.rail-pin:focus-visible {
+  outline-offset: -3px;
+}
+
+.rail-row.pinned .rail-pin {
+  color: var(--accent);
+}
+
+.rail-pin-i {
+  width: 0.875rem;
+  height: 0.875rem;
+}
+
+.rail-row:hover .rail-pin,
+.rail-row:has(:focus-visible) .rail-pin {
+  opacity: 1;
+}
+
+.rail-row:hover .rail-count,
+.rail-row:has(:focus-visible) .rail-count {
+  visibility: hidden;
+}
+
+/* Beside the filter box, and exactly as tall as it. Stretched to the row's
+   height rather than given one: the box's height is its font, padding and
+   border, and a second height written here would be a second number to keep
+   in step with those — off by a pixel at some zoom, and the rail's filter row
+   would stop lining up with the channel list's search row beside it. Checked
+   in src/__checks__/categoryOrder.test.mjs, and measured in the mock.
+   Wide enough for the longest label, so cycling does not resize the box. */
+.rail-sort {
+  flex: 0 0 auto;
+  align-self: stretch;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  min-width: 4.125rem;
+  padding: 0 0.4375rem;
+  background: var(--bg-3);
+  border: 1px solid var(--line);
+  border-radius: 0.3125rem;
+  font-size: 0.75rem;
+  color: var(--dim);
+}
+
+.rail-sort:hover {
+  color: var(--text);
+  border-color: #39414f;
+}
+
+.rail-sort-i {
+  flex: 0 0 auto;
+  width: 0.875rem;
+  height: 0.875rem;
+}
+
+.rail-sort-label {
+  white-space: nowrap;
 }
 
 /* ------------------------------------------------------------------ list */
@@ -1225,11 +1366,17 @@ select option {
   --guide-gutter: 13.125rem;
 }
 
+/* The same height and right inset as the list's heading row (.list-head),
+   so the List | Guide switch at the right of both sits in exactly the same
+   place and switching views does not make it jump under the pointer. */
 .guide-head {
   display: flex;
   align-items: center;
   gap: 0.625rem;
-  padding: 0.5rem 0.75rem;
+  height: var(--pane-head-h);
+  /* +1px for the list pane's right border, which the full-width guide does
+     not have: measured, the switch otherwise moved a pixel. */
+  padding: 0 calc(0.375rem + 1px) 0 0.75rem;
   border-bottom: 1px solid var(--line);
   background: var(--bg-2);
   flex: 0 0 auto;
@@ -1732,7 +1879,9 @@ button.prog:hover {
   font-variant-numeric: tabular-nums;
   font-size: 0.75rem;
   color: var(--dim);
-  min-width: 3.375rem;
+  /* Room for "10 min 00 s": durations are in words now, and a readout that
+     grew as it counted would nudge every control beside it. */
+  min-width: 5.5rem;
   text-align: center;
 }
 
@@ -2242,6 +2391,39 @@ button.prog:hover {
 
 .row-field input[type="range"] {
   flex: 0 0 12.5rem;
+}
+
+/* What the rewind buffer buys, per bitrate: a small three-column table
+   under the slider. The channel playing now leads, in the text colour,
+   because it is the row that answers the question. */
+.rewind-estimates {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  column-gap: 1rem;
+  row-gap: 0.125rem;
+  margin: 0.375rem 0 0.5rem;
+  font-size: 0.75rem;
+  color: var(--dim);
+  max-width: 24rem;
+}
+
+.rewind-estimates > div {
+  display: contents;
+}
+
+.rewind-estimates dt,
+.rewind-estimates dd {
+  margin: 0;
+}
+
+.rewind-estimates .rate {
+  color: var(--dimmer);
+  font-variant-numeric: tabular-nums;
+}
+
+.rewind-estimates .this-channel dt,
+.rewind-estimates .this-channel dd:last-child {
+  color: var(--text);
 }
 
 /* A boxed line of status: saving, a save that did not, what a connection
@@ -3295,4 +3477,58 @@ textarea.field {
 
 .update-actions {
   gap: 0.5rem;
+}
+
+/* The tooltip — one element for the whole app, placed by src/tooltip.ts.
+   The layer is the viewport: fixed and full-bleed, so the tip's `left`/`top`
+   are measured from the window's corner and its percentage max-width is a
+   share of the window's width (never `vw`; see viewport-units.test.mjs).
+   Above the resize edges, and never in the way of them: neither the layer nor
+   the tip takes the pointer, so an edge under a tip can still be grabbed. */
+.tip-layer {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1100;
+}
+
+/* The menus' surface at the menus' type size, so it reads as part of the app
+   rather than as something the toolkit drew over it. Wraps rather than
+   ellipsizes: the tip is where cut-off text goes to be read in full, and
+   cutting it off again here would be absurd. */
+.tip {
+  position: absolute;
+  left: 0;
+  top: 0;
+  max-width: min(22rem, calc(100% - 0.75rem));
+  padding: 0.25rem 0.5rem;
+  background: var(--bg-3);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 0.375rem;
+  box-shadow: 0 0.375rem 1.25rem rgba(0, 0, 0, 0.5);
+  font-size: 0.75rem;
+  line-height: 1.35;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+  /* Visible from the first frame — the fade starts at most of the way in,
+     so it softens the arrival without anything having to wait for it. */
+  animation: tip-in 70ms ease-out;
+}
+
+.tip[hidden] {
+  display: none;
+}
+
+@keyframes tip-in {
+  from {
+    opacity: 0.4;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tip {
+    animation: none;
+  }
 }

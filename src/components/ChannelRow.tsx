@@ -47,23 +47,28 @@ export const ChannelRow = memo(function ChannelRow({
       style={style}
       onClick={() => onPlay(channel)}
       onDoubleClick={() => onOpenFull(channel)}
-      title={channel.name}
     >
       <Logo url={channel.logoUrl} />
       <span className="row-num">{channel.num ?? ""}</span>
-      <span className="row-name">{channel.cleanName}</span>
-      <span className={`row-now ${now ? "" : "none"}`}>
+      {/* Tips only when cut short. An instant tip on every row the pointer
+          crosses would be a strobe; the name is offered where it is needed,
+          which is where the ellipsis is. The raw name rather than the clean
+          one, because it is the full story — prefix and all. */}
+      <span className="row-name" data-tip-overflow={channel.name}>
+        {channel.cleanName}
+      </span>
+      <span className={`row-now ${now ? "" : "none"}`} data-tip-overflow="">
         {now ? `${hhmm(now.start)}  ${now.title}` : "no guide data"}
       </span>
       {channel.hasArchive ? (
-        <span className="badge archive" title={`${channel.archiveDays ?? "?"}-day catchup`}>
+        <span className="badge archive" data-tip={`${channel.archiveDays ?? "?"}-day catchup`}>
           ⏱ {channel.archiveDays ?? "?"}d
         </span>
       ) : null}
       {looksBroken(channel.quality) ? (
         <span
           className="badge broken"
-          title={`${channel.quality?.failCount} failures against ${channel.quality?.okCount} successes`}
+          data-tip={`${channel.quality?.failCount} failures against ${channel.quality?.okCount} successes`}
         >
           !
         </span>

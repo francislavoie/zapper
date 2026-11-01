@@ -83,7 +83,7 @@ export function Toolbar() {
             aria-label="Menu"
             aria-expanded={state.menuOpen}
             aria-haspopup="menu"
-            title="Menu"
+            data-tip="Menu"
             onClick={() => dispatch({ type: "menu", open: !state.menuOpen })}
           >
             <Burger />
@@ -103,7 +103,7 @@ export function Toolbar() {
             className={`tb-update ${state.update.state.state === "failed" ? "bad" : ""}`}
             onMouseDown={(e) => e.stopPropagation()}
             onClick={() => dispatch({ type: "updateDialog", open: true })}
-            title="Updates"
+            data-tip="Updates"
           >
             {badgeLabel(state.update.state)}
           </button>
@@ -150,7 +150,7 @@ export function Toolbar() {
         <button
           className="tb-btn"
           aria-label="Minimise"
-          title="Minimise"
+          data-tip="Minimise"
           onClick={() => void windowControls.minimise().catch(() => {})}
         >
           <span className="tb-glyph">—</span>
@@ -158,7 +158,7 @@ export function Toolbar() {
         <button
           className="tb-btn"
           aria-label={max.label}
-          title={max.label}
+          data-tip={max.label}
           onClick={() => void windowControls.toggleMaximise().catch(() => {})}
         >
           <span className="tb-glyph">{max.glyph}</span>
@@ -166,7 +166,7 @@ export function Toolbar() {
         <button
           className="tb-btn danger"
           aria-label="Close"
-          title="Close"
+          data-tip="Close"
           onClick={() => void windowControls.close().catch(() => {})}
         >
           <span className="tb-glyph">✕</span>
@@ -199,7 +199,9 @@ function Status({
     <div className={`tb-status ${tone}`} role="status" aria-live="polite">
       {spinning ? <span className="tb-spinner" aria-hidden /> : null}
       <span className="tb-status-text">{text}</span>
-      {detail ? <span className="tb-status-detail">{detail}</span> : null}
+      {detail ? <span className="tb-status-detail" data-tip-overflow="">
+          {detail}
+        </span> : null}
       {tone === "bad" ? (
         <button
           className="link"
@@ -242,7 +244,9 @@ function Menu({ onChoose }: { onChoose: (a: PaletteAction) => void }) {
                 role="menuitem"
                 onClick={() => onChoose(a)}
               >
-                <span className="tb-menu-label">{a.label}</span>
+                <span className="tb-menu-label" data-tip-overflow="">
+                  {a.label}
+                </span>
                 <span className="tb-menu-hint">{a.hint ?? ""}</span>
               </button>
             );

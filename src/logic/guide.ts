@@ -4,6 +4,7 @@
 // browser — see src/__checks__/guide.test.mjs.
 
 import type { ProgrammeDto } from "../types";
+import type { WheelLike } from "./wheel";
 
 export const HOUR = 3600;
 
@@ -65,6 +66,162 @@ export function windowAt(anchor: number, hours: number): TimeWindow {
 export function shiftWindow(win: TimeWindow, hours: number): TimeWindow {
   const by = hours * HOUR;
   return { from: win.from + by, to: win.to + by };
+}
+
+// ------------------------------------------------------- scrolling in time
+//
+// The guide's horizontal position is a number of seconds, not a scrollLeft.
+// There is no wide strip of programmes being slid under a viewport: the
+// window is recomputed from the offset and everything in it — ticks, blocks,
+// the now-line — is placed by the same xForTime() on the same render, so the
+// ruler and the rows cannot drift apart, and only what is on screen is ever
+// in the DOM however far the guide can reach.
+//
+// The offset is measured from `anchor`, the half hour the clock is in (the
+// left edge windowAt() gives). Zero means "follow now", which is what the
+// guide opens on. Anything else is a place somebody scrolled to, and must
+// stay put when the clock rolls over the half hour — see rebaseOffset().
+
+/** How far back the guide reaches. Catchup archives are usually a day to a
+ *  week deep, but the XMLTV providers serve typically carries a day of
+ *  history, and scrolling further would mostly be scrolling through "no
+ *  guide data". A day covers "what was on last night", which is what
+ *  someone scrolling back is after; anything older is a search, not a
+ *  scroll. */
+export const GUIDE_PAST_HOURS = 24;
+/** How far ahead. Panel guides run two to seven days out, but past two days
+ *  the listings are placeholders as often as not, and the far edge should be
+ *  reachable with a few flicks rather than a minute of swiping. */
+export const GUIDE_FUTURE_HOURS = 48;
+
+/** The half hour the clock is in: where an offset of zero starts. */
+export const anchorFor = (now: number): number => Math.floor(now / HALF_HOUR) * HALF_HOUR;
+
+/** Keep an offset inside the reach above, for a window `hours` wide. The far
+ *  edge clamps the window's right side, not its left, so the last screen is
+ *  a full screen rather than one sliding off into nothing. Not rounded: a
+ *  pixel is some nine-odd seconds, and rounding each of a touchpad's many
+ *  one-pixel events would leave the programmes trailing the fingers. */
+export function clampOffset(offset: number, hours: number): number {
+  const lo = -GUIDE_PAST_HOURS * HOUR;
+  const hi = Math.max(lo, GUIDE_FUTURE_HOURS * HOUR - clampHours(hours) * HOUR);
+  return Math.min(hi, Math.max(lo, offset));
+}
+
+/** Carry an offset across a change of anchor. Without this, the moment the
+ *  clock passed :00 or :30 a guide scrolled back to last night would jump
+ *  half an hour under the reader's eyes. Following now (zero) keeps
+ *  following; an unknown previous anchor has nothing to correct. */
+export function rebaseOffset(
+  offset: number,
+  from: number | null,
+  to: number,
+  hours: number,
+): number {
+  if (offset === 0 || from === null || from === to) return offset;
+  return clampOffset(offset - (to - from), hours);
+}
+
+/** The window on screen, for an offset from the clock's anchor. */
+export function guideWindow(now: number, hours: number, offset: number): TimeWindow {
+  return shiftWindow(windowAt(now, hours), clampOffset(offset, hours) / HOUR);
+}
+
+/** Whether the window shows now — which is what the "Now" button lights up
+ *  for, rather than for an offset of exactly zero: scrolled ten minutes
+ *  sideways, now is still on screen and the button should say so. */
+export const showsNow = (now: number, win: TimeWindow): boolean =>
+  now >= win.from && now < win.to;
+
+/** The horizontal part of a wheel event, in pixels, or null if it is not the
+ *  guide's to take.
+ *
+ *  Three gestures mean sideways: a touchpad swipe or a tilt wheel (deltaX),
+ *  and Shift with an ordinary wheel. Some engines already turn Shift+wheel
+ *  into deltaX and some leave it in deltaY, so Shift takes whichever is set.
+ *  An unshifted gesture is sideways only if it is mostly sideways, which is
+ *  exactly the case the page's vertical wheel handling (logic/wheel.ts)
+ *  declines, so the two never both act on one event: a diagonal swipe moves
+ *  one axis, never both. Ctrl and Meta are zoom, and left alone. */
+export function horizontalPixels(
+  e: Pick<WheelLike, "deltaX" | "deltaY" | "deltaMode" | "ctrlKey" | "metaKey" | "shiftKey">,
+  pageWidth: number,
+): number | null {
+  if (e.ctrlKey || e.metaKey) return null;
+  let d: number;
+  if (e.shiftKey) d = e.deltaX !== 0 ? e.deltaX : e.deltaY;
+  else if (e.deltaX !== 0 && Math.abs(e.deltaX) > Math.abs(e.deltaY)) d = e.deltaX;
+  else return null;
+  if (d === 0) return null;
+  // Lines and pages with the sizes wheel.ts uses; WebKitGTK sends pixels.
+  if (e.deltaMode === 1) return d * 40;
+  if (e.deltaMode === 2) return d * pageWidth;
+  return d;
+}
+
+/** Seconds for a horizontal movement of `px` on a track `width` wide showing
+ *  `hours`: the axis's own scale, so a swipe moves the programmes exactly as
+ *  far as the fingers went. */
+export function secondsForPixels(px: number, hours: number, width: number): number {
+  if (!(width > 0)) return 0;
+  return (px * clampHours(hours) * HOUR) / width;
+}
+
+// ------------------------------------------------------- fetching in chunks
+//
+// Programme data is asked for in fixed, clock-aligned chunks rather than for
+// the window on screen. A window that moves by the pixel would otherwise be
+// a new question every frame; a chunk only changes when the scroll crosses
+// into the next one, and what was fetched for it stays good as long as the
+// guide is near it.
+
+/** Six hours: a whole screen at the widest setting fits in two chunks, and a
+ *  day of scrolling is four requests per screen of rows. */
+export const GUIDE_CHUNK = 6 * HOUR;
+
+/** The chunks (by start) covering the window plus `margin` seconds either
+ *  side — the margin is prefetch, so a swipe arrives at programmes already
+ *  loaded rather than at a shimmer. */
+export function chunksFor(win: TimeWindow, margin = 0, chunk = GUIDE_CHUNK): number[] {
+  if (!(chunk > 0) || !(win.to > win.from)) return [];
+  const first = Math.floor((win.from - margin) / chunk) * chunk;
+  const out: number[] = [];
+  for (let c = first; c < win.to + margin; c += chunk) out.push(c);
+  return out;
+}
+
+/** One row's programmes from several chunks, as the window will draw them:
+ *  only those overlapping the window, each once, in order. A programme that
+ *  straddles a chunk boundary comes back from both requests, and the guide
+ *  keys blocks by start time, so duplicates are dropped by start. */
+export function visibleProgrammes(
+  lists: readonly (readonly ProgrammeDto[])[],
+  win: TimeWindow,
+): ProgrammeDto[] {
+  const byStart = new Map<number, ProgrammeDto>();
+  for (const list of lists) {
+    for (const p of list) {
+      if (Math.max(p.start, p.stop) <= win.from || p.start >= win.to) continue;
+      if (!byStart.has(p.start)) byStart.set(p.start, p);
+    }
+  }
+  return [...byStart.values()].sort((a, b) => a.start - b.start);
+}
+
+/** "Yesterday", "Tomorrow", a weekday, or nothing for today — so a header
+ *  reading 21:00–00:00 says which evening once the guide can reach two. By
+ *  calendar day in local time, rounded so a daylight-saving day of 23 or 25
+ *  hours still counts as one. */
+export function dayLabel(t: number, now: number): string {
+  const day = (s: number) => {
+    const d = new Date(s * 1000);
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  };
+  const diff = Math.round((day(t) - day(now)) / 86_400_000);
+  if (diff === 0) return "";
+  if (diff === -1) return "Yesterday";
+  if (diff === 1) return "Tomorrow";
+  return new Date(t * 1000).toLocaleDateString(undefined, { weekday: "short" });
 }
 
 /** Pixels from the left of the track for an instant. Unclamped: callers that

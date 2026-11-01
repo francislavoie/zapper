@@ -164,7 +164,7 @@ export function VolumeSlider({ volume, muted, onVolume, onActivity }: VolumeSlid
 
     <span
       className={`vol-readout ${boosted && !muted ? "over" : ""}`}
-      title={boosted ? `Boosted to ${Math.round(volume)}% (above ${VOLUME_UNITY}% is software gain)` : undefined}
+      data-tip={boosted ? `Boosted to ${Math.round(volume)}% (above ${VOLUME_UNITY}% is software gain)` : undefined}
     >
       {label}
     </span>

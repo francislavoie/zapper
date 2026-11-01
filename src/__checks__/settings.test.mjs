@@ -10,9 +10,11 @@ import assert from "node:assert/strict";
 import {
   DEFAULT_SETTINGS,
   DEFAULT_SUBTITLE,
+  REWIND_BITRATES,
   REWIND_MAX,
   REWIND_MIN,
   clampSettings,
+  rewindSeconds,
   clampSubtitle,
   normaliseColor,
   planSave,
@@ -29,15 +31,32 @@ test("the defaults are the ones the contract documents", () => {
   assert.equal(DEFAULT_SETTINGS.subtitle.backdrop, "background");
   assert.equal(DEFAULT_SETTINGS.subtitle.backdropOpacity, 0.25);
   assert.equal(DEFAULT_SETTINGS.guideHours, 3);
-  assert.ok(DEFAULT_SETTINGS.rewindMinutes >= REWIND_MIN);
-  assert.ok(DEFAULT_SETTINGS.rewindMinutes <= REWIND_MAX);
+  assert.ok(DEFAULT_SETTINGS.rewindMb >= REWIND_MIN);
+  assert.ok(DEFAULT_SETTINGS.rewindMb <= REWIND_MAX);
 });
 
-test("rewind minutes are clamped to the slider's range, whole minutes only", () => {
-  assert.equal(clampSettings(settings({ rewindMinutes: 0 })).rewindMinutes, 1);
-  assert.equal(clampSettings(settings({ rewindMinutes: 900 })).rewindMinutes, 15);
-  assert.equal(clampSettings(settings({ rewindMinutes: 7.4 })).rewindMinutes, 7);
-  assert.equal(clampSettings(settings({ rewindMinutes: NaN })).rewindMinutes, 1);
+test("the rewind buffer is clamped to the slider's range, whole megabytes", () => {
+  assert.equal(clampSettings(settings({ rewindMb: 0 })).rewindMb, REWIND_MIN);
+  assert.equal(clampSettings(settings({ rewindMb: 99_999 })).rewindMb, REWIND_MAX);
+  // A value migrated from the old minutes setting is kept exactly, not
+  // snapped to the slider's step.
+  assert.equal(clampSettings(settings({ rewindMb: 546 })).rewindMb, 546);
+  assert.equal(clampSettings(settings({ rewindMb: 700.4 })).rewindMb, 700);
+  assert.equal(clampSettings(settings({ rewindMb: NaN })).rewindMb, REWIND_MIN);
+});
+
+test("what a buffer buys depends on the bitrate, and the arithmetic is bytes", () => {
+  // 546 MB at 6.8 Mbps is the 640 s that "4 minutes" turned out to hold.
+  assert.equal(Math.round(rewindSeconds(546, 6.8)), 642);
+  assert.equal(rewindSeconds(512, 8), 512);
+  // The same buffer lasts three times as long at a third of the rate.
+  assert.equal(rewindSeconds(300, 3), 3 * rewindSeconds(300, 9));
+  assert.equal(rewindSeconds(0, 8), 0);
+  assert.equal(rewindSeconds(512, 0), 0);
+  // Every listed bitrate is a positive, distinct, ascending figure.
+  const rates = REWIND_BITRATES.map((b) => b.mbps);
+  assert.deepEqual(rates, [...rates].sort((a, b) => a - b));
+  assert.ok(rates.every((r) => r > 0));
 });
 
 test("guide hours and sync interval are bounded too", () => {
@@ -70,7 +89,7 @@ test("subtitle numbers are clamped and the font never goes empty", () => {
 
 test("only a playback change costs applyPlaybackSettings", () => {
   const before = DEFAULT_SETTINGS;
-  assert.deepEqual(planSave(before, settings({ rewindMinutes: 9 })), {
+  assert.deepEqual(planSave(before, settings({ rewindMb: 900 })), {
     applyPlayback: true,
     applySubtitle: false,
   });

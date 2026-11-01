@@ -4,7 +4,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { backend } from "../backend";
-import { clock, hhmm } from "../logic/format";
+import { duration, hhmm } from "../logic/format";
 import {
   behindLiveAt,
   catchupRequest,
@@ -138,7 +138,7 @@ export function Scrubber({ player, channel, onPin }: ScrubberProps) {
               <img className="scrub-thumb" src={preview.dataUrl} alt="" draggable={false} />
             ) : null}
             <span>
-              {hhmm(hoverTime)} · {clock(Math.max(0, now - hoverTime))} back ·{" "}
+              {hhmm(hoverTime)} · {duration(Math.max(0, now - hoverTime))} back ·{" "}
               {hoverCost === "reconnect" ? "reconnects" : "instant"}
             </span>
           </div>
@@ -150,7 +150,7 @@ export function Scrubber({ player, channel, onPin }: ScrubberProps) {
           <>
             <span>{channel?.archiveDays}-day archive · seek reconnects</span>
             <span>
-              buffer {clock(player.bufferedBack)} · instant
+              buffer {duration(player.bufferedBack)} · instant
             </span>
           </>
         ) : (
@@ -158,7 +158,7 @@ export function Scrubber({ player, channel, onPin }: ScrubberProps) {
             <span>
               local buffer only{channel ? " — no catchup on this channel" : ""}
             </span>
-            <span>{clock(player.bufferedBack)} of scrollback</span>
+            <span>{duration(player.bufferedBack)} of scrollback</span>
           </>
         )}
       </div>

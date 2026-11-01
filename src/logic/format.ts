@@ -58,16 +58,52 @@ export function clock(seconds: number): string {
     : `${mm}:${String(sec).padStart(2, "0")}`;
 }
 
-/** "-1:23" behind live, "LIVE" at the edge. */
-export function liveOffset(behindLive: number): string {
-  return behindLive < 1 ? "LIVE" : `-${clock(behindLive)}`;
+/** A span of time in words: "42 s", "4 min", "10 min 40 s", "1 h 05 min".
+ *
+ *  For durations someone reads rather than a position someone scrubs to —
+ *  "640 s" makes the reader do the division, and "10:40" reads as a time of
+ *  day as often as a length. Rounded to the second under an hour and to the
+ *  minute past it, where seconds stop meaning anything. Negative and
+ *  non-finite clamp to zero. */
+export function duration(seconds: number): string {
+  // Compact — "11m12s", not "11 min 12 s" — because these sit in narrow
+  // readouts and rows, and the unit letters are what keep it from reading
+  // as a clock, which "11:12" did.
+  const s = Number.isFinite(seconds) ? Math.max(0, Math.round(seconds)) : 0;
+  if (s < 60) return `${s}s`;
+  if (s < 3600) {
+    const m = Math.floor(s / 60);
+    const rest = s % 60;
+    return rest === 0 ? `${m}m` : `${m}m${String(rest).padStart(2, "0")}s`;
+  }
+  const totalMin = Math.round(s / 60);
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  return m === 0 ? `${h}h` : `${h}h${String(m).padStart(2, "0")}m`;
 }
 
-/** The gap, said the way a person would: seconds under a minute, clock time
- *  past it. */
+/** A span that is usually small but can run to minutes: `places` decimals
+ *  under a minute, where the fraction still means something, and words
+ *  ("10 min 40 s") from there up. */
+export function span(s: number | null | undefined, places = 1): string {
+  if (s === null || s === undefined || !Number.isFinite(s)) return "—";
+  return s < 59.5 ? `${s.toFixed(places)}s` : duration(s);
+}
+
+/** "Live" at the edge, "-1m05s" behind it.
+ *
+ *  Takes the backend's `atLiveEdge`, not a threshold of its own. Deciding
+ *  from `behindLive` here flickered between "-0:02" and "LIVE" as the
+ *  seekable end sawtoothed, which the controls bar had already stopped doing
+ *  by using the backend's hysteresis — and since live now sits a few seconds
+ *  back on purpose, a bare threshold would never say "Live" at all. */
+export function liveOffset(atLiveEdge: boolean, behindLive: number): string {
+  return atLiveEdge ? "Live" : `-${duration(behindLive)}`;
+}
+
+/** The gap, said the way a person would: "4s", "3m05s". */
 export function behindGap(behindLive: number): string {
-  const s = Math.max(0, Math.round(behindLive));
-  return s < 60 ? `${s}s` : clock(s);
+  return duration(behindLive);
 }
 
 export interface LiveState {

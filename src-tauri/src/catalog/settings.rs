@@ -38,9 +38,34 @@ fn overlay(base: &mut serde_json::Value, stored: &serde_json::Value) {
     }
 }
 
+/// The bitrate the old minutes setting was converted at (18.2 Mbps).
+const LEGACY_REWIND_MB_PER_MINUTE: f64 = 60.0 * 18_200_000.0 / 8.0 / 1_000_000.0;
+
+/// Carries a rewind saved in minutes over to megabytes.
+///
+/// Converted at the rate the old setting was applied at, so the budget mpv
+/// holds is exactly what it was before the upgrade: someone who had chosen
+/// four minutes keeps the 546 MB they actually had, rather than a new
+/// default. A stored `rewindMb` always wins.
+fn migrate_rewind(stored: &mut serde_json::Value) {
+    let Some(map) = stored.as_object_mut() else {
+        return;
+    };
+    if map.contains_key("rewindMb") {
+        return;
+    }
+    if let Some(minutes) = map.get("rewindMinutes").and_then(|v| v.as_f64()) {
+        if minutes.is_finite() && minutes > 0.0 {
+            let mb = (minutes * LEGACY_REWIND_MB_PER_MINUTE).round() as u64;
+            map.insert("rewindMb".into(), serde_json::json!(mb));
+        }
+    }
+}
+
 /// Parses a stored blob, or `None` if nothing usable can be made of it.
 fn parse(raw: &str) -> Option<SettingsDto> {
-    let stored: serde_json::Value = serde_json::from_str(raw).ok()?;
+    let mut stored: serde_json::Value = serde_json::from_str(raw).ok()?;
+    migrate_rewind(&mut stored);
     let mut merged = serde_json::to_value(SettingsDto::default()).ok()?;
     overlay(&mut merged, &stored);
     serde_json::from_value(merged).ok()
@@ -92,7 +117,7 @@ mod tests {
     fn an_empty_database_reads_as_defaults() {
         let c = open_in_memory().unwrap();
         let s = load(&c);
-        assert_eq!(s.rewind_minutes, SettingsDto::default().rewind_minutes);
+        assert_eq!(s.rewind_mb, SettingsDto::default().rewind_mb);
         assert_eq!(s.guide_hours, 3);
         assert!(s.hardware_decode);
     }
@@ -101,7 +126,7 @@ mod tests {
     fn settings_round_trip() {
         let c = open_in_memory().unwrap();
         let want = SettingsDto {
-            rewind_minutes: 12.5,
+            rewind_mb: 1280,
             hardware_decode: false,
             tone_map_hdr: false,
             guide_hours: 6,
@@ -122,7 +147,7 @@ mod tests {
 
         let got = load(&c);
         assert!(!got.check_for_updates);
-        assert_eq!(got.rewind_minutes, 12.5);
+        assert_eq!(got.rewind_mb, 1280);
         assert!(!got.hardware_decode);
         assert!(!got.tone_map_hdr);
         assert_eq!(got.guide_hours, 6);
@@ -198,15 +223,33 @@ mod tests {
         // What a build from before `syncIntervalHours` existed would have
         // written. It must not throw away the settings it does carry.
         let c = open_in_memory().unwrap();
-        write_raw(&c, r#"{"rewindMinutes":9.0,"guideHours":5}"#);
+        write_raw(&c, r#"{"rewindMb":900,"guideHours":5}"#);
         let s = load(&c);
-        assert_eq!(s.rewind_minutes, 9.0);
+        assert_eq!(s.rewind_mb, 900);
         assert_eq!(s.guide_hours, 5);
         assert_eq!(
             s.sync_interval_hours,
             SettingsDto::default().sync_interval_hours
         );
         assert_eq!(s.subtitle.font, SubtitleStyleDto::default().font);
+    }
+
+    #[test]
+    fn a_rewind_saved_in_minutes_keeps_the_bytes_it_had() {
+        // Four minutes was applied as 546 MB; the upgrade must not change
+        // what mpv holds.
+        let c = open_in_memory().unwrap();
+        write_raw(&c, r#"{"rewindMinutes":4.0,"guideHours":5}"#);
+        let s = load(&c);
+        assert_eq!(s.rewind_mb, 546);
+        assert_eq!(s.guide_hours, 5);
+    }
+
+    #[test]
+    fn a_saved_megabyte_figure_wins_over_a_leftover_minutes_one() {
+        let c = open_in_memory().unwrap();
+        write_raw(&c, r#"{"rewindMinutes":4.0,"rewindMb":256}"#);
+        assert_eq!(load(&c).rewind_mb, 256);
     }
 
     #[test]

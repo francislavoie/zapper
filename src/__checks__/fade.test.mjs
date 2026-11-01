@@ -173,9 +173,9 @@ test("clock and live offset read the way a person would say them", () => {
   assert.equal(clock(75), "1:15");
   assert.equal(clock(3661), "1:01:01");
   assert.equal(clock(-5), "0:00");
-  assert.equal(liveOffset(0), "LIVE");
-  assert.equal(liveOffset(0.4), "LIVE");
-  assert.equal(liveOffset(90), "-1:30");
+  assert.equal(liveOffset(true, 4.2), "Live");
+  assert.equal(liveOffset(true, 9), "Live", "the backend's live flag decides, not a threshold");
+  assert.equal(liveOffset(false, 90), "-1m30s");
 });
 
 test("programme progress stays inside 0-1", () => {

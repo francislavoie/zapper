@@ -31,6 +31,10 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
           // A context menu is always the most recent thing on screen: it
           // cannot be opened from behind anything.
           dispatch({ type: "favouriteMenu", menu: null });
+        } else if (state.categoryMenu) {
+          // The same, for the category rail's. Only one of the two can be
+          // open: each closes on any right-click outside itself.
+          dispatch({ type: "categoryMenu", menu: null });
         } else if (state.menuOpen) {
           dispatch({ type: "menu", open: false });
         } else if (state.aboutOpen) {
@@ -153,5 +157,6 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
     state.aboutOpen,
     state.updateOpen,
     state.favouriteMenu,
+    state.categoryMenu,
   ]);
 }

@@ -9,15 +9,32 @@
 // video surface is. So the rail windows itself the same way the
 // channel list does, through the same arithmetic, and the "All channels"
 // entry is simply row zero rather than a special case outside the window.
+//
+// Some of those categories are the only ones a given viewer ever opens, so
+// they can be pinned: drawn straight under "All channels", above a hairline,
+// in the order they were pinned. The rest can be re-sorted from the button
+// beside the filter box. What goes where is worked out in
+// logic/categoryOrder.ts; this component only draws it.
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { OVERSCAN, ROW_HEIGHT, computeWindow } from "../logic/virtual";
+import { SORT_LABEL, nextSort, railRows, sortTip } from "../logic/categoryOrder";
 import { loadSession, saveSession } from "../session";
 import { loadCategories } from "../actions";
 import { ALL_CATEGORIES, useApp, useDispatch } from "../store";
+import { ContextMenu } from "./ContextMenu";
+import { Pin, SortOrder } from "./icons";
 
 export function CategoryRail() {
-  const { categories, categoryId, categoryFilter, sync } = useApp();
+  const {
+    categories,
+    categoryId,
+    categoryFilter,
+    categoryPins,
+    categorySort,
+    categoryMenu,
+    sync,
+  } = useApp();
   const dispatch = useDispatch();
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const restoreTo = useRef(loadSession().railScrollTop);
@@ -50,13 +67,6 @@ export function CategoryRail() {
     setScrollTop(top);
   }, [categories.status]);
 
-  const list = useMemo(() => {
-    if (categories.status !== "ready") return [];
-    const q = categoryFilter.trim().toLowerCase();
-    if (q === "") return categories.data;
-    return categories.data.filter((c) => c.name.toLowerCase().includes(q));
-  }, [categories, categoryFilter]);
-
   const total =
     categories.status === "ready"
       ? categories.data.reduce((n, c) => n + c.channelCount, 0)
@@ -64,21 +74,31 @@ export function CategoryRail() {
 
   /** Row zero is "All channels". Making it part of the list rather than a
    *  sibling above it means one set of offsets, and the window arithmetic
-   *  does not need to know it exists. */
+   *  does not need to know it exists. The pinned block is the same: ordinary
+   *  rows at ordinary offsets, with the divider drawn inside the last one. */
   const rows = useMemo(
-    () => [
-      { id: ALL_CATEGORIES, name: "All channels", count: total, title: undefined as string | undefined },
-      ...list.map((c) => ({
-        id: c.id,
-        name: c.name,
-        count: c.channelCount,
-        title: c.name as string | undefined,
-      })),
-    ],
-    [list, total],
+    () =>
+      railRows(
+        { id: ALL_CATEGORIES, name: "All channels", count: total },
+        categories.status === "ready" ? categories.data : [],
+        { pins: categoryPins, sort: categorySort, filter: categoryFilter },
+      ),
+    [categories, total, categoryPins, categorySort, categoryFilter],
   );
 
   const win = computeWindow(scrollTop, height, ROW_HEIGHT, rows.length, OVERSCAN);
+
+  const closeMenu = useCallback(() => dispatch({ type: "categoryMenu", menu: null }), [dispatch]);
+
+  /** A new order is a different list, and the offset the old one was
+   *  scrolled to lands somewhere arbitrary in it; the top is the only place
+   *  in the new order that means anything. */
+  const cycleSort = () => {
+    dispatch({ type: "categorySort", sort: nextSort(categorySort) });
+    const el = scrollerRef.current;
+    if (el) el.scrollTop = 0;
+    setScrollTop(0);
+  };
 
   // The `.rail` column itself, and the tab bar above this, belong to Rail:
   // this component is one of the two lists that can be in it.
@@ -98,6 +118,20 @@ export function CategoryRail() {
             }
           }}
         />
+        {/* Beside the box it orders the results of, and exactly as tall as
+            it — see .rail-sort — so this row stays level with the channel
+            list's search row. One button that cycles rather than a dropdown:
+            three orders is few enough to step through, and a click is
+            cheaper than opening a list to pick from. */}
+        <button
+          className="rail-sort"
+          aria-label={`Sort: ${SORT_LABEL[categorySort].long}`}
+          data-tip={sortTip(categorySort)}
+          onClick={cycleSort}
+        >
+          <SortOrder className="rail-sort-i" />
+          <span className="rail-sort-label">{SORT_LABEL[categorySort].short}</span>
+        </button>
         {/* Settings moved to the toolbar's menu; the gear that was here made
             the rail's head a second, competing command surface. */}
       </div>
@@ -133,7 +167,8 @@ export function CategoryRail() {
           </div>
         ) : null}
 
-        {categories.status === "ready" && list.length === 0 ? (
+        {/* Only "All channels" left: nothing matched, pinned or not. */}
+        {categories.status === "ready" && rows.length === 1 ? (
           <div className="pane-note">
             {categories.data.length === 0
               ? "No categories yet. Sync has not run."
@@ -144,23 +179,97 @@ export function CategoryRail() {
         <div className="rail-spacer" style={{ height: win.totalHeight }}>
           {rows.slice(win.start, win.end).map((r, i) => {
             const index = win.start + i;
+            // "All channels" is not a category and cannot be pinned.
+            const pinnable = r.id !== ALL_CATEGORIES;
             return (
-              <button
+              // A box holding two buttons rather than one button, because
+              // the pin is a second thing to press and HTML does not allow a
+              // button inside a button.
+              <div
                 key={r.id}
-                className={`rail-item ${r.id === categoryId ? "sel" : ""}`}
-                title={r.title}
+                className={`rail-row ${r.pinned ? "pinned" : ""} ${r.pinEnd ? "pin-end" : ""}`}
                 style={{ top: index * ROW_HEIGHT }}
-                onClick={() => dispatch({ type: "selectCategory", id: r.id })}
               >
-                <span className="rail-name">{r.name}</span>
-                <span className="rail-count">{r.count ? r.count.toLocaleString() : ""}</span>
-              </button>
+                <button
+                  className={`rail-item ${r.id === categoryId ? "sel" : ""}`}
+                  onClick={() => dispatch({ type: "selectCategory", id: r.id })}
+                  onContextMenu={(e) => {
+                    if (!pinnable) return;
+                    // As in the favourites: WebKit's own menu is suppressed
+                    // at the GTK level, so this is for the browser mock.
+                    e.preventDefault();
+                    dispatch({
+                      type: "categoryMenu",
+                      menu: { id: r.id, name: r.name, x: e.clientX, y: e.clientY, keyboard: false },
+                    });
+                  }}
+                  onKeyDown={(e) => {
+                    // The keyboard's way to the same menu, opened under the
+                    // row since there is no pointer to open it at.
+                    if (!pinnable) return;
+                    if (e.key !== "ContextMenu" && !(e.shiftKey && e.key === "F10")) return;
+                    e.preventDefault();
+                    const box = e.currentTarget.getBoundingClientRect();
+                    dispatch({
+                      type: "categoryMenu",
+                      menu: { id: r.id, name: r.name, x: box.left + 12, y: box.bottom, keyboard: true },
+                    });
+                  }}
+                >
+                  {r.pinned ? <Pin className="rail-pinned" filled /> : null}
+                  <span className="rail-name" data-tip-overflow="">
+                    {r.name}
+                  </span>
+                  <span className="rail-count">{r.count ? r.count.toLocaleString() : ""}</span>
+                </button>
+                {pinnable ? (
+                  // Over the count, and only while the row is hovered or the
+                  // keyboard is on it: the count is what the row says the
+                  // rest of the time. Always in the tab order, so pinning
+                  // does not need a pointer.
+                  <button
+                    className="rail-pin"
+                    aria-label={r.pinned ? `Unpin ${r.name}` : `Pin ${r.name} to the top`}
+                    data-tip={r.pinned ? "Unpin" : "Pin to the top"}
+                    onClick={() => dispatch({ type: "categoryPin", id: r.id, pinned: !r.pinned })}
+                  >
+                    <Pin className="rail-pin-i" filled={r.pinned} />
+                  </button>
+                ) : null}
+              </div>
             );
           })}
         </div>
       </div>
+
+      {categoryMenu ? (
+        <ContextMenu
+          x={categoryMenu.x}
+          y={categoryMenu.y}
+          heading={categoryMenu.name}
+          onClose={closeMenu}
+          takeFocus={categoryMenu.keyboard}
+        >
+          <button
+            className="tb-menu-item"
+            role="menuitem"
+            onClick={() =>
+              dispatch({
+                type: "categoryPin",
+                id: categoryMenu.id,
+                pinned: !categoryPins.includes(categoryMenu.id),
+              })
+            }
+          >
+            <span className="tb-menu-label">
+              {categoryPins.includes(categoryMenu.id) ? "Unpin from the top" : "Pin to the top"}
+            </span>
+          </button>
+          <div className="tb-menu-foot">
+            Pinned categories stay above the rest, in the order you pinned them.
+          </div>
+        </ContextMenu>
+      ) : null}
     </>
   );
 }
-
-

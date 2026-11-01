@@ -185,10 +185,15 @@ impl Default for SubtitleStyleDto {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct SettingsDto {
-    /// How far back live playback can be rewound. Stored as minutes because
-    /// that is the question a person actually asks; converted to the byte
-    /// budget mpv wants.
-    pub rewind_minutes: f64,
+    /// How much live video is kept for rewinding, in megabytes (10^6 bytes).
+    ///
+    /// Not minutes: a time would have to be converted to mpv's byte budget at
+    /// one assumed bitrate, so "4 minutes" would hold nearly eleven on a
+    /// 6.8 Mbps channel and under four on a 4K one. mpv's budget is bytes and
+    /// nothing else, so the setting says what it is, and the settings pane
+    /// shows what that buys at common bitrates instead of promising a time it
+    /// cannot keep.
+    pub rewind_mb: u32,
     pub hardware_decode: bool,
     /// Tone-map HDR down to SDR. Off would leave HDR washed out on an SDR
     /// panel, so it defaults on.
@@ -212,7 +217,7 @@ pub struct SettingsDto {
 impl Default for SettingsDto {
     fn default() -> Self {
         Self {
-            rewind_minutes: 4.0,
+            rewind_mb: 512,
             hardware_decode: true,
             tone_map_hdr: true,
             guide_hours: 3,
@@ -433,6 +438,10 @@ pub struct StatsDto {
     /// asking, so the graphs are already drawn when the panel opens — see
     /// `crate::ipc::health`.
     pub history: Vec<crate::ipc::health::SampleDto>,
+    /// Times playback stopped to wait for data since the stream started. A
+    /// stall drops no frames, so this is the only number that counts the
+    /// stutter a viewer notices most.
+    pub stalls: i64,
 }
 
 /// The Xtream account, as much of it as the interface may see.

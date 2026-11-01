@@ -7,10 +7,13 @@
 import { useEffect, useRef, useState } from "react";
 import { backend } from "../backend";
 import { useSettings, type SettingsControl } from "../hooks/useSettings";
-import { clampVolume } from "../logic/format";
+import { clampVolume, duration } from "../logic/format";
 import {
+  REWIND_BITRATES,
   REWIND_MAX,
   REWIND_MIN,
+  REWIND_STEP,
+  rewindSeconds,
   SUB_SIZE_MAX,
   SUB_SIZE_MIN,
   SYNC_MAX,
@@ -105,18 +108,22 @@ export function SettingsModal() {
             <>
               <div className="row-field">
                 <label htmlFor="set-rewind">
-                  Live rewind — {s.settings.rewindMinutes} min
+                  Rewind buffer — {s.settings.rewindMb.toLocaleString()} MB
                 </label>
                 <input
                   id="set-rewind"
                   type="range"
                   min={REWIND_MIN}
                   max={REWIND_MAX}
-                  step={1}
-                  value={s.settings.rewindMinutes}
-                  onChange={(e) => s.patch({ rewindMinutes: Number(e.target.value) })}
+                  step={REWIND_STEP}
+                  value={s.settings.rewindMb}
+                  onChange={(e) => s.patch({ rewindMb: Number(e.target.value) })}
                 />
               </div>
+              <RewindEstimates
+                megabytes={s.settings.rewindMb}
+                playing={player.state === "playing" || player.state === "paused"}
+              />
               <div className="row-field">
                 <label htmlFor="set-hwdec">Hardware decode</label>
                 <button
@@ -140,9 +147,10 @@ export function SettingsModal() {
                 </button>
               </div>
               <p>
-                Rewind is minutes of live scrollback, converted to mpv’s byte
-                budget behind the scenes; longer costs memory. Turning tone
-                mapping off leaves HDR channels washed out on an SDR panel.
+                The rewind buffer is memory set aside for live scrollback.
+                How far back it reaches depends on the channel’s bitrate, so
+                the times above are estimates. Turning tone mapping off
+                leaves HDR channels washed out on an SDR panel.
               </p>
             </>
           ) : null}
@@ -190,7 +198,7 @@ export function SettingsModal() {
                       key={c}
                       className={`swatch ${s.settings.subtitle.color === c ? "sel" : ""}`}
                       style={{ background: c }}
-                      title={c}
+                      data-tip={c}
                       aria-label={c}
                       onClick={() => s.patchSubtitle({ color: c })}
                     />
@@ -212,7 +220,7 @@ export function SettingsModal() {
                     <button
                       key={b.id}
                       className={`ctl ${s.settings.subtitle.backdrop === b.id ? "on" : ""}`}
-                      title={b.note}
+                      data-tip={b.note}
                       onClick={() => s.patchSubtitle({ backdrop: b.id })}
                     >
                       {b.label}
@@ -505,6 +513,53 @@ function Status({
         </div>
       ) : null}
     </>
+  );
+}
+
+/** What the rewind buffer buys, in time, at bitrates people recognise — and
+ *  at the channel playing now, measured, which is the one that matters.
+ *
+ *  The setting is megabytes because that is all mpv's buffer understands;
+ *  saying "4 minutes" instead was a promise it kept only at one bitrate. */
+function RewindEstimates({ megabytes, playing }: { megabytes: number; playing: boolean }) {
+  const [channelMbps, setChannelMbps] = useState<number | null>(null);
+  useEffect(() => {
+    if (!playing) {
+      setChannelMbps(null);
+      return;
+    }
+    let live = true;
+    void backend
+      .playerStats()
+      .then((st) => {
+        const bps = (st.videoBitrate ?? 0) + (st.audioBitrate ?? 0);
+        if (live) setChannelMbps(bps > 0 ? bps / 1_000_000 : null);
+      })
+      .catch(() => {
+        // The common bitrates below still answer the question.
+      });
+    return () => {
+      live = false;
+    };
+  }, [playing]);
+
+  return (
+    <dl className="rewind-estimates" aria-label="How far back the buffer reaches">
+      {channelMbps !== null ? (
+        <div className="this-channel">
+          <dt>This channel</dt>
+          <dd className="rate">{channelMbps.toFixed(1)} Mbps</dd>
+          <dd>{duration(rewindSeconds(megabytes, channelMbps))}</dd>
+        </div>
+      ) : null}
+      {REWIND_BITRATES.map((b) => (
+        <div key={b.label}>
+          <dt>{b.label}</dt>
+          <dd className="rate">{b.mbps} Mbps</dd>
+          <dd>{duration(rewindSeconds(megabytes, b.mbps))}</dd>
+        </div>
+      ))}
+    </dl>
   );
 }
 

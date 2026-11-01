@@ -396,10 +396,10 @@ fn tick(app: &AppHandle, p: &Player) {
             let settled = m
                 .last_live_nudge
                 .is_none_or(|t| t.elapsed() >= LIVE_NUDGE_INTERVAL);
-            if m.drift_secs > MAX_DRIFT_SECS && settled && probe.behind_live > LIVE_EDGE_MARGIN {
+            if m.drift_secs > MAX_DRIFT_SECS && settled && probe.behind_live > LIVE_CUSHION + 1.0 {
                 m.last_live_nudge = Some(Instant::now());
                 m.drift_secs = 0.0;
-                let by = (probe.behind_live - LIVE_EDGE_MARGIN).max(0.0);
+                let by = (probe.behind_live - LIVE_CUSHION).max(0.0);
                 // Best-effort: failing to catch up is not a reason to fail a
                 // stream that is otherwise playing fine.
                 let _ = p.command("seek", &[&format!("{by:.3}"), "relative"]);
@@ -652,12 +652,21 @@ pub async fn seek_relative(app: AppHandle, seconds: f64) -> Result<(), String> {
     .await
 }
 
-/// How far short of the seekable end `seek_live` aims.
+/// How far behind the newest data "live" sits: where `seek_live` lands, the
+/// furthest a forward skip goes, and where the automatic catch-up aims.
 ///
-/// Small but not zero: the boundary itself moves between the read of
-/// `seekable-ranges` and the seek, and a target one frame past it is refused
-/// silently rather than clamped.
-const LIVE_EDGE_MARGIN: f64 = 0.5;
+/// Half a second — just enough not to aim past a boundary that moves while
+/// it is being read — is not enough: every jump to live stalls a few seconds
+/// later. A server does not deliver evenly: it goes quiet for a second
+/// or two and then sends what it owes in a burst, so half a second of video
+/// ahead of the playhead runs dry in the first quiet spell and mpv stops to
+/// refill. Measured with `player_check` against `fake_stream.py --gap-every
+/// 4` (1.5s gaps): at 0.5s, one stall in the fifteen seconds after reaching
+/// live, the buffer ahead drained to 0.0s; at this value, none.
+///
+/// Four seconds is a delay nobody watching live TV notices, and comfortably
+/// more than the gaps a server leaves.
+pub const LIVE_CUSHION: f64 = 4.0;
 
 /// How much playback time may be lost before the viewer is carried back to
 /// the live edge.
@@ -700,7 +709,10 @@ fn lost_since(previous: Option<f64>, now: Option<f64>, elapsed: f64) -> f64 {
 }
 
 /// Below this, playback is considered to have reached live.
-const LIVE_ENTER: f64 = 3.0;
+///
+/// Measured from the newest data, so it sits above [`LIVE_CUSHION`]: playback
+/// parked on the cushion is live, which is where `seek_live` puts it.
+const LIVE_ENTER: f64 = LIVE_CUSHION + 3.0;
 /// Above this, it is considered to have fallen behind.
 ///
 /// The gap between the two is the point. `behind_live` is measured against the
@@ -709,7 +721,7 @@ const LIVE_ENTER: f64 = 3.0;
 /// live. A single threshold makes the indicator flicker between "live" and a
 /// few seconds behind; two thresholds mean it only changes when something
 /// actually changed.
-const LIVE_EXIT: f64 = 8.0;
+const LIVE_EXIT: f64 = LIVE_CUSHION + 8.0;
 
 /// Deliberately takes the previous answer: without it there is no hysteresis,
 /// only a threshold.
@@ -741,7 +753,7 @@ pub async fn seek_live(app: AppHandle) -> Result<(), String> {
         // seek past the seekable end (the cache runs one to three seconds
         // beyond it) is ignored by mpv without an error: playback stays
         // exactly where it was.
-        let by = (probe.behind_live - LIVE_EDGE_MARGIN).max(0.0);
+        let by = (probe.behind_live - LIVE_CUSHION).max(0.0);
         match by > 0.05 {
             true => p.command("seek", &[&format!("{by:.3}"), "relative"]),
             false => Ok(()),
@@ -875,6 +887,7 @@ pub async fn player_stats(app: AppHandle) -> Result<crate::ipc::types::StatsDto,
             behind_live: probe.behind_live,
             buffered_back: probe.buffered_back,
             history: crate::ipc::health::samples(),
+            stalls: crate::ipc::health::stalls(),
         })
     })
     .await
@@ -896,12 +909,16 @@ pub async fn player_state() -> Result<PlayerStateDto, String> {
 /// Clamps a relative seek to what is actually buffered.
 ///
 /// Seeking past either end of the demuxer cache on a live stream drops the
-/// connection and reopens it, which this account cannot afford.
+/// connection and reopens it, which a single-connection account cannot afford.
+/// Forward, it stops at [`LIVE_CUSHION`] rather than the very edge: a skip
+/// that lands on the newest data has nothing ahead of it and stalls a few
+/// seconds later, exactly as a `seek_live` to the very edge would. Already on
+/// the cushion, a forward skip does nothing.
 fn clamp_seek(seconds: f64, buffered_back: f64, behind_live: f64) -> f64 {
     if seconds < 0.0 {
         seconds.max(-buffered_back)
     } else {
-        seconds.min(behind_live)
+        seconds.min((behind_live - LIVE_CUSHION).max(0.0))
     }
 }
 
@@ -1191,8 +1208,18 @@ mod tests {
     fn seeks_are_clamped_to_the_buffered_window() {
         assert_eq!(clamp_seek(-5.0, 60.0, 3.0), -5.0);
         assert_eq!(clamp_seek(-90.0, 60.0, 3.0), -60.0);
-        assert_eq!(clamp_seek(30.0, 60.0, 3.0), 3.0);
         assert_eq!(clamp_seek(-5.0, 0.0, 0.0), 0.0);
+    }
+
+    #[test]
+    fn a_forward_skip_stops_on_the_cushion_not_the_edge() {
+        // 20s behind: +5 is a full 5.
+        assert_eq!(clamp_seek(5.0, 60.0, 20.0), 5.0);
+        // 6s behind: only as far as the cushion, never onto the newest data.
+        assert_eq!(clamp_seek(5.0, 60.0, LIVE_CUSHION + 2.0), 2.0);
+        // Already on the cushion, or closer: nowhere to go.
+        assert_eq!(clamp_seek(5.0, 60.0, LIVE_CUSHION), 0.0);
+        assert_eq!(clamp_seek(5.0, 60.0, 1.0), 0.0);
     }
 
     #[test]
@@ -1471,12 +1498,9 @@ mod tests {
     }
 
     #[test]
-    fn the_rewind_budget_is_minutes_at_the_measured_bitrate() {
-        // 18.2 Mbps measured on a 1080p59.94 feed: a minute is 136.5 MB.
-        assert_eq!(rewind_bytes(1.0), 136_500_000);
-        // The default, which lands near the 512 MiB mpv is initialised with.
-        assert_eq!(rewind_bytes(4.0), 546_000_000);
-        assert_eq!(rewind_bytes(0.5), 68_250_000);
+    fn the_rewind_budget_is_the_megabytes_asked_for() {
+        assert_eq!(rewind_bytes(512), 512_000_000);
+        assert_eq!(rewind_bytes(546), 546_000_000);
     }
 
     #[test]
@@ -1485,16 +1509,14 @@ mod tests {
         // back buffer at all - and mpv then cannot seek back even the second
         // it already has, which reads as a broken player rather than a
         // setting.
-        assert_eq!(rewind_bytes(0.0), MIN_BACK_BYTES);
-        assert_eq!(rewind_bytes(-5.0), MIN_BACK_BYTES);
-        assert_eq!(rewind_bytes(f64::NAN), MIN_BACK_BYTES);
-        assert_eq!(rewind_bytes(0.000_001), MIN_BACK_BYTES);
+        assert_eq!(rewind_bytes(0), MIN_BACK_BYTES);
+        assert_eq!(rewind_bytes(1), MIN_BACK_BYTES);
     }
 
     #[test]
     fn an_absurd_rewind_is_capped_rather_than_swapping_the_machine() {
-        assert_eq!(rewind_bytes(100_000.0), MAX_BACK_BYTES);
-        assert_eq!(rewind_bytes(f64::INFINITY), MAX_BACK_BYTES);
+        assert_eq!(rewind_bytes(100_000), MAX_BACK_BYTES);
+        assert_eq!(rewind_bytes(u32::MAX), MAX_BACK_BYTES);
     }
 
     #[test]
@@ -1507,7 +1529,7 @@ mod tests {
     #[test]
     fn playback_settings_map_onto_mpvs_own_names() {
         let on = playback_properties(&SettingsDto {
-            rewind_minutes: 2.0,
+            rewind_mb: 273,
             hardware_decode: true,
             tone_map_hdr: true,
             ..Default::default()
@@ -1529,26 +1551,34 @@ mod tests {
 
     #[test]
     fn the_live_indicator_does_not_flicker_on_the_sawtooth() {
-        // behind_live oscillating in the 0-4s band is what normal live
-        // playback looks like; the answer must not change through it.
+        // Parked on the cushion, behind_live sawtooths a few seconds either
+        // side of it; that is normal live playback and the answer must not
+        // change through it.
+        let c = LIVE_CUSHION;
         let mut live = true;
-        for behind in [0.0, 3.4, 0.2, 4.0, 1.1, 3.9, 0.0] {
+        for behind in [c, c + 2.4, c - 1.8, c + 3.0, c + 0.1, c + 2.9, c - 2.0] {
             live = live_edge_with_hysteresis(live, behind);
             assert!(live, "went non-live at {behind}s, which is still live");
         }
     }
 
     #[test]
+    fn seek_live_lands_somewhere_the_indicator_calls_live() {
+        assert!(live_edge_with_hysteresis(false, LIVE_CUSHION));
+    }
+
+    #[test]
     fn a_real_rewind_leaves_the_live_edge_and_stays_left() {
+        let c = LIVE_CUSHION;
         let mut live = true;
-        live = live_edge_with_hysteresis(live, 12.0);
-        assert!(!live, "12s behind is not live");
+        live = live_edge_with_hysteresis(live, c + 12.0);
+        assert!(!live, "12s past the cushion is not live");
         // Coming back must clear the tighter entry threshold, not merely dip
-        // under the exit one, or it would flap around 8s.
-        live = live_edge_with_hysteresis(live, 6.0);
-        assert!(!live, "6s is under the exit threshold but over the entry one");
-        live = live_edge_with_hysteresis(live, 1.0);
-        assert!(live, "1s behind is live again");
+        // under the exit one, or it would flap around the exit.
+        live = live_edge_with_hysteresis(live, c + 5.0);
+        assert!(!live, "under the exit threshold but over the entry one");
+        live = live_edge_with_hysteresis(live, c + 1.0);
+        assert!(live, "just past the cushion is live again");
     }
 }
 
@@ -1646,38 +1676,23 @@ fn subtitle_properties(style: &crate::ipc::types::SubtitleStyleDto) -> Vec<(&'st
     ]
 }
 
-/// Bits per second of live video, measured on a 1080p59.94 feed from this
-/// panel . Every stream sampled was H.264 SDR at roughly
-/// this rate, so it is the honest number to size a byte budget with — but it
-/// is a *typical* rate, not a ceiling: a genuinely 4K channel would fill the
-/// budget faster and rewind correspondingly less far.
-const LIVE_BITS_PER_SEC: f64 = 18_200_000.0;
+/// The floor. `demuxer-max-back-bytes=0` does not mean "no rewind limit", it
+/// means no back buffer at all, and mpv then refuses to seek back even the
+/// second it is holding — which reads as a broken player, not a setting.
+const MIN_BACK_BYTES: i64 = 32 * 1_000_000;
 
-/// Roughly fourteen seconds at the measured rate. `demuxer-max-back-bytes=0`
-/// does not mean "no rewind limit", it means no back buffer at all, and mpv
-/// then refuses to seek back even the second it is holding — which reads as
-/// a broken player rather than as a setting.
-const MIN_BACK_BYTES: i64 = 32 * 1024 * 1024;
+/// The back buffer is resident memory; two gigabytes is as much as this is
+/// willing to take from the rest of the machine.
+const MAX_BACK_BYTES: i64 = 2_000 * 1_000_000;
 
-/// The back buffer is resident memory. Two gigabytes is about eight minutes
-/// of the measured feed and as much as this is willing to take from the rest
-/// of the machine.
-const MAX_BACK_BYTES: i64 = 2 * 1024 * 1024 * 1024;
-
-/// Minutes of scrollback as the byte budget mpv actually wants.
-fn rewind_bytes(minutes: f64) -> i64 {
-    // NaN is a broken setting and takes the floor; an infinity is someone
-    // asking for everything and takes the ceiling.
-    if minutes.is_nan() || minutes <= 0.0 {
-        return MIN_BACK_BYTES;
-    }
-    let bytes = minutes * 60.0 * LIVE_BITS_PER_SEC / 8.0;
-    // Through f64 rather than a cast on an unbounded value: `as` saturates,
-    // but the clamp is the thing being tested and it should be visible.
-    if bytes >= MAX_BACK_BYTES as f64 {
-        return MAX_BACK_BYTES;
-    }
-    (bytes.round() as i64).clamp(MIN_BACK_BYTES, MAX_BACK_BYTES)
+/// The rewind setting, in megabytes, as the byte budget mpv wants.
+///
+/// Megabytes in, bytes out, nothing assumed. Minutes at a typical 18.2 Mbps
+/// would hold nearly eleven minutes on a 6.8 Mbps channel for a setting that
+/// said four; the settings pane shows what the budget buys at common
+/// bitrates instead.
+fn rewind_bytes(megabytes: u32) -> i64 {
+    (i64::from(megabytes) * 1_000_000).clamp(MIN_BACK_BYTES, MAX_BACK_BYTES)
 }
 
 /// The mpv properties that express the playback settings.
@@ -1685,7 +1700,7 @@ fn playback_properties(s: &crate::ipc::types::SettingsDto) -> Vec<(&'static str,
     vec![
         (
             "demuxer-max-back-bytes",
-            rewind_bytes(s.rewind_minutes).to_string(),
+            rewind_bytes(s.rewind_mb).to_string(),
         ),
         (
             "hwdec",

@@ -106,8 +106,8 @@ async fn run() -> Result<(), String> {
 
     let before = cmd::settings().await?;
     println!(
-        "settings: rewind={}min hwdec={} tonemap={} guide={}h backdrop={:?}",
-        before.rewind_minutes,
+        "settings: rewind={}MB hwdec={} tonemap={} guide={}h backdrop={:?}",
+        before.rewind_mb,
         before.hardware_decode,
         before.tone_map_hdr,
         before.guide_hours,
@@ -119,16 +119,17 @@ async fn run() -> Result<(), String> {
         (before.subtitle.backdrop_opacity - 0.25).abs() < 1e-9
     );
 
+    let before_mb = before.rewind_mb;
     let mut changed = before.clone();
-    changed.rewind_minutes = 9.0;
+    changed.rewind_mb = 900;
     changed.subtitle.size = 44;
     cmd::set_settings(changed).await?;
     let after = cmd::settings().await?;
-    check!("a saved setting reads back", after.rewind_minutes == 9.0);
+    check!("a saved setting reads back", after.rewind_mb == 900);
     check!("nested subtitle fields persist", after.subtitle.size == 44);
     cmd::set_settings(before).await?;
     let restored = cmd::settings().await?;
-    check!("settings restore cleanly", restored.rewind_minutes != 9.0);
+    check!("settings restore cleanly", restored.rewind_mb == before_mb);
 
     // --- guide rows -------------------------------------------------------
 

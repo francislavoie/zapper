@@ -105,14 +105,48 @@ fn main() {
 #[cfg(target_os = "linux")]
 const SETTLE: u64 = 14;
 
-/// How far back to seek. Must be comfortably inside `SETTLE`.
+/// How far back to seek. Must be comfortably inside `SETTLE`, and well past
+/// the live cushion, so that `seek_live` has real distance to cover rather
+/// than finding itself already close enough.
 #[cfg(target_os = "linux")]
-const SEEK_BACK: f64 = -5.0;
+const SEEK_BACK: f64 = -10.0;
 
-/// What counts as "at the live edge". Not zero: `seek_live` deliberately
-/// stops just short of a boundary that moves while it is being read.
+/// What counts as "at the live edge": `seek_live` parks playback on the
+/// cushion behind the newest data, give or take the couple of seconds the
+/// seekable end jumps by as chunks arrive.
 #[cfg(target_os = "linux")]
-const LIVE: f64 = 2.5;
+const LIVE: f64 = zapper_lib::ipc::player_cmds::LIVE_CUSHION + 2.5;
+
+/// How long to watch for a stall after `seek_live`.
+#[cfg(target_os = "linux")]
+const AFTER_LIVE: u64 = 15;
+
+/// Polls the player for `for_how_long`, counting the times playback stopped
+/// to wait for the cache (each one a visible stutter), and the thinnest the
+/// buffer ahead of the playhead got.
+#[cfg(target_os = "linux")]
+async fn watch_for_stalls(
+    app: &tauri::AppHandle,
+    for_how_long: std::time::Duration,
+) -> Result<(u32, f64), String> {
+    use zapper_lib::ipc::player_cmds as cmds;
+    let until = std::time::Instant::now() + for_how_long;
+    let (mut stalls, mut was, mut thinnest) = (0u32, false, f64::INFINITY);
+    while std::time::Instant::now() < until {
+        let s = cmds::player_stats(app.clone()).await?;
+        let now = s.buffering.unwrap_or(false);
+        if now && !was {
+            stalls += 1;
+        }
+        was = now;
+        if let Some(ahead) = s.cache_duration {
+            thinnest = thinnest.min(ahead);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    println!("[after-live] stalls={stalls} thinnest_ahead={thinnest:.2}s");
+    Ok((stalls, thinnest))
+}
 
 #[cfg(target_os = "linux")]
 async fn run(app: &tauri::AppHandle) -> Result<String, String> {
@@ -185,6 +219,20 @@ async fn run(app: &tauri::AppHandle) -> Result<String, String> {
         ));
     }
 
+    // --- stays smooth after reaching live ---------------------------------
+    //
+    // Arriving at the edge is only half of it. Landing with nothing buffered
+    // ahead plays for a few seconds and then stalls to refill. Watched for
+    // long enough to see the stall a thin buffer produces.
+    let (stalls, thinnest) = watch_for_stalls(app, Duration::from_secs(AFTER_LIVE)).await?;
+    note(app, "after-live").await;
+    if stalls > 0 {
+        return Err(format!(
+            "playback stalled to buffer {stalls} time(s) in the {AFTER_LIVE}s after seek_live \
+             (thinnest buffer ahead {thinnest:.1}s)"
+        ));
+    }
+
     // --- stop -------------------------------------------------------------
     cmds::stop(app.clone()).await?;
     let stopped = cmds::player_state().await?;
@@ -195,7 +243,8 @@ async fn run(app: &tauri::AppHandle) -> Result<String, String> {
     Ok(format!(
         "stream {stream_id} played {w}x{h} {} @ {}, \
          seek {SEEK_BACK}s took behind_live {:.1}s -> {:.1}s, \
-         seek_live returned it to {:.1}s, stop() reached Stopped",
+         seek_live returned it to {:.1}s, no stall in the {AFTER_LIVE}s after \
+         (thinnest buffer ahead {thinnest:.1}s), stop() reached Stopped",
         measured.codec.as_deref().unwrap_or("codec unknown"),
         measured
             .fps

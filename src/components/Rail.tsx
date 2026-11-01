@@ -106,7 +106,7 @@ export function Rail() {
         aria-orientation="vertical"
         aria-valuenow={Math.round(railWidthRem * 4) / 4}
         tabIndex={0}
-        title={
+        data-tip={
           isDefaultRailWidth(railWidthRem)
             ? "Drag to resize the rail"
             : "Drag to resize · double-click to reset"

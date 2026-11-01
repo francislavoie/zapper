@@ -181,7 +181,7 @@ export function ChannelList() {
           count line would put the search level with the rail's tabs and the
           filter a row lower. */}
       <ListHead
-        title={searching ? "Search results" : categoryName}
+        heading={searching ? "Search results" : categoryName}
         total={source.total}
         loading={source.loading}
       />
@@ -251,11 +251,19 @@ export function ChannelList() {
 }
 
 /** What the list is showing, and the way to the guide. */
-function ListHead({ title, total, loading }: { title: string; total: number; loading: boolean }) {
+function ListHead({
+  heading,
+  total,
+  loading,
+}: {
+  heading: string;
+  total: number;
+  loading: boolean;
+}) {
   return (
     <div className="list-head">
-      <span className="list-title" title={title}>
-        {title}
+      <span className="list-title" data-tip-overflow="">
+        {heading}
       </span>
       <span className="list-count">{total.toLocaleString()}</span>
       {loading ? <span className="list-count">loading…</span> : null}

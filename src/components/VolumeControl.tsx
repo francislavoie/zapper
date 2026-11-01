@@ -104,7 +104,7 @@ export function VolumeControl({
           onActivity?.();
           onToggleMute();
         }}
-        title={muted ? "Unmute" : "Mute"}
+        data-tip={muted ? "Unmute" : "Mute"}
         aria-label={muted ? "Unmute" : "Mute"}
         aria-pressed={muted}
       >

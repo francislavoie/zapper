@@ -23,7 +23,7 @@ export const DEFAULT_SUBTITLE: SubtitleStyleDto = {
 export const DEFAULT_SETTINGS: SettingsDto = {
   // "auto" follows the system. Only English ships today.
   language: "auto",
-  rewindMinutes: 5,
+  rewindMb: 512,
   hardwareDecode: true,
   toneMapHdr: true,
   guideHours: 3,
@@ -32,8 +32,30 @@ export const DEFAULT_SETTINGS: SettingsDto = {
   checkForUpdates: true,
 };
 
-export const REWIND_MIN = 1;
-export const REWIND_MAX = 15;
+/** Rewind buffer, in megabytes. The ceiling is the backend's: the buffer is
+ *  resident memory, and two gigabytes is as much as it will take. */
+export const REWIND_MIN = 64;
+export const REWIND_MAX = 2000;
+export const REWIND_STEP = 32;
+
+/** Bitrates people will recognise, for saying what a buffer size buys. The
+ *  1080p50 figure is typical of a live sports feed. */
+export const REWIND_BITRATES: ReadonlyArray<{ label: string; mbps: number }> = [
+  { label: "SD", mbps: 3 },
+  { label: "720p", mbps: 6 },
+  { label: "1080p", mbps: 10 },
+  { label: "1080p50", mbps: 18 },
+  { label: "4K", mbps: 25 },
+];
+
+/** Seconds of video `megabytes` holds at `mbps` megabits per second. The
+ *  setting is bytes because that is all mpv's buffer understands; this is
+ *  the honest way to say what that means in time — per bitrate, since the
+ *  same buffer holds three times as long on an SD channel as on a 1080p one. */
+export function rewindSeconds(megabytes: number, mbps: number): number {
+  if (!(megabytes > 0) || !(mbps > 0)) return 0;
+  return (megabytes * 8) / mbps;
+}
 export const SUB_SIZE_MIN = 12;
 export const SUB_SIZE_MAX = 72;
 export const SYNC_MIN = 1;
@@ -73,7 +95,7 @@ export function clampSettings(s: SettingsDto): SettingsDto {
     // Not clamped to a known list: an unknown tag falls back at lookup time,
     // which keeps a hand-edited config from being silently rewritten.
     language: s.language || "auto",
-    rewindMinutes: round(s.rewindMinutes, REWIND_MIN, REWIND_MAX),
+    rewindMb: round(s.rewindMb, REWIND_MIN, REWIND_MAX),
     hardwareDecode: !!s.hardwareDecode,
     toneMapHdr: !!s.toneMapHdr,
     guideHours: round(s.guideHours, 1, 6),
@@ -194,7 +216,7 @@ export interface SavePlan {
   applySubtitle: boolean;
 }
 
-const PLAYBACK_KEYS = ["rewindMinutes", "hardwareDecode", "toneMapHdr"] as const;
+const PLAYBACK_KEYS = ["rewindMb", "hardwareDecode", "toneMapHdr"] as const;
 
 export function planSave(before: SettingsDto, after: SettingsDto): SavePlan {
   return {

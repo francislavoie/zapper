@@ -24,7 +24,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { backend } from "../backend";
 import { toggleFullscreen } from "../fullscreen";
-import { clock, liveState, measuredLine } from "../logic/format";
+import { duration, liveState, measuredLine } from "../logic/format";
 import { atScreenEdge, initialFade, nextFade, type FadeEvent } from "../logic/fade";
 import { volumeAfterWheel, volumeLevel } from "../logic/volume";
 import { zoneAt, zoneIsAvailable, zoneSeek } from "../logic/gestures";
@@ -185,7 +185,7 @@ export function PlayerChrome() {
             stream — the same thing Escape does. */}
         <button
           className="ctl chrome-back"
-          title="Back to browsing (Escape)"
+          data-tip="Back to browsing (Escape)"
           aria-label="Back to browsing"
           onClick={() => dispatch({ type: "mode", mode: "browse" })}
         >
@@ -194,7 +194,9 @@ export function PlayerChrome() {
         </button>
 
         <div className="chrome-title">
-          <h2>{nowChannel?.cleanName ?? "Nothing playing"}</h2>
+          <h2 data-tip-overflow={nowChannel?.name ?? ""}>
+            {nowChannel?.cleanName ?? "Nothing playing"}
+          </h2>
           <p>
             {player.state === "opening"
               ? "Opening…"
@@ -226,7 +228,7 @@ export function PlayerChrome() {
           <div className="chrome-stack-row">
             <button
               className={`ctl icon stack-toggle ${stacked ? "on" : ""}`}
-              title={
+              data-tip={
                 stacked
                   ? "Give the whole window back to the picture"
                   : "Put the picture across the top, with the guide below"
@@ -253,7 +255,7 @@ export function PlayerChrome() {
         >
           <button
             className="ctl icon"
-            title={playing ? "Pause (Space)" : "Play (Space)"}
+            data-tip={playing ? "Pause (Space)" : "Play (Space)"}
             aria-label={playing ? "Pause" : "Play"}
             onClick={() => void run(dispatch, "pause", backend.togglePause())}
           >
@@ -265,7 +267,7 @@ export function PlayerChrome() {
               not a thing to sit looking at. */}
           <button
             className="ctl icon"
-            title="Stop"
+            data-tip="Stop"
             aria-label="Stop"
             onClick={() => {
               void run(dispatch, "stop", backend.stop());
@@ -285,7 +287,7 @@ export function PlayerChrome() {
 
           <button
             className={`ctl icon ${player.compressor ? "on" : ""}`}
-            title="Dynamic range compressor"
+            data-tip="Dynamic range compressor"
             aria-label="Dynamic range compressor"
             aria-pressed={player.compressor}
             onClick={() =>
@@ -305,7 +307,7 @@ export function PlayerChrome() {
 
           <button
             className="ctl icon"
-            title={`Back ${SKIP_SECONDS} seconds (Left)`}
+            data-tip={`Back ${SKIP_SECONDS} seconds (Left)`}
             aria-label={`Back ${SKIP_SECONDS} seconds`}
             onClick={() => void run(dispatch, "seek", backend.seekRelative(-SKIP_SECONDS))}
           >
@@ -313,7 +315,7 @@ export function PlayerChrome() {
           </button>
           <button
             className="ctl icon"
-            title={`Forward ${SKIP_SECONDS} seconds (Right)`}
+            data-tip={`Forward ${SKIP_SECONDS} seconds (Right)`}
             aria-label={`Forward ${SKIP_SECONDS} seconds`}
             onClick={() => void run(dispatch, "seek", backend.seekRelative(SKIP_SECONDS))}
           >
@@ -325,7 +327,7 @@ export function PlayerChrome() {
               jump to, so it stops being clickable rather than lying. */}
           <button
             className={`ctl live ${live.live ? "at-edge" : ""}`}
-            title={live.canJump ? `${live.label} — click to jump to live (L)` : live.label}
+            data-tip={live.canJump ? `${live.label} — click to jump to live (L)` : live.label}
             aria-label={live.label}
             disabled={!live.canJump}
             onClick={() => void run(dispatch, "live", backend.seekLive())}
@@ -334,15 +336,15 @@ export function PlayerChrome() {
             Live
           </button>
 
-          <span className="time" title="Buffered scrollback">
-            {clock(player.bufferedBack)}
+          <span className="time" data-tip="Buffered scrollback">
+            {duration(player.bufferedBack)}
           </span>
 
           <span className="spring" />
 
           <button
             className="ctl"
-            title="Browse without stopping playback (Escape)"
+            data-tip="Browse without stopping playback (Escape)"
             onClick={() => dispatch({ type: "mode", mode: "browse" })}
           >
             Browse
@@ -352,7 +354,7 @@ export function PlayerChrome() {
               `rightmost` is for. */}
           <button
             className="ctl icon rightmost"
-            title={fullscreen ? "Leave fullscreen (F)" : "Fullscreen (F)"}
+            data-tip={fullscreen ? "Leave fullscreen (F)" : "Fullscreen (F)"}
             aria-label={fullscreen ? "Leave fullscreen" : "Fullscreen"}
             onClick={() =>
               void toggleFullscreen()
