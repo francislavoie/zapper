@@ -16,7 +16,9 @@ import type {
   CategoryDto,
   ChannelDto,
   LiveJumpDto,
+  PlayerOptionsDto,
   PlayerStateDto,
+  ProgrammeDto,
   SettingsDto,
   SyncStatusDto,
   UpdateStatusDto,
@@ -35,6 +37,7 @@ import { clampVideoWidth } from "./logic/videoSize";
 import { setHidden, setPinned, type CategorySort } from "./logic/categoryOrder";
 import { loadCategoryHidden, loadCategoryPins, loadCategorySort } from "./categoryPrefs";
 import type { ZapView } from "./logic/zap";
+import { startSleep, type SleepRequest, type SleepTimer } from "./logic/sleep";
 
 export const ALL_CATEGORIES = "*all*";
 
@@ -67,6 +70,25 @@ export interface CategoryMenu {
   x: number;
   y: number;
   keyboard: boolean;
+}
+
+/** The menu over the picture: where it opens, in client pixels, and what it
+ *  holds. In the store for the same reason as the others — Escape unwinds it
+ *  in useGlobalKeys.
+ *
+ *  `only` is the menu narrowed to one of its submenus, opened from a control
+ *  rather than a right-click: the transport bar's audio button and its moon.
+ *  `anchor` is that control, so a second press on it closes the menu rather
+ *  than closing and reopening it; `keyboard` when it was pressed from the
+ *  keyboard, so the menu takes focus. */
+export interface VideoMenu {
+  x: number;
+  y: number;
+  only?: "audio" | "sleep";
+  anchor?: HTMLElement | null;
+  keyboard?: boolean;
+  /** Opens upwards from `y`: from a control at the bottom of the picture. */
+  above?: boolean;
 }
 
 /** Browse shows the rail and the list with the picture in the watch panel;
@@ -113,8 +135,20 @@ export interface State {
    *  opens, in client pixels. In the store for the same reason as
    *  categoryMenu — Escape unwinds it in useGlobalKeys. */
   categoryOptions: { x: number; y: number } | null;
-  /** Where a right-click on the picture landed, in client pixels. */
-  videoMenu: { x: number; y: number } | null;
+  /** The menu over the picture, if it is open. */
+  videoMenu: VideoMenu | null;
+  /** The stream's tracks and how the picture is drawn, as the backend last
+   *  pushed them. */
+  options: PlayerOptionsDto;
+  /** The sleep timer, while one is set. Cleared when it goes off, when it is
+   *  turned off, and whenever playback stops: an explicit stop is the
+   *  viewer being awake, and with nothing playing there is nothing for it
+   *  to stop. */
+  sleep: SleepTimer | null;
+  /** What the guide says is on the playing channel now, when a sleep timer
+   *  may end with it — see `programmeForSleep`. Kept by the SleepTimer
+   *  component, which watches the clock so nothing else has to. */
+  sleepProgramme: ProgrammeDto | null;
   /** The diagnostics panel. Off by default and polled only while open. */
   statsOpen: boolean;
   /** Which view fullscreen was entered from, so leaving it goes back there
@@ -255,6 +289,9 @@ export const initialState: State = {
   activityVersion: 0,
   categoryOptions: null,
   videoMenu: null,
+  options: { audio: [], subtitles: [], aspect: "auto", deinterlace: "off" },
+  sleep: null,
+  sleepProgramme: null,
   statsOpen: false,
   fullscreenFrom: null,
   query: "",
@@ -303,7 +340,12 @@ export type Action =
   | { type: "categoryPrefs"; pins: readonly string[]; hidden: readonly string[]; sort: CategorySort }
   | { type: "activityChanged" }
   | { type: "categoryOptions"; menu: { x: number; y: number } | null }
-  | { type: "videoMenu"; at: { x: number; y: number } | null }
+  | { type: "videoMenu"; at: VideoMenu | null }
+  | { type: "options"; value: PlayerOptionsDto }
+  /** Set the sleep timer, or turn it off with `null`. `at` is the wall clock
+   *  in milliseconds, passed in so the reducer stays pure. */
+  | { type: "sleep"; request: SleepRequest | null; at: number }
+  | { type: "sleepProgramme"; programme: ProgrammeDto | null }
   | { type: "stats"; open: boolean }
   | { type: "fullscreenFrom"; mode: Mode | null }
   | { type: "stacked"; on: boolean }
@@ -364,6 +406,21 @@ export function reducer(state: State, action: Action): State {
       return { ...state, fullscreenFrom: action.mode };
     case "videoMenu":
       return { ...state, videoMenu: action.at };
+    case "options":
+      return { ...state, options: action.value };
+    case "sleep": {
+      // Chosen from a menu, so the menu has done its job either way.
+      const closed = { ...state, videoMenu: null, menuOpen: false };
+      if (action.request === null) return { ...closed, sleep: null };
+      // A request that cannot be had — the programme's end went unknown
+      // between the menu drawing and the click — leaves the timer as it was.
+      const timer = startSleep(action.request, action.at, state.sleepProgramme);
+      return timer ? { ...closed, sleep: timer } : closed;
+    }
+    case "sleepProgramme":
+      return state.sleepProgramme === action.programme
+        ? state
+        : { ...state, sleepProgramme: action.programme };
     case "stats":
       // Opening it closes the menu it was chosen from; nothing wants both.
       return { ...state, statsOpen: action.open, videoMenu: null };
@@ -476,6 +533,12 @@ export function reducer(state: State, action: Action): State {
         ...state,
         player: action.value,
         liveJump: nextLiveJump(state, action.value),
+        // Stopping is the viewer awake, or the stream gone: either way there
+        // is nothing left for the timer to do.
+        sleep:
+          action.value.state === "stopped" && state.player.state !== "stopped"
+            ? null
+            : state.sleep,
         // Once the backend confirms the stream we asked for, the optimistic
         // highlight has served its purpose.
         pendingStreamId:

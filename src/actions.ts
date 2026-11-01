@@ -7,6 +7,8 @@ import { toggleFullscreen } from "./fullscreen";
 import { errorMessage, failed, loading, ready } from "./logic/async";
 import { catchupMinutes } from "./logic/guide";
 import type { ActionId } from "./logic/palette";
+import type { SleepRequest } from "./logic/sleep";
+import { refreshFullscreen } from "./hooks/useFullscreen";
 import { run, type Action, type Mode } from "./store";
 import type { ChannelDto, PlayerStateDto, ProgrammeDto } from "./types";
 
@@ -58,6 +60,29 @@ export function playPrevious(dispatch: Dispatch<Action>, previous: ChannelDto | 
   void playChannel(dispatch, previous);
 }
 
+/** Sets the sleep timer, or turns it off with `null`. The reducer closes
+ *  whichever menu it was chosen from. */
+export function setSleep(dispatch: Dispatch<Action>, request: SleepRequest | null) {
+  dispatch({ type: "sleep", request, at: Date.now() });
+}
+
+/** Toggles fullscreen from wherever the picture is.
+ *
+ *  From the docked picture that means going through the player: the video
+ *  rect is measured from whichever slot the layout offers, and browse offers
+ *  the corner, so without the mode change the window would go fullscreen
+ *  with the picture still in its corner. Remembering where it came from is
+ *  what lets leaving fullscreen go back there. */
+export function togglePictureFullscreen(dispatch: Dispatch<Action>, mode: Mode) {
+  if (mode !== "watch") {
+    dispatch({ type: "fullscreenFrom", mode });
+    dispatch({ type: "mode", mode: "watch" });
+  }
+  void toggleFullscreen()
+    .then(refreshFullscreen)
+    .catch((err: unknown) => dispatch({ type: "toast", text: `fullscreen: ${String(err)}` }));
+}
+
 // ------------------------------------------------------------------ actions
 
 /** What an action needs beyond the dispatcher: the player, because "toggle
@@ -92,6 +117,13 @@ const HANDLERS: Record<ActionId, (ctx: ActionContext) => void> = {
     ),
   theater: ({ dispatch }) => dispatch({ type: "mode", mode: "watch" }),
   stats: ({ dispatch }) => dispatch({ type: "stats", open: true }),
+  sleep15: ({ dispatch }) => setSleep(dispatch, 15),
+  sleep30: ({ dispatch }) => setSleep(dispatch, 30),
+  sleep45: ({ dispatch }) => setSleep(dispatch, 45),
+  sleep60: ({ dispatch }) => setSleep(dispatch, 60),
+  sleep90: ({ dispatch }) => setSleep(dispatch, 90),
+  sleepProgramme: ({ dispatch }) => setSleep(dispatch, "programme"),
+  sleepOff: ({ dispatch }) => setSleep(dispatch, null),
   sync: ({ dispatch }) => void run(dispatch, "sync", backend.syncNow()),
   settings: ({ dispatch }) => dispatch({ type: "settings", open: true }),
   updates: ({ dispatch }) => {

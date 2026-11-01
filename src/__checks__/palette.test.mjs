@@ -53,16 +53,18 @@ test("player-only actions are hidden when nothing is playing", () => {
   assert.ok(idle.includes("sync"));
   assert.ok(idle.includes("settings"));
 
-  const live = availableActions(true, true).map((a) => a.id);
+  const live = availableActions(true, { hasPrevious: true, sleeping: true, programme: true }).map(
+    (a) => a.id,
+  );
   assert.ok(live.includes("compressor"));
   assert.equal(live.length, ACTIONS.length);
 });
 
 test("the previous channel is offered only when there is one", () => {
   assert.ok(!availableActions(true).some((a) => a.id === "previous"));
-  assert.ok(availableActions(true, true).some((a) => a.id === "previous"));
+  assert.ok(availableActions(true, { hasPrevious: true }).some((a) => a.id === "previous"));
   // Not a player control: after a stop, going back is still on offer.
-  assert.ok(availableActions(false, true).some((a) => a.id === "previous"));
+  assert.ok(availableActions(false, { hasPrevious: true }).some((a) => a.id === "previous"));
 });
 
 test("actions come before channels", () => {
@@ -94,4 +96,32 @@ test("arrow movement wraps in both directions", () => {
   // A big jump (page down) still lands in range.
   assert.equal(moveIndex(0, 10, 4), 2);
   assert.equal(moveIndex(0, -10, 4), 2);
+});
+
+// ------------------------------------------------------------- sleep timer
+
+test("every sleep length is its own palette entry, findable by typing it", () => {
+  const live = availableActions(true);
+  for (const m of [15, 30, 45, 60, 90]) {
+    const hits = filterActions(live, `sleep ${m}`);
+    assert.ok(hits.some((a) => a.id === `sleep${m}` && a.sleep === m), `sleep ${m}`);
+  }
+});
+
+test("the sleep actions need something playing", () => {
+  const idle = availableActions(false, { sleeping: true, programme: true }).map((a) => a.id);
+  assert.ok(idle.every((id) => !id.startsWith("sleep")));
+});
+
+test("'end of this programme' needs the guide to know the end, and 'off' needs a timer", () => {
+  const ids = (c) => availableActions(true, c).map((a) => a.id);
+  assert.ok(!ids({}).includes("sleepProgramme"));
+  assert.ok(ids({ programme: true }).includes("sleepProgramme"));
+  assert.ok(!ids({}).includes("sleepOff"));
+  assert.ok(ids({ sleeping: true }).includes("sleepOff"));
+  // The palette's words: what the hamburger's submenu calls just "Off".
+  const off = ACTIONS.find((a) => a.id === "sleepOff");
+  assert.equal(off.label, "Sleep timer: off");
+  assert.equal(off.short, "Off");
+  assert.equal(off.sleep, null);
 });

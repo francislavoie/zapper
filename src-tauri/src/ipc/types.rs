@@ -161,6 +161,84 @@ impl Default for PlayerStateDto {
     }
 }
 
+/// One audio or subtitle track of the stream that is open, as mpv lists it.
+///
+/// Every descriptive field is optional: a broadcast multiplex often carries
+/// a language and nothing else, and some carry not even that. Naming the
+/// track for a person is the interface's job (`logic/tracks.ts`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackDto {
+    /// mpv's id, which is numbered per kind: audio 1 and subtitle 1 are two
+    /// different tracks. What `set_audio_track` and `set_subtitle_track` take.
+    pub id: i64,
+    pub title: Option<String>,
+    /// As the stream declares it: usually ISO 639-2 (`eng`, `fre`), sometimes
+    /// 639-1 (`en`).
+    pub lang: Option<String>,
+    /// mpv's codec name: `ac3`, `aac`, `dvb_subtitle`, `dvb_teletext`.
+    pub codec: Option<String>,
+    /// Audio only: how many channels, 6 being 5.1.
+    pub channels: Option<i64>,
+    pub default: bool,
+    pub forced: bool,
+    /// Subtitles for the deaf and hard of hearing.
+    pub hearing_impaired: bool,
+    /// Audio description.
+    pub visual_impaired: bool,
+    pub selected: bool,
+}
+
+/// How the picture is fitted to its slot.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AspectMode {
+    /// The stream's own shape.
+    #[default]
+    #[serde(rename = "auto")]
+    Auto,
+    #[serde(rename = "16:9")]
+    Wide,
+    #[serde(rename = "4:3")]
+    Standard,
+    #[serde(rename = "2.35:1")]
+    Scope,
+    /// The stream's own shape, scaled until the slot is covered and the
+    /// overhang cropped.
+    #[serde(rename = "fill")]
+    Fill,
+    /// Pulled to the slot's shape, whatever that does to the picture.
+    #[serde(rename = "stretch")]
+    Stretch,
+}
+
+/// mpv's `deinterlace`: `auto` deinterlaces only frames flagged interlaced.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DeinterlaceMode {
+    Auto,
+    On,
+    /// mpv's own default, so the player starts here.
+    #[default]
+    Off,
+}
+
+/// What the picture's menu offers: the stream's tracks, and how it is drawn.
+///
+/// Pushed as `events::PLAYER_OPTIONS` whenever any of it changes — the track
+/// lists with every new stream, or when a multiplex announces a track late —
+/// and read once with `player_options`. Separate from `PlayerStateDto`,
+/// which is pushed several times a second and has no need to carry a track
+/// list that changes once per channel.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlayerOptionsDto {
+    pub audio: Vec<TrackDto>,
+    pub subtitles: Vec<TrackDto>,
+    /// Kept for the session: mpv holds these across channel changes.
+    pub aspect: AspectMode,
+    pub deinterlace: DeinterlaceMode,
+}
+
 /// How subtitles are drawn. Maps onto libass through mpv properties.
 ///
 /// Modelled on Vimeo's controls rather than mpv's: people think in "box behind
@@ -337,6 +415,7 @@ pub struct BackupAccountDto {
 pub mod events {
     pub const SYNC_STATUS: &str = "zapper://sync-status";
     pub const PLAYER_STATE: &str = "zapper://player-state";
+    pub const PLAYER_OPTIONS: &str = "zapper://player-options";
     pub const UPDATE: &str = "zapper://update";
     /// A [`super::MediaKey`] pressed on the desktop's media controls.
     pub const MEDIA_KEY: &str = "zapper://media-key";

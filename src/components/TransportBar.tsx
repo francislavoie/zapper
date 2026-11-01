@@ -6,7 +6,7 @@
 // The order of the row is not arbitrary:
 //
 //   play/pause · stop · volume + slider · compressor ·· skip back ·
-//   skip forward · live · buffered ··· browse … fullscreen
+//   skip forward · live · buffered ··· sleep · audio · browse … fullscreen
 //
 // Play and stop lead, because they are the two things anybody reaches for
 // without looking, and both sit left of the volume control. Volume and the
@@ -25,17 +25,28 @@
 //
 // Browse is the caller's to offer (`onBrowse`) and the docked picture does
 // not: "browse without stopping" is where you already are.
+//
+// Two controls come and go. The moon is there only while a sleep timer is
+// set, and says how long is left; the audio button only when the stream has
+// more than one audio track. Both open the matching part of the picture's
+// right-click menu, so there is one set of choices and two ways to them.
+// They sit right of the spring, with the things that are about this
+// stream rather than about where in it you are.
 
-import type { RefObject } from "react";
+import type { MouseEvent, RefObject } from "react";
 import { backend } from "../backend";
 import { duration, liveState } from "../logic/format";
 import { SKIP_SECONDS } from "../logic/gestures";
+import { hasAudioChoice, selectedLabel } from "../logic/tracks";
 import { run, useApp, useDispatch } from "../store";
+import { useSleepLeft } from "../hooks/useSleep";
 import {
+  AudioTracks,
   CompressorOff,
   CompressorOn,
   ExitFullscreen,
   Fullscreen,
+  Moon,
   Pause,
   Play,
   SkipBack,
@@ -77,8 +88,32 @@ export function TransportBar({
   onBrowse,
   hintWithin,
 }: TransportBarProps) {
-  const { player, nowChannel } = useApp();
+  const { player, nowChannel, options, videoMenu } = useApp();
   const dispatch = useDispatch();
+  const sleepLeft = useSleepLeft();
+
+  /** Opens one part of the picture's menu above a control, or closes it if
+   *  that control's menu is the one open. */
+  const openMenu = (only: "audio" | "sleep") => (e: MouseEvent<HTMLButtonElement>) => {
+    onActivity();
+    if (videoMenu?.only === only) {
+      dispatch({ type: "videoMenu", at: null });
+      return;
+    }
+    const r = e.currentTarget.getBoundingClientRect();
+    dispatch({
+      type: "videoMenu",
+      at: {
+        x: r.left,
+        y: r.top - 4,
+        above: true,
+        only,
+        anchor: e.currentTarget,
+        // A click with no pointer behind it is Enter or Space.
+        keyboard: e.detail === 0,
+      },
+    });
+  };
 
   const playing = player.state === "playing";
   // The backend decides what counts as live, with hysteresis. The interface
@@ -192,6 +227,32 @@ export function TransportBar({
         </span>
 
         <span className="spring" />
+
+        {sleepLeft ? (
+          <button
+            className={`ctl icon sleep-moon ${videoMenu?.only === "sleep" ? "on" : ""}`}
+            data-tip={`Sleep timer: ${sleepLeft} left — click to change or turn off`}
+            aria-label={`Sleep timer, ${sleepLeft} left`}
+            aria-haspopup="menu"
+            aria-expanded={videoMenu?.only === "sleep"}
+            onClick={openMenu("sleep")}
+          >
+            <Moon className="i" />
+          </button>
+        ) : null}
+
+        {hasAudioChoice(options) ? (
+          <button
+            className={`ctl icon ${videoMenu?.only === "audio" ? "on" : ""}`}
+            data-tip={`Audio track: ${selectedLabel(options.audio) ?? "none"}`}
+            aria-label="Audio track"
+            aria-haspopup="menu"
+            aria-expanded={videoMenu?.only === "audio"}
+            onClick={openMenu("audio")}
+          >
+            <AudioTracks className="i" />
+          </button>
+        ) : null}
 
         {onBrowse ? (
           <button

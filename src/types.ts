@@ -99,6 +99,43 @@ export interface LiveJumpDto {
   seq: number;
 }
 
+/** One audio or subtitle track of the stream that is open. Mirrors
+ *  `TrackDto`. Naming it for a person is `logic/tracks.ts`. */
+export interface TrackDto {
+  /** mpv's id, numbered per kind: audio 1 and subtitle 1 are different
+   *  tracks. */
+  id: number;
+  title: string | null;
+  /** As the stream declares it: usually ISO 639-2 (`eng`, `fre`). */
+  lang: string | null;
+  /** mpv's codec name: `ac3`, `aac`, `dvb_subtitle`. */
+  codec: string | null;
+  /** Audio only; 6 is 5.1. */
+  channels: number | null;
+  default: boolean;
+  forced: boolean;
+  /** Subtitles for the deaf and hard of hearing. */
+  hearingImpaired: boolean;
+  /** Audio description. */
+  visualImpaired: boolean;
+  selected: boolean;
+}
+
+/** How the picture is fitted to its slot. Mirrors `AspectMode`. */
+export type AspectMode = "auto" | "16:9" | "4:3" | "2.35:1" | "fill" | "stretch";
+
+/** mpv's `deinterlace`. Mirrors `DeinterlaceMode`. */
+export type DeinterlaceMode = "auto" | "on" | "off";
+
+/** What the picture's menu offers, pushed as `EVENTS.playerOptions` when any
+ *  of it changes. Mirrors `PlayerOptionsDto`. */
+export interface PlayerOptionsDto {
+  audio: TrackDto[];
+  subtitles: TrackDto[];
+  aspect: AspectMode;
+  deinterlace: DeinterlaceMode;
+}
+
 /** Normalised window coordinates. Video is not a DOM element; the frontend
  *  tells Rust where to draw it. */
 export interface VideoRect {
@@ -227,6 +264,7 @@ export interface FavouriteDto {
 export const EVENTS = {
   syncStatus: "zapper://sync-status",
   playerState: "zapper://player-state",
+  playerOptions: "zapper://player-options",
   update: "zapper://update",
   mediaKey: "zapper://media-key",
 } as const;

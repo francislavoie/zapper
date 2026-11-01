@@ -74,6 +74,11 @@ export const SHORTCUT_GROUPS: readonly ShortcutGroup[] = [
       { keys: [["Double-click"]], does: "Middle of the picture: fullscreen", mouse: true },
       { keys: [["Double-click"]], does: "Left or right edge: back or forward 5 seconds", mouse: true },
       { keys: [["Right-click"]], does: "A category or favourite: its menu", mouse: true },
+      {
+        keys: [["Right-click"]],
+        does: "On the picture: tracks, aspect, sleep timer",
+        mouse: true,
+      },
     ],
   },
 ];

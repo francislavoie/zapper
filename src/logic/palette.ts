@@ -6,11 +6,12 @@
 // Checked in src/__checks__/palette.test.mjs.
 
 import type { ChannelDto } from "../types";
+import type { SleepRequest } from "./sleep";
 
 /** Where an action sits when the list is drawn as a menu rather than filtered
  *  as a palette. The palette ignores this; the toolbar's hamburger rules a
  *  line between groups. */
-export type ActionGroup = "view" | "player" | "data" | "app";
+export type ActionGroup = "view" | "player" | "sleep" | "data" | "app";
 
 /** Every action the app has, named once. `runAction` in src/actions.ts takes a
  *  `Record<ActionId, …>`, so `tsc` fails the build if an action here has no
@@ -26,6 +27,13 @@ export const ACTION_IDS = [
   "fullscreen",
   "theater",
   "stats",
+  "sleep15",
+  "sleep30",
+  "sleep45",
+  "sleep60",
+  "sleep90",
+  "sleepProgramme",
+  "sleepOff",
   "sync",
   "settings",
   "updates",
@@ -43,6 +51,21 @@ export interface PaletteAction {
   needsPlayer?: boolean;
   /** Hidden until there is a previous channel to go back to. */
   needsPrevious?: boolean;
+  /** Hidden unless the condition holds: a sleep timer is set, or the guide
+   *  knows when the programme on now ends. */
+  needs?: "sleeping" | "programme";
+  /** A sleep timer action: what it sets, or `null` for off. */
+  sleep?: SleepRequest | null;
+  /** What it is called inside a submenu that already says what it is part
+   *  of: "30 minutes" under "Sleep timer". */
+  short?: string;
+}
+
+/** What `needsPrevious` and `needs` are checked against. */
+export interface ActionConditions {
+  hasPrevious?: boolean;
+  sleeping?: boolean;
+  programme?: boolean;
 }
 
 export type PaletteItem =
@@ -93,6 +116,36 @@ export const ACTIONS: PaletteAction[] = [
   },
   // A view, not a player control: it opens with nothing playing too.
   { id: "stats", label: "Stats for nerds", hint: "S", group: "view" },
+  // Each length its own entry, so typing "sleep 30" is one Enter away. The
+  // hamburger folds the group into one row with a submenu.
+  ...([15, 30, 45, 60, 90] as const).map(
+    (m): PaletteAction => ({
+      id: `sleep${m}`,
+      label: `Sleep timer: ${m} minutes`,
+      short: `${m} minutes`,
+      group: "sleep",
+      needsPlayer: true,
+      sleep: m,
+    }),
+  ),
+  {
+    id: "sleepProgramme",
+    label: "Sleep timer: end of this programme",
+    short: "End of this programme",
+    group: "sleep",
+    needsPlayer: true,
+    needs: "programme",
+    sleep: "programme",
+  },
+  {
+    id: "sleepOff",
+    label: "Sleep timer: off",
+    short: "Off",
+    group: "sleep",
+    needsPlayer: true,
+    needs: "sleeping",
+    sleep: null,
+  },
   { id: "sync", label: "Refresh data from the provider", hint: "sync", group: "data" },
   { id: "settings", label: "Open settings", hint: "⚙", group: "app" },
   // "upgrade" and "version" are what people type looking for this one.
@@ -103,7 +156,7 @@ export const ACTIONS: PaletteAction[] = [
 /** The order the menu draws groups in, so a new group cannot land in an
  *  arbitrary place depending on where its first action happened to be
  *  declared. */
-export const GROUP_ORDER: ActionGroup[] = ["view", "player", "data", "app"];
+export const GROUP_ORDER: ActionGroup[] = ["view", "player", "sleep", "data", "app"];
 
 /** The palette's own action list, cut into the menu's groups, empty groups
  *  dropped. The menu is therefore a rearrangement of the palette and never a
@@ -121,9 +174,16 @@ export function flatGroups(groups: PaletteAction[][]): PaletteAction[] {
   return groups.flat();
 }
 
-export function availableActions(playing: boolean, hasPrevious = false): PaletteAction[] {
+export function availableActions(
+  playing: boolean,
+  conditions: ActionConditions = {},
+): PaletteAction[] {
   return ACTIONS.filter(
-    (a) => (!a.needsPlayer || playing) && (!a.needsPrevious || hasPrevious),
+    (a) =>
+      (!a.needsPlayer || playing) &&
+      (!a.needsPrevious || conditions.hasPrevious === true) &&
+      (a.needs === undefined ||
+        (a.needs === "sleeping" ? conditions.sleeping === true : conditions.programme === true)),
   );
 }
 

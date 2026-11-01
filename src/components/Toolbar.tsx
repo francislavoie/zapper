@@ -45,6 +45,8 @@ import { useApp, useDispatch } from "../store";
 import { windowControls } from "../window";
 import { useMaximised } from "../hooks/useMaximised";
 import { Bolt, UpdateArrow } from "./icons";
+import { SleepSubMenu } from "./SleepMenu";
+import { SubMenuHost } from "./SubMenu";
 
 export function Toolbar() {
   const state = useApp();
@@ -259,16 +261,19 @@ function Menu({ onChoose }: { onChoose: (a: PaletteAction) => void }) {
 
   // Exactly the palette's list, regrouped. Anything the palette can do, the
   // menu can do, and nothing else — there is no second list to keep in step.
+  // The sleep timer's lengths are one row here, opening a submenu: seven
+  // rows of them would outnumber everything else in the menu.
   const groups = actionGroups(
-    availableActions(player.state !== "stopped", previousChannel !== null),
+    availableActions(player.state !== "stopped", { hasPrevious: previousChannel !== null }),
   );
   let seen = 0;
 
   return (
     <div className="tb-menu" role="menu" aria-label="Main menu">
+      <SubMenuHost>
       {groups.map((group, gi) => (
         <div className="tb-menu-group" key={gi}>
-          {group.map((a) => {
+          {group[0]?.group === "sleep" ? <SleepSubMenu /> : group.map((a) => {
             const index = seen++;
             return (
               <button
@@ -287,6 +292,7 @@ function Menu({ onChoose }: { onChoose: (a: PaletteAction) => void }) {
           })}
         </div>
       ))}
+      </SubMenuHost>
       <div className="tb-menu-foot">
         {ACTIONS.length} actions · <b>Ctrl+P</b> searches them
       </div>

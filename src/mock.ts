@@ -19,7 +19,11 @@ import type {
   MediaKey,
   MediaSessionDto,
   PlayerStateDto,
+  PlayerOptionsDto,
   ProgrammeDto,
+  TrackDto,
+  AspectMode,
+  DeinterlaceMode,
   QualityDto,
   SettingsDto,
   SubtitleStyleDto,
@@ -506,6 +510,66 @@ const playerEmitter = new Emitter<PlayerStateDto>({
   liveJump: null,
 });
 
+const optionsEmitter = new Emitter<PlayerOptionsDto>({
+  audio: [],
+  subtitles: [],
+  aspect: "auto",
+  deinterlace: "off",
+});
+
+const track = (id: number, t: Partial<TrackDto>): TrackDto => ({
+  id,
+  title: null,
+  lang: null,
+  codec: null,
+  channels: null,
+  default: false,
+  forced: false,
+  hearingImpaired: false,
+  visualImpaired: false,
+  selected: false,
+  ...t,
+});
+
+/** Tracks for a stream, so the picture menu has something to show. Three
+ *  shapes by stream id: the common one (a single audio track, no
+ *  subtitles, so no track choice is offered at all), a bilingual broadcast
+ *  with DVB subtitles, and one with audio description and a track with no
+ *  language. */
+function mockTracks(streamId: number): Pick<PlayerOptionsDto, "audio" | "subtitles"> {
+  switch (streamId % 3) {
+    case 1:
+      return {
+        audio: [
+          track(1, { lang: "eng", codec: "ac3", channels: 6, default: true, selected: true }),
+          track(2, { lang: "fre", codec: "aac", channels: 2 }),
+          track(3, { lang: "spa", codec: "mp2", channels: 2, title: "Commentary" }),
+        ],
+        subtitles: [
+          track(1, { lang: "eng", codec: "dvb_subtitle" }),
+          track(2, { lang: "eng", codec: "dvb_teletext", hearingImpaired: true }),
+          track(3, { lang: "fre", codec: "dvb_subtitle" }),
+        ],
+      };
+    case 2:
+      return {
+        audio: [
+          track(1, { lang: "deu", codec: "aac", channels: 2, default: true, selected: true }),
+          track(2, { lang: "deu", codec: "aac", channels: 2, visualImpaired: true }),
+          track(3, { codec: "eac3", channels: 6 }),
+        ],
+        subtitles: [track(1, { lang: "deu", codec: "dvb_teletext" })],
+      };
+    default:
+      return { audio: [track(1, { lang: "eng", codec: "aac", channels: 2, selected: true })], subtitles: [] };
+  }
+}
+
+function patchOptions(p: Partial<PlayerOptionsDto>): PlayerOptionsDto {
+  optionsEmitter.emit({ ...optionsEmitter.last, ...p });
+  return optionsEmitter.last;
+}
+
 const syncEmitter = new Emitter<SyncStatusDto>({
   phase: "idle",
   message: "",
@@ -647,6 +711,7 @@ async function openStream(streamId: number, quality: Partial<PlayerStateDto>) {
     behindLive: 0,
     liveJump: null,
   });
+  patchOptions({ audio: [], subtitles: [] });
   await delay(700);
   if (openSeq !== mine) return;
   // The connect burst: playback starts well behind live, as the real thing
@@ -654,6 +719,7 @@ async function openStream(streamId: number, quality: Partial<PlayerStateDto>) {
   // reported as a jump, which is what the picture's corner announces.
   const behind = 14 + Math.round(Math.random() * 100) / 10;
   patchPlayer({ state: "playing", ...quality, behindLive: behind, bufferedBack: behind, atLiveEdge: false });
+  patchOptions(mockTracks(streamId));
   startBufferClock();
   await delay(2500);
   if (openSeq !== mine || playerEmitter.last.state !== "playing") return;
@@ -806,6 +872,7 @@ export const mockApi = {
       behindLive: 0,
       liveJump: null,
     });
+    patchOptions({ audio: [], subtitles: [] });
   },
 
   togglePause: async () => {
@@ -841,6 +908,16 @@ export const mockApi = {
   },
 
   playerState: async () => playerEmitter.last,
+
+  playerOptions: async () => optionsEmitter.last,
+  setAudioTrack: async (id: number) =>
+    patchOptions({ audio: optionsEmitter.last.audio.map((t) => ({ ...t, selected: t.id === id })) }),
+  setSubtitleTrack: async (id: number | null) =>
+    patchOptions({
+      subtitles: optionsEmitter.last.subtitles.map((t) => ({ ...t, selected: t.id === id })),
+    }),
+  setAspect: async (aspect: AspectMode) => patchOptions({ aspect }),
+  setDeinterlace: async (deinterlace: DeinterlaceMode) => patchOptions({ deinterlace }),
 
   // Synthetic but not static: the graphs are the point of the panel, and a
   // flat line would make a broken one look fine. The buffer breathes, the
@@ -1398,6 +1475,9 @@ export const onMockSyncStatus = (f: (s: SyncStatusDto) => void) =>
 
 export const onMockPlayerState = (f: (s: PlayerStateDto) => void) =>
   Promise.resolve(playerEmitter.on(f));
+
+export const onMockPlayerOptions = (f: (s: PlayerOptionsDto) => void) =>
+  Promise.resolve(optionsEmitter.on(f));
 
 export const onMockUpdate = (f: (s: UpdateStatusDto) => void) =>
   Promise.resolve(updateEmitter.on(f));

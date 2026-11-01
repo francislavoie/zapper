@@ -131,8 +131,9 @@ test("the menu can never offer an action the palette would not", () => {
 test("empty groups are dropped rather than drawn as a stray rule", () => {
   const idle = actionGroups(availableActions(false));
   assert.ok(idle.every((g) => g.length > 0));
-  // With nothing playing the whole player group goes, so there is one fewer.
-  assert.equal(actionGroups(availableActions(true)).length, idle.length + 1);
+  // With nothing playing the whole player group goes, and the sleep timer
+  // with it — there is nothing for it to stop — so there are two fewer.
+  assert.equal(actionGroups(availableActions(true)).length, idle.length + 2);
 });
 
 test("groups draw in a declared order, not in declaration order", () => {

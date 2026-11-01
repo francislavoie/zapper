@@ -6,7 +6,13 @@
 // background stays transparent; only chrome surfaces get colour.
 
 import { Activity, useEffect, useLayoutEffect, useRef } from "react";
-import { backend, isMock, subscribePlayer, subscribeSync } from "./backend";
+import {
+  backend,
+  isMock,
+  subscribePlayer,
+  subscribePlayerOptions,
+  subscribeSync,
+} from "./backend";
 import { paintMockStill } from "./mock";
 import { loadCategories } from "./actions";
 import { errorMessage } from "./logic/async";
@@ -45,6 +51,7 @@ import { Toasts } from "./components/Toasts";
 import { Boundary } from "./components/Crashed";
 import { StatsPanel } from "./components/StatsPanel";
 import { VideoMenu } from "./components/VideoMenu";
+import { SleepTimer } from "./components/SleepTimer";
 import { TooltipHost } from "./components/TooltipHost";
 
 /** How long "Jumped 12s to live" stays over the picture: long enough to be
@@ -312,6 +319,16 @@ export function App() {
     void subscribePlayer((p) => dispatch({ type: "player", value: p }))
       .then((u) => (live ? unsubs.push(u) : u()))
       .catch(() => {});
+    void subscribePlayerOptions((o) => dispatch({ type: "options", value: o }))
+      .then((u) => (live ? unsubs.push(u) : u()))
+      .catch(() => {});
+    backend
+      .playerOptions()
+      .then((o) => live && dispatch({ type: "options", value: o }))
+      .catch(() => {
+        // The picture menu then offers no track choice, which is also what a
+        // single-track stream gets.
+      });
 
     backend
       .syncStatus()
@@ -423,7 +440,7 @@ export function App() {
             the stream is answered and where the diagnostics belong. */}
         {state.videoMenu ? (
           <VideoMenu
-            at={state.videoMenu}
+            menu={state.videoMenu}
             onClose={() => dispatch({ type: "videoMenu", at: null })}
           />
         ) : null}
@@ -467,6 +484,9 @@ export function App() {
       {/* While browsing, a channel number being typed floats over the views;
           while watching it is in the picture's corner (PictureCorner). */}
       {state.mode === "watch" ? null : <ZapChip />}
+      {/* Draws nothing: the sleep timer's clock, here so it runs whatever
+          view is up. */}
+      <SleepTimer />
       <ZoomBadge />
       <Toasts />
       {/* Once, for every tip in the app: targets carry `data-tip` and this

@@ -20,7 +20,11 @@ use tauri::{AppHandle, Emitter};
 
 use crate::catalog::activity::{self, Accumulator};
 use crate::catalog::store;
-use crate::ipc::types::{events, LiveJumpDto, PlaybackState, PlayerStateDto};
+use crate::ipc::tracks;
+use crate::ipc::types::{
+    events, AspectMode, DeinterlaceMode, LiveJumpDto, PlaybackState, PlayerOptionsDto,
+    PlayerStateDto,
+};
 use crate::surface::mpv::{self, Player, Probe, Signal};
 use crate::surface::VideoRect;
 use crate::source::{Playable, Source};
@@ -431,6 +435,18 @@ fn tick(app: &AppHandle, p: &Player) {
     let earned;
     let loaded;
     let newly_failed;
+    // The newest track list this tick, if it moved. Only the last matters.
+    let tracks = signals.iter().rev().find_map(|s| match s {
+        Signal::Tracks(json) => Some(json.as_str()),
+        _ => None,
+    });
+    if let Some(json) = tracks {
+        let (audio, subtitles) = tracks::parse_track_list(json);
+        commit_options(app, |o| {
+            o.audio = audio;
+            o.subtitles = subtitles;
+        });
+    }
     let payload = {
         let mut m = STATE.lock().expect("player state mutex poisoned");
         let was_failed = m.dto.state == PlaybackState::Failed;
@@ -461,7 +477,7 @@ fn tick(app: &AppHandle, p: &Player) {
                         m.ended();
                     }
                 }
-                Signal::StartFile | Signal::FileLoaded => {}
+                Signal::StartFile | Signal::FileLoaded | Signal::Tracks(_) => {}
             }
         }
         m.apply(&probe);
@@ -763,6 +779,7 @@ async fn open(app: &AppHandle, stream_id: i64, target: Playable) -> Result<(), S
     commit(app, |m| m.opening(stream_id));
     let r = on_player(app, move |p| {
         apply_http_headers(p, &target);
+        reset_track_choice(p);
         // `replace` closes the current demuxer before opening the next, which
         // is what keeps this a one-connection client.
         p.load(&target.url).map_err(|e| e.to_string())
@@ -1086,6 +1103,108 @@ pub async fn player_state() -> Result<PlayerStateDto, String> {
         .expect("player state mutex poisoned")
         .dto
         .clone())
+}
+
+// ---------------------------------------------------------------------------
+// The picture menu: tracks, aspect, deinterlacing
+// ---------------------------------------------------------------------------
+
+/// What the picture menu shows. The track lists come from mpv's own
+/// `track-list` notifications (see the heartbeat); the aspect and the
+/// deinterlacing are what was last chosen, which mpv keeps across channel
+/// changes because both are global options rather than per-file ones.
+static OPTIONS: LazyLock<Mutex<PlayerOptionsDto>> =
+    LazyLock::new(|| Mutex::new(PlayerOptionsDto::default()));
+
+/// Changes the picture menu's state and pushes it if anything moved.
+fn commit_options(app: &AppHandle, f: impl FnOnce(&mut PlayerOptionsDto)) -> PlayerOptionsDto {
+    let (now, changed) = {
+        let mut o = OPTIONS.lock().expect("player options mutex poisoned");
+        let before = o.clone();
+        f(&mut o);
+        (o.clone(), *o != before)
+    };
+    if changed {
+        let _ = app.emit(events::PLAYER_OPTIONS, now.clone());
+    }
+    now
+}
+
+/// A track picked on one channel is not a choice for the next.
+///
+/// `aid` and `sid` are options as well as properties: setting one switches
+/// the track *and* stays set for every file after it. Audio track 2 on the
+/// next channel may be a different language, or not exist — and mpv then
+/// plays that channel silent. So each stream opens on mpv's own choice.
+fn reset_track_choice(p: &Player) {
+    for key in ["aid", "sid"] {
+        if let Err(e) = p.set_property(key, "auto") {
+            tracing::warn!("could not reset {key}: {e}");
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn player_options() -> Result<PlayerOptionsDto, String> {
+    Ok(OPTIONS.lock().expect("player options mutex poisoned").clone())
+}
+
+/// Switches to one of the stream's audio tracks, by mpv's audio id.
+#[tauri::command]
+pub async fn set_audio_track(app: AppHandle, id: i64) -> Result<PlayerOptionsDto, String> {
+    on_player(&app, move |p| {
+        p.set_property("aid", &tracks::track_value(Some(id)))
+            .map_err(|e| e.to_string())
+    })
+    .await?;
+    // The list itself follows from mpv's notification; this is so the menu
+    // that asked sees its answer without waiting a heartbeat for it.
+    Ok(commit_options(&app, |o| {
+        for t in &mut o.audio {
+            t.selected = t.id == id;
+        }
+    }))
+}
+
+/// Shows one of the stream's subtitle tracks, or none.
+#[tauri::command]
+pub async fn set_subtitle_track(
+    app: AppHandle,
+    id: Option<i64>,
+) -> Result<PlayerOptionsDto, String> {
+    on_player(&app, move |p| {
+        p.set_property("sid", &tracks::track_value(id))
+            .map_err(|e| e.to_string())
+    })
+    .await?;
+    Ok(commit_options(&app, |o| {
+        for t in &mut o.subtitles {
+            t.selected = Some(t.id) == id;
+        }
+    }))
+}
+
+#[tauri::command]
+pub async fn set_aspect(app: AppHandle, aspect: AspectMode) -> Result<PlayerOptionsDto, String> {
+    let props: Vec<(&'static str, String)> = tracks::aspect_properties(aspect)
+        .iter()
+        .map(|(k, v)| (*k, (*v).to_owned()))
+        .collect();
+    on_player(&app, move |p| apply_properties(p, &props)).await?;
+    Ok(commit_options(&app, |o| o.aspect = aspect))
+}
+
+#[tauri::command]
+pub async fn set_deinterlace(
+    app: AppHandle,
+    mode: DeinterlaceMode,
+) -> Result<PlayerOptionsDto, String> {
+    on_player(&app, move |p| {
+        p.set_property("deinterlace", tracks::deinterlace_value(mode))
+            .map_err(|e| e.to_string())
+    })
+    .await?;
+    Ok(commit_options(&app, |o| o.deinterlace = mode))
 }
 
 // ---------------------------------------------------------------------------

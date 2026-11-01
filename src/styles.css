@@ -1279,6 +1279,56 @@ select option {
   border-top: 1px solid var(--line);
 }
 
+/* A row that opens a submenu: what is chosen now in the hint's place, and a
+   chevron saying there is more. The host is only a context for which
+   submenu is open; it takes no box of its own, so the menu's layout is the
+   items' as before. */
+.submenu-host {
+  display: contents;
+}
+
+.submenu-row .tb-menu-hint {
+  max-width: 9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* In a menu whose other items keep a column for their tick, the rows that
+   open submenus keep it too, so every label starts on one line. */
+.ctx-menu .submenu-row::before {
+  content: "";
+  flex: 0 0 0.875rem;
+  margin-right: -0.25rem;
+}
+
+.submenu-row.open {
+  background: var(--accent-dim);
+}
+
+.submenu-chevron {
+  flex: 0 0 auto;
+  width: 0.75rem;
+  height: 0.75rem;
+  margin: 0 -0.25rem 0 -0.375rem;
+  color: var(--dimmer);
+}
+
+/* Above the menu it comes from: it opens beside it, and where the window is
+   too narrow for that it is pushed back over it. */
+.ctx-sub {
+  z-index: 61;
+}
+
+/* A track's detail can be long ("Commentary · Dolby Digital · 5.1"); it gives
+   way before the name does. */
+.ctx-menu .tb-menu-hint {
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Beside the filter box, and exactly as tall as it. Stretched to the row's
    height rather than given one: the box's height is its font, padding and
    border, and a second height written here would be a second number to keep

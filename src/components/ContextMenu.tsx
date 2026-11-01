@@ -23,6 +23,7 @@ import {
 } from "react";
 import { documentScale } from "../zoom";
 import { menuPosition } from "../logic/favourites";
+import { SubMenuHost } from "./SubMenu";
 
 export interface ContextMenuProps {
   /** Where to open, in visual (client) pixels. */
@@ -39,6 +40,9 @@ export interface ContextMenuProps {
    *  "outside": it is left to the button, which closes the menu itself —
    *  otherwise the press closes it and the click that follows reopens it. */
   anchor?: RefObject<HTMLElement | null>;
+  /** Open upwards from `y` rather than down: for a menu opened from a
+   *  control at the bottom of the window, which it should not cover. */
+  above?: boolean;
   children: ReactNode;
 }
 
@@ -52,6 +56,7 @@ export function ContextMenu({
   onClose,
   takeFocus,
   anchor,
+  above = false,
   children,
 }: ContextMenuProps) {
   const ref = useRef<HTMLDivElement | null>(null);
@@ -69,9 +74,16 @@ export function ContextMenu({
     // it the menu lands at pointer × zoom: right at the top-left corner and
     // further out the further across the window you click.
     const scale = documentScale();
-    const placed = menuPosition(x, y, r.width, r.height, window.innerWidth, window.innerHeight);
+    const placed = menuPosition(
+      x,
+      above ? y - r.height : y,
+      r.width,
+      r.height,
+      window.innerWidth,
+      window.innerHeight,
+    );
     setBox({ left: placed.left / scale, top: placed.top / scale });
-  }, [x, y, heading]);
+  }, [x, y, heading, above]);
 
   useEffect(() => {
     if (!takeFocus) return;
@@ -109,7 +121,11 @@ export function ContextMenu({
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     const step = { ArrowDown: 1, ArrowUp: -1, Home: 0, End: 0 }[e.key];
     if (step === undefined) return;
-    const items = [...(ref.current?.querySelectorAll<HTMLElement>(ITEM) ?? [])];
+    // This menu's own items: a submenu's panel sits inside this element and
+    // walks its own list (see SubMenu).
+    const items = [...(ref.current?.querySelectorAll<HTMLElement>(ITEM) ?? [])].filter(
+      (el) => !el.closest(".ctx-sub"),
+    );
     if (items.length === 0) return;
     e.preventDefault();
     const at = items.indexOf(document.activeElement as HTMLElement);
@@ -140,7 +156,7 @@ export function ContextMenu({
       <div className="ctx-head" data-tip-overflow="">
         {heading}
       </div>
-      {children}
+      <SubMenuHost>{children}</SubMenuHost>
     </div>
   );
 }

@@ -26,7 +26,14 @@ export function CommandPalette() {
 
   const playing = state.player.state !== "stopped";
   const items = paletteItems(
-    filterActions(availableActions(playing, state.previousChannel !== null), query),
+    filterActions(
+      availableActions(playing, {
+        hasPrevious: state.previousChannel !== null,
+        sleeping: state.sleep !== null,
+        programme: state.sleepProgramme !== null,
+      }),
+      query,
+    ),
     results.status === "ready" ? results.data : [],
   );
   const active = clampIndex(index, items.length);

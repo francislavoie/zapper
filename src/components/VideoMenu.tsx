@@ -1,66 +1,207 @@
-// The right-click menu on the picture.
+// The right-click menu on the picture, full size or docked.
 //
 // WebKit's own context menu is suppressed at the GTK level — Back, Reload
 // and Inspect Element mean nothing here, and "Reload" would throw away the
-// running player. This is what takes its place over the video: a short list
-// of things that are actually about the stream.
+// running player. This is what takes its place over the video: things that
+// are about the stream, and only those that apply to it. A single audio
+// track is no choice, so there is no audio row; no subtitles, no subtitle
+// row; nothing playing, none of the picture's settings at all.
+//
+// The choices sit in submenus, each row saying what is chosen now, so the
+// menu stays a short list over a picture it should not hide. Below them are
+// the three views of the picture, with their keys.
+//
+// The same menu narrowed to one submenu (`only`) is what the transport bar's
+// audio button and sleep moon open: the same choices, from a control.
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { menuPosition } from "../logic/favourites";
-import { useDispatch } from "../store";
-import { documentScale } from "../zoom";
+import { runAction, togglePictureFullscreen } from "../actions";
+import { backend } from "../backend";
+import { useFullscreen } from "../hooks/useFullscreen";
+import {
+  ASPECT_CHOICES,
+  DEINTERLACE_CHOICES,
+  choiceLabel,
+  hasAudioChoice,
+  selectedLabel,
+  trackLabel,
+} from "../logic/tracks";
+import { run, useApp, useDispatch, type VideoMenu as VideoMenuState } from "../store";
+import type { PlayerOptionsDto } from "../types";
+import { ContextMenu } from "./ContextMenu";
+import { useSleepLeft } from "../hooks/useSleep";
+import { SleepItems, SleepSubMenu } from "./SleepMenu";
+import { CheckItem, RadioItem, SubMenu } from "./SubMenu";
 
 export interface VideoMenuProps {
-  at: { x: number; y: number };
+  menu: VideoMenuState;
   onClose: () => void;
 }
 
-export function VideoMenu({ at, onClose }: VideoMenuProps) {
+export function VideoMenu({ menu, onClose }: VideoMenuProps) {
+  const state = useApp();
   const dispatch = useDispatch();
-  const ref = useRef<HTMLDivElement | null>(null);
-  const [box, setBox] = useState(() => ({ left: at.x, top: at.y }));
+  const fullscreen = useFullscreen();
+  const sleepLeft = useSleepLeft();
+  const { options, player } = state;
+  const playing = player.state !== "stopped";
 
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const r = el.getBoundingClientRect();
-    // Measured in visual pixels and written back as a CSS length, which is
-    // not the same unit under CSS zoom. See `documentScale`.
-    const scale = documentScale();
-    const placed = menuPosition(at.x, at.y, r.width, r.height, window.innerWidth, window.innerHeight);
-    setBox({ left: placed.left / scale, top: placed.top / scale });
-  }, [at.x, at.y]);
+  /** Every choice closes the menu: it has been answered. The new state comes
+   *  back from the command and is applied at once, rather than a heartbeat
+   *  later when the backend's push arrives. */
+  const choose = (what: string, p: Promise<PlayerOptionsDto>) => {
+    onClose();
+    void run(
+      dispatch,
+      what,
+      p.then((value) => dispatch({ type: "options", value })),
+    );
+  };
 
-  useEffect(() => {
-    const dismiss = (e: Event) => {
-      if (!ref.current?.contains(e.target as Node)) onClose();
-    };
-    // Capture, so a click elsewhere closes this before that click acts.
-    window.addEventListener("mousedown", dismiss, true);
-    window.addEventListener("contextmenu", dismiss, true);
-    window.addEventListener("resize", onClose);
-    return () => {
-      window.removeEventListener("mousedown", dismiss, true);
-      window.removeEventListener("contextmenu", dismiss, true);
-      window.removeEventListener("resize", onClose);
-    };
-  }, [onClose]);
+  const anchor = menu.anchor ? { current: menu.anchor } : undefined;
+
+  if (menu.only === "audio") {
+    return (
+      <ContextMenu x={menu.x} y={menu.y} heading="Audio track" onClose={onClose}
+                   takeFocus={menu.keyboard} anchor={anchor} above={menu.above}>
+        <AudioItems options={options} choose={choose} />
+      </ContextMenu>
+    );
+  }
+
+  if (menu.only === "sleep") {
+    return (
+      <ContextMenu
+        x={menu.x}
+        y={menu.y}
+        heading={sleepLeft ? `Sleep timer · ${sleepLeft} left` : "Sleep timer"}
+        onClose={onClose}
+        takeFocus={menu.keyboard}
+        anchor={anchor}
+        above={menu.above}
+      >
+        <SleepItems />
+      </ContextMenu>
+    );
+  }
 
   return (
-    <div
-      className="ctx-menu"
-      role="menu"
-      aria-label="Stream options"
-      ref={ref}
-      style={{ left: box.left, top: box.top }}
+    <ContextMenu
+      x={menu.x}
+      y={menu.y}
+      heading={state.nowChannel?.cleanName ?? "Picture"}
+      onClose={onClose}
+      takeFocus={menu.keyboard}
     >
-      <button
-        className="ctx-item"
-        role="menuitem"
-        onClick={() => dispatch({ type: "stats", open: true })}
-      >
-        Stats for nerds
-      </button>
-    </div>
+      {hasAudioChoice(options) ? (
+        <SubMenu label="Audio track" value={selectedLabel(options.audio) ?? undefined}>
+          <AudioItems options={options} choose={choose} />
+        </SubMenu>
+      ) : null}
+
+      {options.subtitles.length > 0 ? (
+        <SubMenu label="Subtitles" value={selectedLabel(options.subtitles) ?? "Off"}>
+          <RadioItem
+            checked={!options.subtitles.some((t) => t.selected)}
+            label="Off"
+            onSelect={() => choose("subtitles", backend.setSubtitleTrack(null))}
+          />
+          {options.subtitles.map((t, i) => {
+            const l = trackLabel(t, i);
+            return (
+              <RadioItem
+                key={t.id}
+                checked={t.selected}
+                label={l.label}
+                detail={l.detail}
+                onSelect={() => choose("subtitles", backend.setSubtitleTrack(t.id))}
+              />
+            );
+          })}
+        </SubMenu>
+      ) : null}
+
+      {playing ? (
+        <>
+          <SubMenu label="Aspect ratio" value={choiceLabel(ASPECT_CHOICES, options.aspect)}>
+            {ASPECT_CHOICES.map((c) => (
+              <RadioItem
+                key={c.value}
+                checked={options.aspect === c.value}
+                label={c.label}
+                onSelect={() => choose("aspect ratio", backend.setAspect(c.value))}
+              />
+            ))}
+          </SubMenu>
+          <SubMenu
+            label="Deinterlace"
+            value={choiceLabel(DEINTERLACE_CHOICES, options.deinterlace)}
+          >
+            {DEINTERLACE_CHOICES.map((c) => (
+              <RadioItem
+                key={c.value}
+                checked={options.deinterlace === c.value}
+                label={c.label}
+                onSelect={() => choose("deinterlace", backend.setDeinterlace(c.value))}
+              />
+            ))}
+          </SubMenu>
+          <SleepSubMenu />
+          <div className="ctx-sep" role="separator" />
+        </>
+      ) : null}
+
+      <CheckItem
+        checked={state.statsOpen}
+        label="Stats for nerds"
+        hint="S"
+        onSelect={() => dispatch({ type: "stats", open: !state.statsOpen })}
+      />
+      {playing ? (
+        <CheckItem
+          checked={state.mode === "watch"}
+          label="Theater"
+          hint="T"
+          onSelect={() => {
+            onClose();
+            if (state.mode === "watch") dispatch({ type: "mode", mode: "browse" });
+            else runAction("theater", { dispatch, player, previous: state.previousChannel });
+          }}
+        />
+      ) : null}
+      <CheckItem
+        checked={fullscreen}
+        label="Fullscreen"
+        hint="F"
+        onSelect={() => {
+          onClose();
+          togglePictureFullscreen(dispatch, fullscreen ? "watch" : state.mode);
+        }}
+      />
+    </ContextMenu>
+  );
+}
+
+function AudioItems({
+  options,
+  choose,
+}: {
+  options: PlayerOptionsDto;
+  choose: (what: string, p: Promise<PlayerOptionsDto>) => void;
+}) {
+  return (
+    <>
+      {options.audio.map((t, i) => {
+        const l = trackLabel(t, i);
+        return (
+          <RadioItem
+            key={t.id}
+            checked={t.selected}
+            label={l.label}
+            detail={l.detail}
+            onSelect={() => choose("audio track", backend.setAudioTrack(t.id))}
+          />
+        );
+      })}
+    </>
   );
 }

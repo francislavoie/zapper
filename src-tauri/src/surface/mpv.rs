@@ -78,6 +78,15 @@ impl Player {
         })
         .context("initialising mpv")?;
 
+        // The track list is pushed rather than polled: it changes once per
+        // channel, or when a multiplex announces a track late, and also when
+        // a track is switched (its `selected` flags move). Observed as a
+        // string, mpv hands over the whole list as JSON with each change.
+        // Not fatal: without it the picture menu offers no track choice.
+        if let Err(e) = mpv.observe_property("track-list", libmpv2::Format::String, 0) {
+            tracing::warn!("could not observe the track list: {e}");
+        }
+
         let mpv: &'static Mpv = Box::leak(Box::new(mpv));
         MPV.set(mpv)
             .map_err(|_| anyhow!("mpv is already initialised in this process"))?;
@@ -220,6 +229,8 @@ pub enum Signal {
         /// change back to stopped.
         replaced: bool,
     },
+    /// mpv's `track-list`, as JSON, after it changed.
+    Tracks(String),
 }
 
 /// A one-shot reading for the diagnostics panel.
@@ -341,6 +352,11 @@ impl Player {
                             | libmpv2::mpv_end_file_reason::Quit
                     ),
                 }),
+                Ok(libmpv2::events::Event::PropertyChange {
+                    name: "track-list",
+                    change: libmpv2::events::PropertyData::Str(json),
+                    ..
+                }) => out.push(Signal::Tracks(json.to_owned())),
                 Ok(libmpv2::events::Event::QueueOverflow) => {
                     tracing::warn!("mpv event queue overflowed; some state changes were lost");
                 }

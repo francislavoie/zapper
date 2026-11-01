@@ -38,6 +38,10 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
         } else if (state.categoryOptions) {
           // The rail's options menu: also a menu, also opened last.
           dispatch({ type: "categoryOptions", menu: null });
+        } else if (state.videoMenu) {
+          // The picture's menu: opened last, like the others. A submenu
+          // inside it that has focus closes itself first (see SubMenu).
+          dispatch({ type: "videoMenu", at: null });
         } else if (state.menuOpen) {
           dispatch({ type: "menu", open: false });
         } else if (state.aboutOpen) {
@@ -190,6 +194,7 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
     state.favouriteMenu,
     state.categoryMenu,
     state.categoryOptions,
+    state.videoMenu,
     state.statsOpen,
     state.previousChannel,
   ]);

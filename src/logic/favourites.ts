@@ -160,6 +160,35 @@ export function menuPosition(
   };
 }
 
+/** Where a submenu goes beside the row that opened it.
+ *
+ *  To the right, with its first item level with the row, which is where the
+ *  pointer is already heading. If there is no room on the right it opens to
+ *  the left of the parent menu instead — overlapping the menu it came from
+ *  would hide the row that explains it — and as a last resort it is pushed
+ *  back inside the window. Vertically it slides up as far as it must to fit.
+ *  `row` is in the same visual pixels as the viewport. */
+export function subMenuPosition(
+  row: { left: number; right: number; top: number },
+  width: number,
+  height: number,
+  viewportWidth: number,
+  viewportHeight: number,
+  margin = 6,
+  /** The panel's own padding, so its first item lines up with the row. */
+  inset = 4,
+): MenuBox {
+  const right = row.right + 2;
+  const left =
+    right + width + margin <= viewportWidth
+      ? right
+      : row.left - 2 - width >= margin
+        ? row.left - 2 - width
+        : Math.max(margin, viewportWidth - width - margin);
+  const top = Math.max(margin, Math.min(row.top - inset, viewportHeight - height - margin));
+  return { left, top };
+}
+
 /** How many favourites the rail asks for.
  *
  *  More than fills the rail at any zoom, and short enough that the backend's

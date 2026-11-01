@@ -384,3 +384,39 @@ export function Check({ className, title }: IconProps) {
     </svg>
   );
 }
+
+/** A crescent: the sleep timer. One circle with a second one cut out of it,
+ *  so the shape is a moon at any size rather than a smudge. */
+export function Moon({ className, title }: IconProps) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" aria-hidden={!title} focusable="false">
+      {title ? <title>{title}</title> : null}
+      <path d="M19.5 14.6A8 8 0 1 1 9.4 4.5a6.3 6.3 0 0 0 10.1 10.1Z" fill="currentColor" />
+    </svg>
+  );
+}
+
+/** A speech balloon with two lines in it: the stream's audio tracks, which
+ *  are almost always a choice of language. */
+export function AudioTracks({ className, title }: IconProps) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" aria-hidden={!title} focusable="false">
+      {title ? <title>{title}</title> : null}
+      <path d="M5 4.5h14a2 2 0 0 1 2 2v8.5a2 2 0 0 1-2 2h-7.5L7 20.5v-3.5H5a2 2 0 0 1-2-2V6.5a2 2 0 0 1 2-2Z"
+            fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />
+      <path d="M7.5 9H16.5M7.5 12.5H13.5" fill="none" stroke="currentColor" strokeWidth="1.7"
+            strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/** Points at the submenu a menu row opens. */
+export function ChevronRight({ className, title }: IconProps) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" aria-hidden={!title} focusable="false">
+      {title ? <title>{title}</title> : null}
+      <path d="M9.5 6 15.5 12 9.5 18" fill="none" stroke="currentColor" strokeWidth="2"
+            strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}

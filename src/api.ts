@@ -13,6 +13,9 @@ import {
   type CategoryDto,
   type ChannelDto,
   type PlayerStateDto,
+  type PlayerOptionsDto,
+  type AspectMode,
+  type DeinterlaceMode,
   type ProgrammeDto,
   type SettingsDto,
   type SubtitleStyleDto,
@@ -63,6 +66,14 @@ export const api = {
   setVideoRect: (rect: VideoRect) => invoke<void>("set_video_rect", { rect }),
   playerState: () => invoke<PlayerStateDto>("player_state"),
   playerStats: () => invoke<StatsDto>("player_stats"),
+  playerOptions: () => invoke<PlayerOptionsDto>("player_options"),
+  setAudioTrack: (id: number) => invoke<PlayerOptionsDto>("set_audio_track", { id }),
+  /** `null` turns subtitles off. */
+  setSubtitleTrack: (id: number | null) =>
+    invoke<PlayerOptionsDto>("set_subtitle_track", { id }),
+  setAspect: (aspect: AspectMode) => invoke<PlayerOptionsDto>("set_aspect", { aspect }),
+  setDeinterlace: (mode: DeinterlaceMode) =>
+    invoke<PlayerOptionsDto>("set_deinterlace", { mode }),
   thumbnailAt: (behindLive: number) =>
     invoke<ThumbnailDto | null>("thumbnail_at", { behindLive }),
 
@@ -126,6 +137,9 @@ export const onSyncStatus = (f: (s: SyncStatusDto) => void): Promise<UnlistenFn>
 
 export const onPlayerState = (f: (s: PlayerStateDto) => void): Promise<UnlistenFn> =>
   listen<PlayerStateDto>(EVENTS.playerState, (e) => f(e.payload));
+
+export const onPlayerOptions = (f: (s: PlayerOptionsDto) => void): Promise<UnlistenFn> =>
+  listen<PlayerOptionsDto>(EVENTS.playerOptions, (e) => f(e.payload));
 
 export const onUpdate = (f: (s: UpdateStatusDto) => void): Promise<UnlistenFn> =>
   listen<UpdateStatusDto>(EVENTS.update, (e) => f(e.payload));
