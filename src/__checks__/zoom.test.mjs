@@ -185,13 +185,15 @@ test("a bare wheel is not a zoom — over the video it is the volume", () => {
   assert.equal(zoomWheelCommand({ deltaY: 120, ctrlKey: false }), null);
 });
 
-// index.html applies the remembered zoom in an inline script, before the
-// bundle exists to be imported from. That duplicates the storage key and the
-// bounds, and a silent drift there would make the app open at the wrong size
-// with nothing to show for it.
-test("index.html's zoom bootstrap agrees with the module", async () => {
+// public/boot.js applies the remembered zoom before the bundle exists to be
+// imported from. That duplicates the storage key and the bounds, and a silent
+// drift there would make the app open at the wrong size with nothing to show
+// for it.
+test("the zoom bootstrap agrees with the module", async () => {
   const { readFileSync } = await import("node:fs");
-  const html = readFileSync(new URL("../../index.html", import.meta.url), "utf8");
+  const html = readFileSync(new URL("../../public/boot.js", import.meta.url), "utf8");
+  const css = readFileSync(new URL("../../public/boot.css", import.meta.url), "utf8");
+  assert.match(css, /html\.zoom-pending\s*\{\s*visibility:\s*hidden;/);
   assert.ok(
     html.includes(`localStorage.getItem("${ZOOM_STORAGE_KEY}")`),
     "the bootstrap reads a different storage key than the module writes",
@@ -206,4 +208,18 @@ test("index.html's zoom bootstrap agrees with the module", async () => {
     html.includes('classList.remove("zoom-pending")'),
     "nothing reveals the page if the bundle never loads",
   );
+});
+
+// The recording service serves this page to browsers under a policy that runs
+// no inline script and applies no inline style (src-tauri/src/recording/web.rs),
+// so index.html loads the bootstrap from files, before the bundle.
+test("index.html has no inline script or style", async () => {
+  const { readFileSync } = await import("node:fs");
+  const html = readFileSync(new URL("../../index.html", import.meta.url), "utf8");
+  assert.doesNotMatch(html, /<script(?![^>]*\bsrc=)[^>]*>/, "an inline <script>");
+  assert.doesNotMatch(html, /<style/, "an inline <style>");
+  assert.doesNotMatch(html, /\son[a-z]+=/i, "an inline event handler");
+  const boot = html.indexOf('src="/boot.js"');
+  assert.ok(boot > 0 && boot < html.indexOf("/src/main.tsx"), "boot.js runs before the bundle");
+  assert.ok(html.indexOf('href="/boot.css"') < boot, "boot.css applies before boot.js hides the page");
 });
