@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use tauri::{Emitter, Manager};
 
-use crate::ipc::types::{events, InstallOutcomeDto, UpdateStatusDto};
+use crate::ipc::types::{events, InstallOutcomeDto, InstallWhen, UpdateStatusDto};
 use crate::updates::{self, install::detect_install_kind, Updates};
 
 /// Builds the updater, makes it the app's state, and starts the automatic
@@ -102,9 +102,11 @@ pub async fn update_cancel(u: State<'_>) -> Result<UpdateStatusDto, String> {
     Ok(u.cancel_download())
 }
 
+/// `when`: what to do about a recording in progress (Windows); asked about
+/// first when not given.
 #[tauri::command]
-pub async fn update_install(u: State<'_>) -> Result<InstallOutcomeDto, String> {
-    u.install().await
+pub async fn update_install(u: State<'_>, when: Option<InstallWhen>) -> Result<InstallOutcomeDto, String> {
+    u.install_when(when.unwrap_or_default()).await
 }
 
 #[tauri::command]

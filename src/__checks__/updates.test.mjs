@@ -18,12 +18,14 @@ import {
   kindLabel,
   nextStep,
   percentOf,
+  recordingPrompt,
   releaseOf,
   showsBadge,
   statusLine,
   stepLabel,
 } from "../logic/updates.ts";
 import { ACTIONS, filterActions } from "../logic/palette.ts";
+import { hhmm, setTimeFormat } from "../logic/format.ts";
 import { DEFAULT_SETTINGS, clampSettings } from "../logic/settings.ts";
 
 const release = (p = {}) => ({
@@ -87,6 +89,8 @@ test("the main button always does the next sensible thing", () => {
   assert.equal(nextStep({ state: "downloading", release: release(), received: 1, total: 2 }), "cancel");
   assert.equal(nextStep({ state: "ready", release: release() }), "install");
   assert.equal(nextStep({ state: "installing", release: release() }), null);
+  // Waiting for a recording to finish can be called off.
+  assert.equal(nextStep({ state: "waitingForRecording", release: release(), until: null }), "cancel");
   assert.equal(nextStep({ state: "installed", release: release() }), "restart");
   assert.equal(nextStep({ state: "failed", message: "x", release: release() }), "download");
   assert.equal(nextStep({ state: "failed", message: "x", release: release({ asset: null }) }), "page");
@@ -145,6 +149,7 @@ test("every state has a sentence, and not configured says why", () => {
     { state: "downloading", release: release(), received: 1, total: 2 },
     { state: "ready", release: release() },
     { state: "installing", release: release() },
+    { state: "waitingForRecording", release: release(), until: null },
     { state: "installed", release: release() },
     { state: "failed", message: "The download doesn't match its checksum", release: release() },
   ];
@@ -152,6 +157,30 @@ test("every state has a sentence, and not configured says why", () => {
   assert.match(statusLine(status({ state: "notConfigured" })), /aren't configured/);
   assert.equal(statusLine(status({ state: "upToDate" })), "zapper 0.1.0 is the newest version.");
   assert.match(statusLine(status(states.at(-1))), /checksum/, "a failure says what failed");
+});
+
+test("an install that would stop a recording says what, until when, and offers both ways", () => {
+  setTimeFormat("24h");
+  const until = Math.floor(new Date(2026, 10, 3, 21, 5).getTime() / 1000);
+  const p = recordingPrompt(until, "The Late Film");
+  assert.match(p.message, /recording “The Late Film” until 21:05/);
+  assert.match(p.message, /what it has recorded so far is kept/);
+  assert.equal(p.wait, "Install at 21:05, when it finishes");
+  assert.equal(p.now, "Install now");
+  // A service that cannot say: no title, no time, still two choices.
+  const q = recordingPrompt(null, null);
+  assert.match(q.message, /recording a programme\./);
+  assert.equal(q.wait, "Install when it finishes");
+  // The time follows the clock setting, like every other.
+  setTimeFormat("12h");
+  assert.equal(recordingPrompt(until, null).wait, `Install at ${hhmm(until)}, when it finishes`);
+  assert.match(recordingPrompt(until, null).wait, /9:05 pm/);
+  setTimeFormat("24h");
+  // And the waiting state says when it will happen.
+  const w = status({ state: "waitingForRecording", release: release(), until });
+  assert.match(statusLine(w), /installs when the recording finishes, at 21:05\./);
+  assert.equal(badgeShort(w.state), "Waiting");
+  assert.ok(showsBadge(w.state));
 });
 
 test("install kinds have names, and the package managers warn about the password", () => {

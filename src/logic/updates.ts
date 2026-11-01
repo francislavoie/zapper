@@ -6,6 +6,7 @@
 //
 // Pure; checked in src/__checks__/updates.test.mjs.
 
+import { hhmm } from "./format.ts";
 import type { InstallKind, UpdateReleaseDto, UpdateStateDto, UpdateStatusDto } from "../types";
 
 /** The release a state carries, if any. A failed check carries none. */
@@ -43,6 +44,8 @@ export function badgeLabel(s: UpdateStateDto): string {
       return "Update ready to install";
     case "installing":
       return "Installing update…";
+    case "waitingForRecording":
+      return "Update waits for a recording";
     case "installed":
       return "Restart to update";
     case "failed":
@@ -65,6 +68,8 @@ export function badgeShort(s: UpdateStateDto): string {
       return "Install";
     case "installing":
       return "Installing";
+    case "waitingForRecording":
+      return "Waiting";
     case "installed":
       return "Restart";
     case "failed":
@@ -94,6 +99,8 @@ export function statusLine(st: UpdateStatusDto): string {
       return `zapper ${s.release.version} is downloaded and checked, ready to install.`;
     case "installing":
       return `Installing zapper ${s.release.version}…`;
+    case "waitingForRecording":
+      return `zapper ${s.release.version} installs when the recording finishes${s.until ? `, at ${hhmm(s.until)}` : ""}.`;
     case "installed":
       return `zapper ${s.release.version} is installed. Restart zapper to start using it.`;
     case "failed":
@@ -125,6 +132,7 @@ export function nextStep(s: UpdateStateDto): UpdateStep {
       // there is nothing to download, only a page to read.
       return s.release.asset ? "download" : "page";
     case "downloading":
+    case "waitingForRecording":
       return "cancel";
     case "ready":
       return "install";
@@ -153,6 +161,22 @@ export function stepLabel(step: UpdateStep, s: UpdateStateDto): string {
     case null:
       return "";
   }
+}
+
+/** What the dialog says when installing would stop a recording in progress
+ *  (Windows: the installer replaces the recording service's program), and
+ *  its two ways on. */
+export function recordingPrompt(
+  until: number | null,
+  title: string | null,
+): { message: string; wait: string; now: string } {
+  const what = title ? `“${title}”` : "a programme";
+  const when = until ? ` until ${hhmm(until)}` : "";
+  return {
+    message: `The recording service is recording ${what}${when}. Installing the update stops it; what it has recorded so far is kept.`,
+    wait: until ? `Install at ${hhmm(until)}, when it finishes` : "Install when it finishes",
+    now: "Install now",
+  };
 }
 
 /** The toast for an update nobody asked about: once per version, ever, this

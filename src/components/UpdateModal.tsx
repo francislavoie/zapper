@@ -22,13 +22,14 @@ import {
   kindLabel,
   nextStep,
   percentOf,
+  recordingPrompt,
   releaseOf,
   statusLine,
   stepLabel,
   type UpdateStep,
 } from "../logic/updates";
 import { useApp, useDispatch } from "../store";
-import type { InstallOutcomeDto } from "../types";
+import type { InstallOutcomeDto, InstallWhen } from "../types";
 
 export function UpdateModal() {
   const { update } = useApp();
@@ -49,12 +50,12 @@ export function UpdateModal() {
   const release = releaseOf(s);
   const step = nextStep(s);
 
-  const install = async () => {
+  const install = async (when: InstallWhen = "ask") => {
     setError(null);
     setOutcome(null);
     setPending(true);
     try {
-      setOutcome(await backend.updateInstall());
+      setOutcome(await backend.updateInstall(when));
     } catch (e) {
       setError(errorMessage(e));
     } finally {
@@ -73,10 +74,12 @@ export function UpdateModal() {
   }, [s.state]);
 
   const act = async (what: UpdateStep) => {
-    if (pending) return;
+    // Cancel answers even while a request is out: waiting for a recording to
+    // finish is an install request that stays out until it does.
+    if (pending && what !== "cancel") return;
     if (what === "install") return install();
     setError(null);
-    setPending(true);
+    if (what !== "cancel") setPending(true);
     try {
       switch (what) {
         case "check":
@@ -104,7 +107,7 @@ export function UpdateModal() {
       installWhenReady.current = false;
       setError(errorMessage(e));
     } finally {
-      setPending(false);
+      if (what !== "cancel") setPending(false);
     }
   };
 
@@ -115,7 +118,9 @@ export function UpdateModal() {
     );
   };
 
-  const busy = pending || s.state === "checking" || s.state === "installing";
+  const busy =
+    pending || s.state === "checking" || s.state === "installing" || s.state === "waitingForRecording";
+  const asking = outcome?.outcome === "recording" ? recordingPrompt(outcome.until, outcome.title) : null;
 
   return (
     <div
@@ -211,6 +216,8 @@ export function UpdateModal() {
           </div>
         ) : null}
 
+        {asking ? <div className="settings-note">{asking.message}</div> : null}
+
         {error ? <div className="settings-note bad">{error}</div> : null}
 
         <div className="about-actions update-actions">
@@ -219,7 +226,16 @@ export function UpdateModal() {
               Release page
             </button>
           ) : null}
-          {step ? (
+          {asking ? (
+            <>
+              <button className="ctl" disabled={pending} onClick={() => void install("now")}>
+                {asking.now}
+              </button>
+              <button className="ctl on" disabled={pending} onClick={() => void install("whenIdle")} autoFocus>
+                {asking.wait}
+              </button>
+            </>
+          ) : step ? (
             <button
               className="ctl on"
               // Cancel stays live during a download: it is the one thing a

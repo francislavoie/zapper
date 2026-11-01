@@ -44,7 +44,8 @@ pub mod release;
 pub mod version;
 
 use crate::ipc::types::{
-    InstallOutcomeDto, UpdateAssetDto, UpdateReleaseDto, UpdateStateDto, UpdateStatusDto,
+    InstallOutcomeDto, InstallWhen, UpdateAssetDto, UpdateReleaseDto, UpdateStateDto,
+    UpdateStatusDto,
 };
 use install::{
     app_bundle, bundle_replaceable, install_command, manual_command, relaunch_command,
@@ -126,6 +127,55 @@ pub trait UpdateRunner: Send + Sync {
     fn spawn(&self, cmd: &InstallCommand) -> std::io::Result<()>;
     /// Quits zapper, as closing the window does.
     fn quit(&self);
+    /// The recording service on this computer, if one answers.
+    fn recording(&self) -> Pin<Box<dyn Future<Output = Option<Recording>> + Send + '_>> {
+        Box::pin(async { None })
+    }
+    /// Stops it now, cleanly (what it recorded finished into playable
+    /// files), and waits for it to be gone.
+    fn stop_recording(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(async {})
+    }
+    /// How often a wait for the recording to finish looks again.
+    fn recording_poll(&self) -> Duration {
+        Duration::from_secs(15)
+    }
+}
+
+/// What the recording service says about stopping it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Recording {
+    /// Stopping it now would cut a recording short, or one about to start.
+    pub busy: bool,
+    /// When it will be idle, if it says.
+    pub until: Option<i64>,
+    /// What it is recording.
+    pub title: Option<String>,
+}
+
+/// What an install that must stop the recording service does first.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Gate {
+    /// No service, or one with nothing to lose: go ahead.
+    Proceed,
+    /// It is recording: say so, and let the person choose.
+    Ask { until: Option<i64>, title: Option<String> },
+    /// It is recording, and the person said to stop it.
+    StopFirst,
+    /// It is recording, and the person said to wait.
+    Wait { until: Option<i64> },
+}
+
+/// [`Gate`] from what was asked and what the service says.
+pub fn gate(when: InstallWhen, service: Option<&Recording>) -> Gate {
+    match service {
+        Some(r) if r.busy => match when {
+            InstallWhen::Ask => Gate::Ask { until: r.until, title: r.title.clone() },
+            InstallWhen::Now => Gate::StopFirst,
+            InstallWhen::WhenIdle => Gate::Wait { until: r.until },
+        },
+        _ => Gate::Proceed,
+    }
 }
 
 pub type Emit = Arc<dyn Fn(UpdateStatusDto) + Send + Sync>;
@@ -174,6 +224,8 @@ struct Inner {
     /// Restart has been asked for and the relaunch started: a second press
     /// must not start a second copy.
     restarting: bool,
+    /// Set by Cancel while an install waits for the recording service.
+    wait_cancel: Option<Arc<AtomicBool>>,
 }
 
 pub struct Updates {
@@ -188,6 +240,7 @@ fn release_of(state: &UpdateStateDto) -> Option<&UpdateReleaseDto> {
         | UpdateStateDto::Downloading { release, .. }
         | UpdateStateDto::Ready { release }
         | UpdateStateDto::Installing { release }
+        | UpdateStateDto::WaitingForRecording { release, .. }
         | UpdateStateDto::Installed { release } => Some(release),
         UpdateStateDto::Failed { release, .. } => release.as_ref(),
         UpdateStateDto::NotConfigured
@@ -205,6 +258,7 @@ fn busy(state: &UpdateStateDto) -> bool {
         UpdateStateDto::Downloading { .. }
             | UpdateStateDto::Ready { .. }
             | UpdateStateDto::Installing { .. }
+            | UpdateStateDto::WaitingForRecording { .. }
             | UpdateStateDto::Installed { .. }
     )
 }
@@ -231,6 +285,7 @@ impl Updates {
                 announced: (None, 0),
                 checking: false,
                 restarting: false,
+                wait_cancel: None,
             }),
         }
     }
@@ -494,6 +549,9 @@ impl Updates {
     /// Stops the download; the update is offered again.
     pub fn cancel_download(&self) -> UpdateStatusDto {
         let mut inner = self.lock();
+        if let Some(c) = inner.wait_cancel.take() {
+            c.store(true, Ordering::SeqCst);
+        }
         if let Some((_, cancel)) = inner.download.take() {
             cancel.store(true, Ordering::SeqCst);
             if let Some(release) = release_of(&inner.state).cloned() {
@@ -516,6 +574,12 @@ impl Updates {
     /// Ready, so a second press (or a second window's) gets "no verified
     /// update" rather than a second package manager run.
     pub async fn install(&self) -> Result<InstallOutcomeDto, String> {
+        self.install_when(InstallWhen::Ask).await
+    }
+
+    /// [`Self::install`], saying what to do about a recording in progress
+    /// where the installer must stop the recording service (Windows).
+    pub async fn install_when(&self, when: InstallWhen) -> Result<InstallOutcomeDto, String> {
         let (release, file, digest) = {
             let mut inner = self.lock();
             let claimed = match (&inner.state, inner.found.as_ref().and_then(|f| f.file.clone())) {
@@ -573,8 +637,43 @@ impl Updates {
             // comment for what that does and does not guarantee.
             let (dir, from, want) = (self.cfg.dir.clone(), file.clone(), digest.clone());
             // The recording service runs zapper-server.exe from the folder
-            // the installer replaces, and a file in use cannot be: stop it.
-            // zapper starts it again when it reopens (lib.rs).
+            // the installer replaces, and a file in use cannot be: stop it,
+            // without cutting a recording short unasked. zapper starts it
+            // again when it reopens (lib.rs).
+            let runner = &self.cfg.runner;
+            let service = runner.recording().await;
+            match gate(when, service.as_ref()) {
+                Gate::Ask { until, title } => {
+                    self.back_to_ready(release);
+                    return Ok(InstallOutcomeDto::Recording { until, title });
+                }
+                Gate::Wait { until } => {
+                    let cancel = Arc::new(AtomicBool::new(false));
+                    {
+                        let mut inner = self.lock();
+                        inner.wait_cancel = Some(cancel.clone());
+                        self.set(&mut inner, UpdateStateDto::WaitingForRecording { release: release.clone(), until });
+                    }
+                    loop {
+                        tokio::time::sleep(runner.recording_poll()).await;
+                        if cancel.load(Ordering::SeqCst) {
+                            self.back_to_ready(release);
+                            return Ok(InstallOutcomeDto::NotNow);
+                        }
+                        let now = runner.recording().await;
+                        if gate(InstallWhen::WhenIdle, now.as_ref()) == Gate::Proceed {
+                            break;
+                        }
+                    }
+                    let mut inner = self.lock();
+                    inner.wait_cancel = None;
+                    self.set(&mut inner, UpdateStateDto::Installing { release: release.clone() });
+                }
+                Gate::StopFirst | Gate::Proceed => {}
+            }
+            if service.is_some() {
+                runner.stop_recording().await;
+            }
             let _ = tokio::task::spawn_blocking(crate::recording::service::stop_for_update).await;
             let staged = match tokio::task::spawn_blocking(move || stage_for_launch(&dir, &from, &want)).await {
                 Ok(Ok(p)) => p,
@@ -800,6 +899,38 @@ impl UpdateRunner for SystemRunner {
 
     fn quit(&self) {
         (self.quit)();
+    }
+
+    fn recording(&self) -> Pin<Box<dyn Future<Output = Option<Recording>> + Send + '_>> {
+        Box::pin(async {
+            let c = crate::recording::client::Client::local().ok()?;
+            let st = c.status().await.ok()?;
+            Some(Recording {
+                busy: st.busy(),
+                until: st.idle_at.or(st.active.iter().map(|a| a.until).max()),
+                title: st.active.first().map(|a| a.title.clone()),
+            })
+        })
+    }
+
+    fn stop_recording(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(async {
+            use crate::recording::api::{ShutdownRequest, ShutdownWhen};
+            let Ok(c) = crate::recording::client::Client::local() else { return };
+            let now = ShutdownRequest { when: ShutdownWhen::Now, restart: false };
+            if let Err(e) = c.shutdown(&now).await {
+                tracing::warn!("asking the recording service to stop: {e:#}");
+                return;
+            }
+            // Gone once it no longer answers; it closes its listeners last.
+            for _ in 0..240 {
+                if c.version().await.is_err() {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+            tracing::warn!("the recording service did not stop within two minutes");
+        })
     }
 }
 

@@ -58,6 +58,10 @@ struct FakeRunner {
     quits: AtomicUsize,
     /// What `run` answers: an exit code, or `None` for "no such program".
     code: Mutex<Option<i32>>,
+    /// What the recording service answers, one per look (the last repeats).
+    recording: Mutex<Vec<Option<Recording>>>,
+    /// Stops asked of it.
+    stops: AtomicUsize,
 }
 
 impl UpdateRunner for FakeRunner {
@@ -77,6 +81,18 @@ impl UpdateRunner for FakeRunner {
     }
     fn quit(&self) {
         self.quits.fetch_add(1, Ordering::SeqCst);
+    }
+    fn recording(&self) -> Pin<Box<dyn Future<Output = Option<Recording>> + Send + '_>> {
+        let mut answers = self.recording.lock().unwrap();
+        let r = if answers.len() > 1 { answers.remove(0) } else { answers.first().cloned().flatten() };
+        Box::pin(async move { r })
+    }
+    fn stop_recording(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        self.stops.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async {})
+    }
+    fn recording_poll(&self) -> Duration {
+        Duration::from_millis(5)
     }
 }
 
@@ -409,6 +425,84 @@ async fn windows_installers_start_and_zapper_quits() {
     assert!(folder.file_name().unwrap().to_string_lossy().starts_with("launch-"), "{}", folder.display());
     assert_eq!(std::fs::read(&program).unwrap(), b"hello");
     assert_eq!(r.runner.quits.load(Ordering::SeqCst), 1);
+}
+
+/// A rig with the NSIS installer of 0.3.0 downloaded and ready.
+async fn windows_ready() -> Rig {
+    let r = rig(InstallKind::Nsis, true, "0.2.0");
+    let name = asset_name(InstallKind::Nsis, &Version::parse("0.3.0").unwrap()).unwrap();
+    let mut rel = a_release_with_the_deb();
+    rel.assets[0].name = name.clone();
+    *r.source.releases.lock().unwrap() = Ok(vec![rel]);
+    *r.source.sums.lock().unwrap() = format!("{HELLO}  {name}\n");
+    r.updates.check(1).await.unwrap();
+    r.updates.start_download().unwrap();
+    settle(&r.updates).await;
+    r
+}
+
+fn recording(busy: bool) -> Option<Recording> {
+    Some(Recording { busy, until: busy.then_some(5_000), title: busy.then(|| "Fixture".to_string()) })
+}
+
+#[test]
+fn the_gate_asks_only_when_a_recording_would_be_cut() {
+    assert_eq!(gate(InstallWhen::Ask, None), Gate::Proceed, "no service");
+    assert_eq!(gate(InstallWhen::Ask, recording(false).as_ref()), Gate::Proceed, "idle");
+    assert_eq!(
+        gate(InstallWhen::Ask, recording(true).as_ref()),
+        Gate::Ask { until: Some(5_000), title: Some("Fixture".into()) }
+    );
+    assert_eq!(gate(InstallWhen::Now, recording(true).as_ref()), Gate::StopFirst);
+    assert_eq!(gate(InstallWhen::WhenIdle, recording(true).as_ref()), Gate::Wait { until: Some(5_000) });
+}
+
+#[tokio::test]
+async fn a_recording_in_progress_is_asked_about_before_installing() {
+    let r = windows_ready().await;
+    *r.runner.recording.lock().unwrap() = vec![recording(true)];
+    let o = r.updates.install().await.unwrap();
+    assert_eq!(o, InstallOutcomeDto::Recording { until: Some(5_000), title: Some("Fixture".into()) });
+    assert!(r.runner.spawned.lock().unwrap().is_empty(), "nothing started");
+    assert_eq!(r.runner.stops.load(Ordering::SeqCst), 0, "nothing stopped");
+    assert!(matches!(r.updates.status().state, UpdateStateDto::Ready { .. }));
+    // "Install now": stopped cleanly first, then the installer.
+    assert_eq!(r.updates.install_when(InstallWhen::Now).await.unwrap(), InstallOutcomeDto::Quitting);
+    assert_eq!(r.runner.stops.load(Ordering::SeqCst), 1);
+    assert_eq!(r.runner.spawned.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn installing_when_the_recording_finishes_waits_for_it() {
+    let r = windows_ready().await;
+    *r.runner.recording.lock().unwrap() = vec![recording(true), recording(true), recording(true), recording(false)];
+    assert_eq!(r.updates.install_when(InstallWhen::WhenIdle).await.unwrap(), InstallOutcomeDto::Quitting);
+    assert!(r.runner.recording.lock().unwrap().len() == 1, "looked until it was idle");
+    assert!(r
+        .emitted
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|s| matches!(s.state, UpdateStateDto::WaitingForRecording { until: Some(5_000), .. })));
+    assert_eq!(r.runner.spawned.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn waiting_for_the_recording_can_be_cancelled() {
+    let r = Arc::new(windows_ready().await);
+    *r.runner.recording.lock().unwrap() = vec![recording(true)];
+    let u = r.updates.clone();
+    let waiting = tokio::spawn(async move { u.install_when(InstallWhen::WhenIdle).await });
+    for _ in 0..200 {
+        if matches!(r.updates.status().state, UpdateStateDto::WaitingForRecording { .. }) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    r.updates.cancel_download();
+    assert_eq!(waiting.await.unwrap().unwrap(), InstallOutcomeDto::NotNow);
+    assert!(matches!(r.updates.status().state, UpdateStateDto::Ready { .. }));
+    assert!(r.runner.spawned.lock().unwrap().is_empty());
 }
 
 #[tokio::test]

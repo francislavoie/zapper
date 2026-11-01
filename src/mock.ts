@@ -42,6 +42,7 @@ import type {
   SyncStatusDto,
   InstallKind,
   InstallOutcomeDto,
+  InstallWhen,
   UpdateReleaseDto,
   UpdateStatusDto,
   VideoRect,
@@ -719,7 +720,9 @@ let storedSettings: SettingsDto = {
  *    manual        the install "fails" and hands back the command to run
  *    current       nothing newer
  *    unconfigured  the placeholder repository: no check ever happens
- *    offline       every check fails */
+ *    offline       every check fails
+ *    recording     a Windows copy whose recording service is recording until
+ *                  ten minutes from now: Install asks first */
 const UPDATES_MODE =
   (typeof location !== "undefined" &&
     new URLSearchParams(location.search).get("updates")) ||
@@ -1151,16 +1154,26 @@ const mockRecordingApi = {
   },
   recordingStatus: async (): Promise<RecordingStatusDto> => {
     const list = recordingsOrRefuse();
+    const active = list
+      .filter((r) => r.state === "recording")
+      .map((r) => ({
+        id: r.id,
+        title: r.title,
+        streamId: r.streamId,
+        bytes: r.parts[0]?.bytes ?? 0,
+        since: r.start,
+        until: r.stop + r.padAfter,
+      }));
     return {
       version: "0.1.0",
       apiVersion: 1,
-      active: list
-        .filter((r) => r.state === "recording")
-        .map((r) => ({ id: r.id, title: r.title, streamId: r.streamId, bytes: r.parts[0]?.bytes ?? 0, since: r.start })),
+      active,
       outputDir: mockRecordingSettings.outputDir,
       diskFree: 412e9,
       diskTotal: 1e12,
       now: Math.floor(Date.now() / 1000),
+      idle: active.length === 0,
+      idleAt: active.length ? Math.max(...active.map((a) => a.until)) : undefined,
     };
   },
   recordingSettings: async (): Promise<RecordingSettingsDto> => {
@@ -1944,14 +1957,31 @@ export const mockApi = {
 
   updateCancel: async (): Promise<UpdateStatusDto> => {
     window.clearInterval(updateTimer);
-    if (updateEmitter.last.state.state === "downloading") {
+    if (updateEmitter.last.state.state === "waitingForRecording") {
+      setUpdate({ state: { state: "ready", release: MOCK_RELEASE } });
+    } else if (updateEmitter.last.state.state === "downloading") {
       setUpdate({ state: { state: "available", release: MOCK_RELEASE } });
     }
     return updateEmitter.last;
   },
 
-  updateInstall: async (): Promise<InstallOutcomeDto> => {
+  updateInstall: async (when: InstallWhen = "ask"): Promise<InstallOutcomeDto> => {
     if (updateEmitter.last.state.state !== "ready") throw "There's no verified update to install";
+    if (UPDATES_MODE === "recording") {
+      const until = Math.floor(Date.now() / 1000) + 600;
+      if (when === "ask") return { outcome: "recording", until, title: "The Late Film" };
+      if (when === "whenIdle") {
+        setUpdate({ state: { state: "waitingForRecording", release: MOCK_RELEASE, until } });
+        // Long enough to see; Cancel puts it back to ready.
+        await delay(4000);
+        // Read again: Cancel may have changed it meanwhile.
+        const now = (updateEmitter.last as UpdateStatusDto).state;
+        if (now.state !== "waitingForRecording") return { outcome: "notNow" };
+      }
+      setUpdate({ state: { state: "installing", release: MOCK_RELEASE } });
+      await delay(600);
+      return { outcome: "quitting" };
+    }
     setUpdate({ state: { state: "installing", release: MOCK_RELEASE } });
     await delay(900);
     if (UPDATES_MODE === "manual") {
