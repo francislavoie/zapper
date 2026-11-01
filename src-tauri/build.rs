@@ -8,10 +8,71 @@ fn main() {
         tauri_build::build();
     }
     #[cfg(feature = "server")]
-    remuxer(bundle.as_deref());
+    {
+        remuxer(bundle.as_deref());
+        web_assets();
+    }
     let _ = bundle;
     // Windows (MSVC) only; tauri-build does the same for the app.
     static_vcruntime::metabuild();
+}
+
+/// The web interface zapper-server serves (`recording::web`): the frontend's build in `../dist`,
+/// the same files the app's window shows, compiled into the binary. One file to install and
+/// nothing beside it to go missing or out of step with the API it talks to.
+///
+/// Writes `$OUT_DIR/web_assets.rs`, a list of `(path, include_bytes!(…))`; `include_bytes!`
+/// makes a changed file rebuild, and watching `dist` notices a file added or removed. A release
+/// build refuses without the frontend built (`npm run build`); a debug build serves a page
+/// saying so, so the Rust tests and harnesses run without Node.
+#[cfg(feature = "server")]
+fn web_assets() {
+    use std::fmt::Write as _;
+    let dist = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .map(|p| p.join("dist"))
+        .expect("src-tauri has a parent");
+    // Made when missing, so there is a directory to watch: watching a path that does not exist
+    // reruns this script, and rebuilds the crate, on every build. Vite empties and fills it.
+    let _ = std::fs::create_dir_all(&dist);
+    println!("cargo:rerun-if-changed={}", dist.display());
+    let mut files = Vec::new();
+    if dist.join("index.html").is_file() {
+        collect(&dist, &dist, &mut files);
+    } else if std::env::var("PROFILE").as_deref() == Ok("release") {
+        panic!("zapper-server serves the web interface from ../dist: run `npm run build` first");
+    } else {
+        println!("cargo:warning=../dist has no index.html: zapper-server's web interface will say it was not built (run `npm run build`)");
+    }
+    files.sort();
+    let mut code = String::from("&[\n");
+    for (rel, abs) in &files {
+        let _ = writeln!(code, "    ({rel:?}, include_bytes!({abs:?})),");
+    }
+    code.push(']');
+    let out = PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR")).join("web_assets.rs");
+    std::fs::write(&out, code).expect("writing web_assets.rs");
+}
+
+/// Every file under `dir`, as its path relative to `root` with `/` between the parts, and its
+/// absolute path.
+#[cfg(feature = "server")]
+fn collect(root: &Path, dir: &Path, files: &mut Vec<(String, String)>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in entries.flatten() {
+        let path = e.path();
+        if path.is_dir() {
+            collect(root, &path, files);
+        } else if let Ok(rel) = path.strip_prefix(root) {
+            let rel: Vec<String> = rel
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                .collect();
+            files.push((rel.join("/"), path.to_string_lossy().into_owned()));
+        }
+    }
 }
 
 /// zapper's own LGPL libmpv and FFmpeg: the archive `scripts/fetch-libmpv.sh` (or, on Windows,

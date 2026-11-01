@@ -128,12 +128,14 @@ jobs:
         working-directory: src-tauri
         run: cargo clippy --lib --bins --features harness -q -- -D warnings
 
+      # Before zapper-server, which compiles the interface in to serve it to browsers
+      # (src-tauri/build.rs).
+      - name: Frontend build
+        run: npm run build
+
       - name: zapper-server
         working-directory: src-tauri
         run: cargo build --release --no-default-features --features server --bin zapper-server
-
-      - name: Frontend build
-        run: npm run build
 
       - name: Frontend checks
         run: node --test src/__checks__/*.test.mjs

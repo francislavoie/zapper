@@ -7,8 +7,13 @@
 //! this computer only) or a device's, from signing in. Network access, the
 //! password and the list of devices are the app's alone.
 //!
-//! No CORS headers: a page from another origin cannot read any answer. The
-//! web client will be served from here, on the same origin.
+//! A browser signs in for a cookie instead (`{"cookie": true}`), which
+//! stands for the device's token on every request to this origin; requests
+//! that rely on it must show they come from this origin's own page
+//! ([`web::csrf`]). The web interface itself is served from here too
+//! ([`web::files`]), with the catalogue API it reads ([`browse`]).
+//!
+//! No CORS headers: a page from another origin cannot read any answer.
 
 use std::sync::Arc;
 
@@ -27,6 +32,7 @@ use super::api::{
 };
 use super::now;
 use super::server::Server;
+use super::{browse, web};
 
 type Shared = Arc<Server>;
 
@@ -77,18 +83,56 @@ fn bearer(req: &Request) -> Option<&str> {
 }
 
 /// Every request: where it may come from.
+///
+/// A browser that asks for the web interface over plain HTTP while the
+/// service wants HTTPS is sent to the same address over HTTPS rather than
+/// shown an error; nothing is answered over plain HTTP either way.
 async fn gate(State(s): State<Shared>, req: Request, next: Next) -> Response {
     let p = peer(&req);
     if let Err(r) = access::admit(&p, &s.config().network) {
+        if r == Refusal::NeedsHttps {
+            if let Some(to) = https_redirect(&req) {
+                return to;
+            }
+        }
         return ApiError::from(r).into_response();
     }
     next.run(req).await
 }
 
+/// `308` to the HTTPS address of a page of the web interface, for a `GET`
+/// outside the API that names its host.
+fn https_redirect(req: &Request) -> Option<Response> {
+    let path = req.uri().path();
+    if req.method() != axum::http::Method::GET || path == "/api" || path.starts_with("/api/") {
+        return None;
+    }
+    let host = req.headers().get(header::HOST)?.to_str().ok()?;
+    if host.is_empty() || host.contains(['/', '\\', '@', ' ']) {
+        return None;
+    }
+    let to = HeaderValue::from_str(&format!("https://{host}{path}")).ok()?;
+    Some((StatusCode::PERMANENT_REDIRECT, [(header::LOCATION, to)]).into_response())
+}
+
 /// Who it is: the app, or a signed-in device.
+///
+/// A bearer token is the app's or a device's. A cookie can only ever be a
+/// device's: the service sets one only from a sign-in, and the app's token
+/// in one (put there by hand, or by a page that somehow learnt it) is
+/// refused rather than trusted, so nothing a browser sends by itself is
+/// worth more than a device.
 fn caller(s: &Server, req: &Request) -> Result<Caller, Refusal> {
     let p = peer(req);
-    let token = bearer(req);
+    if let Some(token) = bearer(req) {
+        return s
+            .access
+            .devices(|d| access::identify(&p, Some(token), &s.token, d, now()));
+    }
+    let token = web::cookie_token(req.headers());
+    if token.is_some_and(|t| super::config::token_matches(&s.token, t)) {
+        return Err(Refusal::BadToken);
+    }
     s.access
         .devices(|d| access::identify(&p, token, &s.token, d, now()))
 }
@@ -229,11 +273,27 @@ async fn login(
         .get(header::USER_AGENT)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
+    // A cookie is something a browser sends by itself from then on, so only
+    // the interface's own page may ask for one (see `web::csrf`).
+    if req.cookie && !web::has_csrf_header(&headers) {
+        return ApiError(
+            StatusCode::FORBIDDEN,
+            "refused: the request did not come from zapper's own page".into(),
+        )
+        .into_response();
+    }
     match s
         .access
         .login(p.addr.ip(), &req.password, req.name.as_deref(), ua, now())
         .await
     {
+        // The token goes where the page cannot read it, and nowhere else.
+        Ok(out) if req.cookie => (
+            StatusCode::CREATED,
+            [(header::SET_COOKIE, web::session_cookie(&out.token, p.tls))],
+            Json(serde_json::json!({ "device": out.device })),
+        )
+            .into_response(),
         Ok(out) => (StatusCode::CREATED, Json(out)).into_response(),
         Err(LoginError::Wait(d)) => {
             let secs = d.as_secs_f64().ceil().max(1.0) as u64;
@@ -259,10 +319,11 @@ async fn login(
     }
 }
 
-/// Signs the calling device out.
+/// Signs the calling device out, and a browser's cookie with it.
 async fn logout(
     State(s): State<Shared>,
     Extension(c): Extension<Caller>,
+    p: Option<Extension<Peer>>,
 ) -> Result<impl IntoResponse, ApiError> {
     let Caller::Device(id) = c else {
         return Err(ApiError(
@@ -271,7 +332,31 @@ async fn logout(
         ));
     };
     s.access.devices(|d| d.revoke(&id)).map_err(bad)?;
-    Ok(Json(serde_json::json!({ "signedOut": true })))
+    let tls = p.is_some_and(|Extension(p)| p.tls);
+    Ok((
+        [(header::SET_COOKIE, web::cleared_cookie(tls))],
+        Json(serde_json::json!({ "signedOut": true })),
+    ))
+}
+
+/// Who is asking: `{device}` for a signed-in device, `{app: true}` for the
+/// app, `{signedIn: false}` for anyone else. The web interface asks first,
+/// to know whether to show its sign-in, so not being signed in is an answer
+/// here rather than a 401.
+async fn session(State(s): State<Shared>, req: Request) -> Response {
+    let device = match caller(&s, &req) {
+        Ok(Caller::App) => return Json(serde_json::json!({ "app": true })).into_response(),
+        Ok(Caller::Device(id)) => s
+            .access
+            .devices(|d| d.list())
+            .into_iter()
+            .find(|d| d.id == id),
+        Err(_) => None,
+    };
+    match device {
+        Some(d) => Json(serde_json::json!({ "signedIn": true, "device": d })).into_response(),
+        None => Json(serde_json::json!({ "signedIn": false })).into_response(),
+    }
 }
 
 pub fn router(server: Shared) -> Router {
@@ -282,6 +367,7 @@ pub fn router(server: Shared) -> Router {
         .route("/api/recordings/{id}/cancel", post(cancel))
         .route("/api/settings", get(settings).put(set_settings))
         .route("/api/logout", post(logout))
+        .merge(browse::routes())
         .route_layer(middleware::from_fn_with_state(server.clone(), auth));
     let app = Router::new()
         .route("/api/network", get(network).put(set_network))
@@ -293,9 +379,13 @@ pub fn router(server: Shared) -> Router {
     Router::new()
         .route("/api/version", get(version))
         .route("/api/login", post(login))
+        .route("/api/session", get(session))
         .merge(authed)
         .merge(app)
+        .fallback(web::files)
+        .layer(middleware::from_fn(web::csrf))
         .layer(middleware::from_fn_with_state(server.clone(), gate))
+        .layer(middleware::from_fn(web::headers))
         .with_state(server)
 }
 
@@ -1010,5 +1100,513 @@ mod tests {
             .headers()
             .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
             .is_none());
+    }
+
+    // ------------------------------------------------------------ browsers
+
+    const LAN_HOST: &str = "192.168.1.20:8796";
+    const LAN_ORIGIN: &str = "https://192.168.1.20:8796";
+
+    /// A request as the web interface's own page sends it: the cookie, the
+    /// interface's header and this origin.
+    fn from_page(
+        method: &str,
+        uri: &str,
+        cookie: Option<&str>,
+        body: Option<serde_json::Value>,
+    ) -> Request {
+        let mut r = req_body(method, uri, LAN, true, None, body);
+        let h = r.headers_mut();
+        h.insert(header::HOST, HeaderValue::from_static(LAN_HOST));
+        h.insert(header::ORIGIN, HeaderValue::from_static(LAN_ORIGIN));
+        h.insert("sec-fetch-site", HeaderValue::from_static("same-origin"));
+        h.insert("x-zapper", HeaderValue::from_static("1"));
+        h.insert(
+            header::USER_AGENT,
+            HeaderValue::from_static("Mozilla/5.0 (X11; Linux x86_64) Firefox/131.0"),
+        );
+        if let Some(c) = cookie {
+            h.insert(
+                header::COOKIE,
+                HeaderValue::from_str(&format!("{}={c}", web::COOKIE)).unwrap(),
+            );
+        }
+        r
+    }
+
+    async fn call_raw(s: &Shared, r: Request) -> (StatusCode, axum::http::HeaderMap, Vec<u8>) {
+        let resp = router(s.clone()).oneshot(r).await.unwrap();
+        let status = resp.status();
+        let headers = resp.headers().clone();
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 24)
+            .await
+            .unwrap();
+        (status, headers, bytes.to_vec())
+    }
+
+    /// Signs in as the web interface does; the cookie's token.
+    async fn browser_login(s: &Shared) -> String {
+        let (st, h, body) = call_raw(
+            s,
+            from_page(
+                "POST",
+                "/api/login",
+                None,
+                Some(serde_json::json!({"password": "correct horse", "cookie": true})),
+            ),
+        )
+        .await;
+        assert_eq!(st, StatusCode::CREATED);
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(body.get("token").is_none(), "the page never sees the token: {body}");
+        assert_eq!(body["device"]["name"], "Firefox on Linux");
+        let set = h[header::SET_COOKIE].to_str().unwrap().to_string();
+        set.strip_prefix(&format!("{}=", web::COOKIE))
+            .and_then(|r| r.split(';').next())
+            .unwrap()
+            .to_string()
+    }
+
+    #[tokio::test]
+    async fn a_browser_signs_in_for_a_cookie_its_page_cannot_read() {
+        let s = server("cookie");
+        enable(&s, true).await;
+        let (st, h, body) = call_raw(
+            &s,
+            from_page(
+                "POST",
+                "/api/login",
+                None,
+                Some(serde_json::json!({"password": "correct horse", "cookie": true})),
+            ),
+        )
+        .await;
+        assert_eq!(st, StatusCode::CREATED);
+        let set = h[header::SET_COOKIE].to_str().unwrap();
+        for part in ["HttpOnly", "SameSite=Strict", "Path=/", "; Secure"] {
+            assert!(set.contains(part), "{part} in {set}");
+        }
+        let body = String::from_utf8(body).unwrap();
+        let token = set.split(';').next().unwrap().split_once('=').unwrap().1;
+        assert!(!body.contains(token), "the token stays out of the answer");
+
+        // Signed in: the session says which device, and the API answers.
+        let (st, body) = call(&s, from_page("GET", "/api/session", Some(token), None)).await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(body["device"]["name"], "Firefox on Linux");
+        assert_eq!(
+            call(&s, from_page("GET", "/api/recordings", Some(token), None))
+                .await
+                .0,
+            StatusCode::OK
+        );
+        // The browser is listed like any other device.
+        let (_, net) = call(&s, req("GET", "/api/network", HOME, false, Some(APP))).await;
+        assert_eq!(net["devices"][0]["name"], "Firefox on Linux");
+        // And, like any other device, cannot touch network access.
+        assert_eq!(
+            call(&s, from_page("GET", "/api/network", Some(token), None))
+                .await
+                .0,
+            StatusCode::FORBIDDEN
+        );
+        // A wrong one is no session at all, which the session says.
+        let (st, body) = call(&s, from_page("GET", "/api/session", Some("nope"), None)).await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(body, serde_json::json!({ "signedIn": false }));
+        assert_eq!(
+            call(&s, from_page("GET", "/api/recordings", Some("nope"), None))
+                .await
+                .0,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn the_cookie_is_secure_only_over_https() {
+        let s = server("cookie-plain");
+        s.access.set_password("correct horse").await.unwrap();
+        // The app's own computer, plain HTTP on 127.0.0.1: a Secure cookie
+        // would never come back.
+        let mut r = req_body(
+            "POST",
+            "/api/login",
+            HOME,
+            false,
+            None,
+            Some(serde_json::json!({"password": "correct horse", "cookie": true})),
+        );
+        r.headers_mut().insert("x-zapper", HeaderValue::from_static("1"));
+        let (st, h, _) = call_raw(&s, r).await;
+        assert_eq!(st, StatusCode::CREATED);
+        let set = h[header::SET_COOKIE].to_str().unwrap();
+        assert!(set.contains("HttpOnly") && set.contains("SameSite=Strict"), "{set}");
+        assert!(!set.contains("Secure"), "{set}");
+    }
+
+    #[tokio::test]
+    async fn a_cookie_sign_in_must_come_from_the_page() {
+        let s = server("cookie-csrf");
+        enable(&s, true).await;
+        let body = serde_json::json!({"password": "correct horse", "cookie": true});
+        let mut r = from_page("POST", "/api/login", None, Some(body.clone()));
+        r.headers_mut().remove("x-zapper");
+        let (st, h, _) = call_raw(&s, r).await;
+        assert_eq!(st, StatusCode::FORBIDDEN);
+        assert!(h.get(header::SET_COOKIE).is_none());
+        let mut r = from_page("POST", "/api/login", None, Some(body));
+        r.headers_mut()
+            .insert(header::ORIGIN, HeaderValue::from_static("https://evil.example"));
+        assert_eq!(call(&s, r).await.0, StatusCode::FORBIDDEN);
+        assert!(s.access.devices(|d| d.is_empty()), "nobody signed in");
+        // A program signing in for a token is as it was.
+        let r = req_body(
+            "POST",
+            "/api/login",
+            LAN,
+            true,
+            None,
+            Some(serde_json::json!({"password": "correct horse"})),
+        );
+        let (st, body) = call(&s, r).await;
+        assert_eq!(st, StatusCode::CREATED);
+        assert!(body["token"].is_string());
+    }
+
+    #[tokio::test]
+    async fn changes_by_cookie_need_the_header_and_this_origin() {
+        let s = server("csrf");
+        enable(&s, true).await;
+        let token = browser_login(&s).await;
+        let soon = now() + 3600;
+        let schedule = || {
+            Some(serde_json::json!({
+                "streamId": 7, "title": "Evening News", "start": soon, "stop": soon + 1800,
+                "channelName": "One"
+            }))
+        };
+        // No header: refused, and nothing scheduled.
+        let mut r = from_page("POST", "/api/recordings", Some(&token), schedule());
+        r.headers_mut().remove("x-zapper");
+        let (st, body) = call(&s, r).await;
+        assert_eq!(st, StatusCode::FORBIDDEN, "{body}");
+        // From another site, with the header.
+        let mut r = from_page("POST", "/api/recordings", Some(&token), schedule());
+        r.headers_mut()
+            .insert(header::ORIGIN, HeaderValue::from_static("https://evil.example"));
+        assert_eq!(call(&s, r).await.0, StatusCode::FORBIDDEN);
+        let mut r = from_page("POST", "/api/recordings", Some(&token), schedule());
+        r.headers_mut()
+            .insert("sec-fetch-site", HeaderValue::from_static("cross-site"));
+        assert_eq!(call(&s, r).await.0, StatusCode::FORBIDDEN);
+        assert!(s.list().unwrap().is_empty());
+
+        // From the page: scheduled, then cancelled.
+        let (st, rec) = call(&s, from_page("POST", "/api/recordings", Some(&token), schedule())).await;
+        assert_eq!(st, StatusCode::CREATED, "{rec}");
+        let id = rec["id"].as_i64().unwrap();
+        let mut r = from_page("POST", &format!("/api/recordings/{id}/cancel"), Some(&token), None);
+        r.headers_mut().remove("x-zapper");
+        assert_eq!(call(&s, r).await.0, StatusCode::FORBIDDEN);
+        let (st, body) = call(
+            &s,
+            from_page("POST", &format!("/api/recordings/{id}/cancel"), Some(&token), None),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(body["cancelled"], true);
+    }
+
+    #[tokio::test]
+    async fn the_apps_token_is_no_cookie() {
+        let s = server("app-cookie");
+        let mut r = req("GET", "/api/status", HOME, false, None);
+        r.headers_mut().insert(
+            header::COOKIE,
+            HeaderValue::from_str(&format!("{}={APP}", web::COOKIE)).unwrap(),
+        );
+        assert_eq!(call(&s, r).await.0, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn signing_out_revokes_the_device_and_forgets_the_cookie() {
+        let s = server("web-logout");
+        enable(&s, true).await;
+        let token = browser_login(&s).await;
+        let (st, h, _) = call_raw(&s, from_page("POST", "/api/logout", Some(&token), None)).await;
+        assert_eq!(st, StatusCode::OK);
+        let set = h[header::SET_COOKIE].to_str().unwrap();
+        assert!(set.starts_with("zapper_session=;") && set.contains("Max-Age=0"), "{set}");
+        let (_, body) = call(&s, from_page("GET", "/api/session", Some(&token), None)).await;
+        assert_eq!(body["signedIn"], false);
+        assert_eq!(
+            call(&s, from_page("GET", "/api/status", Some(&token), None))
+                .await
+                .0,
+            StatusCode::UNAUTHORIZED
+        );
+        assert!(s.access.devices(|d| d.is_empty()));
+    }
+
+    #[tokio::test]
+    async fn every_answer_carries_the_security_headers() {
+        let s = server("headers");
+        enable(&s, true).await;
+        for (uri, want) in [
+            ("/", StatusCode::OK),
+            ("/api/version", StatusCode::OK),
+            ("/api/status", StatusCode::UNAUTHORIZED),
+        ] {
+            let (st, h, _) = call_raw(&s, from_page("GET", uri, None, None)).await;
+            assert_eq!(st, want, "{uri}");
+            assert_eq!(h[header::CONTENT_SECURITY_POLICY], web::CSP, "{uri}");
+            let csp = h[header::CONTENT_SECURITY_POLICY].to_str().unwrap();
+            assert!(csp.contains("script-src 'self'") && !csp.contains("unsafe"), "{csp}");
+            assert!(csp.contains("frame-ancestors 'none'"), "{csp}");
+            assert_eq!(h[header::X_CONTENT_TYPE_OPTIONS], "nosniff", "{uri}");
+            assert_eq!(h[header::REFERRER_POLICY], "no-referrer", "{uri}");
+            assert!(h.get(header::ACCESS_CONTROL_ALLOW_ORIGIN).is_none());
+        }
+        // Even what the gate turns away.
+        let (st, h, _) = call_raw(&s, req("GET", "/api/version", LAN, false, None)).await;
+        assert_eq!(st, StatusCode::FORBIDDEN);
+        assert_eq!(h[header::CONTENT_SECURITY_POLICY], web::CSP);
+    }
+
+    #[tokio::test]
+    async fn the_interface_is_served_with_its_own_addresses_falling_back_to_it() {
+        let s = server("files");
+        enable(&s, true).await;
+        let (st, h, index) = call_raw(&s, from_page("GET", "/", None, None)).await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(h[header::CONTENT_TYPE], "text/html; charset=utf-8");
+        assert_eq!(h[header::CACHE_CONTROL], "no-cache");
+        let index = String::from_utf8(index).unwrap();
+        if !web::built() {
+            eprintln!("dist/ was not built: the interface's files were not checked");
+            assert!(index.contains("npm run build"));
+            return;
+        }
+        // An address of the interface's own is the interface.
+        let (st, _, page) = call_raw(&s, from_page("GET", "/guide", None, None)).await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(String::from_utf8(page).unwrap(), index);
+        // No inline script: the policy would refuse it.
+        assert!(!index.contains("<script>"), "{index}");
+        assert!(!index.contains("<style>"), "{index}");
+        // A hashed asset, kept for a year.
+        let asset = index
+            .split('"')
+            .find(|p| p.starts_with("/assets/") && p.ends_with(".js"))
+            .expect("index.html names its script")
+            .to_string();
+        let (st, h, js) = call_raw(&s, from_page("GET", &asset, None, None)).await;
+        assert_eq!(st, StatusCode::OK);
+        assert!(!js.is_empty());
+        assert_eq!(h[header::CONTENT_TYPE], "text/javascript; charset=utf-8");
+        assert_eq!(h[header::CACHE_CONTROL], "public, max-age=31536000, immutable");
+        // A missing file is missing, not the page.
+        assert_eq!(
+            call_raw(&s, from_page("GET", "/assets/gone-1234.js", None, None))
+                .await
+                .0,
+            StatusCode::NOT_FOUND
+        );
+        let (st, body) = call(&s, from_page("GET", "/api/nothing-here", None, None)).await;
+        assert_eq!(st, StatusCode::NOT_FOUND);
+        assert!(body["error"].is_string());
+        // Files are only read.
+        let mut r = from_page("POST", "/guide", None, None);
+        r.headers_mut().remove(header::COOKIE);
+        assert_eq!(call(&s, r).await.0, StatusCode::METHOD_NOT_ALLOWED);
+    }
+
+    #[tokio::test]
+    async fn a_browser_on_plain_http_is_sent_to_https() {
+        let s = server("redirect");
+        enable(&s, true).await;
+        let mut r = req("GET", "/guide", LAN, false, None);
+        r.headers_mut()
+            .insert(header::HOST, HeaderValue::from_static(LAN_HOST));
+        let (st, h, _) = call_raw(&s, r).await;
+        assert_eq!(st, StatusCode::PERMANENT_REDIRECT);
+        assert_eq!(h[header::LOCATION], "https://192.168.1.20:8796/guide");
+        // The API is refused, not redirected.
+        let mut r = req("GET", "/api/version", LAN, false, None);
+        r.headers_mut()
+            .insert(header::HOST, HeaderValue::from_static(LAN_HOST));
+        assert_eq!(call(&s, r).await.0, StatusCode::FORBIDDEN);
+        // While network access is off, nothing at all.
+        let mut c = s.config();
+        c.network.enabled = false;
+        s.replace_config(c);
+        let mut r = req("GET", "/guide", LAN, false, None);
+        r.headers_mut()
+            .insert(header::HOST, HeaderValue::from_static(LAN_HOST));
+        assert_eq!(call(&s, r).await.0, StatusCode::FORBIDDEN);
+    }
+
+    /// Two channels, `base + 1` and `base + 2`, in category `web-<base>`:
+    /// each test its own, since the tests share one in-memory catalogue.
+    fn seed_catalogue(base: i64, logo: &str) {
+        use crate::catalog::db;
+        db::install_test_db();
+        db::with_db(|c| {
+            c.execute(
+                "INSERT INTO categories (id, name, sort) VALUES (?1, 'Web News', 0)",
+                [format!("web-{base}")],
+            )?;
+            for (id, name) in [(base + 1, "Harbour One"), (base + 2, "Harbour Two")] {
+                c.execute(
+                    "INSERT INTO channels (stream_id, category_id, name, clean_name, num,
+                                           epg_channel_id, logo_url)
+                     VALUES (?1, ?2, ?3, ?3, ?1, ?4, ?5)",
+                    rusqlite::params![id, format!("web-{base}"), name, format!("web-{id}"), logo],
+                )?;
+            }
+            let t = now();
+            c.execute(
+                "INSERT INTO epg (channel_ref, start, stop, title, description)
+                 VALUES (?1, ?2, ?3, 'Harbour Report', NULL)",
+                rusqlite::params![format!("web-{}", base + 1), t - 600, t + 1200],
+            )?;
+            crate::catalog::guide_search::index_changes(c)?;
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_catalogue_is_read_without_its_provider_addresses() {
+        let s = server("browse");
+        enable(&s, true).await;
+        let secret_logo = "http://provider.example/u/secret-user/p/secret-pass/logo.png";
+        seed_catalogue(91000, secret_logo);
+        let token = browser_login(&s).await;
+        let get = |uri: &str| from_page("GET", uri, Some(&token), None);
+
+        let (st, cats) = call(&s, get("/api/categories")).await;
+        assert_eq!(st, StatusCode::OK);
+        assert!(cats
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["id"] == "web-91000" && c["channelCount"] == 2));
+
+        let (st, page) = call(&s, get("/api/channels?category=web-91000&offset=0&limit=10")).await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(page[0]["streamId"], 91001);
+        assert_eq!(page[0]["logoUrl"], "/api/logo/91001");
+        assert_eq!(page[0]["nowPlaying"]["title"], "Harbour Report");
+
+        let (_, rows) = call(&s, get("/api/channels/by-id?ids=91002,91001")).await;
+        assert_eq!(rows.as_array().unwrap().len(), 2);
+
+        let (st, hits) = call(&s, get("/api/channels/search?q=harbour%20two&limit=5")).await;
+        assert_eq!(st, StatusCode::OK);
+        assert!(hits.as_array().unwrap().iter().any(|h| h["streamId"] == 91002));
+        let (_, either) = call(&s, get("/api/channels/search?q=harbour%20one%7Charbour%20two&limit=5")).await;
+        let found: Vec<i64> = either
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|h| h["streamId"].as_i64())
+            .collect();
+        assert!(found.contains(&91001) && found.contains(&91002), "{either}");
+
+        let (st, hits) = call(&s, get("/api/programmes/search?q=harbour%20rep&offset=0&limit=10")).await;
+        assert_eq!(st, StatusCode::OK);
+        let hit = hits
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|h| h["channel"]["streamId"] == 91001)
+            .expect("the programme is found");
+        assert_eq!(hit["programme"]["title"], "Harbour Report");
+        assert_eq!(hit["channel"]["logoUrl"], "/api/logo/91001");
+
+        let t = now();
+        let (st, rows) = call(
+            &s,
+            get(&format!("/api/guide/rows?ids=91001,91002&from={}&to={}", t - 3600, t + 3600)),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(rows[0]["programmes"][0]["title"], "Harbour Report");
+        assert_eq!(rows[1]["logoUrl"], "/api/logo/91002");
+        let (st, _) = call(&s, get(&format!("/api/guide?ids=91001&from={}&to={}", t - 3600, t + 3600))).await;
+        assert_eq!(st, StatusCode::OK);
+        let (st, at) = call(&s, get("/api/channels/91002/index?category=web-91000")).await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(at, 1);
+        let (st, _) = call(&s, get("/api/channels/numbers")).await;
+        assert_eq!(st, StatusCode::OK);
+        let (st, _) = call(&s, get("/api/favourites?limit=10")).await;
+        assert_eq!(st, StatusCode::OK);
+        let (st, sync) = call(&s, get("/api/sync")).await;
+        assert_eq!(st, StatusCode::OK);
+        assert!(sync["phase"].is_string());
+
+        // Nothing of the provider's address in any of it.
+        for uri in [
+            "/api/channels?category=web-91000&offset=0&limit=10",
+            "/api/channels/search?q=harbour&limit=5",
+            "/api/programmes/search?q=harbour&offset=0&limit=10",
+        ] {
+            let (_, _, body) = call_raw(&s, get(uri)).await;
+            assert!(!String::from_utf8(body).unwrap().contains("secret"), "{uri}");
+        }
+
+        // Not without signing in, and a bad request says why.
+        assert_eq!(
+            call(&s, from_page("GET", "/api/categories", None, None)).await.0,
+            StatusCode::UNAUTHORIZED
+        );
+        let (st, body) = call(&s, get("/api/guide/rows?ids=1,x&from=0&to=1")).await;
+        assert_eq!(st, StatusCode::BAD_REQUEST);
+        assert!(body["error"].as_str().unwrap().contains("ids"));
+    }
+
+    #[tokio::test]
+    async fn a_logo_is_fetched_by_the_service_and_runs_nothing() {
+        let provider = crate::test_http::serve(|r, _| {
+            if r.route() == "/logo.png" {
+                crate::test_http::Reply::ok(b"\x89PNG fake".to_vec()).header("Content-Type", "image/png")
+            } else {
+                crate::test_http::Reply::ok("<html>not an image</html>").header("Content-Type", "text/html")
+            }
+        });
+        let s = server("logo");
+        enable(&s, true).await;
+        let token = browser_login(&s).await;
+        seed_catalogue(92000, &format!("{}/logo.png", provider.base));
+        let (st, h, body) = call_raw(&s, from_page("GET", "/api/logo/92001", Some(&token), None)).await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(h[header::CONTENT_TYPE], "image/png");
+        assert_eq!(body, b"\x89PNG fake");
+        assert_eq!(h[header::CONTENT_SECURITY_POLICY], web::LOGO_CSP);
+        assert!(h[header::CACHE_CONTROL].to_str().unwrap().contains("max-age"));
+        assert_eq!(
+            call_raw(&s, from_page("GET", "/api/logo/92001", None, None)).await.0,
+            StatusCode::UNAUTHORIZED
+        );
+
+        // Something that is not an image is not served as one.
+        crate::catalog::db::with_db(|c| {
+            c.execute(
+                "UPDATE channels SET logo_url = ?1 WHERE stream_id = 92002",
+                [format!("{}/page", provider.base)],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(
+            call_raw(&s, from_page("GET", "/api/logo/92002", Some(&token), None)).await.0,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            call_raw(&s, from_page("GET", "/api/logo/1", Some(&token), None)).await.0,
+            StatusCode::NOT_FOUND
+        );
     }
 }
