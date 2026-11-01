@@ -303,6 +303,12 @@ fn main() {
             // must never make noise.
             mpv::with_player(|p| -> anyhow::Result<()> {
                 p.set_property("ao", "null")?;
+                // A decoder other than the app's, for a machine whose OpenGL
+                // cannot take VideoToolbox's frames reliably (CI's software
+                // renderer).
+                if let Some(hwdec) = std::env::var("ZAPPER_HWDEC").ok().filter(|h| !h.is_empty()) {
+                    p.set_property("hwdec", &hwdec)?;
+                }
                 // mpv's own log, verbose, for working out a failure afterwards.
                 if let Ok(path) = std::env::var("ZAPPER_MPV_LOG") {
                     p.set_property("msg-level", "all=v")?;
