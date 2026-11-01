@@ -120,6 +120,10 @@ Download the package for your system from the
   and Plex expect (or by channel, by date, or a pattern of your own), with an optional wall-clock
   subtitle track. It switches to a backup feed if the channel's fails, and never takes a
   connection someone is watching on. On Linux and Windows; see [docs/recording.md](docs/recording.md).
+- **In a browser:** with network access turned on, the recording service serves zapper's own
+  interface to other devices on your network, behind a password: browse the channels and the
+  guide, search, and schedule or cancel recordings from a phone or another computer. Watching in
+  the browser isn't there yet.
 
 ## Performance
 

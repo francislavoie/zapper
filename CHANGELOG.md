@@ -27,6 +27,11 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
   on your network can reach it over HTTPS with its own certificate, whose fingerprint Settings
   shows, after signing in with a password you set there. Each device is listed and can be
   revoked, and the port can be changed.
+- zapper in a browser: with network access on, opening the recording service's address shows
+  zapper's interface after signing in with that password. Browse the channels and the guide,
+  search channels and programmes, and schedule, cancel and delete recordings; watching in the
+  browser is not there yet. Each browser is listed with the other devices and can be signed out
+  there or from the page itself.
 
 ### Changed
 
