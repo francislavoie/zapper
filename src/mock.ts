@@ -10,6 +10,7 @@
 import { auditLightSurfaces, auditOverVideo } from "./audit";
 import { alternatives } from "./logic/searchQuery";
 import { patternFor, place, validatePattern } from "./logic/naming";
+import { parsePort, passwordProblem } from "./logic/network";
 import type {
   AccountDto,
   ActivityRowDto,
@@ -29,6 +30,8 @@ import type {
   DeinterlaceMode,
   ProgrammeHitDto,
   QualityDto,
+  NetworkDto,
+  NetworkSettingsDto,
   RecordingDto,
   RecordingSettingsDto,
   RecordingStatusDto,
@@ -1030,6 +1033,62 @@ function seedRecordings(): RecordingDto[] {
   return out;
 }
 
+/** Network access, faked: off with no password, as a new service is.
+ *  `?network=on` starts it on, with a password and two devices signed in, so
+ *  the whole box can be seen at once. Port 8080 stands for one another
+ *  program holds. */
+const NETWORK_ON =
+  typeof location !== "undefined" &&
+  new URLSearchParams(location.search).get("network") === "on";
+const MOCK_FINGERPRINT =
+  "3F:9A:1C:72:E4:08:B5:6D:21:CE:90:47:AB:13:F8:62:5D:0E:C9:34:87:2B:D1:6A:F0:45:9E:B8:13:7C:2A:D5";
+
+function mockNetworkSeed(): NetworkDto {
+  const now = Math.floor(Date.now() / 1000);
+  return {
+    enabled: NETWORK_ON,
+    port: 8796,
+    https: true,
+    passwordSet: NETWORK_ON,
+    fingerprint: NETWORK_ON ? MOCK_FINGERPRINT : undefined,
+    addresses: [],
+    devices: NETWORK_ON
+      ? [
+          {
+            id: "5be1c0a2f4d93e70",
+            name: "Firefox on Android",
+            userAgent: "Mozilla/5.0 (Android 14; Mobile; rv:131.0) Gecko/131.0 Firefox/131.0",
+            created: now - 12 * 86_400,
+            lastUsed: now - 540,
+            address: "192.168.1.31",
+          },
+          {
+            id: "91a7d3e0c6b2f845",
+            name: "Living room TV",
+            userAgent: "Mozilla/5.0 (X11; Linux armv7l) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+            created: now - 40 * 86_400,
+            lastUsed: now - 3 * 86_400,
+            address: "192.168.1.44",
+          },
+        ]
+      : [],
+  };
+}
+
+let mockNetwork: NetworkDto = mockNetworkSeed();
+
+function networkView(): NetworkDto {
+  const scheme = mockNetwork.https ? "https" : "http";
+  return {
+    ...mockNetwork,
+    addresses: [
+      `${scheme}://192.168.1.20:${mockNetwork.port}`,
+      `${scheme}://[fd00::1a2b:3c4d]:${mockNetwork.port}`,
+    ],
+    devices: mockNetwork.devices.map((d) => ({ ...d })),
+  };
+}
+
 function recordingsOrRefuse(): RecordingDto[] {
   if (RECORDING_OFF || mockService.state !== "active") throw "The recording service is not running.";
   return (mockRecordings ??= seedRecordings());
@@ -1104,6 +1163,43 @@ const mockRecordingApi = {
       defaultOutputDir: mockRecordingSettings.defaultOutputDir,
     });
     return { ...mockRecordingSettings };
+  },
+  recordingNetwork: async (): Promise<NetworkDto> => {
+    recordingsOrRefuse();
+    await delay(30);
+    return networkView();
+  },
+  setRecordingNetwork: async (next: NetworkSettingsDto): Promise<NetworkDto> => {
+    recordingsOrRefuse();
+    await delay(150);
+    if (parsePort(String(next.port)) === null) throw "the port must be between 1024 and 65535";
+    if (next.enabled && !mockNetwork.passwordSet)
+      throw "set a sign-in password before turning on network access";
+    if (next.port === 8080) throw "port 8080 is in use by another program";
+    mockNetwork = {
+      ...mockNetwork,
+      ...next,
+      error: undefined,
+      fingerprint:
+        mockNetwork.fingerprint ?? (next.enabled && next.https ? MOCK_FINGERPRINT : undefined),
+    };
+    return networkView();
+  },
+  setRecordingPassword: async (password: string): Promise<NetworkDto> => {
+    recordingsOrRefuse();
+    await delay(250);
+    const why = passwordProblem(password, password);
+    if (why) throw why;
+    // A new password signs every device out, as the service does.
+    mockNetwork = { ...mockNetwork, passwordSet: true, devices: [] };
+    return networkView();
+  },
+  revokeRecordingDevice: async (id: string): Promise<NetworkDto> => {
+    recordingsOrRefuse();
+    await delay(40);
+    if (!mockNetwork.devices.some((d) => d.id === id)) throw "no such device";
+    mockNetwork = { ...mockNetwork, devices: mockNetwork.devices.filter((d) => d.id !== id) };
+    return networkView();
   },
   recordingService: async (): Promise<ServiceStatusDto> => {
     await delay(30);

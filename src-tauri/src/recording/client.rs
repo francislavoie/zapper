@@ -9,7 +9,8 @@ use anyhow::{anyhow, Result};
 use serde::de::DeserializeOwned;
 
 use super::api::{
-    ErrorDto, RecordingDto, RecordingSettingsDto, ScheduleRequest, StatusDto, VersionDto,
+    ErrorDto, NetworkDto, NetworkSettingsDto, PasswordRequest, RecordingDto, RecordingSettingsDto,
+    ScheduleRequest, StatusDto, VersionDto,
 };
 
 pub struct Client {
@@ -121,6 +122,37 @@ impl Client {
 
     pub async fn set_settings(&self, s: &RecordingSettingsDto) -> Result<RecordingSettingsDto> {
         self.send(self.http.put(self.url("/api/settings")).json(s))
+            .await
+    }
+
+    /// Network access: whether other devices may reach the service, the
+    /// devices signed in.
+    pub async fn network(&self) -> Result<NetworkDto> {
+        self.send(self.http.get(self.url("/api/network"))).await
+    }
+
+    pub async fn set_network(&self, s: &NetworkSettingsDto) -> Result<NetworkDto> {
+        self.send(self.http.put(self.url("/api/network")).json(s))
+            .await
+    }
+
+    /// Sets the password other devices sign in with, signing every device
+    /// out.
+    pub async fn set_password(&self, password: &str) -> Result<NetworkDto> {
+        let body = PasswordRequest {
+            password: password.to_string(),
+        };
+        self.send(self.http.put(self.url("/api/network/password")).json(&body))
+            .await
+    }
+
+    pub async fn revoke_device(&self, id: &str) -> Result<NetworkDto> {
+        // The id is the service's own hex; anything else is refused here
+        // rather than spliced into a path.
+        if id.is_empty() || !id.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(anyhow!("no such device"));
+        }
+        self.send(self.http.delete(self.url(&format!("/api/devices/{id}"))))
             .await
     }
 }

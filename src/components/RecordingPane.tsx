@@ -1,7 +1,7 @@
 // Settings › Recording: the recording service on this computer (install,
-// remove, whether it keeps running after logging out) and what it does with
+// remove, whether it keeps running after logging out), what it does with
 // every recording (where, what its files are called, how much padding, the
-// clock track).
+// clock track), and whether other devices may reach it (NetworkAccess).
 //
 // The settings are the service's own, read and written through its API, so
 // they can only be changed while it is running — all but "Simultaneous
@@ -22,6 +22,7 @@ import type { SettingsControl } from "../hooks/useSettings";
 import { useDispatch } from "../store";
 import type { RecordingSettingsDto, RecordingStatusDto, ServiceStatusDto } from "../types";
 import { NamingField } from "./NamingField";
+import { NetworkAccess } from "./NetworkAccess";
 import { RangeField, SettingRow, SettingsGroup } from "./SettingsParts";
 import { Switch } from "./Switch";
 
@@ -158,7 +159,7 @@ export function RecordingPane({ s }: { s: SettingsControl }) {
               ? service.unsupportedReason
               : service?.supported && !service.installed && !service.binary
                 ? "zapper-server was not found beside zapper or on the PATH, so it cannot be installed from here yet."
-                : `Records what you schedule from the guide, even with zapper closed. It runs as you (a systemd user service), listens on ${service?.address ?? "127.0.0.1"} only, and keeps the catalogue current like the app does. Removing it keeps your recordings.`
+                : `Records what you schedule from the guide, even with zapper closed. It runs as you (a systemd user service), listens on ${service?.address ?? "127.0.0.1"} (and on your network only if you allow it below), and keeps the catalogue current like the app does. Removing it keeps your recordings.`
           }
         >
           {service?.supported ? (
@@ -306,6 +307,7 @@ export function RecordingPane({ s }: { s: SettingsControl }) {
               />
             </SettingRow>
           </SettingsGroup>
+          <NetworkAccess />
         </>
       )}
 

@@ -32,6 +32,8 @@ import {
   type MediaSessionDto,
   type UpdateStatusDto,
   type VideoRect,
+  type NetworkDto,
+  type NetworkSettingsDto,
   type RecordingDto,
   type RecordingSettingsDto,
   type RecordingStatusDto,
@@ -166,6 +168,12 @@ export const api = {
   recordingSettings: () => invoke<RecordingSettingsDto>("recording_settings"),
   setRecordingSettings: (settings: RecordingSettingsDto) =>
     invoke<RecordingSettingsDto>("set_recording_settings", { settings }),
+  recordingNetwork: () => invoke<NetworkDto>("recording_network"),
+  setRecordingNetwork: (settings: NetworkSettingsDto) =>
+    invoke<NetworkDto>("set_recording_network", { settings }),
+  setRecordingPassword: (password: string) =>
+    invoke<NetworkDto>("set_recording_password", { password }),
+  revokeRecordingDevice: (id: string) => invoke<NetworkDto>("revoke_recording_device", { id }),
   recordingService: () => invoke<ServiceStatusDto>("recording_service"),
   installRecordingService: (linger: boolean) =>
     invoke<ServiceStatusDto>("install_recording_service", { linger }),

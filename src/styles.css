@@ -5623,6 +5623,78 @@ textarea.field {
   color: #ffc9c9;
 }
 
+/* Settings › Recording › Network access: a narrow port field, the
+   certificate's fingerprint and the addresses in monospace with a Copy
+   beside each, and the two password fields side by side. */
+.net-port {
+  flex: 0 0 6rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.net-port[aria-invalid] {
+  border-color: #6a3036;
+}
+
+.net-addresses {
+  display: grid;
+  gap: 0.25rem;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.net-copyable {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  min-width: 0;
+}
+
+.net-copyable code {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0.3125rem 0.5625rem;
+  border: 1px solid var(--line);
+  border-radius: 0.375rem;
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-monospace, "DejaVu Sans Mono", monospace;
+  font-size: 0.6875rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A fingerprint is checked pair by pair against a browser's: all of it
+   shows, wrapped between pairs (its <wbr>s), never cut. */
+.net-copyable .net-fingerprint {
+  white-space: normal;
+  line-height: 1.6;
+}
+
+.net-copyable .ctl {
+  flex: 0 0 auto;
+}
+
+.net-password {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  width: 100%;
+}
+
+.net-password .field {
+  flex: 1 1 10rem;
+}
+
+.net-why {
+  margin-top: 0.375rem;
+  font-size: 0.75rem;
+  color: #ffc9c9;
+}
+
 /* The Recordings dialog: a scrolling list of rows grouped by state. */
 .about.recordings {
   width: min(42rem, 100%);

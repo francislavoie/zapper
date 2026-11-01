@@ -658,3 +658,38 @@ export interface ServiceStatusDto {
   address: string;
   versionMismatch: boolean;
 }
+
+/** Network access (Settings › Recording), as it is changed. */
+export interface NetworkSettingsDto {
+  /** Listen on every interface, not only 127.0.0.1. Needs a password set. */
+  enabled: boolean;
+  /** 1024–65535, for the app and the network alike. */
+  port: number;
+  /** Other devices get HTTPS; off is plain HTTP on the network. */
+  https: boolean;
+}
+
+/** A device signed in with the password. */
+export interface DeviceDto {
+  id: string;
+  name: string;
+  userAgent: string;
+  /** Unix seconds. */
+  created: number;
+  lastUsed?: number;
+  /** Where it was last seen from. */
+  address?: string;
+}
+
+export interface NetworkDto extends NetworkSettingsDto {
+  /** The password itself never leaves the service. */
+  passwordSet: boolean;
+  /** The HTTPS certificate's SHA-256, `AB:CD:…`, once one was made. */
+  fingerprint?: string;
+  /** `https://192.168.1.20:8796`, one per network address of the computer. */
+  addresses: string[];
+  /** Why network access is not on as set. */
+  error?: string;
+  /** Most recently used first. */
+  devices: DeviceDto[];
+}

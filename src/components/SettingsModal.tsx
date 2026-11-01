@@ -69,7 +69,8 @@ const SUMMARY: Record<Section, string> = {
   Audio: "The volume and the compressor, for whatever is playing.",
   Subtitles: "How subtitles look. mpv draws them under this window; the preview stands in.",
   Guide: "The guide's width, how times are written, and how often the catalogue refreshes.",
-  Recording: "The recording service on this computer, and what it does with each recording.",
+  Recording:
+    "The recording service on this computer, what it does with each recording, and which other devices may reach it.",
   Data: "The catalogue, and backups of your settings and favourites.",
   Updates: "Whether zapper looks for new versions, and which one is installed.",
   Keyboard: "Every shortcut and mouse gesture, grouped by where it works.",

@@ -3,7 +3,9 @@
 //! the API token stays out of the page. Installing and removing the service
 //! (`recording::service`) runs `systemctl`, on a blocking thread.
 
-use crate::recording::api::{RecordingDto, RecordingSettingsDto, ScheduleRequest, StatusDto};
+use crate::recording::api::{
+    NetworkDto, NetworkSettingsDto, RecordingDto, RecordingSettingsDto, ScheduleRequest, StatusDto,
+};
 use crate::recording::client::Client;
 use crate::recording::service::{self, ServiceStatusDto};
 
@@ -50,6 +52,28 @@ pub async fn set_recording_settings(
     settings: RecordingSettingsDto,
 ) -> Result<RecordingSettingsDto, String> {
     client()?.set_settings(&settings).await.map_err(words)
+}
+
+#[tauri::command]
+pub async fn recording_network() -> Result<NetworkDto, String> {
+    client()?.network().await.map_err(words)
+}
+
+#[tauri::command]
+pub async fn set_recording_network(settings: NetworkSettingsDto) -> Result<NetworkDto, String> {
+    client()?.set_network(&settings).await.map_err(words)
+}
+
+/// The password other devices sign in with: passed through to the service,
+/// which keeps only its hash.
+#[tauri::command]
+pub async fn set_recording_password(password: String) -> Result<NetworkDto, String> {
+    client()?.set_password(&password).await.map_err(words)
+}
+
+#[tauri::command]
+pub async fn revoke_recording_device(id: String) -> Result<NetworkDto, String> {
+    client()?.revoke_device(&id).await.map_err(words)
 }
 
 /// The service on this computer: installed, running, answering, and with
