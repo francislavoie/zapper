@@ -7,14 +7,18 @@
 //   left    the hamburger, which holds every action the command palette holds,
 //           because it is literally the palette's own list regrouped, and
 //           beside it the one line saying what the backend is doing — here
-//           rather than in a strip floating over the window's content — and,
-//           only when there is one, the badge for an update waiting;
+//           rather than in a strip floating over the window's content;
 //   centre  the app's name, centred on the window rather than on the space
 //           left over, so it does not drift as the status line grows;
-//   right   the window buttons.
+//   right   only when there is one, the badge for an update waiting, then the
+//           window buttons.
 //
-// Everything between the status and the window buttons drags the window, and
-// the name is drawn over that strip without taking its clicks.
+// Everything that is not a button drags the window: the status line, and the
+// strip between it and the right-hand end, with the name drawn over that strip
+// without taking its clicks. The update badge is a button that still lets a
+// drag through: press and move, and the window moves; press and release, and
+// it opens. It sits where people reach to grab a window, so it must not be a
+// dead spot there.
 //
 // Two rules that are not obvious:
 //
@@ -26,7 +30,7 @@
 //     video: everything below it is measured, and the rect handed to mpv comes
 //     from that measurement. See `.stage` in styles.css.
 
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, type MouseEvent as ReactMouseEvent } from "react";
 import { runAction } from "../actions";
 import { useClock } from "../hooks/useClock";
 import {
@@ -36,11 +40,11 @@ import {
   type PaletteAction,
 } from "../logic/palette";
 import { maximiseLabel, statusLine } from "../logic/toolbar";
-import { badgeLabel, showsBadge } from "../logic/updates";
+import { badgeLabel, badgeShort, showsBadge } from "../logic/updates";
 import { useApp, useDispatch } from "../store";
 import { windowControls } from "../window";
 import { useMaximised } from "../hooks/useMaximised";
-import { Bolt } from "./icons";
+import { Bolt, UpdateArrow } from "./icons";
 
 export function Toolbar() {
   const state = useApp();
@@ -72,6 +76,44 @@ export function Toolbar() {
 
   const max = maximiseLabel(maximised);
 
+  // `startDragging` hands the gesture to the window manager, which then
+  // swallows the mouse-up, so the double click has to be caught on the way
+  // down — `detail === 2` is the second press of the pair, before the drag
+  // would begin.
+  const dragWindow = (e: ReactMouseEvent) => {
+    if (e.button !== 0) return;
+    if (e.detail >= 2) {
+      void windowControls
+        .toggleMaximise()
+        .catch((err: unknown) => dispatch({ type: "toast", text: `maximise: ${String(err)}` }));
+      return;
+    }
+    void windowControls.startDragging().catch(() => {
+      // A window manager that refuses the drag is not worth a toast on every
+      // press; the bar simply stays put.
+    });
+  };
+
+  // For a button on the drag surface: a press that moves past a few pixels
+  // becomes a window drag, and one that doesn't stays a click. Once the window
+  // manager has the drag it eats the mouse-up, so no click follows a drag.
+  const dragOnMove = (e: ReactMouseEvent) => {
+    if (e.button !== 0) return;
+    const x = e.clientX;
+    const y = e.clientY;
+    const stop = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", stop);
+    };
+    const onMove = (m: MouseEvent) => {
+      if (Math.hypot(m.clientX - x, m.clientY - y) < DRAG_SLOP_PX) return;
+      stop();
+      void windowControls.startDragging().catch(() => {});
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", stop);
+  };
+
   return (
     <header className="toolbar">
       <div className="tb-lead">
@@ -93,21 +135,9 @@ export function Toolbar() {
 
         <Status
           {...status}
+          onDrag={dragWindow}
           onRetry={() => runAction("sync", { dispatch, player: state.player })}
         />
-
-        {/* Only while there is an update to act on; otherwise nothing at
-            all, so an up-to-date app has a title bar like any other. */}
-        {showsBadge(state.update.state) ? (
-          <button
-            className={`tb-update ${state.update.state.state === "failed" ? "bad" : ""}`}
-            onMouseDown={(e) => e.stopPropagation()}
-            onClick={() => dispatch({ type: "updateDialog", open: true })}
-            data-tip="Updates"
-          >
-            {badgeLabel(state.update.state)}
-          </button>
-        ) : null}
       </div>
 
       {/* Centred on the window, not on what is left between the status and the
@@ -122,31 +152,25 @@ export function Toolbar() {
         zapper
       </div>
 
-      {/* The drag handle. `startDragging` hands the gesture to the window
-          manager, which then swallows the mouse-up, so the double click has to
-          be caught on the way down — `detail === 2` is the second press of the
-          pair, before the drag would begin. */}
-      <div
-        className="tb-drag"
-        data-drag-region
-        onMouseDown={(e) => {
-          if (e.button !== 0) return;
-          if (e.detail >= 2) {
-            void windowControls
-              .toggleMaximise()
-              .catch((err: unknown) =>
-                dispatch({ type: "toast", text: `maximise: ${String(err)}` }),
-              );
-            return;
-          }
-          void windowControls.startDragging().catch(() => {
-            // A window manager that refuses the drag is not worth a toast on
-            // every press; the bar simply stays put.
-          });
-        }}
-      />
+      {/* The drag handle: the wide stretch between the two ends. */}
+      <div className="tb-drag" data-drag-region onMouseDown={dragWindow} />
 
       <div className="tb-tail">
+        {/* Only while there is an update to act on; otherwise nothing at
+            all, so an up-to-date app has a title bar like any other. One
+            word and an arrow; the sentence is in the tooltip. */}
+        {showsBadge(state.update.state) ? (
+          <button
+            className={`tb-update ${state.update.state.state === "failed" ? "bad" : ""}`}
+            onMouseDown={dragOnMove}
+            onClick={() => dispatch({ type: "updateDialog", open: true })}
+            data-tip={badgeLabel(state.update.state)}
+            aria-label={badgeLabel(state.update.state)}
+          >
+            <UpdateArrow className="tb-update-icon" />
+            {badgeShort(state.update.state)}
+          </button>
+        ) : null}
         <button
           className="tb-btn"
           aria-label="Minimise"
@@ -188,15 +212,21 @@ function Burger() {
   );
 }
 
+/** How far a press on a title-bar button may wander and still be a click. */
+const DRAG_SLOP_PX = 4;
+
 function Status({
   tone,
   text,
   detail,
   spinning,
   onRetry,
-}: ReturnType<typeof statusLine> & { onRetry: () => void }) {
+  onDrag,
+}: ReturnType<typeof statusLine> & { onRetry: () => void; onDrag: (e: ReactMouseEvent) => void }) {
+  // Words, not a control: pressing them drags the window like the rest of the
+  // bar. The retry link stops its own press from reaching here.
   return (
-    <div className={`tb-status ${tone}`} role="status" aria-live="polite">
+    <div className={`tb-status ${tone}`} role="status" aria-live="polite" onMouseDown={onDrag}>
       {spinning ? <span className="tb-spinner" aria-hidden /> : null}
       <span className="tb-status-text">{text}</span>
       {detail ? <span className="tb-status-detail" data-tip-overflow="">

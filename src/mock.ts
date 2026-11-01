@@ -240,6 +240,14 @@ function schedule(row: ChannelDto, from: number, to: number): ProgrammeDto[] {
   return out;
 }
 
+/** The share of channels with guide data. Most of a real catalogue has none,
+ *  so that is the default; `?guide=full` gives every channel a schedule, for
+ *  pictures of the guide that show what it looks like with data in it. */
+const GUIDE_SHARE =
+  typeof location !== "undefined" && new URLSearchParams(location.search).get("guide") === "full"
+    ? 1
+    : 0.15;
+
 function buildCatalog(): MockCatalog {
   const nowSec = Math.floor(Date.now() / 1000);
   const categories: CategoryDto[] = [];
@@ -308,7 +316,7 @@ function buildCatalog(): MockCatalog {
         archiveDays: hasArchive ? (rand() < 0.5 ? 3 : 7) : null,
         isSeparator: false,
         quality: makeQuality(full),
-        nowPlaying: rand() < 0.15 ? makeProgramme(nowSec) : null,
+        nowPlaying: rand() < GUIDE_SHARE ? makeProgramme(nowSec) : null,
       });
     }
 
@@ -1162,6 +1170,23 @@ if (typeof globalThis !== "undefined") {
     lightSurfaces: (minSize?: number) => auditLightSurfaces(minSize),
     overVideo: () => auditOverVideo(g.__lastVideoRect as VideoRect | undefined),
   };
+}
+
+/** A broadcast-looking still for the stand-in video plane, so screenshots of
+ *  the mock show a picture rather than a test pattern. It is fetched by URL
+ *  from the dev server (which serves the project root), never imported, so it
+ *  stays out of the production bundle; the caller only reaches this under
+ *  `import.meta.env.DEV`. The pattern from `.mock-video` stays until the image
+ *  has loaded, and stays for good if it never does. Credit: docs/licensing.md. */
+export function paintMockStill(el: HTMLElement): void {
+  const url = "/docs/images/broadcast-still.jpg";
+  const img = new Image();
+  img.onload = () => {
+    // Contained on black, the way mpv letterboxes a picture whose shape
+    // doesn't match the rect.
+    el.style.background = `#000 url("${url}") center / contain no-repeat`;
+  };
+  img.src = url;
 }
 
 /** `?backend=broken` makes every command reject the way the real backend does

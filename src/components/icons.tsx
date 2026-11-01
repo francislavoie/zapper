@@ -220,6 +220,24 @@ export function Bolt({ className, title }: IconProps) {
   );
 }
 
+/** An arrow down onto a tray: "there is something to download", the update
+ *  badge's mark. Stroked like the window buttons beside it. */
+export function UpdateArrow({ className, title }: IconProps) {
+  return (
+    <svg className={className} viewBox="0 0 16 16" aria-hidden={!title} focusable="false">
+      {title ? <title>{title}</title> : null}
+      <path
+        d="M8 2.5V10M4.75 6.75 8 10l3.25-3.25M3 13.5h10"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 /** A plain square. Stop is the one transport control with a settled shape;
  *  anything cleverer just makes people hesitate. */
 export function Stop({ className, title }: IconProps) {

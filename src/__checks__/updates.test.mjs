@@ -12,6 +12,7 @@ import {
   announcement,
   asksForPassword,
   badgeLabel,
+  badgeShort,
   formatSize,
   kindLabel,
   nextStep,
@@ -51,7 +52,10 @@ test("the badge appears only when there is something to act on", () => {
   ]) {
     assert.equal(showsBadge(s), true, s.state);
     assert.notEqual(badgeLabel(s), "", s.state);
+    const short = badgeShort(s);
+    assert.ok(short !== "" && short.length <= 10, `${s.state}: "${short}" is too long for the title bar`);
   }
+  assert.equal(badgeShort({ state: "downloading", release: release(), received: 1, total: 4 }), "25%");
   assert.equal(badgeLabel({ state: "available", release: release() }), "Update to 0.2.0");
   assert.equal(badgeLabel({ state: "installed", release: release() }), "Restart to update");
 });

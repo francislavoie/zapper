@@ -52,6 +52,28 @@ export function badgeLabel(s: UpdateStateDto): string {
   }
 }
 
+/** The badge's one word, for the title bar's right-hand end, where every
+ *  pixel it takes is a pixel of grab handle gone. The full sentence is its
+ *  tooltip (`badgeLabel`). */
+export function badgeShort(s: UpdateStateDto): string {
+  switch (s.state) {
+    case "available":
+      return "Update";
+    case "downloading":
+      return `${percentOf(s)}%`;
+    case "ready":
+      return "Install";
+    case "installing":
+      return "Installing";
+    case "installed":
+      return "Restart";
+    case "failed":
+      return "Failed";
+    default:
+      return "";
+  }
+}
+
 /** One line on where things stand, for the settings pane and the dialog. */
 export function statusLine(st: UpdateStatusDto): string {
   const s = st.state;

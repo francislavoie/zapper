@@ -121,6 +121,15 @@ Maintainer notes: decisions still pending before Windows builds are published.
   notice to be reproduced; mpv-winbuild-cmake's archive doesn't carry them. A complete Windows
   package would collect them into a notices file of their own.
 
+## Documentation images
+
+The picture in the README's screenshots, `docs/images/broadcast-still.jpg`, is cropped from
+[Championship Soccer Stadium SW View](https://commons.wikimedia.org/wiki/File:Championship-Soccer-Stadium-SW-View-2024-08-03.jpg)
+by Haruhi8, released under [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) (public
+domain dedication); the advertising boards are blurred. It is a documentation and development
+asset only: the mock shows it in place of video under `vite dev`, and it is in no package or
+production build.
+
 ## Updating
 
 - **New dependency, new license:** the build names it. Check its terms, then extend the

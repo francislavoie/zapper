@@ -20,6 +20,8 @@ It's built with a Rust core, a React interface and [Tauri](https://tauri.app/), 
 [mpv](https://mpv.io/) (libmpv) doing the playback, drawn straight beneath the window rather than
 through the browser engine.
 
+![zapper's browse view: a football match playing in the picture at the top right, the playing channel's now and next programmes beside it, and below, the category list on the left with the guide's timeline of what's on across the sports channels](docs/images/screenshot.webp)
+
 > **Status:** used day to day on Linux. Windows builds and runs; its installers aren't published
 > yet. macOS isn't supported yet.
 
@@ -74,6 +76,8 @@ each release lists the files' checksums. After that, zapper updates itself (see
   Settings › Keyboard.
 
 ### Playback
+
+![The player filling the window: the channel name and programme at the top left, and along the bottom the transport bar with the scrollback timeline, pause, stop, volume, skip back and forward, and the Live marker](docs/images/screenshot-player.webp)
 
 - **libmpv** with hardware decoding (VA-API on Linux, frames kept on the GPU), HEVC, and HDR
   tone-mapped to your display.

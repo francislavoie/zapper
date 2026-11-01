@@ -7,6 +7,7 @@
 
 import { Activity, useEffect, useLayoutEffect, useRef } from "react";
 import { backend, isMock, subscribePlayer, subscribeSync } from "./backend";
+import { paintMockStill } from "./mock";
 import { loadCategories } from "./actions";
 import { errorMessage } from "./logic/async";
 import { useGlobalKeys } from "./hooks/useGlobalKeys";
@@ -49,6 +50,9 @@ export function App() {
   const dockRef = useRef<HTMLDivElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const planeRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (import.meta.env.DEV && isMock && planeRef.current) paintMockStill(planeRef.current);
+  }, []);
   const browsing = state.mode === "browse";
   const guiding = state.mode === "guide";
 
