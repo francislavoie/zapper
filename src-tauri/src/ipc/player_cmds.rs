@@ -103,6 +103,73 @@ struct Machine {
     last_tick_at: Option<Instant>,
     /// When the last automatic catch-up ran, so chasing cannot thrash.
     last_live_nudge: Option<Instant>,
+    /// The one catch-up after a channel's connect burst; see [`Settle`].
+    settle: Option<Settle>,
+}
+
+/// Brings a freshly tuned channel up to live once its connect burst is over.
+///
+/// A server answers a new connection with a burst of what it already holds,
+/// and mpv starts at the oldest frame of it: tuning in landed 20-odd seconds
+/// in the past and stayed there, because the automatic catch-up only answers
+/// time *lost* to stalls — deliberately, since chasing the edge while the
+/// burst was still arriving would seek, wait, and seek again: a
+/// stutter-jump-stutter at the start of every zap.
+///
+/// So this waits for the burst to finish — `behind_live` stops growing for
+/// [`SETTLE_QUIET`] — or for [`SETTLE_MAX`] if it never visibly does, and
+/// then makes one decision: jump to the live cushion if playback is more
+/// than [`SETTLE_SLACK`] past it, otherwise nothing. One seek, after the
+/// data has arrived, so there is nothing for it to stutter over.
+#[derive(Debug, Clone, Copy)]
+struct Settle {
+    /// Seconds since the first frame.
+    age: f64,
+    /// The furthest behind live seen so far.
+    peak: f64,
+    /// Seconds since `peak` last grew.
+    quiet: f64,
+}
+
+/// How long `behind_live` must stop growing for the burst to count as over.
+const SETTLE_QUIET: f64 = 1.5;
+/// The longest to wait for that before deciding anyway.
+const SETTLE_MAX: f64 = 10.0;
+/// How far past the cushion is worth a seek. Less than this is the
+/// sawtooth of an ordinary live stream, not a burst's backlog.
+const SETTLE_SLACK: f64 = 2.0;
+/// Growth smaller than this is the seekable end ticking over, not the burst.
+const SETTLE_GROWTH: f64 = 0.5;
+
+impl Settle {
+    fn new() -> Self {
+        Self {
+            age: 0.0,
+            peak: 0.0,
+            quiet: 0.0,
+        }
+    }
+
+    /// Takes one heartbeat (`dt` seconds since the last) and the current
+    /// distance behind live. `None` while waiting; `Some(by)` once decided,
+    /// where `by` is the forward seek to make (zero: none needed).
+    fn observe(&mut self, dt: f64, behind: f64) -> Option<f64> {
+        self.age += dt;
+        if behind > self.peak + SETTLE_GROWTH {
+            self.peak = behind;
+            self.quiet = 0.0;
+        } else {
+            self.quiet += dt;
+        }
+        if self.quiet < SETTLE_QUIET && self.age < SETTLE_MAX {
+            return None;
+        }
+        Some(if behind > LIVE_CUSHION + SETTLE_SLACK {
+            behind - LIVE_CUSHION
+        } else {
+            0.0
+        })
+    }
 }
 
 impl Machine {
@@ -116,6 +183,7 @@ impl Machine {
             last_pos: None,
             last_tick_at: None,
             last_live_nudge: None,
+            settle: None,
         }
     }
 
@@ -138,6 +206,7 @@ impl Machine {
         self.dto.behind_live = 0.0;
         self.dto.buffered_back = 0.0;
         self.opened_at = Some(Instant::now());
+        self.settle = None;
     }
 
     /// First frame decoded. The only honest "it works" edge: `file-loaded`
@@ -152,6 +221,11 @@ impl Machine {
             PlaybackState::Playing
         };
         self.dto.error = None;
+        // Only on the way out of Opening: a later reconfigure (a resolution
+        // change mid-stream) is not a new connection and has no burst.
+        if self.opened_at.is_some() {
+            self.settle = Some(Settle::new());
+        }
         self.opened_at = None;
     }
 
@@ -393,6 +467,23 @@ fn tick(app: &AppHandle, p: &Player) {
             // reaches the threshold.
             m.drift_secs =
                 (m.drift_secs + lost_since(m.last_pos, probe.time_pos, elapsed)).max(0.0);
+
+            // Once per tune-in: up to live after the connect burst, see
+            // `Settle`. It runs before the drift rule below and resets it,
+            // so the two cannot both seek on one tick.
+            if let Some(decision) = m.settle.as_mut().and_then(|s| s.observe(elapsed, probe.behind_live)) {
+                m.settle = None;
+                if decision > 0.05 {
+                    tracing::info!(
+                        "tuned in {:.1}s behind live; catching up to the cushion",
+                        probe.behind_live
+                    );
+                    m.last_live_nudge = Some(Instant::now());
+                    m.drift_secs = 0.0;
+                    let _ = p.command("seek", &[&format!("{decision:.3}"), "relative"]);
+                }
+            }
+
             let settled = m
                 .last_live_nudge
                 .is_none_or(|t| t.elapsed() >= LIVE_NUDGE_INTERVAL);
@@ -406,6 +497,10 @@ fn tick(app: &AppHandle, p: &Player) {
             }
         } else {
             m.drift_secs = 0.0;
+            // Rewound on purpose (or paused): being behind is the point now.
+            if !m.following_live {
+                m.settle = None;
+            }
         }
         m.last_pos = probe.time_pos;
         m.last_tick_at = Some(Instant::now());
@@ -763,12 +858,32 @@ pub async fn seek_live(app: AppHandle) -> Result<(), String> {
     .await
 }
 
+/// How loud a volume setting *sounds*, as mpv's own volume.
+///
+/// The slider is in perceived loudness: 70% should sound about 70% as loud,
+/// and 200% about twice as loud. mpv's `volume` is not that: it is cubed into
+/// an amplitude (`pow(volume / 100, 3)`, player/audio.c), so 70% was 0.34 of
+/// full amplitude, −9.3 dB, which sounds like about half — "70% sounds like
+/// half volume", as it was put. Loudness grows roughly as amplitude^0.6
+/// (Stevens), so a perceived fraction `p` wants amplitude `p^(1/0.6)`, and
+/// mpv reaches that with `100 · p^(1/(3·0.6))` = `100 · p^(5/9)`.
+///
+/// 100 maps to 100, so mpv's default and the slider agree at unity; above it
+/// the same curve boosts, 200% landing at +10 dB rather than mpv's +18.
+fn mpv_volume(perceived: f64) -> f64 {
+    if !perceived.is_finite() || perceived <= 0.0 {
+        return 0.0;
+    }
+    100.0 * (perceived / 100.0).powf(5.0 / 9.0)
+}
+
 /// 0-200; above 100 is software boost via `volume-max`.
 #[tauri::command]
 pub async fn set_volume(app: AppHandle, volume: f64) -> Result<(), String> {
     let v = volume.clamp(0.0, 200.0);
+    let to_mpv = mpv_volume(v);
     on_player(&app, move |p| {
-        p.set_f64("volume", v).map_err(|e| e.to_string())
+        p.set_f64("volume", to_mpv).map_err(|e| e.to_string())
     })
     .await?;
     commit(&app, |m| m.dto.volume = v);
@@ -1209,6 +1324,75 @@ mod tests {
         assert_eq!(clamp_seek(-5.0, 60.0, 3.0), -5.0);
         assert_eq!(clamp_seek(-90.0, 60.0, 3.0), -60.0);
         assert_eq!(clamp_seek(-5.0, 0.0, 0.0), 0.0);
+    }
+
+    /// Feeds `Settle` a series of `behind_live` readings a heartbeat apart and
+    /// returns the decision and the heartbeat it came on.
+    fn settle_run(readings: impl IntoIterator<Item = f64>) -> Option<(usize, f64)> {
+        let mut s = Settle::new();
+        let dt = TICK.as_secs_f64();
+        readings
+            .into_iter()
+            .enumerate()
+            .find_map(|(i, b)| s.observe(dt, b).map(|by| (i, by)))
+    }
+
+    #[test]
+    fn a_tune_in_burst_is_caught_up_once_it_has_finished() {
+        // The burst: behind_live climbs to 24s over two seconds, then holds
+        // (real-time delivery, the seekable end ticking over by tenths).
+        let mut readings: Vec<f64> = (1..=8).map(|i| f64::from(i) * 3.0).collect();
+        readings.extend((0..40).map(|i| 24.0 + f64::from(i % 3) * 0.1));
+        let (at, by) = settle_run(readings).expect("never decided");
+        // Not during the climb: the seek waits for the data to have arrived.
+        assert!(at >= 8 + 5, "decided at heartbeat {at}, while the burst was arriving");
+        // Lands on the cushion.
+        assert!((24.0 - by - LIVE_CUSHION).abs() < 0.2, "jumped by {by}");
+    }
+
+    #[test]
+    fn a_tune_in_already_near_live_is_left_alone() {
+        let readings = std::iter::repeat_n(LIVE_CUSHION + 1.0, 40);
+        assert_eq!(settle_run(readings).map(|(_, by)| by), Some(0.0));
+    }
+
+    #[test]
+    fn a_burst_that_never_settles_is_decided_anyway() {
+        // Still growing at SETTLE_MAX: decide then rather than wait forever.
+        let readings = (1..=200).map(|i| f64::from(i) * 0.6);
+        let (at, by) = settle_run(readings).expect("never decided");
+        let dt = TICK.as_secs_f64();
+        assert!((at as f64 + 1.0) * dt >= SETTLE_MAX - dt);
+        assert!(by > 0.0);
+    }
+
+    /// The gain mpv applies for one of its volumes, in dB.
+    fn mpv_db(mpv: f64) -> f64 {
+        20.0 * (mpv / 100.0).powi(3).log10()
+    }
+
+    #[test]
+    fn the_volume_slider_tracks_how_loud_it_sounds() {
+        // Unity is unity: mpv's default and the slider agree.
+        assert!((mpv_volume(100.0) - 100.0).abs() < 1e-9);
+        // 70% was −9.3 dB through mpv's cube, which sounds like half. Now
+        // about −5 dB, which sounds like about 70%: loudness ≈ amplitude^0.6.
+        let db70 = mpv_db(mpv_volume(70.0));
+        assert!((-5.6..=-4.8).contains(&db70), "70% is {db70:.1} dB");
+        let perceived = 10f64.powf(db70 / 20.0).powf(0.6);
+        assert!((perceived - 0.7).abs() < 0.01, "70% sounds like {perceived:.2}");
+        // Boost: 200% about twice as loud (+10 dB), not mpv's +18.
+        let db200 = mpv_db(mpv_volume(200.0));
+        assert!((9.5..=10.5).contains(&db200), "200% is {db200:.1} dB");
+        // Silence and nonsense are silence, and it never decreases.
+        assert_eq!(mpv_volume(0.0), 0.0);
+        assert_eq!(mpv_volume(f64::NAN), 0.0);
+        let mut last = 0.0;
+        for v in (0..=200).map(f64::from) {
+            let m = mpv_volume(v);
+            assert!(m >= last);
+            last = m;
+        }
     }
 
     #[test]

@@ -23,6 +23,8 @@ export const ACTION_IDS = [
   "pause",
   "stop",
   "fullscreen",
+  "theater",
+  "stats",
   "sync",
   "settings",
   "updates",
@@ -68,6 +70,16 @@ export const ACTIONS: PaletteAction[] = [
     needsPlayer: true,
     group: "player",
   },
+  // T toggles; from here it opens, since a menu entry has no "back" half.
+  {
+    id: "theater",
+    label: "Theater: picture fills the window",
+    hint: "T",
+    needsPlayer: true,
+    group: "player",
+  },
+  // A view, not a player control: it opens with nothing playing too.
+  { id: "stats", label: "Stats for nerds", hint: "S", group: "view" },
   { id: "sync", label: "Refresh data from the panel", hint: "sync", group: "data" },
   { id: "settings", label: "Open settings", hint: "⚙", group: "app" },
   // "upgrade" and "version" are what people type looking for this one.

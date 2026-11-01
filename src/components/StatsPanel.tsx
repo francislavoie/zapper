@@ -14,12 +14,15 @@ import { useEffect, useState } from "react";
 import { backend } from "../backend";
 import {
   HISTORY_LENGTH,
+  SAMPLE_SECONDS,
   STATS_POLL_MS,
   bitrate,
   bytes,
   count,
   rate,
   resolutionLine,
+  sampleAt,
+  sampleX,
   seconds,
   sparkline,
   text,
@@ -113,32 +116,35 @@ export function StatsPanel({ onClose }: { onClose: () => void }) {
         <Graph
           label="Buffer health"
           reading={`${span(stats?.cacheDuration, 1)}${stats?.buffering ? " · STARVED" : ""}`}
-          path={sparkline(history.map((s) => s.buffer), GRAPH_W, GRAPH_H, bufferCeiling)}
+          values={history.map((s) => s.buffer)}
+          ceiling={bufferCeiling}
+          describe={(v) => span(v, 1)}
           tone={stats?.buffering ? "bad" : "good"}
         />
         <Graph
           label="Network"
           reading={rate(stats?.cacheSpeed)}
-          path={sparkline(history.map((s) => s.speed), GRAPH_W, GRAPH_H)}
+          values={history.map((s) => s.speed)}
+          describe={(v) => rate(v)}
           tone="info"
         />
+        {/* Two kinds of hitch on one graph, in two colours: dropped frames
+            as the line, stalls as red bands behind it. They are different
+            things — a stall drops nothing, playback freezes and waits for
+            data — so the drop counter alone stayed at zero through the
+            stutter people notice most; side by side, which one happened
+            when is one glance. */}
         <Graph
-          label="Dropped frames"
+          label="Drops & stalls"
           reading={`${count(
             (stats?.droppedFrames ?? 0) + (stats?.decoderDroppedFrames ?? 0),
-          )} total`}
-          path={sparkline(history.map((s) => s.dropped), GRAPH_W, GRAPH_H)}
+          )} dropped · ${count(stats?.stalls ?? 0)} ${(stats?.stalls ?? 0) === 1 ? "stall" : "stalls"}`}
+          values={history.map((s) => s.dropped)}
+          stalled={history.map((s) => s.starved)}
+          describe={(v, i) =>
+            `${count(v)} dropped${history[i]?.starved ? " · stalled" : ""}`
+          }
           tone="warn"
-        />
-        {/* Its own graph, because a stall is not a dropped frame: playback
-            freezes and waits for data, every frame is still shown, and the
-            counter above stays at zero through the stutter people notice
-            most. Each raised step is a moment the picture was frozen. */}
-        <Graph
-          label="Stalls"
-          reading={`${count(stats?.stalls ?? 0)} since tuning in`}
-          path={sparkline(history.map((s) => (s.starved ? 1 : 0)), GRAPH_W, GRAPH_H, 1)}
-          tone={(stats?.stalls ?? 0) > 0 ? "bad" : "good"}
         />
 
         <Row label="A/V sync" value={seconds(stats?.avsync, 3)} />
@@ -173,17 +179,39 @@ function Row({ label, value }: { label: string; value: string }) {
   );
 }
 
+/** One graph, with a readout of the latest value — or, while the pointer is
+ *  over the graph, of the sample under it, marked with a line and a dot. A
+ *  trace that dipped is a question ("how low, and when?"), and the answer
+ *  should not need guessing from the shape. */
 function Graph({
   label,
   reading,
-  path,
+  values,
+  ceiling,
+  stalled,
+  describe,
   tone,
 }: {
   label: string;
   reading: string;
-  path: string;
+  values: readonly number[];
+  ceiling?: number;
+  /** Samples at which playback was stalled, shaded as red bands behind the
+   *  line: a second series in a second colour on the same time axis. */
+  stalled?: readonly boolean[];
+  /** One sample's value in words, for the hover readout. */
+  describe: (v: number, index: number) => string;
   tone: "good" | "bad" | "warn" | "info";
 }) {
+  const step = GRAPH_W / Math.max(HISTORY_LENGTH - 1, 1);
+  const [hover, setHover] = useState<number | null>(null);
+  const index = hover !== null && hover < values.length ? hover : null;
+  const top = Math.max(ceiling ?? Math.max(0, ...values), Number.EPSILON);
+  const x = index !== null ? sampleX(index, values.length) * GRAPH_W : 0;
+  const y =
+    index !== null ? GRAPH_H - (Math.min(Math.max(values[index], 0), top) / top) * GRAPH_H : 0;
+  const ago = index !== null ? (values.length - 1 - index) * SAMPLE_SECONDS : 0;
+
   return (
     <div className="stats-row graph">
       <dt>{label}</dt>
@@ -193,11 +221,43 @@ function Graph({
           viewBox={`0 0 ${GRAPH_W} ${GRAPH_H}`}
           preserveAspectRatio="none"
           aria-hidden="true"
+          onPointerMove={(e) => {
+            const r = e.currentTarget.getBoundingClientRect();
+            setHover(r.width > 0 ? sampleAt((e.clientX - r.left) / r.width, values.length) : null);
+          }}
+          onPointerLeave={() => setHover(null)}
         >
-          <path d={path} fill="none" stroke="currentColor" strokeWidth="1.5" />
+          {stalled
+            ? stalled.map((s, i) =>
+                s ? (
+                  <rect
+                    key={i}
+                    className="stats-stall"
+                    x={sampleX(i, stalled.length) * GRAPH_W - step / 2}
+                    y={0}
+                    width={step}
+                    height={GRAPH_H}
+                  />
+                ) : null,
+              )
+            : null}
+          <path
+            d={sparkline(values, GRAPH_W, GRAPH_H, ceiling)}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+          />
+          {index !== null ? (
+            <g className="stats-cursor">
+              <line x1={x} x2={x} y1={0} y2={GRAPH_H} vectorEffect="non-scaling-stroke" />
+              <circle cx={x} cy={y} r={2.5} />
+            </g>
+          ) : null}
         </svg>
         <span className="stats-reading" data-selectable>
-          {reading}
+          {index !== null
+            ? `${describe(values[index], index)} · ${ago === 0 ? "now" : `${duration(ago)} ago`}`
+            : reading}
         </span>
       </dd>
     </div>

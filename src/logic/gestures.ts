@@ -73,3 +73,59 @@ export function zoneSeek(zone: VideoZone, step: number): number | null {
 export function zoneIsAvailable(zone: VideoZone, atLiveEdge: boolean): boolean {
   return zone !== "forward" || !atLiveEdge;
 }
+
+/** What the skip controls and the side zones move by, and what their icons
+ *  say. One number for the bar, the docked controls and the gestures, so an
+ *  arrow can never claim a different jump from the one it makes. */
+export const SKIP_SECONDS = 5;
+
+export type ZoneAction =
+  | { kind: "fullscreen" }
+  | { kind: "seek"; zone: "back" | "forward"; by: number }
+  | null;
+
+/** What a double-click in a zone does, full size and docked alike.
+ *
+ *  The middle is fullscreen in both places. Docked, that means all the way
+ *  to fullscreen (through the player), the same destination as the docked
+ *  bar's fullscreen button: a single click already goes to the player, so
+ *  the double-click is spent on the further place rather than repeating it. */
+export function zoneAction(zone: VideoZone, atLiveEdge: boolean, step = SKIP_SECONDS): ZoneAction {
+  if (zone === "middle") return { kind: "fullscreen" };
+  if (!zoneIsAvailable(zone, atLiveEdge)) return null;
+  const by = zoneSeek(zone, step);
+  return by === null ? null : { kind: "seek", zone, by };
+}
+
+/** How long a click on the docked picture waits to find out whether it is
+ *  the first half of a double-click.
+ *
+ *  It has to wait. A single click leaves for the player, which unmounts the
+ *  docked picture, so without the wait the second click of a double-click
+ *  lands on the full-size player — at a different place in its zones, and
+ *  usually in its seek-forward corner, since the docked picture is top
+ *  right. Short, because every single click pays it. */
+export const DOUBLE_CLICK_MS = 250;
+
+/** Which half of a click sequence a click is, from `MouseEvent.detail`.
+ *  Zero is a click with no pointer count behind it (synthesised), which is
+ *  a single click. A third click in a row is not a new gesture. */
+export function clickIntent(detail: number): "single" | "double" | "ignore" {
+  if (!(detail >= 2)) return "single";
+  return detail === 2 ? "double" : "ignore";
+}
+
+/** What a single click (or Enter) on the docked picture does.
+ *
+ *  Paused, it resumes where it is rather than going full screen: the picture
+ *  is frozen, and getting it moving is the obvious thing being asked for.
+ *  Otherwise, while there is a stream, it goes to the player; a channel that
+ *  was only restored is started; and with neither there is nothing to do. */
+export function slotAction(
+  state: "stopped" | "opening" | "playing" | "paused" | "failed",
+  ready: boolean,
+): "resume" | "watch" | "start" | null {
+  if (state === "paused") return "resume";
+  if (state !== "stopped") return "watch";
+  return ready ? "start" : null;
+}

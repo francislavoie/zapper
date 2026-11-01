@@ -17,6 +17,7 @@ import type { Async } from "../logic/async";
 import type { ChannelDto } from "../types";
 import { ChannelRow } from "./ChannelRow";
 import { ViewSwitch } from "./ViewSwitch";
+import { SearchField } from "./SearchField";
 
 /** The backend caps search at a sane number; 100 is plenty to scan. */
 const SEARCH_LIMIT = 100;
@@ -186,13 +187,13 @@ export function ChannelList() {
         loading={source.loading}
       />
       <div className="pane-head">
-        <input
-          className="field list-search"
-          ref={registerSearchInput}
+        <SearchField
+          className="list-search"
+          inputRef={registerSearchInput}
           placeholder="Search channels    /"
-          spellCheck={false}
           value={state.query}
-          onChange={(e) => dispatch({ type: "query", text: e.target.value })}
+          onChange={(text) => dispatch({ type: "query", text })}
+          clearLabel="Clear search"
         />
       </div>
 

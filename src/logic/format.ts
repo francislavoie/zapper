@@ -174,3 +174,29 @@ export function playerBadge(p: PlayerStateDto): string | null {
     failCount: 0,
   });
 }
+
+/** The two captions under the scrubber: what the left of the bar is, and
+ *  what the right of it is.
+ *
+ *  `compact` is the docked picture's bar, a fraction of the player's width:
+ *  the same two facts in the fewest words that still say them — how far back
+ *  the archive goes, and how much is held locally. */
+export function scrubLabels(o: {
+  hasArchive: boolean;
+  archiveDays: number | null;
+  bufferedBack: number;
+  hasChannel: boolean;
+  compact: boolean;
+}): [string, string] {
+  const held = duration(o.bufferedBack);
+  if (o.hasArchive) {
+    return o.compact
+      ? [`${o.archiveDays}d archive`, `${held} buffer`]
+      : [`${o.archiveDays}-day archive · seek reconnects`, `buffer ${held} · instant`];
+  }
+  if (o.compact) return [o.hasChannel ? "no catchup" : "local buffer", `${held} back`];
+  return [
+    `local buffer only${o.hasChannel ? " — no catchup on this channel" : ""}`,
+    `${held} of scrollback`,
+  ];
+}

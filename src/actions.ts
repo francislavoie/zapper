@@ -73,6 +73,8 @@ const HANDLERS: Record<ActionId, (ctx: ActionContext) => void> = {
     void toggleFullscreen().catch((e: unknown) =>
       dispatch({ type: "toast", text: `fullscreen: ${String(e)}` }),
     ),
+  theater: ({ dispatch }) => dispatch({ type: "mode", mode: "watch" }),
+  stats: ({ dispatch }) => dispatch({ type: "stats", open: true }),
   sync: ({ dispatch }) => void run(dispatch, "sync", backend.syncNow()),
   settings: ({ dispatch }) => dispatch({ type: "settings", open: true }),
   updates: ({ dispatch }) => {

@@ -186,6 +186,16 @@ async fn run(app: &tauri::AppHandle) -> Result<String, String> {
     sleep(Duration::from_secs(SETTLE)).await;
     note(app, "settled").await;
     let before = cmds::player_state().await?;
+    // Tuning in lands on the server's connect burst — the oldest of what it
+    // already held — and must be brought up to live once that has arrived.
+    // Run against `fake_stream.py --burst 20` to exercise it; on an even
+    // feed it is near live from the start and this holds trivially.
+    if before.behind_live > LIVE {
+        return Err(format!(
+            "{SETTLE}s after tuning in, still {:.1}s behind live (the connect burst was never caught up)",
+            before.behind_live
+        ));
+    }
     if before.buffered_back < 4.0 {
         return Err(format!(
             "only {:.1}s of scrollback after {SETTLE}s of playback; nothing to seek into",

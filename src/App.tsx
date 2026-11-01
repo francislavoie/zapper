@@ -5,7 +5,7 @@
 // Nothing here may paint an opaque pixel over the video region. The page
 // background stays transparent; only chrome surfaces get colour.
 
-import { useEffect, useLayoutEffect, useRef } from "react";
+import { Activity, useEffect, useLayoutEffect, useRef } from "react";
 import { backend, isMock, subscribePlayer, subscribeSync } from "./backend";
 import { loadCategories } from "./actions";
 import { errorMessage } from "./logic/async";
@@ -50,6 +50,7 @@ export function App() {
   const stageRef = useRef<HTMLDivElement | null>(null);
   const planeRef = useRef<HTMLDivElement | null>(null);
   const browsing = state.mode === "browse";
+  const guiding = state.mode === "guide";
 
   // The stacked layout is a preference, not a mode: it applies while watching,
   // and only when the window has the room. Too small a window falls back to
@@ -316,16 +317,31 @@ export function App() {
             still a window: the bar above this renders regardless, so it can
             still be moved, resized and closed. */}
         <Boundary what="This view">
-        {browsing ? (
-          <div className="browse">
+        {/* Browse and the guide share one band, mounted once, and each view
+            below it is kept alive while the other is shown. As two separate trees, each
+            with its own band, switching views would throw the band away and
+            fetch now/next again, and coming back to the list would re-fetch
+            its pages and lose the scroll:
+            every toggle a visible reload. A hidden <Activity> keeps state and DOM and only
+            pauses effects. The whole thing is hidden, not unmounted, while
+            watching full size, so the round trip through the player costs
+            nothing either. */}
+        <Activity mode={browsing || guiding ? "visible" : "hidden"}>
+          <div className={guiding ? "guide-stage" : "browse"}>
             {/* First in the DOM as well as on screen: the band owns the top of
-                the stage, and the list below it scrolls under a picture that
-                never moves. */}
+                the stage, and what is below it scrolls under a picture that
+                never moves. mpv draws beneath the webview, so in both views
+                the band is where the hole for the picture is. */}
             <WatchBand videoRef={dockRef} />
-            <Rail />
-            <ChannelList />
+            <Activity mode={guiding ? "hidden" : "visible"}>
+              <Rail />
+              <ChannelList />
+            </Activity>
+            <Activity mode={guiding ? "visible" : "hidden"}>
+              <GuideGrid />
+            </Activity>
           </div>
-        ) : null}
+        </Activity>
 
         {/* Over the picture in every mode, which is where a right-click on
             the stream is answered and where the diagnostics belong. */}
@@ -337,16 +353,6 @@ export function App() {
         ) : null}
         {state.statsOpen ? (
           <StatsPanel onClose={() => dispatch({ type: "stats", open: false })} />
-        ) : null}
-
-        {state.mode === "guide" ? (
-          <div className="guide-stage">
-            {/* The same band as browse, for the same reason: mpv draws
-                beneath the webview, so the only way to see the picture is to
-                leave a hole where it is. */}
-            <WatchBand videoRef={dockRef} />
-            <GuideGrid />
-          </div>
         ) : null}
 
         {/* Chrome belongs to watch mode. Browsing shows the docked picture and

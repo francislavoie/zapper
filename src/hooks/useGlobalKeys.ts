@@ -8,7 +8,6 @@ import { backend } from "../backend";
 import { focusSearch, typingInto } from "../focus";
 import { exitFullscreen, toggleFullscreen } from "../fullscreen";
 import { fullscreenNow, refreshFullscreen } from "./useFullscreen";
-import { clampHours } from "../logic/guide";
 import { run } from "../store";
 import type { State } from "../store";
 import type { Action } from "../store";
@@ -90,15 +89,16 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
       }
 
       if (state.mode === "guide") {
-        const page = clampHours(state.settings.guideHours);
+        // An hour per press, like the ‹ › buttons: a whole screen was a jump
+        // big enough to lose your place in.
         if (e.key === "ArrowLeft") {
           e.preventDefault();
-          dispatch({ type: "guideShift", hours: -page });
+          dispatch({ type: "guideShift", hours: -1 });
           return;
         }
         if (e.key === "ArrowRight") {
           e.preventDefault();
-          dispatch({ type: "guideShift", hours: page });
+          dispatch({ type: "guideShift", hours: 1 });
           return;
         }
         if (e.key === "Home") {
@@ -119,8 +119,26 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
         return;
       }
 
+      // Stats for nerds, from anywhere: the panel says what it can with
+      // nothing playing, and its graphs are already recording when something is.
+      if (e.key === "s" || e.key === "S") {
+        e.preventDefault();
+        dispatch({ type: "stats", open: !state.statsOpen });
+        return;
+      }
+
       // The rest only mean anything with a stream open.
       if (state.player.state === "stopped") return;
+
+      // Theater: the picture filling the window, without going fullscreen
+      // (that is F). YouTube's key for the same idea, so the hand already
+      // knows it. From the list or the guide it opens the player; from the
+      // player it goes back to where the docked picture lives.
+      if (e.key === "t" || e.key === "T") {
+        e.preventDefault();
+        dispatch({ type: "mode", mode: state.mode === "watch" ? "browse" : "watch" });
+        return;
+      }
 
       switch (e.key) {
         case " ":
@@ -158,5 +176,6 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
     state.updateOpen,
     state.favouriteMenu,
     state.categoryMenu,
+    state.statsOpen,
   ]);
 }

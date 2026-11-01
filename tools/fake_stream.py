@@ -8,6 +8,7 @@ path — HTTP, MPEG-TS, mpv's cache — with none of those problems.
   tools/fake_stream.py                       # serves every fixture on :8788
   tools/fake_stream.py --port 9000 --rate 2  # burst at 2x realtime
   tools/fake_stream.py --gap-every 4         # 1.5s gaps, then a burst
+  tools/fake_stream.py --burst 20            # open with 20s at once, as a panel does
 
 Then point the player at:  http://127.0.0.1:8788/sample1080.ts
 """
@@ -28,6 +29,7 @@ class Handler(BaseHTTPRequestHandler):
     quiet = True
     gap_every = 0.0
     gap_for = 0.0
+    burst = 0.0
 
     def log_message(self, *a):
         if not Handler.quiet:
@@ -72,7 +74,9 @@ class Handler(BaseHTTPRequestHandler):
         # in a burst. Playing right at the live edge survives an even feed and
         # stalls on that one, so testing the edge needs the gaps.
         next_gap = time.monotonic() + Handler.gap_every if Handler.gap_every else None
-        owed = 0  # chunks to send without pacing, to catch up after a gap
+        # Chunks to send without pacing: a gap's backlog, and the connect
+        # burst many servers open with — what they already hold, at once.
+        owed = int(Handler.burst / delay) if Handler.burst else 0
 
         try:
             while True:  # loop the segment forever
@@ -126,8 +130,11 @@ def main():
                     help="go quiet every SECONDS of delivery, like a live server")
     ap.add_argument("--gap-for", type=float, default=1.5, metavar="SECONDS",
                     help="how long each gap lasts; the backlog follows in a burst")
+    ap.add_argument("--burst", type=float, default=0.0, metavar="SECONDS",
+                    help="open each connection with SECONDS of video at once, like a panel")
     ap.add_argument("--verbose", action="store_true")
     a = ap.parse_args()
+    Handler.burst = a.burst
 
     Handler.rate = a.rate
     Handler.gap_every = a.gap_every

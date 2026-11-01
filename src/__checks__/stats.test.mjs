@@ -16,10 +16,30 @@ import {
   count,
   rate,
   resolutionLine,
+  sampleAt,
+  sampleX,
   seconds,
   sparkline,
   text,
 } from "../logic/stats.ts";
+
+test("the hover cursor finds the sample under the pointer, both ways round", () => {
+  const n = HISTORY_LENGTH;
+  // A full graph: the left edge is the oldest sample, the right the newest.
+  assert.equal(sampleAt(0, n), 0);
+  assert.equal(sampleAt(1, n), n - 1);
+  assert.equal(sampleAt(0.5, n), Math.round((n - 1) / 2));
+  // Round trip: the x a sample is drawn at points back at that sample.
+  for (const i of [0, 7, 60, n - 1]) assert.equal(sampleAt(sampleX(i, n), n), i);
+  // A graph with ten samples is drawn from the right; its empty left side
+  // points at nothing rather than at the oldest sample.
+  assert.equal(sampleAt(0.1, 10), null);
+  assert.equal(sampleAt(1, 10), 9);
+  assert.equal(sampleAt(sampleX(0, 10), 10), 0);
+  // Nothing to point at.
+  assert.equal(sampleAt(0.5, 0), null);
+  assert.equal(sampleAt(Number.NaN, 10), null);
+});
 
 // The sampling itself — the delta arithmetic, the ring, the reset on a new
 // stream — lives in the backend, which records continuously so the panel

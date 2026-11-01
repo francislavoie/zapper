@@ -35,8 +35,11 @@ export interface SourceKindInfo {
 export const SOURCE_KINDS: readonly SourceKindInfo[] = [
   {
     id: "xtream",
-    label: "Xtream panel",
-    needs: "Server address, username and password",
+    // "Xtream", as people say it, and the server is called a server. The
+    // needs line names "Xtream Codes" in full, since that is what a
+    // provider's email calls the login.
+    label: "Xtream",
+    needs: "An Xtream Codes server, username and password",
     points: [
       { text: "Channels and guide from one login", ok: true },
       { text: "Catch-up wherever your provider offers it", ok: true },

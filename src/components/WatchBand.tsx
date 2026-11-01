@@ -14,15 +14,9 @@
 // moving or resizing the picture is one edit and the rect follows by
 // measurement.
 
-import {
-  useEffect,
-  useRef,
-  useState,
-  type PointerEvent as ReactPointerEvent,
-  type RefObject,
-} from "react";
+import { useRef, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 import { playChannel } from "../actions";
-import { volumeAfterWheel } from "../logic/volume";
+import { slotAction } from "../logic/gestures";
 import { backend } from "../backend";
 import { useClock } from "../hooks/useClock";
 import { useNowNext } from "../hooks/useNowNext";
@@ -70,30 +64,25 @@ export function WatchBand({ videoRef }: WatchBandProps) {
     if (nowChannel) void playChannel(dispatch, nowChannel);
   };
 
-  // Scroll over the docked picture is volume, exactly as it is over the
-  // full-size one. Attached by hand rather than with onWheel, because React
-  // registers wheel at the root as passive and a passive listener cannot
-  // preventDefault — without which the page scrolls underneath as well.
-  const [volumeNudge, setVolumeNudge] = useState(0);
-  const playerState = useRef(player);
-  playerState.current = player;
-  useEffect(() => {
-    const el = videoRef.current;
-    if (!el) return;
-    const onWheel = (e: WheelEvent) => {
-      // Ctrl+wheel is application zoom; leave it to the window.
-      if (e.ctrlKey || e.metaKey) return;
-      const p = playerState.current;
-      if (p.state === "stopped") return;
-      e.preventDefault();
-      const next = volumeAfterWheel(p.volume, e.deltaY);
-      setVolumeNudge((n) => n + 1);
-      void run(dispatch, "volume", backend.setVolume(next));
-      if (p.muted) void run(dispatch, "mute", backend.setMuted(false));
-    };
-    el.addEventListener("wheel", onWheel, { passive: false });
-    return () => el.removeEventListener("wheel", onWheel);
-  }, [dispatch, videoRef]);
+  // The slot looks like the picture, so it has to behave like it: while
+  // something is playing a click goes full screen, paused it resumes, and
+  // while a channel is merely restored it starts it. Doing nothing was the
+  // worst of the three — it said "ready" and then ignored the click. While
+  // playing, the click arrives through MiniControls, which first waits to
+  // see whether it is half of a double-click.
+  const activate = () => {
+    switch (slotAction(player.state, ready)) {
+      case "resume":
+        void run(dispatch, "pause", backend.togglePause());
+        break;
+      case "watch":
+        toWatch();
+        break;
+      case "start":
+        resume();
+        break;
+    }
+  };
 
   // Resizing the picture. The slot is pinned right, so dragging its left
   // edge outwards makes it bigger.
@@ -218,18 +207,7 @@ export function WatchBand({ videoRef }: WatchBandProps) {
         role={live || ready ? "button" : undefined}
         tabIndex={live || ready ? 0 : undefined}
         aria-label={videoTip}
-        // The slot looks like the picture, so it has to behave like it: while
-        // something is playing it goes full screen, and while a channel is
-        // merely restored it starts it. Doing nothing was the worst of the
-        // three — it said "ready" and then ignored the click.
-        onClick={() => {
-          // Paused, a click resumes where it is rather than going full
-          // screen: the picture is frozen, and getting it moving is the
-          // obvious thing being asked for.
-          if (player.state === "paused") void run(dispatch, "pause", backend.togglePause());
-          else if (live) toWatch();
-          else if (ready) resume();
-        }}
+        onClick={activate}
         onKeyDown={(e) => {
           if (e.key !== "Enter") return;
           if (live) toWatch();
@@ -249,8 +227,7 @@ export function WatchBand({ videoRef }: WatchBandProps) {
         {/* Only while something is playing: there is nothing to transport
             otherwise, and the restored-channel slot is one big click target
             that these would fight with. */}
-        {live ? <MiniControls volumeNudge={volumeNudge} /> : null}
-
+        {live ? <MiniControls onActivate={activate} /> : null}
       </div>
     </section>
   );

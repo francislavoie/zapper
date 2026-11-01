@@ -24,6 +24,7 @@ import { loadCategories } from "../actions";
 import { ALL_CATEGORIES, useApp, useDispatch } from "../store";
 import { ContextMenu } from "./ContextMenu";
 import { Pin, SortOrder } from "./icons";
+import { SearchField } from "./SearchField";
 
 export function CategoryRail() {
   const {
@@ -105,12 +106,11 @@ export function CategoryRail() {
   return (
     <>
       <div className="pane-head">
-        <input
-          className="field"
+        <SearchField
           placeholder="Filter categories"
           value={categoryFilter}
-          spellCheck={false}
-          onChange={(e) => dispatch({ type: "categoryFilter", text: e.target.value })}
+          onChange={(text) => dispatch({ type: "categoryFilter", text })}
+          clearLabel="Clear filter"
           onKeyDown={(e) => {
             if (e.key === "Escape" && categoryFilter !== "") {
               e.stopPropagation();

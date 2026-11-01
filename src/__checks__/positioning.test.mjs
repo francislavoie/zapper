@@ -27,7 +27,9 @@ function ruleFor(selector) {
 
 /** Every anchor, and the absolutely positioned thing that needs it. */
 const ANCHORS = [
-  [".watch-video", ".mini-controls", "the hover controls on the docked picture"],
+  [".watch-video", ".mini-chrome", "the gesture layer over the docked picture"],
+  [".mini-chrome", ".mini-controls", "the hover controls on the docked picture"],
+  [".mini-volume", ".mini-volume-pop", "the docked picture's volume slider panel"],
   [".rail", ".rail-grip", "the divider between the rail and the list"],
   [".rail-spacer", ".rail-row", "the windowed category rows"],
   [".rail-row", ".rail-pin", "the pin button over a category row's count"],

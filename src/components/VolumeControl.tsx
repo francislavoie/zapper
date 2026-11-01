@@ -1,23 +1,14 @@
-// Volume: the icon that mutes, and the slider beside it.
+// Volume: the icon that mutes, and the slider that goes with it.
 //
-// The slider is VolumeSlider, which the docked picture also uses — there in
-// a popover above its control row rather than inline. One drawing of one
-// control; see that file for why it is drawn rather than borrowed from the
-// platform.
+// Inline on the player bar. On the docked picture's bar (`popover`) the
+// slider sits in a small panel above the button instead, because there the
+// row is already a full row of controls in a 22rem box and the slider is the
+// one of them that needs length to be worth having. One mute button and one
+// slider either way; see VolumeSlider for why the slider is drawn rather than
+// borrowed from the platform.
 
 import { useEffect, useRef } from "react";
-import {
-  UNITY_FRACTION,
-  VOLUME_MAX,
-  VOLUME_STEP,
-  VOLUME_UNITY,
-  isBoosted,
-  positionOfVolume,
-  volumeAfterWheel,
-  volumeAtPosition,
-  volumeLabel,
-  volumeLevel,
-} from "../logic/volume";
+import { volumeAfterWheel, volumeLevel } from "../logic/volume";
 import { Volume } from "./icons";
 import { VolumeSlider } from "./VolumeSlider";
 
@@ -30,9 +21,10 @@ export interface VolumeControlProps {
   onToggleMute: () => void;
   /** The chrome fades on idle; touching this control is not idle. */
   onActivity?: () => void;
+  /** The slider in a panel above the button, shown on hover or keyboard
+   *  focus, rather than inline beside it. */
+  popover?: boolean;
 }
-
-const pct = (n: number) => `${n * 100}%`;
 
 export function VolumeControl({
   volume,
@@ -40,10 +32,9 @@ export function VolumeControl({
   onVolume,
   onToggleMute,
   onActivity,
+  popover = false,
 }: VolumeControlProps) {
   const rootRef = useRef<HTMLDivElement | null>(null);
-  const trackRef = useRef<HTMLDivElement | null>(null);
-  const dragging = useRef(false);
 
   // The wheel listener is attached by hand rather than with onWheel, because
   // React registers wheel at the root as passive and a passive listener cannot
@@ -74,30 +65,12 @@ export function VolumeControl({
     return () => el.removeEventListener("wheel", onWheel);
   }, []);
 
-  // Muting does not move the handle. The slider goes on showing the value
-  // playback will come back to — greyed, so it is clear nothing is coming out
-  // of it right now — and `aria-valuenow` says the same number the handle is
-  // sitting on, which it would not if one of them dropped to zero.
-  const position = positionOfVolume(volume);
-  const boosted = isBoosted(volume);
-  const label = volumeLabel(volume, muted);
-
-  const commitAt = (clientX: number) => {
-    const el = trackRef.current;
-    if (!el) return;
-    const box = el.getBoundingClientRect();
-    if (box.width <= 0) return;
-    onActivity?.();
-    onVolume(volumeAtPosition((clientX - box.left) / box.width));
-  };
-
-  const nudge = (delta: number) => {
-    onActivity?.();
-    onVolume(Math.min(VOLUME_MAX, Math.max(0, Math.round(volume + delta))));
-  };
+  const slider = (
+    <VolumeSlider volume={volume} muted={muted} onVolume={onVolume} onActivity={onActivity} />
+  );
 
   return (
-    <div className={`volume ${muted ? "muted" : ""}`} ref={rootRef}>
+    <div className={`volume ${muted ? "muted" : ""}${popover ? " mini-volume" : ""}`} ref={rootRef}>
       <button
         className="ctl icon"
         onClick={() => {
@@ -111,7 +84,18 @@ export function VolumeControl({
         <Volume className="i" level={volumeLevel(volume, muted)} />
       </button>
 
-      <VolumeSlider volume={volume} muted={muted} onVolume={onVolume} onActivity={onActivity} />
+      {popover ? (
+        // Two elements, and the outer one is the reason this is usable. It
+        // reaches from the button up to the panel with nothing between, so
+        // moving the pointer towards the slider never crosses a gap — cross
+        // one and the hover is lost and the thing being reached for
+        // vanishes. The visible panel is the inner element.
+        <span className="mini-volume-pop">
+          <span className="mini-volume-panel">{slider}</span>
+        </span>
+      ) : (
+        slider
+      )}
     </div>
   );
 }

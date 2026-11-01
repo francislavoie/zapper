@@ -1,4 +1,4 @@
-// The account: an Xtream panel, or an M3U playlist with an optional guide.
+// The account: an Xtream Codes login, or an M3U playlist with an optional guide.
 //
 // The password is write-only. It is never sent back from the backend, so
 // the field starts empty even when one is on file, and leaving it empty

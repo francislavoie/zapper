@@ -73,6 +73,19 @@ export function SettingsModal() {
       }}
     >
       <div className="settings" role="dialog" aria-label="Settings">
+        {/* Clicking outside and Escape both close this, and neither shows
+            itself: a dialog with no visible way out reads as one you are
+            stuck in. */}
+        <button
+          className="modal-close"
+          aria-label="Close settings"
+          data-tip="Close (Escape)"
+          onClick={close}
+        >
+          <svg viewBox="0 0 12 12" aria-hidden="true">
+            <path d="M2.5 2.5l7 7M9.5 2.5l-7 7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+          </svg>
+        </button>
         <nav className="settings-side">
           {SECTIONS.map((x) => (
             <button

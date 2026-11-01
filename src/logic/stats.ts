@@ -65,6 +65,30 @@ export function sparkline(
     .join(" ");
 }
 
+/** Seconds between graph samples: two heartbeats of 250ms (TICKS_PER_SAMPLE
+ *  in src-tauri/src/ipc/health.rs). */
+export const SAMPLE_SECONDS = 0.5;
+
+/** Where sample `index` of `count` sits across a graph, 0-1. The inverse of
+ *  [`sampleAt`]; the same right-aligned layout `sparkline` draws. */
+export function sampleX(index: number, count: number): number {
+  const slots = Math.max(HISTORY_LENGTH - 1, 1);
+  return 1 - (count - 1 - index) / slots;
+}
+
+/** Which sample is under a pointer at `fraction` (0-1) across a graph, or
+ *  null where the graph has no data yet. A part-filled graph is drawn from
+ *  the right, so its left side is empty and points at nothing. */
+export function sampleAt(fraction: number, count: number): number | null {
+  if (count <= 0 || !Number.isFinite(fraction)) return null;
+  const slots = Math.max(HISTORY_LENGTH - 1, 1);
+  const first = sampleX(0, count);
+  const half = 0.5 / slots;
+  if (fraction < first - half) return null;
+  const i = Math.round((fraction - first) * slots);
+  return Math.min(count - 1, Math.max(0, i));
+}
+
 // ------------------------------------------------------------- formatting
 
 /** A dash, so a missing reading reads as "this stream does not say" rather

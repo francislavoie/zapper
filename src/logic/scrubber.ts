@@ -157,6 +157,20 @@ export function hintPixel(px: number, hintWidth: number, trackWidth: number): nu
   return Math.min(trackWidth - half, Math.max(half, px));
 }
 
+/** Whether the hover preview fits above the bar without rising past the top
+ *  of the box it has to stay inside.
+ *
+ *  The player's bar always has room. The docked picture's does not: at its
+ *  smallest the picture is shorter than the preview card is tall, and above
+ *  it is the window's edge, which cuts the card off. All three numbers are
+ *  in the same (client) pixels. */
+export function hintFitsAbove(barTop: number, hintHeight: number, boundTop: number): boolean {
+  if (!Number.isFinite(barTop) || !Number.isFinite(hintHeight) || !Number.isFinite(boundTop)) {
+    return true;
+  }
+  return barTop - hintHeight >= boundTop;
+}
+
 export type Zone = "archive" | "buffer";
 
 export function zoneAtPixel(g: Geometry, px: number): Zone {

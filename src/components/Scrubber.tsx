@@ -2,14 +2,15 @@
 // right. Left of the seam a seek reopens the stream from the server; right of
 // it, it is instant. All the arithmetic is in logic/scrubber.ts.
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { backend } from "../backend";
-import { duration, hhmm } from "../logic/format";
+import { duration, hhmm, scrubLabels } from "../logic/format";
 import {
   behindLiveAt,
   catchupRequest,
   geometry,
   headPixel,
+  hintFitsAbove,
   hintPixel,
   localPixel,
   seekCost,
@@ -23,14 +24,20 @@ export interface ScrubberProps {
   player: PlayerStateDto;
   channel: ChannelDto | null;
   onPin: (pinned: boolean) => void;
+  /** The docked picture's bar: the captions in fewer words. */
+  compact?: boolean;
+  /** A box the hover preview must not rise out of. When there is no room
+   *  for it above the bar inside this, it opens below the bar instead. */
+  hintWithin?: RefObject<HTMLElement | null>;
 }
 
-export function Scrubber({ player, channel, onPin }: ScrubberProps) {
+export function Scrubber({ player, channel, onPin, compact = false, hintWithin }: ScrubberProps) {
   const dispatch = useDispatch();
   const trackRef = useRef<HTMLDivElement | null>(null);
   const hintRef = useRef<HTMLDivElement | null>(null);
   const [width, setWidth] = useState(0);
   const [hintWidth, setHintWidth] = useState(0);
+  const [hintBelow, setHintBelow] = useState(false);
   const [hoverPx, setHoverPx] = useState<number | null>(null);
   const now = useNowSeconds();
 
@@ -69,7 +76,18 @@ export function Scrubber({ player, channel, onPin }: ScrubberProps) {
   useLayoutEffect(() => {
     const el = hintRef.current;
     setHintWidth(el ? el.getBoundingClientRect().width / scaleOf(el) : 0);
-  }, [hoverTime, hoverCost, width]);
+    // Above the bar unless that leaves the box it has to stay inside. The
+    // docked picture can be smaller than the preview card is tall, and above
+    // it is the window's edge, which cuts the card off.
+    const bound = hintWithin?.current;
+    const bar = el?.parentElement;
+    if (!el || !bound || !bar) {
+      setHintBelow(false);
+      return;
+    }
+    const height = el.getBoundingClientRect().height;
+    setHintBelow(!hintFitsAbove(bar.getBoundingClientRect().top, height, bound.getBoundingClientRect().top));
+  }, [hoverTime, hoverCost, width, preview, hintWithin]);
 
   // Layout pixels, which is what the geometry is in. See `localPixel`: the
   // rect and the event are in visual pixels and `clientWidth` is not, and
@@ -98,6 +116,13 @@ export function Scrubber({ player, channel, onPin }: ScrubberProps) {
   };
 
   const bufferIsEmpty = player.bufferedBack < 1;
+  const [leftLabel, rightLabel] = scrubLabels({
+    hasArchive: g.hasArchive,
+    archiveDays: channel?.archiveDays ?? null,
+    bufferedBack: player.bufferedBack,
+    hasChannel: channel !== null,
+    compact,
+  });
 
   return (
     <div className="scrub">
@@ -125,7 +150,7 @@ export function Scrubber({ player, channel, onPin }: ScrubberProps) {
 
         {hoverTime !== null ? (
           <div
-            className="scrub-hint"
+            className={hintBelow ? "scrub-hint below" : "scrub-hint"}
             ref={hintRef}
             style={{ left: hintPixel(hoverPx ?? 0, hintWidth, width) }}
           >
@@ -146,21 +171,8 @@ export function Scrubber({ player, channel, onPin }: ScrubberProps) {
       </div>
 
       <div className="scrub-labels">
-        {g.hasArchive ? (
-          <>
-            <span>{channel?.archiveDays}-day archive · seek reconnects</span>
-            <span>
-              buffer {duration(player.bufferedBack)} · instant
-            </span>
-          </>
-        ) : (
-          <>
-            <span>
-              local buffer only{channel ? " — no catchup on this channel" : ""}
-            </span>
-            <span>{duration(player.bufferedBack)} of scrollback</span>
-          </>
-        )}
+        <span>{leftLabel}</span>
+        <span>{rightLabel}</span>
       </div>
     </div>
   );

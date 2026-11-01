@@ -1,212 +1,154 @@
-// Transport for the docked picture.
+// The docked picture's controls, and its gestures.
 //
 // The player's full chrome only exists in watch mode, so while the picture
 // was docked there was nothing to press: pausing or muting meant opening the
-// player and coming back.
+// player and coming back. The bar here is the player's own TransportBar at
+// its compact size — scrubber, scrollback readout and every button, with the
+// same tooltips and keys — so the two cannot drift apart. Only Browse is
+// left out, and only because the band is where Browse goes.
 //
-// The same buttons in the same order as the player bar, built from the same
-// `.ctl` classes and the same icons — it is the same control surface at a
-// smaller size, not a second one with its own ideas. Two things the bar has
-// are left out, and only because they do not fit in a 22rem box: the volume
-// slider, whose button remains as mute, and Browse, which is where you
-// already are.
+// The gestures are the player's too, through the same hook: scroll is volume,
+// a double-click at either edge seeks with a bubble to say so. What differs
+// is what a click means, because the band gives the picture a job of its own
+// — a single click opens the player (see WatchBand) — and so a double-click
+// in the middle goes on past the player to fullscreen.
 //
 // Drawn over the video deliberately. The slot is a hole through to mpv and
 // nothing may sit on it permanently — but controls that appear under the
-// pointer and leave again are what that hole is for.
+// pointer and leave again are what that hole is for. This layer itself is
+// transparent and covers the slot only to hear the pointer; the bar is
+// invisible and untouchable until the pointer is there.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import { backend } from "../backend";
 import { toggleFullscreen } from "../fullscreen";
+import { useFade } from "../hooks/useFade";
 import { refreshFullscreen } from "../hooks/useFullscreen";
-import { liveState } from "../logic/format";
+import { useVideoGestures } from "../hooks/useVideoGestures";
+import { DOUBLE_CLICK_MS, clickIntent } from "../logic/gestures";
+import { volumeAfterWheel } from "../logic/volume";
 import { run, useApp, useDispatch } from "../store";
-import {
-  CompressorOff,
-  CompressorOn,
-  Fullscreen,
-  Pause,
-  Play,
-  SkipBack,
-  SkipForward,
-  Stop,
-  Volume,
-} from "./icons";
-import { VolumeSlider } from "./VolumeSlider";
+import { TransportBar } from "./TransportBar";
+import { VideoFeedback } from "./VideoFeedback";
 
-/** The same jump the player bar makes, from the same constant's value. */
-const SKIP_SECONDS = 5;
+export interface MiniControlsProps {
+  /** What a single click on the picture does. Owned by the band, which also
+   *  answers Enter and the click on a picture that is not playing yet. */
+  onActivate: () => void;
+}
 
-export function MiniControls({ volumeNudge = 0 }: { volumeNudge?: number }) {
+export function MiniControls({ onActivate }: MiniControlsProps) {
   const { player, mode } = useApp();
   const dispatch = useDispatch();
-  const playing = player.state === "playing";
-  const live = liveState(player.atLiveEdge, player.behindLive);
+  // Hidden until the pointer arrives: a stream starting is not a reason to
+  // put a panel over the picture.
+  const [fade, on] = useFade(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
 
-  // The slider lives above the row rather than in it: the row is already
-  // eight controls wide in a 22rem box, and the slider is the one of them
-  // that needs length to be worth having.
-  //
-  // Shown on hover of the volume group, and for a moment after a scroll
-  // anywhere over the picture — that gesture changes a number with nothing
-  // on screen to show it, so it brings up the thing that does.
-  const [nudged, setNudged] = useState(false);
+  // The band stays mounted, hidden, while the player is open (App.tsx keeps
+  // it in an <Activity>). Coming back, the bar must start hidden rather than
+  // as it was when the picture was clicked — before paint, so the panel is
+  // never seen over the picture for the half second the idle clock needs.
+  useLayoutEffect(() => on({ type: "leave" }), [on]);
+
+  // From the docked picture, fullscreen means all the way there rather than
+  // to the player and then fullscreen. The mode change is not cosmetic: the
+  // video rect is measured from whichever slot the layout offers, and browse
+  // offers the corner — so going fullscreen without it leaves a full-screen
+  // window with the picture still in the corner of it.
+  const toFullscreen = () => {
+    dispatch({ type: "fullscreenFrom", mode });
+    dispatch({ type: "mode", mode: "watch" });
+    void toggleFullscreen()
+      .then(refreshFullscreen)
+      .catch((err: unknown) => dispatch({ type: "toast", text: `fullscreen: ${String(err)}` }));
+  };
+
+  const gestures = useVideoGestures({
+    atLiveEdge: player.atLiveEdge,
+    muted: player.muted,
+    onFullscreen: toFullscreen,
+    onActivity: () => on({ type: "activity" }),
+  });
+
+  // Scroll over the docked picture is volume, exactly as it is over the
+  // full-size one. Attached by hand rather than with onWheel, because React
+  // registers wheel at the root as passive and a passive listener cannot
+  // preventDefault — without which the list scrolls underneath as well.
+  const latest = useRef({ player, gestures, on });
+  latest.current = { player, gestures, on };
   useEffect(() => {
-    if (volumeNudge === 0) return;
-    setNudged(true);
-    const t = window.setTimeout(() => setNudged(false), 1400);
-    return () => window.clearTimeout(t);
-  }, [volumeNudge]);
+    const el = rootRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      // Ctrl+wheel is application zoom; leave it to the window.
+      if (e.ctrlKey || e.metaKey) return;
+      const { player: p, gestures: g, on: poke } = latest.current;
+      if (p.state === "stopped") return;
+      e.preventDefault();
+      const next = volumeAfterWheel(p.volume, e.deltaY);
+      poke({ type: "activity" });
+      // Scrolling up from mute here means "let me hear this", so the bubble
+      // shows the speaker that is about to be heard.
+      g.flashVolume(next, false);
+      void run(dispatch, "volume", backend.setVolume(next));
+      if (p.muted) void run(dispatch, "mute", backend.setMuted(false));
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [dispatch]);
 
-  const setVolume = (next: number) => {
-    void run(dispatch, "volume", backend.setVolume(next));
-    // Reaching for the slider while muted means "let me hear this".
-    if (player.muted) void run(dispatch, "mute", backend.setMuted(false));
+  // A single click waits to see whether a second is coming. See
+  // DOUBLE_CLICK_MS: answering at once would unmount this picture under the
+  // second click.
+  const pending = useRef<number | null>(null);
+  const cancelPending = () => {
+    if (pending.current !== null) window.clearTimeout(pending.current);
+    pending.current = null;
   };
-
-  // The slot behind these is click-to-open-the-player. Every button has to
-  // stop that, or pausing would also throw you into the player.
-  const act = (e: React.MouseEvent, f: () => void) => {
-    e.stopPropagation();
-    f();
-  };
+  useEffect(() => cancelPending, []);
 
   return (
     <div
-      className="mini-controls"
-      onDoubleClick={(e) => e.stopPropagation()}
-      onContextMenu={(e) => e.stopPropagation()}
+      className={`mini-chrome ${fade.visible ? "shown" : ""}`}
+      ref={rootRef}
+      onPointerMove={() => on({ type: "activity" })}
+      onPointerLeave={() => on({ type: "leave" })}
+      onClick={(e) => {
+        // The band's own click handler is for when this layer is absent.
+        e.stopPropagation();
+        const intent = clickIntent(e.detail);
+        if (intent === "single") {
+          cancelPending();
+          pending.current = window.setTimeout(() => {
+            pending.current = null;
+            onActivate();
+          }, DOUBLE_CLICK_MS);
+        } else if (intent === "double") {
+          cancelPending();
+          gestures.doubleClick(e.clientX, e.currentTarget.getBoundingClientRect());
+        }
+      }}
     >
-      <button
-        className="ctl icon"
-        data-tip={playing ? "Pause (Space)" : "Play (Space)"}
-        aria-label={playing ? "Pause" : "Play"}
-        onClick={(e) => act(e, () => void run(dispatch, "pause", backend.togglePause()))}
+      <VideoFeedback feedback={gestures.feedback} />
+
+      {/* Every click inside the bar belongs to the control it hit. Without
+          stopping it here, pausing would also count as a click on the
+          picture and open the player. */}
+      <div
+        className="mini-controls"
+        onClick={(e) => e.stopPropagation()}
+        onContextMenu={(e) => e.stopPropagation()}
       >
-        {playing ? <Pause className="i" /> : <Play className="i" />}
-      </button>
-
-      <button
-        className="ctl icon"
-        data-tip="Stop"
-        aria-label="Stop"
-        onClick={(e) => act(e, () => void run(dispatch, "stop", backend.stop()))}
-      >
-        <Stop className="i" />
-      </button>
-
-      <span className={`mini-volume ${nudged ? "open" : ""}`}>
-        <button
-          className="ctl icon"
-          data-tip={player.muted ? "Unmute" : "Mute"}
-          aria-label={player.muted ? "Unmute" : "Mute"}
-          aria-pressed={player.muted}
-          onClick={(e) =>
-            act(e, () => void run(dispatch, "mute", backend.setMuted(!player.muted)))
-          }
-        >
-          <Volume className="i" level={player.muted ? "muted" : "high"} />
-        </button>
-
-        {/* Two elements, and the outer one is the reason this is usable.
-            It reaches from the button up to the panel with nothing between,
-            so moving the pointer towards the slider never crosses a gap —
-            cross one and the hover is lost and the thing being reached for
-            vanishes. The visible panel is the inner element. */}
-        <span className="mini-volume-pop">
-          <span
-            className="mini-volume-panel volume"
-            onClick={(e) => e.stopPropagation()}
-            onDoubleClick={(e) => e.stopPropagation()}
-          >
-            <VolumeSlider volume={player.volume} muted={player.muted} onVolume={setVolume} />
-          </span>
-        </span>
-      </span>
-
-      <button
-        className={`ctl icon ${player.compressor ? "on" : ""}`}
-        data-tip="Dynamic range compressor"
-        aria-label="Dynamic range compressor"
-        aria-pressed={player.compressor}
-        onClick={(e) =>
-          act(
-            e,
-            () =>
-              void run(dispatch, "compressor", backend.setCompressor(!player.compressor)),
-          )
-        }
-      >
-        {player.compressor ? <CompressorOn className="i" /> : <CompressorOff className="i" />}
-      </button>
-
-      {/* The same gap the bar has: audio on one side, transport on the other. */}
-      <span className="ctl-gap" />
-
-      <button
-        className="ctl icon"
-        data-tip={`Back ${SKIP_SECONDS} seconds (Left)`}
-        aria-label={`Back ${SKIP_SECONDS} seconds`}
-        onClick={(e) =>
-          act(e, () => void run(dispatch, "seek", backend.seekRelative(-SKIP_SECONDS)))
-        }
-      >
-        <SkipBack className="i" seconds={SKIP_SECONDS} />
-      </button>
-
-      <button
-        className="ctl icon"
-        data-tip={`Forward ${SKIP_SECONDS} seconds (Right)`}
-        aria-label={`Forward ${SKIP_SECONDS} seconds`}
-        onClick={(e) =>
-          act(e, () => void run(dispatch, "seek", backend.seekRelative(SKIP_SECONDS)))
-        }
-      >
-        <SkipForward className="i" seconds={SKIP_SECONDS} />
-      </button>
-
-      {/* The word as well as the dot, as on the player bar: the dot alone
-          says something is red, not what it is. Smaller here, because the
-          row has a fifth of the width to spend. */}
-      <button
-        className={`ctl live mini-live ${live.live ? "at-edge" : ""}`}
-        data-tip={live.canJump ? `${live.label} — jump to live (L)` : live.label}
-        aria-label={live.label}
-        disabled={!live.canJump}
-        onClick={(e) => act(e, () => void run(dispatch, "live", backend.seekLive()))}
-      >
-        <span className="live-dot" aria-hidden="true" />
-        Live
-      </button>
-
-      {/* Last, like fullscreen on the bar, and the same control: from the
-          docked picture that means all the way to fullscreen rather than to
-          the player and then fullscreen. Clicking the picture is still the
-          way to the player, so nothing is lost by spending this button on
-          the further destination.
-
-          The mode change is not cosmetic. The video rect is measured from
-          whichever slot the layout offers, and browse offers the corner —
-          so going fullscreen without this leaves a full-screen window with
-          the picture still in the corner of it. */}
-      <button
-        className="ctl icon rightmost"
-        data-tip="Fullscreen (F)"
-        aria-label="Fullscreen"
-        onClick={(e) =>
-          act(e, () => {
-            dispatch({ type: "fullscreenFrom", mode });
-            dispatch({ type: "mode", mode: "watch" });
-            void toggleFullscreen()
-              .then(refreshFullscreen)
-              .catch((err: unknown) =>
-                dispatch({ type: "toast", text: `fullscreen: ${String(err)}` }),
-              );
-          })
-        }
-      >
-        <Fullscreen className="i" />
-      </button>
+        <TransportBar
+          compact
+          onPin={(pinned) => on({ type: "pin", pinned })}
+          onActivity={() => on({ type: "activity" })}
+          fullscreen={false}
+          onFullscreen={toFullscreen}
+          hintWithin={rootRef}
+        />
+      </div>
     </div>
   );
 }
