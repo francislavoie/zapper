@@ -135,14 +135,16 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
           TAG: ${{ needs.plan.outputs.tag }}
         run: |
-          mkdir -p dist
-          if python3 scripts/changelog.py notes "$VERSION" CHANGELOG.md > dist/release-notes.md; then
-            echo "Release notes: $(wc -l < dist/release-notes.md) lines"
+          # out/, not dist/: the frontend build `just package` runs empties dist/ (Vite's
+          # outDir), which took the notes with it.
+          mkdir -p out
+          if python3 scripts/changelog.py notes "$VERSION" CHANGELOG.md > out/release-notes.md; then
+            echo "Release notes: $(wc -l < out/release-notes.md) lines"
           elif [ -n "$TAG" ]; then
             exit 1
           else
             echo "::warning::No CHANGELOG.md section for $VERSION (fine for a dry run)."
-            rm dist/release-notes.md
+            rm out/release-notes.md
           fi
 
       # The Linux build dependencies (README.md). The packages' Depends are fixed in tauri.conf.json, not
@@ -215,13 +217,13 @@ jobs:
           for f in "$deb" "$rpm" "$pkg"; do
             [ -f "$f" ] || { echo "::error::Missing $f: $(ls src-tauri/target/release/bundle/*/)"; exit 1; }
           done
-          cp "$deb" "$rpm" "$pkg" dist/
-          (cd dist && sha256sum -- *.deb *.rpm *.pkg.tar.zst > SHA256SUMS && cat SHA256SUMS)
+          cp "$deb" "$rpm" "$pkg" out/
+          (cd out && sha256sum -- *.deb *.rpm *.pkg.tar.zst > SHA256SUMS && cat SHA256SUMS)
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: zapper-${{ steps.version.outputs.version }}-linux
-          path: dist/
+          path: out/
           if-no-files-found: error
           retention-days: 3
           compression-level: 0
@@ -299,20 +301,20 @@ jobs:
             "src-tauri/target/release/bundle/nsis/zapper_${env:VERSION}_x64-setup.exe",
             "src-tauri/target/release/bundle/msi/zapper_${env:VERSION}_x64_en-US.msi"
           )
-          New-Item -ItemType Directory -Force dist | Out-Null
+          New-Item -ItemType Directory -Force out | Out-Null
           foreach ($f in $files) {
             if (-not (Test-Path $f)) { throw "Missing $f" }
-            Copy-Item $f dist/
+            Copy-Item $f out/
           }
           # sha256sum's format, so the release job checks and merges it with the Linux one.
-          $sums = foreach ($f in Get-ChildItem dist -File) { "{0}  {1}" -f (Get-FileHash -Algorithm SHA256 $f.FullName).Hash.ToLower(), $f.Name }
-          [IO.File]::WriteAllText("$PWD/dist/SHA256SUMS", ($sums -join "`n") + "`n")
-          Get-Content dist/SHA256SUMS
+          $sums = foreach ($f in Get-ChildItem out -File) { "{0}  {1}" -f (Get-FileHash -Algorithm SHA256 $f.FullName).Hash.ToLower(), $f.Name }
+          [IO.File]::WriteAllText("$PWD/out/SHA256SUMS", ($sums -join "`n") + "`n")
+          Get-Content out/SHA256SUMS
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: zapper-${{ needs.linux.outputs.version }}-windows
-          path: dist/
+          path: out/
           if-no-files-found: error
           retention-days: 3
           compression-level: 0
@@ -367,14 +369,14 @@ jobs:
         run: |
           dmg=src-tauri/target/release/bundle/dmg/zapper_${VERSION}_aarch64.dmg
           [ -f "$dmg" ] || { echo "::error::Missing $dmg"; exit 1; }
-          mkdir -p dist
-          cp "$dmg" dist/
-          (cd dist && shasum -a 256 -- *.dmg > SHA256SUMS && cat SHA256SUMS)
+          mkdir -p out
+          cp "$dmg" out/
+          (cd out && shasum -a 256 -- *.dmg > SHA256SUMS && cat SHA256SUMS)
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: zapper-${{ needs.linux.outputs.version }}-macos
-          path: dist/
+          path: out/
           if-no-files-found: error
           retention-days: 3
           compression-level: 0
