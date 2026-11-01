@@ -408,8 +408,10 @@ fn tick(app: &AppHandle, p: &Player) {
     // Assigned inside the block below, where the state lock is held.
     let earned;
     let loaded;
+    let newly_failed;
     let payload = {
         let mut m = STATE.lock().expect("player state mutex poisoned");
+        let was_failed = m.dto.state == PlaybackState::Failed;
         for s in &signals {
             match s {
                 Signal::VideoReconfig => {
@@ -442,6 +444,11 @@ fn tick(app: &AppHandle, p: &Player) {
         }
         m.apply(&probe);
         m.check_deadline();
+        newly_failed = if !was_failed && m.dto.state == PlaybackState::Failed {
+            m.dto.stream_id
+        } else {
+            None
+        };
 
         // Catch up only after playback has genuinely lost time.
         //
@@ -524,12 +531,46 @@ fn tick(app: &AppHandle, p: &Player) {
     if loaded {
         crate::ipc::health::observe(health);
     }
+    if let Some(id) = newly_failed {
+        explain_failure(app, id);
+    }
     if let Some(e) = earned {
         persist(e);
     }
     if let Some(payload) = payload {
         let _ = app.emit(events::PLAYER_STATE, payload);
     }
+}
+
+/// Asks the account why a channel failed, when it can say more than mpv.
+///
+/// mpv reports a refused stream as "loading failed". An HDHomeRun knows
+/// whether that was every tuner being busy, or no signal, and the person
+/// looking at the error needs to know which: one is fixed by stopping a
+/// recording, the other by nothing at all. The question goes to the tuner
+/// off the main thread, and the answer replaces mpv's message only if the
+/// same channel is still the one that failed — a zap in the meantime is a
+/// different story.
+///
+/// Only for a source already built: the heartbeat is no place to read the
+/// account file, and a failure on a source nobody has built yet cannot be
+/// an HDHomeRun stream.
+fn explain_failure(app: &AppHandle, stream_id: i64) {
+    let cached = CLIENT.read().ok().and_then(|slot| *slot);
+    let Some(Source::HdHomeRun(tuner)) = cached else {
+        return;
+    };
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let Some(why) = tuner.explain_failure(stream_id).await else {
+            return;
+        };
+        commit(&app, |m| {
+            if m.dto.stream_id == Some(stream_id) && m.dto.state == PlaybackState::Failed {
+                m.dto.error = Some(why);
+            }
+        });
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -578,7 +619,10 @@ pub fn forget_panel() {
 pub fn panel() -> Result<&'static XtreamClient, String> {
     match source()? {
         Source::Xtream(c) => Ok(c),
-        Source::M3u(_) => Err("the account is an M3U playlist, not an Xtream panel".to_owned()),
+        other => Err(format!(
+            "the account is {}, not an Xtream panel",
+            other.kind().label()
+        )),
     }
 }
 
@@ -645,6 +689,12 @@ pub async fn play_catchup(
                 local_utc_offset(start),
             )
             .map_err(|e| crate::catalog::sync_engine::scrub(&e.to_string()))?,
+        // A tuner has no archive, and a Tvheadend server's is its DVR, which
+        // is not read. Their channels are never marked as having catch-up,
+        // so this is only reached by a stale request from before a switch.
+        Source::HdHomeRun(_) | Source::Tvheadend(_) => {
+            return Err("this account has no catch-up".to_owned());
+        }
     };
     open(&app, stream_id, target).await
 }

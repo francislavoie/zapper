@@ -17,7 +17,9 @@
 use anyhow::{anyhow, Context, Result};
 use std::path::PathBuf;
 
+use crate::hdhomerun::HdhrAccount;
 use crate::m3u::M3uAccount;
+use crate::tvheadend::TvhAccount;
 use crate::xtream::Credentials;
 
 /// `~/.config/zapper/account.json`, or the platform's equivalent.
@@ -27,9 +29,12 @@ pub fn account_path() -> PathBuf {
 
 /// The file's shape.
 ///
-/// Both kinds' fields live side by side and `kind` says which is in use, so
+/// Every kind's fields live side by side and `kind` says which is in use, so
 /// switching to a playlist and back does not cost the Xtream password (and
-/// vice versa). Every field defaults, which is what keeps a file written
+/// vice versa). The kinds added later are prefixed with their name
+/// (`hdhomerun_…`, `tvheadend_…`) rather than sharing `host`/`username`/
+/// `password`: a Tvheadend login is not the Xtream one, and switching between
+/// the two must not overwrite either. Every field defaults, which is what keeps a file written
 /// before playlists existed — `{"host","username","password"}` and nothing
 /// else — loading exactly as it did: no `kind` means Xtream.
 #[derive(serde::Serialize, serde::Deserialize, Default)]
@@ -48,6 +53,17 @@ struct Stored {
     epg_urls: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     user_agent: Option<String>,
+    /// The tuner's address.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    hdhomerun_device: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    hdhomerun_epg_urls: Vec<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    tvheadend_url: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    tvheadend_username: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    tvheadend_password: String,
 }
 
 impl Stored {
@@ -73,10 +89,33 @@ impl Stored {
         })
     }
 
+    fn hdhomerun(&self) -> Option<HdhrAccount> {
+        if self.hdhomerun_device.trim().is_empty() {
+            return None;
+        }
+        Some(HdhrAccount {
+            device: self.hdhomerun_device.clone(),
+            epg_urls: self.hdhomerun_epg_urls.clone(),
+        })
+    }
+
+    fn tvheadend(&self) -> Option<TvhAccount> {
+        if self.tvheadend_url.trim().is_empty() {
+            return None;
+        }
+        Some(TvhAccount {
+            url: self.tvheadend_url.clone(),
+            username: self.tvheadend_username.clone(),
+            password: self.tvheadend_password.clone(),
+        })
+    }
+
     fn kind(&self) -> Result<Kind> {
         match self.kind.as_deref().map(str::trim) {
             None | Some("") | Some("xtream") => Ok(Kind::Xtream),
             Some("m3u") => Ok(Kind::M3u),
+            Some("hdhomerun") => Ok(Kind::HdHomeRun),
+            Some("tvheadend") => Ok(Kind::Tvheadend),
             Some(other) => Err(anyhow!(
                 "{} names an account kind this version does not know ({other})",
                 account_path().display()
@@ -90,6 +129,8 @@ impl Stored {
 pub enum Kind {
     Xtream,
     M3u,
+    HdHomeRun,
+    Tvheadend,
 }
 
 impl Kind {
@@ -97,6 +138,18 @@ impl Kind {
         match self {
             Kind::Xtream => "xtream",
             Kind::M3u => "m3u",
+            Kind::HdHomeRun => "hdhomerun",
+            Kind::Tvheadend => "tvheadend",
+        }
+    }
+
+    /// What the kind is called where a person will read it.
+    pub fn label(self) -> &'static str {
+        match self {
+            Kind::Xtream => "an Xtream panel",
+            Kind::M3u => "an M3U playlist",
+            Kind::HdHomeRun => "an HDHomeRun tuner",
+            Kind::Tvheadend => "a Tvheadend server",
         }
     }
 }
@@ -106,6 +159,19 @@ impl Kind {
 pub enum Account {
     Xtream(Credentials),
     M3u(M3uAccount),
+    HdHomeRun(HdhrAccount),
+    Tvheadend(TvhAccount),
+}
+
+impl Account {
+    pub fn kind(&self) -> Kind {
+        match self {
+            Account::Xtream(_) => Kind::Xtream,
+            Account::M3u(_) => Kind::M3u,
+            Account::HdHomeRun(_) => Kind::HdHomeRun,
+            Account::Tvheadend(_) => Kind::Tvheadend,
+        }
+    }
 }
 
 fn read_file() -> Result<Option<Stored>> {
@@ -123,7 +189,7 @@ fn read_file() -> Result<Option<Stored>> {
 
 /// Reads the account file. `Ok(None)` when there is not one yet, which is the
 /// ordinary first-run state and not an error — and also when the account in
-/// use is a playlist, since there are then no panel credentials to use.
+/// use is some other kind, since there are then no Xtream credentials to use.
 pub fn load_stored() -> Result<Option<Credentials>> {
     Ok(match load_account_stored()? {
         Some(Account::Xtream(c)) => Some(c),
@@ -131,7 +197,7 @@ pub fn load_stored() -> Result<Option<Credentials>> {
     })
 }
 
-/// The account in use, of either kind. `Ok(None)` when there is none yet.
+/// The account in use, of any kind. `Ok(None)` when there is none yet.
 pub fn load_account_stored() -> Result<Option<Account>> {
     let Some(s) = read_file()? else {
         return Ok(None);
@@ -139,10 +205,12 @@ pub fn load_account_stored() -> Result<Option<Account>> {
     Ok(match s.kind()? {
         Kind::Xtream => s.xtream().map(Account::Xtream),
         Kind::M3u => s.m3u().map(Account::M3u),
+        Kind::HdHomeRun => s.hdhomerun().map(Account::HdHomeRun),
+        Kind::Tvheadend => s.tvheadend().map(Account::Tvheadend),
     })
 }
 
-/// The account to use, of either kind.
+/// The account to use, of any kind.
 pub fn load_account() -> Result<Account> {
     load_account_stored()?.ok_or_else(|| {
         anyhow!("no account configured. Set one in Settings → Account.")
@@ -153,18 +221,21 @@ pub fn load_account() -> Result<Account> {
 pub fn load() -> Result<Credentials> {
     match load_account()? {
         Account::Xtream(c) => Ok(c),
-        Account::M3u(_) => Err(anyhow!(
-            "the account is an M3U playlist, not an Xtream panel"
+        other => Err(anyhow!(
+            "the account is {}, not an Xtream panel",
+            other.kind().label()
         )),
     }
 }
 
-/// Everything on file, of both kinds, for the settings pane: which kind is in
-/// use, and what each kind's fields hold so switching shows them filled in.
+/// Everything on file, of every kind, for the settings pane: which kind is
+/// in use, and what each kind's fields hold so switching shows them filled in.
 pub struct OnFile {
     pub kind: Kind,
     pub xtream: Option<Credentials>,
     pub m3u: Option<M3uAccount>,
+    pub hdhomerun: Option<HdhrAccount>,
+    pub tvheadend: Option<TvhAccount>,
 }
 
 pub fn on_file() -> OnFile {
@@ -173,11 +244,15 @@ pub fn on_file() -> OnFile {
             kind: s.kind().unwrap_or(Kind::Xtream),
             xtream: s.xtream(),
             m3u: s.m3u(),
+            hdhomerun: s.hdhomerun(),
+            tvheadend: s.tvheadend(),
         },
         _ => OnFile {
             kind: Kind::Xtream,
             xtream: None,
             m3u: None,
+            hdhomerun: None,
+            tvheadend: None,
         },
     }
 }
@@ -206,6 +281,27 @@ pub fn save_m3u(acct: &M3uAccount) -> Result<()> {
     s.playlist = acct.playlist.clone();
     s.epg_urls = acct.epg_urls.clone();
     s.user_agent = acct.user_agent.clone();
+    write(&s)
+}
+
+/// Makes the HDHomeRun the account in use, keeping every other kind's
+/// fields on file.
+pub fn save_hdhomerun(acct: &HdhrAccount) -> Result<()> {
+    let mut s = existing_or_default();
+    s.kind = Some(Kind::HdHomeRun.as_str().to_owned());
+    s.hdhomerun_device = acct.device.clone();
+    s.hdhomerun_epg_urls = acct.epg_urls.clone();
+    write(&s)
+}
+
+/// Makes the Tvheadend server the account in use, keeping every other kind's
+/// fields on file.
+pub fn save_tvheadend(acct: &TvhAccount) -> Result<()> {
+    let mut s = existing_or_default();
+    s.kind = Some(Kind::Tvheadend.as_str().to_owned());
+    s.tvheadend_url = acct.url.clone();
+    s.tvheadend_username = acct.username.clone();
+    s.tvheadend_password = acct.password.clone();
     write(&s)
 }
 
@@ -260,7 +356,11 @@ pub enum Source {
 /// and what an empty password field keeps.
 pub fn summary() -> (Option<Credentials>, Source) {
     let f = on_file();
-    let source = if f.xtream.is_some() || f.m3u.is_some() {
+    let source = if f.xtream.is_some()
+        || f.m3u.is_some()
+        || f.hdhomerun.is_some()
+        || f.tvheadend.is_some()
+    {
         Source::Zapper
     } else {
         Source::None
@@ -425,7 +525,7 @@ mod tests {
                     assert_eq!((c.host.as_str(), c.username.as_str()), ("http://old.example", "me"));
                     assert_eq!(c.password, "pw");
                 }
-                Account::M3u(_) => panic!("an old file is a panel account"),
+                _ => panic!("an old file is a panel account"),
             }
             assert_eq!(load().unwrap().username, "me");
             assert_eq!(on_file().kind, Kind::Xtream);
@@ -438,7 +538,7 @@ mod tests {
             save_m3u(&playlist()).unwrap();
             match load_account().unwrap() {
                 Account::M3u(a) => assert_eq!(a, playlist()),
-                Account::Xtream(_) => panic!("saved a playlist, read a panel"),
+                _ => panic!("saved a playlist, read something else"),
             }
             // Xtream-only callers are told why there is no Xtream server.
             let err = load().unwrap_err().to_string();
@@ -474,6 +574,67 @@ mod tests {
             let err = load_account().unwrap_err().to_string();
             assert!(err.contains("stalker"), "{err}");
             assert!(!err.contains("hunter2"), "{err}");
+        });
+    }
+
+    fn tuner() -> HdhrAccount {
+        HdhrAccount {
+            device: "192.168.1.50".into(),
+            epg_urls: vec![],
+        }
+    }
+
+    fn tvh() -> TvhAccount {
+        TvhAccount {
+            url: "http://tvh.lan:9981".into(),
+            username: "viewer".into(),
+            password: "tvh-secret".into(),
+        }
+    }
+
+    #[test]
+    fn every_kind_round_trips_and_keeps_the_others() {
+        in_temp_config(|| {
+            save(&creds()).unwrap();
+            save_m3u(&playlist()).unwrap();
+            save_hdhomerun(&tuner()).unwrap();
+            match load_account().unwrap() {
+                Account::HdHomeRun(a) => assert_eq!(a, tuner()),
+                other => panic!("saved a tuner, read {other:?}"),
+            }
+            save_tvheadend(&tvh()).unwrap();
+            match load_account().unwrap() {
+                Account::Tvheadend(a) => assert_eq!(a, tvh()),
+                other => panic!("saved a server, read {other:?}"),
+            }
+            let f = on_file();
+            assert_eq!(f.kind, Kind::Tvheadend);
+            // Nothing was lost on the way: each kind's own fields, untouched.
+            assert_eq!(f.xtream.unwrap().password, "secret");
+            assert_eq!(f.m3u, Some(playlist()));
+            assert_eq!(f.hdhomerun, Some(tuner()));
+            // A Tvheadend login is not the Xtream one.
+            assert_eq!(summary().0.unwrap().username, "user");
+            let err = load().unwrap_err().to_string();
+            assert!(err.contains("Tvheadend"), "{err}");
+        });
+    }
+
+    #[test]
+    fn a_file_written_before_the_new_kinds_still_loads_and_they_add_beside_it() {
+        in_temp_config(|| {
+            write_raw(r#"{"kind":"m3u","host":"h","username":"u","password":"p","playlist":"/tv.m3u"}"#);
+            assert!(matches!(load_account().unwrap(), Account::M3u(_)));
+            save_tvheadend(&TvhAccount {
+                url: "tvh.lan:9981".into(),
+                ..TvhAccount::default()
+            })
+            .unwrap();
+            let raw = std::fs::read_to_string(account_path()).unwrap();
+            assert!(raw.contains("\"playlist\": \"/tv.m3u\""), "{raw}");
+            // An anonymous server writes no empty login fields.
+            assert!(!raw.contains("tvheadend_username"), "{raw}");
+            assert!(matches!(load_account().unwrap(), Account::Tvheadend(_)));
         });
     }
 

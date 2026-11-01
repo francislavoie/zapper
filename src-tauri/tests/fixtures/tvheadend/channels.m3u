@@ -1,0 +1,9 @@
+#EXTM3U
+#EXTINF:-1 tvg-logo="{base}/imagecache/12" tvg-id="c0ffee0000000000000000000000c001" tvg-chno="1",NWN One HD
+{base}/stream/channelid/1001{query}profile=pass
+#EXTINF:-1 tvg-logo="{base}/imagecache/13" tvg-id="c0ffee0000000000000000000000c002" tvg-chno="2",NWN Two
+{base}/stream/channelid/1002{query}profile=pass
+#EXTINF:-1 tvg-id="c0ffee0000000000000000000000c003" tvg-chno="5.1",KXMO-HD
+{base}/stream/channelid/1003{query}profile=pass
+#EXTINF:-1 tvg-id="c0ffee0000000000000000000000c004" tvg-chno="101",Radio Talk
+{base}/stream/channelid/1004{query}profile=pass

@@ -121,7 +121,7 @@ export function CommandPalette() {
               <span className="palette-hint">
                 {item.kind === "action"
                   ? (item.action.hint ?? "")
-                  : (item.channel.num ?? "")}
+                  : (item.channel.numLabel ?? item.channel.num ?? "")}
               </span>
             </button>
           ))}

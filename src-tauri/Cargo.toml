@@ -79,6 +79,10 @@ libmpv2 = "7"
 # The updater's check of a downloaded package against the release's
 # SHA256SUMS. Already in the tree through Tauri; named here so it is ours.
 sha2 = "0.10"
+# MD5 for HTTP Digest, which is how Tvheadend logs in by default (see
+# `tvheadend::digest`). RustCrypto's, on the same `digest` 0.10 that sha2
+# already brings, so it is one small crate and nothing under it.
+md-5 = "0.10"
 # Gzipped XMLTV guides (and the odd gzipped playlist). Already in the tree
 # through the PNG stack; named here so it is ours.
 flate2 = "1"

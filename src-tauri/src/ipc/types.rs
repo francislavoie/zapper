@@ -45,6 +45,11 @@ pub struct ChannelDto {
     pub name: String,
     pub clean_name: String,
     pub num: Option<i64>,
+    /// How to write `num`, when the integer is not it: a subchannel's `5.1`,
+    /// stored as `5001` so it sorts. `None` for nearly every channel, whose
+    /// number is shown as it is. See `m3u::parse::channel_number`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub num_label: Option<String>,
     pub logo_url: Option<String>,
     pub category_id: Option<String>,
     pub has_archive: bool,
@@ -464,9 +469,9 @@ pub struct AccountDto {
     /// Where the account is kept, so the answer to "where is this?" is on
     /// screen rather than in a commit message.
     pub path: String,
-    /// "xtream" or "m3u": which of the two sets of fields is in use. Both
-    /// are reported, so switching kinds in the pane shows the other set
-    /// filled in as it was left.
+    /// "xtream", "m3u", "hdhomerun" or "tvheadend": which set of fields
+    /// is in use. Every set is reported, so switching kinds in the pane shows
+    /// the others filled in as they were left.
     pub kind: String,
     /// The playlist location, with any credentials in it redacted. A
     /// provider's playlist URL usually *is* the account
@@ -481,4 +486,15 @@ pub struct AccountDto {
     pub epg_redacted: bool,
     /// Empty for "the default".
     pub user_agent: String,
+    /// The HDHomeRun's address, as typed. A LAN address: nothing to hide.
+    pub hdhomerun_device: String,
+    /// XMLTV guides used in place of SiliconDust's, redacted like the
+    /// playlist's guides. Empty means SiliconDust's.
+    pub hdhomerun_epg_urls: Vec<String>,
+    pub hdhomerun_epg_redacted: bool,
+    /// The Tvheadend server and who to log in as. The password follows the
+    /// Xtream password's rule: only whether one is on file.
+    pub tvheadend_url: String,
+    pub tvheadend_username: String,
+    pub tvheadend_has_password: bool,
 }

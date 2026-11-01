@@ -77,10 +77,20 @@ impl<'c> PlaylistWriter<'c> {
     }
 
     pub fn push(&mut self, e: Entry) -> Result<()> {
-        self.position += 1;
         // See `m3u::ids`: the id comes from what the entry is called, not
         // from its URL, which may carry a token that changes every download.
         let identity = ids::identity(&e);
+        self.push_identified(e, &identity)
+    }
+
+    /// [`push`](Self::push), for an entry whose source knows better than a
+    /// display name what makes it the same channel next time: an HDHomeRun's
+    /// device and guide number, a Tvheadend channel's UUID. Those survive a
+    /// rename and a retag, which a name and a group do not. The identity is
+    /// hashed into the same id range as a playlist's, so the mirror cannot
+    /// tell — and does not need to — which kind of source wrote a row.
+    pub fn push_identified(&mut self, e: Entry, identity: &str) -> Result<()> {
+        self.position += 1;
         let occurrence = {
             let n = self
                 .occurrences
@@ -90,7 +100,7 @@ impl<'c> PlaylistWriter<'c> {
             *n += 1;
             this
         };
-        let stream_id = ids::stream_id(&identity, occurrence);
+        let stream_id = ids::stream_id(identity, occurrence);
         let category = e.group.as_deref().map(|g| {
             if self.group_set.insert(g.to_owned()) {
                 self.groups.push(g.to_owned());
@@ -113,8 +123,8 @@ impl<'c> PlaylistWriter<'c> {
                    (stream_id, category_id, name, clean_name, num, logo_url,
                     epg_channel_id, has_archive, archive_days, is_separator, deleted_at,
                     stream_url, tvg_id, tvg_name, catchup_mode, catchup_source,
-                    http_user_agent, http_referrer)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,NULL,?11,?12,?13,?14,?15,?16,?17)
+                    http_user_agent, http_referrer, num_label)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,NULL,?11,?12,?13,?14,?15,?16,?17,?18)
                  ON CONFLICT(stream_id) DO UPDATE SET
                    category_id=excluded.category_id, name=excluded.name,
                    clean_name=excluded.clean_name, num=excluded.num,
@@ -136,7 +146,8 @@ impl<'c> PlaylistWriter<'c> {
                    tvg_name=excluded.tvg_name, catchup_mode=excluded.catchup_mode,
                    catchup_source=excluded.catchup_source,
                    http_user_agent=excluded.http_user_agent,
-                   http_referrer=excluded.http_referrer",
+                   http_referrer=excluded.http_referrer,
+                   num_label=excluded.num_label",
             )?
             .execute(params![
                 stream_id,
@@ -156,6 +167,9 @@ impl<'c> PlaylistWriter<'c> {
                 e.catchup_source,
                 e.user_agent,
                 e.referrer,
+                // Only with the number it describes: a label beside a
+                // position would name a number the row does not have.
+                e.chno.and(e.chno_label),
             ])?;
 
         if self.seen.insert(stream_id) {
@@ -166,6 +180,20 @@ impl<'c> PlaylistWriter<'c> {
             }
         }
         Ok(())
+    }
+
+    /// Puts the categories in `order` first, in that order, and the rest
+    /// after them as they appeared.
+    ///
+    /// A playlist's group order is its author's, and first appearance is the
+    /// right reading of it. A lineup or a server has an order of its own to
+    /// give instead — an HDHomeRun's favourites before the rest, a
+    /// Tvheadend's tags as its administrator numbered them — and pushing the
+    /// channels in that order to get it would cost them their own.
+    pub fn rank_groups(&mut self, order: &[String]) {
+        let rank = |g: &String| order.iter().position(|o| o == g).unwrap_or(order.len());
+        // Stable, so the unranked keep their order of appearance.
+        self.groups.sort_by_key(rank);
     }
 
     /// Commits the write. Refuses an empty playlist outright: an empty answer

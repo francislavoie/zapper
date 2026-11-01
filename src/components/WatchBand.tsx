@@ -278,7 +278,7 @@ function Ready({
       <p className="watch-state">Where you left off</p>
       <h2 data-tip-overflow={channel.name}>{channel.cleanName}</h2>
       <div className="watch-sub">
-        {channel.num != null ? <span className="watch-num">#{channel.num}</span> : null}
+        {channel.num != null ? <span className="watch-num">#{channel.numLabel ?? channel.num}</span> : null}
         {onNow ? <span className="watch-now" data-tip-overflow="">{onNow.title}</span> : null}
         {channel.hasArchive ? (
           <span className="badge archive" data-tip={`${channel.archiveDays ?? "?"}-day catchup`}>
@@ -338,7 +338,7 @@ function Playing({
           </div>
         </div>
         <div className="watch-sub">
-          {channel.num != null ? <span className="watch-num">#{channel.num}</span> : null}
+          {channel.num != null ? <span className="watch-num">#{channel.numLabel ?? channel.num}</span> : null}
           {badge ? <span className="badge">{badge}</span> : null}
           {channel.hasArchive ? (
             <span className="badge archive" data-tip={`${channel.archiveDays ?? "?"}-day catchup`}>

@@ -86,8 +86,10 @@ CREATE TABLE IF NOT EXISTS epg_channel_names (
 /// number to keep in step, and an older build opening a newer mirror simply
 /// ignores columns it does not select.
 ///
-/// All of these belong to playlist (M3U) channels and stay NULL for a panel's:
-/// a panel builds its stream URLs from the account, a playlist states each one.
+/// All of these belong to channels whose stream URL is stored — playlists,
+/// HDHomeRun lineups and Tvheadend servers — and stay NULL for an Xtream
+/// server's: a server builds its stream URLs from the account, the others
+/// state each one.
 const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
     // Where the channel plays from. Its presence is what marks a row as a
     // playlist channel.
@@ -102,6 +104,11 @@ const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
     // Per-channel HTTP headers from `#EXTVLCOPT` / `#EXTHTTP`, handed to mpv.
     ("channels", "http_user_agent", "TEXT"),
     ("channels", "http_referrer", "TEXT"),
+    // How the channel number is written when `num` cannot say it: an
+    // over-the-air subchannel's `5.1`, which `num` holds as `5001` so the
+    // listing still sorts by it. Set by HDHomeRun lineups and by any
+    // playlist whose `tvg-chno` has a minor part.
+    ("channels", "num_label", "TEXT"),
 ];
 
 fn add_missing_columns(conn: &Connection) -> Result<()> {

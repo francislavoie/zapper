@@ -17,7 +17,8 @@ use crate::ipc::types::{
 /// drift out of step with the mapper.
 const CHANNEL_COLUMNS: &str = "ch.stream_id, ch.name, ch.clean_name, ch.num, ch.logo_url,
      ch.category_id, ch.has_archive, ch.archive_days, ch.is_separator,
-     q.stream_id, q.codec, q.width, q.height, q.fps, q.is_hdr, q.ok_count, q.fail_count";
+     q.stream_id, q.codec, q.width, q.height, q.fps, q.is_hdr, q.ok_count, q.fail_count,
+     ch.num_label";
 
 fn channel_from_row(row: &Row) -> rusqlite::Result<ChannelDto> {
     // A missing `quality` row is the normal case, not an error: most of a
@@ -48,6 +49,7 @@ fn channel_from_row(row: &Row) -> rusqlite::Result<ChannelDto> {
             .get::<_, Option<i64>>(7)?
             .and_then(|d| u32::try_from(d).ok()),
         is_separator: row.get::<_, i64>(8)? != 0,
+        num_label: row.get(17)?,
         quality,
         // Filled in by the caller for the page it returns; joining the guide
         // to every listing would cost more than the UI needs.
@@ -325,9 +327,9 @@ pub fn watched(conn: &Connection) -> Result<Vec<FavouriteDto>> {
     let rows = stmt.query_map([], |row| {
         Ok(FavouriteDto {
             channel: channel_from_row(row)?,
-            watch_seconds: row.get(17)?,
-            last_watched: row.get(18)?,
-            open_count: row.get(19)?,
+            watch_seconds: row.get(18)?,
+            last_watched: row.get(19)?,
+            open_count: row.get(20)?,
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)

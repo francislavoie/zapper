@@ -25,6 +25,13 @@ pub const SECRET_KEYS: &[&str] = &[
     "key=",
     "signature=",
     "sig=",
+    // HTTP Digest's own fields, for an `Authorization` or
+    // `WWW-Authenticate` header that ends up quoted in an error (a
+    // TVHeadend login): the response is a password hash, and the nonces
+    // are what it was salted with. `cnonce=` is caught by `nonce=`.
+    "response=",
+    "nonce=",
+    "opaque=",
 ];
 
 /// Redacts `scheme://user:pass@host` down to `scheme://<redacted>@host`,
@@ -56,26 +63,69 @@ pub fn redact_userinfo(text: &str) -> String {
 }
 
 /// Redacts the values of [`SECRET_KEYS`] wherever they appear in `text`.
+///
+/// Keys are matched without regard to case: an HDHomeRun's guide token
+/// travels as `DeviceAuth=`, which `auth=` only catches that way, and a
+/// provider that writes `Password=` is no less secret for it. A value in
+/// double quotes — the shape a Digest header writes `username="bob"` in — is
+/// redacted up to its closing quote, commas and all.
 pub fn redact_query(text: &str) -> String {
+    // ASCII lowercasing keeps every byte where it was, so offsets found in
+    // the lowered copy index the original.
+    let lower = text.to_ascii_lowercase();
     let mut out = String::with_capacity(text.len());
-    let mut rest = text;
+    let mut pos = 0;
     while let Some((at, key_len)) = SECRET_KEYS
         .iter()
-        .filter_map(|k| rest.find(k).map(|i| (i, k.len())))
+        .filter_map(|k| lower[pos..].find(k).map(|i| (pos + i, k.len())))
         .min_by_key(|(i, _)| *i)
     {
         let value_start = at + key_len;
-        out.push_str(&rest[..value_start]);
-        out.push_str("<redacted>");
+        out.push_str(&text[pos..value_start]);
+        let rest = &text[value_start..];
         // A query value ends at the next separator; everything after it —
-        // including the closing bracket reqwest wraps the URL in — stays.
-        let end = rest[value_start..]
-            .find(['&', ')', ' ', '"', '\n'])
-            .map(|i| value_start + i)
-            .unwrap_or(rest.len());
-        rest = &rest[end..];
+        // including the closing bracket reqwest wraps the URL in — stays. A
+        // quoted one ends at its closing quote, and the quotes stay so a
+        // header still reads as one.
+        let end = match rest.strip_prefix('"') {
+            Some(quoted) => {
+                out.push_str("\"<redacted>\"");
+                quoted.find('"').map(|i| i + 2).unwrap_or(rest.len())
+            }
+            None => {
+                out.push_str("<redacted>");
+                rest.find(['&', ')', ' ', '"', '\n']).unwrap_or(rest.len())
+            }
+        };
+        pos = value_start + end;
     }
-    out.push_str(rest);
+    out.push_str(&text[pos..]);
+    out
+}
+
+/// Redacts the credentials of a `Basic` authorization, which carry no key
+/// for [`redact_query`] to find: the base64 token after the word is the
+/// username and password.
+pub fn redact_basic(text: &str) -> String {
+    let lower = text.to_ascii_lowercase();
+    let mut out = String::with_capacity(text.len());
+    let mut pos = 0;
+    while let Some(i) = lower[pos..].find("basic ") {
+        let token_start = pos + i + "basic ".len();
+        let token_len = text[token_start..]
+            .find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '=')))
+            .unwrap_or(text.len() - token_start);
+        out.push_str(&text[pos..token_start]);
+        // "Basic auth" in a sentence is not a token; eight characters of
+        // base64 is the shortest `a:b` there is.
+        if token_len >= 8 {
+            out.push_str("<redacted>");
+        } else {
+            out.push_str(&text[token_start..token_start + token_len]);
+        }
+        pos = token_start + token_len;
+    }
+    out.push_str(&text[pos..]);
     out
 }
 
@@ -128,6 +178,43 @@ mod tests {
             redact_url("/home/me/tv.m3u"),
             ("/home/me/tv.m3u".to_owned(), false)
         );
+    }
+
+    #[test]
+    fn keys_match_whatever_their_case() {
+        let (s, changed) =
+            redact_url("https://api.hdhomerun.com/api/guide?DeviceAuth=abcDEF123&Start=1700000000");
+        assert!(!s.contains("abcDEF123"), "{s}");
+        assert!(s.contains("Start=1700000000"), "{s}");
+        assert!(changed);
+        let (s, _) = redact_url("http://p.example/get.php?USERNAME=bob&Password=hunter2");
+        assert!(!s.contains("bob") && !s.contains("hunter2"), "{s}");
+    }
+
+    #[test]
+    fn a_digest_header_keeps_its_shape_and_loses_its_values() {
+        let h = r#"Digest username="bob", realm="tvheadend", nonce="abc,123", uri="/playlist/auth/channels", response="6629fae49393a05397450978507c4ef1", qop=auth, nc=00000001, cnonce="0a4f113b""#;
+        let s = redact_query(h);
+        for secret in ["bob", "abc,123", "6629fae4", "0a4f113b"] {
+            assert!(!s.contains(secret), "{secret} leaked: {s}");
+        }
+        assert!(s.contains(r#"realm="tvheadend""#), "{s}");
+        assert!(s.contains(r#"response="<redacted>""#), "{s}");
+    }
+
+    #[test]
+    fn a_tvheadend_auth_code_in_a_stream_url_is_redacted() {
+        let (s, _) = redact_url("http://tvh.lan:9981/stream/channelid/42?auth=Zk3x9QpL&profile=pass");
+        assert_eq!(s, "http://tvh.lan:9981/stream/channelid/42?auth=<redacted>&profile=pass");
+    }
+
+    #[test]
+    fn basic_credentials_are_redacted_but_the_phrase_is_not() {
+        assert_eq!(
+            redact_basic("Authorization: Basic Ym9iOmh1bnRlcjI="),
+            "Authorization: Basic <redacted>"
+        );
+        assert_eq!(redact_basic("uses Basic auth"), "uses Basic auth");
     }
 
     #[test]

@@ -10,11 +10,17 @@ import assert from "node:assert/strict";
 import {
   SOURCE_KINDS,
   asKind,
+  hdhrChanged,
+  hdhrFormFrom,
   kindInfo,
   m3uChanged,
   m3uFormFrom,
+  planHdhrSave,
   planM3uSave,
+  planTvhSave,
   splitUrls,
+  tvhChanged,
+  tvhFormFrom,
 } from "../logic/sources.ts";
 
 const onFile = (p = {}) => ({
@@ -26,10 +32,10 @@ const onFile = (p = {}) => ({
   ...p,
 });
 
-test("there are exactly the two kinds the backend knows, each labelled once", () => {
+test("there are exactly the kinds the backend knows, each labelled once", () => {
   assert.deepEqual(
     SOURCE_KINDS.map((k) => k.id),
-    ["xtream", "m3u"],
+    ["xtream", "m3u", "hdhomerun", "tvheadend"],
   );
   const labels = SOURCE_KINDS.map((k) => k.label);
   assert.equal(new Set(labels).size, labels.length);
@@ -57,8 +63,21 @@ test("the cards are honest about what a playlist does not get", () => {
   assert.ok(kindInfo("xtream").points.every((p) => p.ok), "a panel has no listed limits");
 });
 
+test("the tuner and server cards say what they cannot do", () => {
+  const tuner = kindInfo("hdhomerun").points;
+  const find = (pts, re) => pts.find((p) => re.test(p.text));
+  assert.equal(find(tuner, /SiliconDust/)?.ok, true, "the free guide is the default");
+  assert.equal(find(tuner, /catch-up/i)?.ok, false, "a tuner has no archive");
+  assert.equal(find(tuner, /copy-protected/i)?.ok, false, "DRM channels are left out");
+  const tvh = kindInfo("tvheadend").points;
+  assert.equal(find(tvh, /persistent auth/i)?.ok, false, "the server setting is named up front");
+  assert.equal(find(tvh, /recordings/i)?.ok, false, "no DVR");
+});
+
 test("an unknown or missing kind reads as a panel", () => {
   assert.equal(asKind("m3u"), "m3u");
+  assert.equal(asKind("hdhomerun"), "hdhomerun");
+  assert.equal(asKind("tvheadend"), "tvheadend");
   assert.equal(asKind("xtream"), "xtream");
   assert.equal(asKind(undefined), "xtream");
   assert.equal(asKind("stalker"), "xtream");
@@ -135,6 +154,70 @@ test("a plain guide list is always sent, so clearing it clears it", () => {
   const cleared = { ...form, epgText: "", epgTouched: true };
   assert.deepEqual(planM3uSave(cleared, a).epgUrls, []);
   assert.equal(m3uChanged(cleared, a), true);
+});
+
+const tunerOnFile = (p = {}) => ({
+  hdhomerunDevice: "",
+  hdhomerunEpgUrls: [],
+  hdhomerunEpgRedacted: false,
+  ...p,
+});
+
+test("a tuner needs an address, and an empty guide list means SiliconDust's", () => {
+  assert.ok("error" in planHdhrSave(hdhrFormFrom(tunerOnFile()), tunerOnFile()));
+  const a = tunerOnFile({ hdhomerunDevice: "192.168.1.50" });
+  const form = hdhrFormFrom(a);
+  assert.equal(hdhrChanged(form, a), false);
+  assert.deepEqual(planHdhrSave(form, a), { device: "192.168.1.50", epgUrls: [] });
+  const moved = { ...form, device: " 10.0.0.7 " };
+  assert.equal(hdhrChanged(moved, a), true);
+  assert.equal(planHdhrSave(moved, a).device, "10.0.0.7");
+});
+
+test("a tuner's redacted guide list is kept until typed in", () => {
+  const a = tunerOnFile({
+    hdhomerunDevice: "hdhr.local",
+    hdhomerunEpgUrls: ["http://g/x.xml?key=<redacted>"],
+    hdhomerunEpgRedacted: true,
+  });
+  const form = hdhrFormFrom(a);
+  assert.equal(form.epgText, "");
+  assert.equal(planHdhrSave(form, a).epgUrls, null);
+  const cleared = { ...form, epgTouched: true };
+  assert.deepEqual(planHdhrSave(cleared, a).epgUrls, []);
+});
+
+const serverOnFile = (p = {}) => ({
+  tvheadendUrl: "",
+  tvheadendUsername: "",
+  tvheadendHasPassword: false,
+  ...p,
+});
+
+test("a Tvheadend password is write-only, and a server may need no login", () => {
+  const a = serverOnFile({
+    tvheadendUrl: "http://tvh.lan:9981",
+    tvheadendUsername: "viewer",
+    tvheadendHasPassword: true,
+  });
+  const form = tvhFormFrom(a);
+  assert.equal(form.password, "", "never filled in");
+  assert.equal(tvhChanged(form, a), false);
+  assert.deepEqual(planTvhSave(form, a), {
+    url: "http://tvh.lan:9981",
+    username: "viewer",
+    password: "",
+  });
+  assert.equal(tvhChanged({ ...form, password: "new" }, a), true);
+  // Anonymous: no login fields, and any typed password is not sent.
+  assert.deepEqual(planTvhSave({ url: "tvh.lan:9981", username: "", password: "x" }, serverOnFile()), {
+    url: "tvh.lan:9981",
+    username: "",
+    password: "",
+  });
+  // A username with no password typed or on file cannot log in.
+  assert.ok("error" in planTvhSave({ url: "tvh.lan", username: "viewer", password: "" }, serverOnFile()));
+  assert.ok("error" in planTvhSave({ url: " ", username: "", password: "" }, serverOnFile()));
 });
 
 test("the user agent is trimmed, and a changed one is a change", () => {

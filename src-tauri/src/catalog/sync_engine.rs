@@ -15,9 +15,36 @@ use crate::catalog::playlist::{self, PlaylistStats, PlaylistWriter};
 use crate::catalog::{db, index, origin, status, sync};
 use crate::ipc::types::{events, SyncPhase, SyncStatusDto};
 use crate::m3u::fetch;
-use crate::source::M3uSource;
+use crate::source::{M3uSource, Refused};
 use crate::xtream::XtreamClient;
 
+/// Where a pass writes.
+///
+/// The application's mirror, always, except in tests: a playlist write
+/// soft-deletes every channel it did not see, so a test that ran a whole
+/// pass against the shared test database would empty it under every other
+/// test. The passes that take one of these can be run end to end against a
+/// database of their own.
+pub(crate) trait Mirror: Clone + Send + Sync + 'static {
+    fn write<R>(&self, f: impl FnOnce(&rusqlite::Connection) -> Result<R>) -> Result<R>;
+    /// Rebuilds the search index from the channels just written. Returns
+    /// how many are indexed.
+    fn reindex(&self) -> Result<usize>;
+}
+
+/// The mirror on disk, through the sync's own writer connection.
+#[derive(Clone, Copy)]
+pub(crate) struct AppMirror;
+
+impl Mirror for AppMirror {
+    fn write<R>(&self, f: impl FnOnce(&rusqlite::Connection) -> Result<R>) -> Result<R> {
+        db::with_write_db(f)
+    }
+
+    fn reindex(&self) -> Result<usize> {
+        db::with_write_db(index::rebuild)
+    }
+}
 
 /// Where a phase's status goes. A trait so the phase sequencing can be tested
 /// without a Tauri application to emit from.
@@ -66,9 +93,16 @@ fn dto(
 /// userinfo, `token=` and friends — so the work is
 /// [`crate::m3u::redact`]'s, which knows all of them. (Those requests also
 /// drop the URL from their errors outright; this is the second line.)
+///
+/// The kinds added after those carry secrets of their own shapes, and the
+/// same redaction covers them: an HDHomeRun's guide token travels as
+/// `DeviceAuth=` (caught by `auth=`, keys being matched without regard to
+/// case), a Tvheadend stream URL as `?auth=`, and a Digest header's
+/// `response`, `nonce` and quoted `username` are keys too. A `Basic` header
+/// has no key, so its token is found by the word in front of it.
 pub fn scrub(text: &str) -> String {
     use crate::m3u::redact;
-    redact::redact_query(&redact::redact_userinfo(text))
+    redact::redact_basic(&redact::redact_query(&redact::redact_userinfo(text)))
 }
 
 fn publish<S: StatusSink>(sink: &S, phase: SyncPhase, message: impl Into<String>) {
@@ -77,7 +111,7 @@ fn publish<S: StatusSink>(sink: &S, phase: SyncPhase, message: impl Into<String>
     sink.publish(s);
 }
 
-type Step<'a> = Pin<Box<dyn Future<Output = Result<String>> + Send + 'a>>;
+pub(crate) type Step<'a> = Pin<Box<dyn Future<Output = Result<String>> + Send + 'a>>;
 
 /// The HTTP status a failure carries, if any layer of it came from the server.
 fn http_status(e: &anyhow::Error) -> Option<u16> {
@@ -86,6 +120,7 @@ fn http_status(e: &anyhow::Error) -> Option<u16> {
         .and_then(|r| r.status())
         .map(|s| s.as_u16())
         .or_else(|| e.chain().find_map(|c| c.downcast_ref::<HttpRefusal>()).map(|r| r.0))
+        .or_else(|| e.chain().find_map(|c| c.downcast_ref::<Refused>()).map(|r| r.status))
 }
 
 /// A stand-in for a refusing response in tests, where building a real
@@ -110,7 +145,14 @@ fn is_refusal(e: &anyhow::Error) -> bool {
 }
 
 /// What a person should read when a phase fails.
-fn failure_message(e: &anyhow::Error) -> String {
+///
+/// A source that knows why it was refused ([`Refused`]) says so in its own
+/// words, which name the fix; anything else that is a refusal gets the
+/// general one.
+pub(crate) fn failure_message(e: &anyhow::Error) -> String {
+    if let Some(r) = e.chain().find_map(|c| c.downcast_ref::<Refused>()) {
+        return scrub(&r.why);
+    }
     match http_status(e) {
         Some(code @ (401 | 403)) => {
             format!("The panel refused this account (HTTP {code}). Check Settings → Account.")
@@ -141,7 +183,7 @@ pub enum PassOutcome {
 /// Ending on `Idle` would make a failing pass read as failure, then "Synced 3
 /// days ago", then failure again on the next try — the toolbar flickering
 /// between the two for as long as the server kept refusing.
-async fn run_steps<'a, S: StatusSink>(
+pub(crate) async fn run_steps<'a, S: StatusSink>(
     sink: &S,
     steps: Vec<(SyncPhase, Step<'a>)>,
 ) -> PassOutcome {
@@ -324,6 +366,18 @@ pub async fn run_once(app: &tauri::AppHandle) -> Result<Option<PassOutcome>> {
             let src = M3uSource::new(a)?;
             return Ok(Some(run_m3u_pass(app, &src).await));
         }
+        Account::HdHomeRun(a) => {
+            let src = crate::hdhomerun::HdhrSource::new(a)?;
+            return Ok(Some(
+                crate::catalog::sync_devices::run_hdhomerun_pass(app, &src, AppMirror).await,
+            ));
+        }
+        Account::Tvheadend(a) => {
+            let src = crate::tvheadend::TvhSource::new(a)?;
+            return Ok(Some(
+                crate::catalog::sync_devices::run_tvheadend_pass(app, &src, AppMirror).await,
+            ));
+        }
     };
     // Which catalogue this is, and whether the mirror holds a different one.
     let from = origin::of_xtream(&creds);
@@ -368,7 +422,17 @@ async fn run_m3u_pass<S: StatusSink>(sink: &S, src: &M3uSource) -> PassOutcome {
 
 /// What the playlist phase hands the channels phase: `(new, gone)`, or the
 /// failure to repeat.
-type Landed = std::sync::Mutex<Option<std::result::Result<(usize, usize), String>>>;
+pub(crate) type Landed = std::sync::Mutex<Option<std::result::Result<(usize, usize), String>>>;
+
+/// Records what a playlist-shaped write did, for the channels phase that
+/// follows it.
+pub(crate) fn hand_off(landed: &Landed, r: std::result::Result<&PlaylistStats, &anyhow::Error>) {
+    let handoff = match r {
+        Ok(s) => Ok((s.channels.inserted, s.channels.deleted)),
+        Err(e) => Err(failure_message(e)),
+    };
+    *landed.lock().unwrap_or_else(|e| e.into_inner()) = Some(handoff);
+}
 
 async fn step_m3u_playlist(src: &M3uSource, landed: &Landed) -> Result<String> {
     let r = load_playlist(src).await;
@@ -380,20 +444,22 @@ async fn step_m3u_playlist(src: &M3uSource, landed: &Landed) -> Result<String> {
         db::with_write_db(|conn| origin::record(conn, &from))?;
         Ok(s)
     });
-    let handoff = match &r {
-        Ok(s) => Ok((s.channels.inserted, s.channels.deleted)),
-        Err(e) => Err(failure_message(e)),
-    };
-    *landed.lock().unwrap_or_else(|e| e.into_inner()) = Some(handoff);
+    hand_off(landed, r.as_ref());
     let s = r?;
     Ok(format!("{} categories", s.categories))
 }
 
 async fn step_m3u_channels(landed: &Landed) -> Result<String> {
+    step_landed_channels(&AppMirror, landed).await
+}
+
+/// The channels phase of any playlist-shaped pass: what the write before it
+/// landed, and the index rebuilt over it.
+pub(crate) async fn step_landed_channels<M: Mirror>(mirror: &M, landed: &Landed) -> Result<String> {
     let handoff = landed.lock().unwrap_or_else(|e| e.into_inner()).take();
     match handoff {
         Some(Ok((new, gone))) => {
-            let indexed = db::with_write_db(index::rebuild)?;
+            let indexed = mirror.reindex()?;
             Ok(format!("{indexed} channels ({new} new, {gone} gone)"))
         }
         Some(Err(why)) => Err(anyhow::anyhow!(why)),
@@ -446,7 +512,7 @@ fn write_single(conn: &rusqlite::Connection, location: &str) -> Result<PlaylistS
     w.finish(&crate::m3u::Header::default())
 }
 
-fn write_playlist_from(
+pub(crate) fn write_playlist_from(
     conn: &rusqlite::Connection,
     src: Box<dyn Read + Send>,
     location: &str,
@@ -474,13 +540,24 @@ async fn step_m3u_epg(src: &M3uSource) -> Result<String> {
     if locations.is_empty() {
         return Ok("no guide configured".to_owned());
     }
+    step_xmltv_guides(&AppMirror, src.http(), &locations).await
+}
+
+/// Loads XMLTV guides from `locations` (URLs or files) and matches the
+/// mirror's stored-URL channels to them. The guide phase of a playlist, and
+/// of an HDHomeRun whose account names its own guide.
+pub(crate) async fn step_xmltv_guides<M: Mirror>(
+    mirror: &M,
+    http: &reqwest::Client,
+    locations: &[String],
+) -> Result<String> {
     let mut programmes = 0;
     let mut loaded = 0;
     let mut first_err = None;
-    for loc in &locations {
+    for loc in locations {
         // The first guide to load replaces the stored channel names; later
         // ones add to them, so two guides for two regions both count.
-        match load_guide(src, loc, loaded == 0).await {
+        match load_guide(mirror, http, loc, loaded == 0).await {
             Ok(n) => {
                 programmes += n;
                 loaded += 1;
@@ -496,7 +573,7 @@ async fn step_m3u_epg(src: &M3uSource) -> Result<String> {
         // carries its status so a refusal is still recognised as one.
         return Err(first_err.unwrap_or_else(|| anyhow::anyhow!("no guide loaded")));
     }
-    let (matched, total) = db::with_write_db(playlist::match_epg)?;
+    let (matched, total) = mirror.write(playlist::match_epg)?;
     let mut msg = format!("{programmes} programmes, guide for {matched} of {total} channels");
     if loaded < locations.len() {
         msg.push_str(&format!(" ({} of {} guides failed)", locations.len() - loaded, locations.len()));
@@ -504,19 +581,33 @@ async fn step_m3u_epg(src: &M3uSource) -> Result<String> {
     Ok(msg)
 }
 
-async fn load_guide(src: &M3uSource, location: &str, replace: bool) -> Result<usize> {
-    let names = crate::catalog::epg::ChannelNames::Collect { replace };
-    let parse = move |r: Box<dyn Read + Send>| {
-        db::with_write_db(|conn| {
-            let r = fetch::decompressing(r)?;
-            crate::catalog::epg::parse_xmltv_into(r, conn, names)
-        })
-    };
-    match fetch::open(src.http(), location, "the guide").await? {
+async fn load_guide<M: Mirror>(
+    mirror: &M,
+    http: &reqwest::Client,
+    location: &str,
+    replace: bool,
+) -> Result<usize> {
+    let parse = guide_parser(mirror.clone(), replace);
+    match fetch::open(http, location, "the guide").await? {
         fetch::Opened::Http(resp) => pump_into(resp, "the guide", None, parse).await,
         fetch::Opened::File(f) => tokio::task::spawn_blocking(move || parse(Box::new(f)))
             .await
             .context("joining the guide parser")?,
+    }
+}
+
+/// What reads one XMLTV guide into the mirror, collecting its channel
+/// names for matching. `replace` clears the names an earlier guide left.
+pub(crate) fn guide_parser<M: Mirror>(
+    mirror: M,
+    replace: bool,
+) -> impl FnOnce(Box<dyn Read + Send>) -> Result<usize> + Send + 'static {
+    let names = crate::catalog::epg::ChannelNames::Collect { replace };
+    move |r: Box<dyn Read + Send>| {
+        mirror.write(|conn| {
+            let r = fetch::decompressing(r)?;
+            crate::catalog::epg::parse_xmltv_into(r, conn, names)
+        })
     }
 }
 
@@ -543,7 +634,7 @@ impl Read for Abortable {
 
 /// Streams a response into `work`, which runs on a blocking thread and
 /// reads it as a `Read`. The same bridge as [`step_epg`], plus [`Abortable`].
-async fn pump_into<T: Send + 'static>(
+pub(crate) async fn pump_into<T: Send + 'static>(
     mut resp: reqwest::Response,
     what: &'static str,
     first: Option<Vec<u8>>,

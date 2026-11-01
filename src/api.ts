@@ -64,6 +64,13 @@ export const api = {
   /** `null` keeps what is on file — the redacted playlist or guides. */
   setM3uAccount: (playlist: string | null, epgUrls: string[] | null, userAgent: string) =>
     invoke<void>("set_m3u_account", { playlist, epgUrls, userAgent }),
+  /** `null` keeps the guide list on file, which was shown redacted. */
+  setHdhomerunAccount: (device: string, epgUrls: string[] | null) =>
+    invoke<void>("set_hdhomerun_account", { device, epgUrls }),
+  /** An empty password keeps the one on file; an empty username is a server
+   *  that needs no login. */
+  setTvheadendAccount: (url: string, username: string, password: string) =>
+    invoke<void>("set_tvheadend_account", { url, username, password }),
   testAccount: () => invoke<string>("test_account"),
 
   settings: () => invoke<SettingsDto>("settings"),

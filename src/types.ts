@@ -31,6 +31,10 @@ export interface ChannelDto {
   name: string;
   cleanName: string;
   num: number | null;
+  /** How to write `num` when the integer is not it: an over-the-air
+   *  subchannel's "5.1", which `num` holds as 5001 so lists sort by it.
+   *  Absent for nearly every channel. Show `numLabel ?? num`. */
+  numLabel?: string | null;
   logoUrl: string | null;
   categoryId: string | null;
   hasArchive: boolean;
@@ -298,9 +302,9 @@ export interface AccountDto {
   source: string;
   /** Where it is kept, so "where is this?" is answerable on screen. */
   path: string;
-  /** Which set of fields is in use. Both sets are reported, so switching
-   *  kinds in the pane shows the other one filled in as it was left. */
-  kind: "xtream" | "m3u";
+  /** Which set of fields is in use. Every set is reported, so switching
+   *  kinds in the pane shows the others filled in as they were left. */
+  kind: "xtream" | "m3u" | "hdhomerun" | "tvheadend";
   /** The playlist location, with any credentials in it redacted. */
   playlist: string;
   /** True when `playlist` had credentials taken out: it is shown as set and
@@ -311,4 +315,15 @@ export interface AccountDto {
   epgRedacted: boolean;
   /** Empty for the default. */
   userAgent: string;
+  /** The HDHomeRun's address, as typed. */
+  hdhomerunDevice: string;
+  /** XMLTV guides used instead of SiliconDust's; empty for SiliconDust's.
+   *  Redacted like the playlist's guides. */
+  hdhomerunEpgUrls: string[];
+  hdhomerunEpgRedacted: boolean;
+  /** The Tvheadend server and login. The password is write-only, like the
+   *  Xtream one: only whether one is on file. */
+  tvheadendUrl: string;
+  tvheadendUsername: string;
+  tvheadendHasPassword: boolean;
 }

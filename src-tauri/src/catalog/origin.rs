@@ -44,6 +44,21 @@ pub fn of_playlist(location: &str) -> String {
     format!("m3u:{:016x}", fnv1a(stable_url(location).as_bytes()))
 }
 
+/// A tuner is its `DeviceID`, not its address: DHCP moving it to another
+/// address is the same lineup.
+pub fn of_hdhomerun(device_id: &str) -> String {
+    let id = device_id.trim().to_ascii_uppercase();
+    format!("hdhr:{:016x}", fnv1a(id.as_bytes()))
+}
+
+/// A Tvheadend server is its address and login, like an Xtream server: a
+/// different user may be allowed different channels.
+pub fn of_tvheadend(url: &str, username: &str) -> String {
+    let host = url.trim().trim_end_matches('/').to_ascii_lowercase();
+    let id = format!("{host}\u{0}{}", username.trim());
+    format!("tvh:{:016x}", fnv1a(id.as_bytes()))
+}
+
 pub fn recorded(conn: &Connection) -> Result<Option<String>> {
     Ok(conn
         .query_row("SELECT value FROM meta WHERE key = ?1", [KEY], |r| r.get(0))
@@ -127,6 +142,13 @@ mod tests {
             of_playlist("http://p.example/get.php?username=u&password=b&type=m3u"),
         );
         assert_ne!(of_playlist("/home/me/a.m3u"), of_playlist("/home/me/b.m3u"));
+        assert_eq!(of_hdhomerun("10abcdef"), of_hdhomerun(" 10ABCDEF"));
+        assert_ne!(of_hdhomerun("10ABCDEF"), of_hdhomerun("20ABCDEF"));
+        assert_eq!(
+            of_tvheadend("http://TVH.lan:9981/", "me"),
+            of_tvheadend("http://tvh.lan:9981", "me")
+        );
+        assert_ne!(of_tvheadend("http://tvh.lan:9981", "me"), of_tvheadend("http://tvh.lan:9981", ""));
     }
 
     #[test]

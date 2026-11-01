@@ -31,11 +31,15 @@ fn set_app_id() {
 fn set_app_id() {}
 
 pub mod catalog;
+pub mod hdhomerun;
 pub mod ipc;
 pub mod m3u;
 pub mod paths;
 pub mod source;
 pub mod surface;
+#[cfg(test)]
+pub(crate) mod test_http;
+pub mod tvheadend;
 pub mod updates;
 pub mod window_state;
 pub mod xtream;
@@ -72,6 +76,8 @@ pub fn run() {
             ipc::catalog_cmds::account,
             ipc::catalog_cmds::set_account,
             ipc::catalog_cmds::set_m3u_account,
+            ipc::catalog_cmds::set_hdhomerun_account,
+            ipc::catalog_cmds::set_tvheadend_account,
             ipc::catalog_cmds::test_account,
             ipc::catalog_cmds::set_settings,
             ipc::catalog_cmds::guide_rows,

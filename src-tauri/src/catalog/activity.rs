@@ -231,6 +231,7 @@ mod tests {
                 name: format!("Channel {stream_id}"),
                 clean_name: format!("Channel {stream_id}"),
                 num: Some(stream_id),
+                num_label: None,
                 logo_url: None,
                 category_id: None,
                 has_archive: false,

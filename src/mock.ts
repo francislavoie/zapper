@@ -512,7 +512,17 @@ let mockAccount: AccountDto = {
   epgUrls: [],
   epgRedacted: false,
   userAgent: "",
+  hdhomerunDevice: "",
+  hdhomerunEpgUrls: [],
+  hdhomerunEpgRedacted: false,
+  tvheadendUrl: "",
+  tvheadendUsername: "",
+  tvheadendHasPassword: false,
 };
+
+/** The mock's redaction, so a saved secret-bearing URL comes back the way
+ *  the real backend would send it. */
+const mockRedact = (u: string) => u.replace(/((?:username|password|token|key)=)[^&]*/gi, "$1<redacted>");
 let bufferTimer: number | undefined;
 
 /** Settings survive for the life of the page, so a save can be read back and
@@ -896,8 +906,52 @@ export const mockApi = {
     };
   },
 
+  setHdhomerunAccount: async (device: string, epgUrls: string[] | null) => {
+    await delay(60);
+    if (device.trim() === "") throw "an HDHomeRun address is required";
+    const nextEpg = epgUrls ?? mockAccount.hdhomerunEpgUrls;
+    mockAccount = {
+      ...mockAccount,
+      source: "zapper",
+      kind: "hdhomerun",
+      hdhomerunDevice: device.trim(),
+      hdhomerunEpgUrls: nextEpg.map(mockRedact),
+      hdhomerunEpgRedacted:
+        epgUrls === null ? mockAccount.hdhomerunEpgRedacted : nextEpg.some((u) => mockRedact(u) !== u),
+    };
+  },
+
+  setTvheadendAccount: async (url: string, username: string, password: string) => {
+    await delay(60);
+    if (url.trim() === "") throw "a Tvheadend address is required";
+    if (/^[a-z]+:\/\/[^/]*@/i.test(url.trim()))
+      throw "put the username and password in their own fields, not in the address";
+    const user = username.trim();
+    if (user !== "" && password === "" && !mockAccount.tvheadendHasPassword)
+      throw "a password is required with a username (leave both empty if the server needs no login)";
+    mockAccount = {
+      ...mockAccount,
+      source: "zapper",
+      kind: "tvheadend",
+      tvheadendUrl: url.trim(),
+      tvheadendUsername: user,
+      tvheadendHasPassword: user !== "" && (password !== "" || mockAccount.tvheadendHasPassword),
+    };
+  },
+
   testAccount: async () => {
     await delay(300);
+    if (mockAccount.kind === "hdhomerun") {
+      return "HDHomeRun FLEX 4K (HDFX-4K): 62 channels, 4 tuners · 3 copy-protected, not listed";
+    }
+    if (mockAccount.kind === "tvheadend") {
+      // Typing "nopersist" as the user shows the message a server without
+      // persistent authentication gets.
+      if (mockAccount.tvheadendUsername === "nopersist")
+        throw "Tvheadend accepted this login but will not give out stream links that keep working. In Tvheadend, open Configuration → Users → Passwords, edit this user, set “Persistent authentication” to Enable, and save; then sync again.";
+      const login = mockAccount.tvheadendUsername === "" ? " · no login" : "";
+      return `Tvheadend 4.3-2183~g1b5b5ca: 212 channels${login}`;
+    }
     if (mockAccount.kind === "m3u") {
       const guide =
         mockAccount.epgUrls.length === 0 ? "no guide configured" : `${mockAccount.epgUrls.length} guides OK`;

@@ -432,6 +432,45 @@ mod tests {
     }
 
     #[test]
+    fn a_tuner_needs_an_address_and_keeps_a_redacted_guide_list() {
+        assert!(resolve_hdhomerun_form(None, "  ".into(), None).is_err());
+        let on_file = crate::hdhomerun::HdhrAccount {
+            device: "10.0.0.7".into(),
+            epg_urls: vec!["http://g.example/x.xml?key=k".into()],
+        };
+        let kept = resolve_hdhomerun_form(Some(on_file.clone()), " 10.0.0.8 ".into(), None).unwrap();
+        assert_eq!(kept.device, "10.0.0.8");
+        assert_eq!(kept.epg_urls, on_file.epg_urls);
+        let cleared = resolve_hdhomerun_form(Some(on_file), "10.0.0.8".into(), Some(vec![])).unwrap();
+        assert!(cleared.epg_urls.is_empty(), "empty means SiliconDust's guide");
+    }
+
+    #[test]
+    fn a_tvheadend_password_is_kept_when_left_empty_and_dropped_without_a_user() {
+        let on_file = crate::tvheadend::TvhAccount {
+            url: "http://tvh.lan:9981".into(),
+            username: "viewer".into(),
+            password: "pw".into(),
+        };
+        let kept = resolve_tvheadend_form(
+            Some(on_file.clone()),
+            "http://tvh.lan:9981".into(),
+            "viewer".into(),
+            "".into(),
+        )
+        .unwrap();
+        assert_eq!(kept.password, "pw");
+        let anon =
+            resolve_tvheadend_form(Some(on_file), "tvh.lan:9981".into(), " ".into(), "x".into()).unwrap();
+        assert_eq!((anon.username.as_str(), anon.password.as_str()), ("", ""));
+        let err = resolve_tvheadend_form(None, "tvh.lan".into(), "viewer".into(), "".into()).unwrap_err();
+        assert!(err.contains("password is required"), "{err}");
+        let err = resolve_tvheadend_form(None, "http://a:b@tvh.lan".into(), "".into(), "".into())
+            .unwrap_err();
+        assert!(err.contains("own fields"), "{err}");
+    }
+
+    #[test]
     fn a_playlist_is_required_and_redacted_text_is_refused() {
         assert!(resolve_m3u_form(None, None, None, "".into()).is_err());
         let err = resolve_m3u_form(
@@ -460,7 +499,18 @@ pub async fn account() -> Result<crate::ipc::types::AccountDto, String> {
     let m3u = f.m3u.unwrap_or_default();
     let (playlist, playlist_redacted) = redact_url(&m3u.playlist);
     let epg: Vec<(String, bool)> = m3u.epg_urls.iter().map(|u| redact_url(u)).collect();
+    let tuner = f.hdhomerun.unwrap_or_default();
+    let tuner_epg: Vec<(String, bool)> = tuner.epg_urls.iter().map(|u| redact_url(u)).collect();
+    let tvh = f.tvheadend.unwrap_or_default();
     Ok(crate::ipc::types::AccountDto {
+        hdhomerun_device: tuner.device,
+        hdhomerun_epg_redacted: tuner_epg.iter().any(|(_, r)| *r),
+        hdhomerun_epg_urls: tuner_epg.into_iter().map(|(u, _)| u).collect(),
+        // Checked at save to carry no login; redacted anyway, for a file
+        // edited by hand.
+        tvheadend_url: redact_url(&tvh.url).0,
+        tvheadend_has_password: !tvh.password.is_empty(),
+        tvheadend_username: tvh.username,
         kind: f.kind.as_str().to_owned(),
         playlist,
         playlist_redacted,
@@ -547,6 +597,98 @@ pub async fn set_m3u_account(
     Ok(())
 }
 
+/// Makes an HDHomeRun the account in use.
+///
+/// `epg_urls` of `None` keeps the guide list on file, for the same reason as
+/// the playlist's: it was shown redacted and nobody typed over it. An empty
+/// list is a real value — SiliconDust's guide.
+#[tauri::command]
+pub async fn set_hdhomerun_account(
+    device: String,
+    epg_urls: Option<Vec<String>>,
+) -> Result<(), String> {
+    use crate::catalog::credentials;
+    let existing = credentials::on_file().hdhomerun;
+    let account = resolve_hdhomerun_form(existing, device, epg_urls)?;
+    credentials::save_hdhomerun(&account).map_err(|e| e.to_string())?;
+    crate::ipc::player_cmds::forget_panel();
+    sync_engine::request_now();
+    Ok(())
+}
+
+fn resolve_hdhomerun_form(
+    existing: Option<crate::hdhomerun::HdhrAccount>,
+    device: String,
+    epg_urls: Option<Vec<String>>,
+) -> Result<crate::hdhomerun::HdhrAccount, String> {
+    let device = device.trim().to_owned();
+    crate::hdhomerun::device::base_url(&device).map_err(|e| e.to_string())?;
+    let epg_urls = match epg_urls {
+        Some(list) => list
+            .into_iter()
+            .map(|u| u.trim().to_owned())
+            .filter(|u| !u.is_empty())
+            .collect(),
+        None => existing.unwrap_or_default().epg_urls,
+    };
+    if epg_urls.iter().any(|u| u.contains("<redacted>")) {
+        return Err("type the full address, including the parts shown as <redacted>".to_owned());
+    }
+    Ok(crate::hdhomerun::HdhrAccount { device, epg_urls })
+}
+
+/// Makes a Tvheadend server the account in use.
+///
+/// The password is write-only, as the Xtream one is: empty keeps the one on
+/// file. An empty username is a server that needs no login, and clears the
+/// password with it — a password with nobody to log in as is a password
+/// kept for nothing.
+#[tauri::command]
+pub async fn set_tvheadend_account(
+    url: String,
+    username: String,
+    password: String,
+) -> Result<(), String> {
+    use crate::catalog::credentials;
+    let existing = credentials::on_file().tvheadend;
+    let account = resolve_tvheadend_form(existing, url, username, password)?;
+    credentials::save_tvheadend(&account).map_err(|e| e.to_string())?;
+    crate::ipc::player_cmds::forget_panel();
+    sync_engine::request_now();
+    Ok(())
+}
+
+fn resolve_tvheadend_form(
+    existing: Option<crate::tvheadend::TvhAccount>,
+    url: String,
+    username: String,
+    password: String,
+) -> Result<crate::tvheadend::TvhAccount, String> {
+    let url = url.trim().to_owned();
+    crate::tvheadend::client::base_url(&url).map_err(|e| e.to_string())?;
+    let username = username.trim().to_owned();
+    let password = if username.is_empty() {
+        String::new()
+    } else if password.is_empty() {
+        match existing.map(|a| a.password).filter(|p| !p.is_empty()) {
+            Some(p) => p,
+            None => {
+                return Err(
+                    "a password is required with a username (leave both empty if the server needs no login)"
+                        .to_owned(),
+                )
+            }
+        }
+    } else {
+        password
+    };
+    Ok(crate::tvheadend::TvhAccount {
+        url,
+        username,
+        password,
+    })
+}
+
 /// The account `set_m3u_account` would save. Pure, so the keep-or-replace
 /// rules can be tested without an account file.
 fn resolve_m3u_form(
@@ -590,15 +732,25 @@ fn resolve_m3u_form(
 #[tauri::command]
 pub async fn test_account() -> Result<String, String> {
     use crate::source::Source;
+    let scrubbed = |e: anyhow::Error| crate::catalog::sync_engine::scrub(&format!("{e:#}"));
     let panel = match crate::ipc::player_cmds::source()? {
         Source::Xtream(panel) => panel,
         // A playlist has nobody to ask "who am I"; the honest test is
         // whether it can be fetched and parsed, and whether its guide answers.
-        Source::M3u(m) => {
-            return m
-                .probe()
-                .await
-                .map_err(|e| crate::catalog::sync_engine::scrub(&format!("{e:#}")));
+        Source::M3u(m) => return m.probe().await.map_err(scrubbed),
+        // A tuner says what it is and what it can tune.
+        Source::HdHomeRun(h) => return h.probe().await.map_err(scrubbed),
+        // A server is logged in to, and asked for the playlist this login
+        // gets, which is also the persistent-authentication check. Its
+        // refusals already say what to do; the chain behind them would only
+        // repeat it.
+        Source::Tvheadend(t) => {
+            return t.probe().await.map_err(|e| {
+                match e.chain().find_map(|c| c.downcast_ref::<crate::source::Refused>()) {
+                    Some(r) => crate::catalog::sync_engine::scrub(&r.why),
+                    None => scrubbed(e),
+                }
+            })
         }
     };
     let info = panel

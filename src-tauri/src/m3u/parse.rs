@@ -58,6 +58,10 @@ pub struct Entry {
     /// The first of `group-title`'s `;`-separated groups, or `#EXTGRP`.
     pub group: Option<String>,
     pub chno: Option<i64>,
+    /// How the channel number is written, when `chno` cannot say it: a
+    /// subchannel's `5.1`, which `chno` holds as the sortable `5001`. See
+    /// [`channel_number`].
+    pub chno_label: Option<String>,
     /// Raw catch-up attributes, with the header's defaults already applied.
     /// Interpreted by [`crate::m3u::catchup`].
     pub catchup: Option<String>,
@@ -147,6 +151,33 @@ fn attributes(s: &str) -> (Vec<(String, String)>, Option<&str>) {
 fn nonempty(v: &str) -> Option<String> {
     let t = v.trim();
     (!t.is_empty()).then(|| t.to_owned())
+}
+
+/// How much a minor channel number is worth beside its major one: `5.1`
+/// sorts as `5001`. ATSC minors stop at 999, so no two numbers meet.
+pub const MINOR_SPAN: i64 = 1000;
+
+/// A channel number as people write it, read into something that sorts.
+///
+/// `101` is 101 and needs no label. `5.1` — an over-the-air subchannel, which
+/// is how an HDHomeRun or a Tvheadend server numbers broadcast TV — is
+/// `5 * MINOR_SPAN + 1` with `5.1` kept to show, because the `num` column
+/// the listing sorts by is an integer, and `5.1`, `5.2` and `5.10` must come
+/// out in that order (as decimals they would not: `5.10` is `5.1`). A dash
+/// (`5-1`) is the same thing written the way some lineups write it.
+/// Anything else is not a number this can use, and `None`.
+pub fn channel_number(raw: &str) -> Option<(i64, Option<String>)> {
+    let t = raw.trim();
+    if let Ok(n) = t.parse::<i64>() {
+        return Some((n, None));
+    }
+    let (major, minor) = t.split_once(['.', '-'])?;
+    let major: i64 = major.parse().ok()?;
+    let minor: i64 = minor.parse().ok()?;
+    if !(0..MINOR_SPAN).contains(&minor) || major < 0 {
+        return None;
+    }
+    Some((major * MINOR_SPAN + minor, Some(format!("{major}.{minor}"))))
 }
 
 /// The name for an entry that has none: the last path segment of its URL,
@@ -267,7 +298,12 @@ impl Parser {
                 "group-title" => {
                     e.group = v.split(';').find_map(nonempty);
                 }
-                "tvg-chno" | "channel-number" | "tvg-num" => e.chno = v.trim().parse().ok(),
+                "tvg-chno" | "channel-number" | "tvg-num" => {
+                    if let Some((n, label)) = channel_number(&v) {
+                        e.chno = Some(n);
+                        e.chno_label = label;
+                    }
+                }
                 "catchup" | "catchup-type" => e.catchup = nonempty(&v),
                 "catchup-source" => e.catchup_source = nonempty(&v),
                 "catchup-days" | "timeshift" | "tvg-rec" => {
@@ -454,6 +490,21 @@ mod tests {
         assert_eq!(e.chno, Some(101));
         assert_eq!(e.name, "NWN One HD");
         assert_eq!(e.url, "http://s/1.ts");
+    }
+
+    #[test]
+    fn subchannel_numbers_sort_as_integers_and_keep_their_spelling() {
+        assert_eq!(channel_number("101"), Some((101, None)));
+        assert_eq!(channel_number(" 5.1 "), Some((5001, Some("5.1".into()))));
+        assert_eq!(channel_number("5-10"), Some((5010, Some("5.10".into()))));
+        // 5.2 before 5.10, which decimals would get wrong.
+        assert!(channel_number("5.2").unwrap().0 < channel_number("5.10").unwrap().0);
+        assert!(channel_number("5.99").unwrap().0 < channel_number("6.1").unwrap().0);
+        for bad in ["", "five", "5.1.2", "5.", "5.1000", "-3.1"] {
+            assert_eq!(channel_number(bad), None, "{bad:?}");
+        }
+        let (v, _) = all("#EXTM3U\n#EXTINF:-1 tvg-chno=\"7.2\",KXMO D2\nhttp://s/7.ts\n");
+        assert_eq!((v[0].chno, v[0].chno_label.as_deref()), (Some(7002), Some("7.2")));
     }
 
     #[test]

@@ -1,4 +1,5 @@
-// The account: an Xtream Codes login, or an M3U playlist with an optional guide.
+// The account: an Xtream Codes login, an M3U playlist with an optional guide,
+// an HDHomeRun tuner, or a Tvheadend server.
 //
 // The password is write-only. It is never sent back from the backend, so
 // the field starts empty even when one is on file, and leaving it empty
@@ -13,6 +14,10 @@
 // starts empty with the redacted form as its placeholder, and empty means
 // keep. An address with nothing secret in it is shown as typed.
 //
+// A Tvheadend password follows the Xtream password's rule exactly. An HDHomeRun has no
+// login at all — it is a box on the LAN — and its optional XMLTV guides
+// follow the playlist's guides' rule.
+//
 // The two kinds are not equivalent, and the pane says how before anyone
 // picks one: each type's card lists what it needs and what it gets, kept as
 // data in logic/sources.ts so it is checked against what the backend does.
@@ -23,16 +28,26 @@ import { errorMessage } from "../logic/async";
 import {
   SOURCE_KINDS,
   asKind,
+  hdhrChanged,
+  hdhrFormFrom,
   kindInfo,
   m3uChanged,
   m3uFormFrom,
+  planHdhrSave,
   planM3uSave,
+  planTvhSave,
+  tvhChanged,
+  tvhFormFrom,
+  type HdhrForm,
   type M3uForm,
   type SourceKind,
+  type TvhForm,
 } from "../logic/sources";
 import type { AccountDto } from "../types";
 
 const EMPTY_M3U: M3uForm = { playlist: "", epgText: "", userAgent: "", epgTouched: false };
+const EMPTY_HDHR: HdhrForm = { device: "", epgText: "", epgTouched: false };
+const EMPTY_TVH: TvhForm = { url: "", username: "", password: "" };
 
 export function AccountPane() {
   const [account, setAccount] = useState<AccountDto | null>(null);
@@ -41,6 +56,8 @@ export function AccountPane() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [m3u, setM3u] = useState<M3uForm>(EMPTY_M3U);
+  const [hdhr, setHdhr] = useState<HdhrForm>(EMPTY_HDHR);
+  const [tvh, setTvh] = useState<TvhForm>(EMPTY_TVH);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<{ kind: "ok" | "bad"; text: string } | null>(null);
 
@@ -49,6 +66,9 @@ export function AccountPane() {
     setHost(a.host);
     setUsername(a.username);
     setM3u(m3uFormFrom(a));
+    setHdhr(hdhrFormFrom(a));
+    // Which also empties the password field, as the Xtream one is emptied.
+    setTvh(tvhFormFrom(a));
   };
 
   useEffect(() => {
@@ -75,6 +95,16 @@ export function AccountPane() {
         const plan = planM3uSave(m3u, account);
         if ("error" in plan) throw plan.error;
         await backend.setM3uAccount(plan.playlist, plan.epgUrls, plan.userAgent);
+      } else if (kind === "hdhomerun") {
+        if (!account) return;
+        const plan = planHdhrSave(hdhr, account);
+        if ("error" in plan) throw plan.error;
+        await backend.setHdhomerunAccount(plan.device, plan.epgUrls);
+      } else if (kind === "tvheadend") {
+        if (!account) return;
+        const plan = planTvhSave(tvh, account);
+        if ("error" in plan) throw plan.error;
+        await backend.setTvheadendAccount(plan.url, plan.username, plan.password);
       } else {
         await backend.setAccount(host, username, password);
         // Cleared rather than kept: there is nothing to re-submit, and a
@@ -109,12 +139,19 @@ export function AccountPane() {
   // Switching kinds is itself a change: saving is what makes the other kind
   // the one in use.
   const switching = account !== null && kind !== savedKind;
-  const changed =
-    account !== null &&
-    (switching ||
-      (kind === "xtream"
-        ? host.trim() !== account.host || username.trim() !== account.username || password !== ""
-        : m3uChanged(m3u, account)));
+  const fieldsChanged = (a: AccountDto): boolean => {
+    switch (kind) {
+      case "xtream":
+        return host.trim() !== a.host || username.trim() !== a.username || password !== "";
+      case "m3u":
+        return m3uChanged(m3u, a);
+      case "hdhomerun":
+        return hdhrChanged(hdhr, a);
+      case "tvheadend":
+        return tvhChanged(tvh, a);
+    }
+  };
+  const changed = account !== null && (switching || fieldsChanged(account));
 
   return (
     <>
@@ -202,6 +239,89 @@ export function AccountPane() {
               autoComplete="off"
               placeholder={account?.hasPassword ? "unchanged" : "required"}
               onChange={(e) => setPassword(e.target.value)}
+            />
+          </div>
+        </div>
+      ) : kind === "hdhomerun" ? (
+        <div className="account-form">
+          <div className="row-field">
+            {/* The address, not a name from a list: zapper does not scan the
+                network, and the HDHomeRun app shows the address on its
+                device page. */}
+            <label htmlFor="acct-hdhr">Tuner address</label>
+            <input
+              id="acct-hdhr"
+              className="field"
+              value={hdhr.device}
+              spellCheck={false}
+              autoComplete="off"
+              placeholder="192.168.1.50 or hdhomerun.local"
+              onChange={(e) => setHdhr({ ...hdhr, device: e.target.value })}
+            />
+          </div>
+
+          <div className="row-field">
+            <label htmlFor="acct-hdhr-epg">Guide (XMLTV)</label>
+            <textarea
+              id="acct-hdhr-epg"
+              className="field"
+              rows={2}
+              value={hdhr.epgText}
+              spellCheck={false}
+              autoComplete="off"
+              placeholder={
+                account?.hdhomerunEpgRedacted
+                  ? `unchanged — ${account.hdhomerunEpgUrls.join(", ")}`
+                  : "optional; leave empty for SiliconDust's free guide"
+              }
+              onChange={(e) => setHdhr({ ...hdhr, epgText: e.target.value, epgTouched: true })}
+            />
+          </div>
+        </div>
+      ) : kind === "tvheadend" ? (
+        <div className="account-form">
+          <div className="row-field">
+            <label htmlFor="acct-tvh">Server</label>
+            <input
+              id="acct-tvh"
+              className="field"
+              value={tvh.url}
+              spellCheck={false}
+              autoComplete="off"
+              placeholder="http://tvheadend.local:9981"
+              onChange={(e) => setTvh({ ...tvh, url: e.target.value })}
+            />
+          </div>
+
+          <div className="row-field">
+            <label htmlFor="acct-tvh-user">Username</label>
+            <input
+              id="acct-tvh-user"
+              className="field"
+              value={tvh.username}
+              spellCheck={false}
+              autoComplete="off"
+              placeholder="optional"
+              onChange={(e) => setTvh({ ...tvh, username: e.target.value })}
+            />
+          </div>
+
+          <div className="row-field">
+            <label htmlFor="acct-tvh-pass">Password</label>
+            <input
+              id="acct-tvh-pass"
+              className="field"
+              type="password"
+              value={tvh.password}
+              autoComplete="off"
+              placeholder={
+                account?.tvheadendHasPassword
+                  ? "unchanged"
+                  : tvh.username.trim() === ""
+                    ? "optional"
+                    : "required"
+              }
+              onChange={(e) => setTvh({ ...tvh, password: e.target.value })}
             />
           </div>
         </div>
@@ -294,12 +414,29 @@ export function AccountPane() {
             names one. Leave a field showing “unchanged” empty to keep what is saved.
           </p>
         ) : null}
+        {kind === "hdhomerun" ? (
+          <p>
+            Each channel needs a free tuner while it plays. Channels the tuner marks as
+            copy-protected cannot play here, so they are left out of the list.
+          </p>
+        ) : null}
+        {/* The one setting a Tvheadend user may have to change, said before
+            the test fails rather than only after. */}
+        {kind === "tvheadend" ? (
+          <p>
+            With a login, Tvheadend must give that user persistent authentication: in its web
+            interface, Configuration → Users → Passwords, set “Persistent authentication” to
+            Enable. Leave both login fields empty if the server lets anyone watch.
+          </p>
+        ) : null}
         <p>
           Stored in <code data-selectable>{account?.path ?? "—"}</code>, readable only by
           you.{" "}
           {kind === "m3u"
             ? "Credentials inside a playlist or guide address are never sent back to this window."
-            : "The password is never sent back to this window."}
+            : kind === "hdhomerun"
+              ? "Credentials inside a guide address are never sent back to this window."
+              : "The password is never sent back to this window."}
         </p>
       </div>
     </>

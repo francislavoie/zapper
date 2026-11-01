@@ -1,4 +1,5 @@
-// The two kinds of account, what each can do, and the playlist form's rules.
+// The kinds of account, what each can do, and the forms' keep-or-replace
+// rules.
 //
 // What each kind can do is data rather than markup so it can be checked: it
 // is a promise about what the backend does, and a promise kept in JSX drifts
@@ -10,7 +11,7 @@
 
 import type { AccountDto } from "../types";
 
-export type SourceKind = "xtream" | "m3u";
+export type SourceKind = "xtream" | "m3u" | "hdhomerun" | "tvheadend";
 
 /** One thing an account type does — or, with `ok: false`, does not do. */
 export interface SourcePoint {
@@ -57,6 +58,32 @@ export const SOURCE_KINDS: readonly SourceKindInfo[] = [
       { text: "No account status or expiry", ok: false },
     ],
   },
+  {
+    id: "hdhomerun",
+    label: "HDHomeRun",
+    needs: "An HDHomeRun tuner on your network",
+    points: [
+      { text: "Channels from the tuner's own lineup", ok: true },
+      // SiliconDust's guide is free to owners and needs nothing typed in.
+      { text: "Free guide from SiliconDust, or your XMLTV", ok: true },
+      // A tuner plays one channel per tuner, and has no archive.
+      { text: "No catch-up; one channel per free tuner", ok: false },
+      { text: "Copy-protected channels are not listed", ok: false },
+    ],
+  },
+  {
+    id: "tvheadend",
+    // Tvheadend's own spelling.
+    label: "Tvheadend",
+    needs: "A Tvheadend server; login optional",
+    points: [
+      { text: "Channels, tags and guide from the server", ok: true },
+      // Without it the server will not hand out stream links that last;
+      // the connection test says exactly where to switch it on.
+      { text: "A login needs persistent auth turned on", ok: false },
+      { text: "No catch-up or recordings", ok: false },
+    ],
+  },
 ];
 
 export function kindInfo(kind: SourceKind): SourceKindInfo {
@@ -66,7 +93,7 @@ export function kindInfo(kind: SourceKind): SourceKindInfo {
 /** The backend's `kind`, read defensively: anything unknown is Xtream,
  *  which is what an account file with no kind in it means. */
 export function asKind(raw: string | undefined | null): SourceKind {
-  return raw === "m3u" ? "m3u" : "xtream";
+  return SOURCE_KINDS.find((k) => k.id === raw)?.id ?? "xtream";
 }
 
 /** Guide addresses as typed: one per line, or a comma-separated list the way
@@ -127,6 +154,87 @@ export function planM3uSave(form: M3uForm, a: M3uOnFile): M3uSave | { error: str
 
   const epgUrls = a.epgRedacted && !form.epgTouched ? null : splitUrls(form.epgText);
   return { playlist, epgUrls, userAgent: form.userAgent.trim() };
+}
+
+/** What the HDHomeRun fields hold while being edited. */
+export interface HdhrForm {
+  device: string;
+  epgText: string;
+  /** As for the playlist's guides: a redacted list is kept unless typed in. */
+  epgTouched: boolean;
+}
+
+/** The arguments `set_hdhomerun_account` takes. `null` keeps the guides on
+ *  file; an empty list means SiliconDust's guide. */
+export interface HdhrSave {
+  device: string;
+  epgUrls: string[] | null;
+}
+
+type HdhrOnFile = Pick<AccountDto, "hdhomerunDevice" | "hdhomerunEpgUrls" | "hdhomerunEpgRedacted">;
+
+export function hdhrFormFrom(a: HdhrOnFile): HdhrForm {
+  return {
+    device: a.hdhomerunDevice,
+    epgText: a.hdhomerunEpgRedacted ? "" : a.hdhomerunEpgUrls.join("\n"),
+    epgTouched: false,
+  };
+}
+
+export function planHdhrSave(form: HdhrForm, a: HdhrOnFile): HdhrSave | { error: string } {
+  const device = form.device.trim();
+  if (device === "") return { error: "an HDHomeRun address is required" };
+  const epgUrls = a.hdhomerunEpgRedacted && !form.epgTouched ? null : splitUrls(form.epgText);
+  return { device, epgUrls };
+}
+
+export function hdhrChanged(form: HdhrForm, a: HdhrOnFile): boolean {
+  const start = hdhrFormFrom(a);
+  return (
+    form.device.trim() !== start.device ||
+    (form.epgTouched && splitUrls(form.epgText).join("\n") !== splitUrls(start.epgText).join("\n"))
+  );
+}
+
+/** What the Tvheadend fields hold while being edited. The password starts
+ *  empty whatever is on file — it is write-only, as the Xtream one is. */
+export interface TvhForm {
+  url: string;
+  username: string;
+  password: string;
+}
+
+export interface TvhSave {
+  url: string;
+  username: string;
+  /** Empty keeps the one on file. */
+  password: string;
+}
+
+type TvhOnFile = Pick<AccountDto, "tvheadendUrl" | "tvheadendUsername" | "tvheadendHasPassword">;
+
+export function tvhFormFrom(a: TvhOnFile): TvhForm {
+  return { url: a.tvheadendUrl, username: a.tvheadendUsername, password: "" };
+}
+
+/** What a save would send, or why it cannot. Both login fields empty is a
+ *  server anyone may watch; a username needs a password, typed or on file. */
+export function planTvhSave(form: TvhForm, a: TvhOnFile): TvhSave | { error: string } {
+  const url = form.url.trim();
+  if (url === "") return { error: "a Tvheadend address is required" };
+  const username = form.username.trim();
+  if (username !== "" && form.password === "" && !a.tvheadendHasPassword) {
+    return { error: "a password is required with a username (leave both empty if the server needs no login)" };
+  }
+  return { url, username, password: username === "" ? "" : form.password };
+}
+
+export function tvhChanged(form: TvhForm, a: TvhOnFile): boolean {
+  return (
+    form.url.trim() !== a.tvheadendUrl ||
+    form.username.trim() !== a.tvheadendUsername ||
+    form.password !== ""
+  );
 }
 
 /** Whether there is anything to save: a field differs from what is on file. */

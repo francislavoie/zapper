@@ -1,0 +1,9 @@
+[
+{"GuideNumber":"4.1","GuideName":"KXMO-HD","VideoCodec":"MPEG2","AudioCodec":"AC3","HD":1,"URL":"http://192.168.1.50:5004/auto/v4.1"},
+{"GuideNumber":"4.2","GuideName":"KXMO-D2","VideoCodec":"MPEG2","AudioCodec":"AC3","URL":"http://192.168.1.50:5004/auto/v4.2"},
+{"GuideNumber":"4.10","GuideName":"KXMO-D10","VideoCodec":"MPEG2","AudioCodec":"AC3","URL":"http://192.168.1.50:5004/auto/v4.10"},
+{"GuideNumber":"5.1","GuideName":"KXNG-HD","VideoCodec":"MPEG2","AudioCodec":"AC3","HD":1,"Favorite":1,"URL":"http://192.168.1.50:5004/auto/v5.1"},
+{"GuideNumber":"9","GuideName":"KXHL","VideoCodec":"MPEG2","AudioCodec":"AC3","URL":"http://192.168.1.50:5004/auto/v9"},
+{"GuideNumber":"11.1","GuideName":"KXTW-HD","VideoCodec":"MPEG2","AudioCodec":"AC3","HD":"1","URL":"http://192.168.1.50:5004/auto/v11.1"},
+{"GuideNumber":"13.1","GuideName":"KXPQ-HD","VideoCodec":"HEVC","AudioCodec":"AC4","HD":1,"DRM":1,"URL":"http://192.168.1.50:5004/auto/v13.1"}
+]

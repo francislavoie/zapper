@@ -1,13 +1,18 @@
 //! The account in use, whichever kind it is, and how to play from it.
 //!
-//! zapper has two ways to learn a catalogue: asking an Xtream panel
-//! (`xtream`), or reading an M3U playlist and an XMLTV guide (`m3u`). They
-//! differ in nearly everything — a panel builds stream URLs from the account,
-//! a playlist states each one; a panel's channels have ids, a playlist's are
-//! derived; a panel has one catch-up scheme, a playlist several — so this is
-//! an enum rather than a trait. Each caller matches on it where the kinds
-//! genuinely behave differently, and the panel's arm is always the code that
-//! existed before playlists did, unchanged.
+//! zapper has four ways to learn a catalogue: asking an Xtream server
+//! (`xtream`), reading an M3U playlist and an XMLTV guide (`m3u`), asking an
+//! HDHomeRun tuner for its lineup (`hdhomerun`), and asking a Tvheadend
+//! server for its playlist and guide (`tvheadend`). The last two store their
+//! channels the way a playlist does — a stream URL per row — so playing one
+//! is the same lookup; they differ in how the catalogue is fetched.
+//!
+//! An Xtream server and a playlist differ in nearly everything — a server
+//! builds stream URLs from the account, a playlist states each one; a
+//! server's channels have ids, a playlist's are derived; a server has one
+//! catch-up scheme, a playlist several — so this is an enum rather than a
+//! trait. Each caller matches on it where the kinds genuinely behave
+//! differently.
 //!
 //! What is common is here: building one from the account file, and turning a
 //! channel into something mpv can open ([`Playable`]). The sync passes live
@@ -17,7 +22,9 @@ use anyhow::{anyhow, Context, Result};
 
 use crate::catalog::credentials::{self, Account, Kind};
 use crate::catalog::{db, playlist};
+use crate::hdhomerun::HdhrSource;
 use crate::m3u::{catchup, fetch, M3uAccount};
+use crate::tvheadend::TvhSource;
 use crate::xtream::XtreamClient;
 
 /// A URL and the HTTP headers it must be opened with.
@@ -46,6 +53,8 @@ impl Playable {
 pub enum Source {
     Xtream(XtreamClient),
     M3u(M3uSource),
+    HdHomeRun(HdhrSource),
+    Tvheadend(TvhSource),
 }
 
 impl Source {
@@ -53,6 +62,8 @@ impl Source {
         Ok(match account {
             Account::Xtream(c) => Source::Xtream(XtreamClient::new(c)?),
             Account::M3u(a) => Source::M3u(M3uSource::new(a)?),
+            Account::HdHomeRun(a) => Source::HdHomeRun(HdhrSource::new(a)?),
+            Account::Tvheadend(a) => Source::Tvheadend(TvhSource::new(a)?),
         })
     }
 
@@ -65,6 +76,8 @@ impl Source {
         match self {
             Source::Xtream(_) => Kind::Xtream,
             Source::M3u(_) => Kind::M3u,
+            Source::HdHomeRun(_) => Kind::HdHomeRun,
+            Source::Tvheadend(_) => Kind::Tvheadend,
         }
     }
 
@@ -73,9 +86,50 @@ impl Source {
         match self {
             Source::Xtream(c) => Ok(Playable::plain(c.live_url(stream_id))),
             Source::M3u(m) => m.live(stream_id),
+            Source::HdHomeRun(h) => h.live(stream_id),
+            Source::Tvheadend(t) => t.live(stream_id),
         }
     }
 }
+
+/// What playback needs for a channel whose URL is stored: a playlist's, a
+/// lineup's or a Tvheadend server's.
+pub(crate) fn stored_row(stream_id: i64) -> Result<playlist::StreamRow> {
+    db::with_db(|c| playlist::stream_row(c, stream_id))?
+        .ok_or_else(|| anyhow!("that channel is not in the catalogue any more; try refreshing"))
+}
+
+/// A refusal whose cause is known, carrying what to do about it.
+///
+/// The sync treats any 401 or 403 as the account being refused (it ends the
+/// pass and backs off) and says "check Settings → Account". That is right for
+/// an Xtream server, which has one way to say no. A Tvheadend server has
+/// several — no login, a wrong one, a right one without persistent
+/// authentication — and each has a different fix, so the source names it and
+/// the sync shows this message instead of its own. The status still counts as
+/// a refusal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Refused {
+    pub status: u16,
+    pub why: String,
+}
+
+impl Refused {
+    pub fn new(status: u16, why: impl Into<String>) -> Self {
+        Self {
+            status,
+            why: why.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for Refused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.why)
+    }
+}
+
+impl std::error::Error for Refused {}
 
 pub struct M3uSource {
     account: M3uAccount,
@@ -97,8 +151,7 @@ impl M3uSource {
     }
 
     fn row(&self, stream_id: i64) -> Result<playlist::StreamRow> {
-        db::with_db(|c| playlist::stream_row(c, stream_id))?
-            .ok_or_else(|| anyhow!("that channel is not in the playlist any more; try refreshing"))
+        stored_row(stream_id)
     }
 
     fn playable(&self, row: &playlist::StreamRow, url: String) -> Playable {

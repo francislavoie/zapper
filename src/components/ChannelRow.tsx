@@ -49,7 +49,7 @@ export const ChannelRow = memo(function ChannelRow({
       onDoubleClick={() => onOpenFull(channel)}
     >
       <Logo url={channel.logoUrl} />
-      <span className="row-num">{channel.num ?? ""}</span>
+      <span className="row-num">{channel.numLabel ?? channel.num ?? ""}</span>
       {/* Tips only when cut short. An instant tip on every row the pointer
           crosses would be a strobe; the name is offered where it is needed,
           which is where the ellipsis is. The raw name rather than the clean
