@@ -308,30 +308,35 @@ impl Read for ChunkReader {
 }
 
 async fn step_epg(client: &XtreamClient) -> Result<String> {
-    let mut resp = client.xmltv_stream().await?;
+    let resp = client.xmltv_stream().await?;
+    let programmes = land_xtream_guide(resp, AppMirror).await?;
+    if programmes == 0 {
+        // Not a failure the pass can name — the server sent a guide with
+        // nothing in it — but the reason a guide is empty the next day.
+        tracing::warn!("the server's guide had no programmes in it");
+    }
+    Ok(format!("{programmes} programmes"))
+}
 
-    let (tx, rx) = tokio::sync::mpsc::channel::<Vec<u8>>(8);
-    let parsing = tokio::task::spawn_blocking(move || {
-        db::with_write_db(|conn| {
-            let n = crate::catalog::epg::parse_xmltv(BufReader::new(ChunkReader::new(rx)), conn)?;
+/// An Xtream server's guide into the mirror, as it downloads.
+///
+/// Through [`pump_into`], so the parse sees a download that stops halfway as
+/// an error and its transaction rolls back, leaving the guide that was there;
+/// and the phase waits for the parse to finish, so it reports what the parse
+/// did. (Read to the end of whatever arrived and committed, a cut-short
+/// guide would replace the programmes it reached and report the download's
+/// error while the commit went ahead behind it.)
+async fn land_xtream_guide<M: Mirror>(resp: reqwest::Response, mirror: M) -> Result<usize> {
+    pump_into(resp, "the guide", None, move |r| {
+        mirror.write(|conn| {
+            let n = crate::catalog::epg::parse_xmltv(BufReader::new(r), conn)?;
             // What the guide just landed on top of may be weeks old; see
             // `catalog::prune`.
             prune::prune_and_log(conn, now());
             Ok(n)
         })
-    });
-
-    while let Some(chunk) = resp.chunk().await.context("reading the guide")? {
-        // The parser having gone away is reported by the join below, which
-        // carries the real reason; this send failing is only its shadow.
-        if tx.send(chunk.to_vec()).await.is_err() {
-            break;
-        }
-    }
-    drop(tx);
-
-    let programmes = parsing.await.context("joining the guide parser")??;
-    Ok(format!("{programmes} programmes"))
+    })
+    .await
 }
 
 /// One pass at a time, however it was asked for.
@@ -1300,6 +1305,84 @@ mod tests {
         .await;
         assert_eq!(outcome, PassOutcome::Failed);
         assert_eq!(rec.phases().last(), Some(&SyncPhase::Failed));
+    }
+
+    /// A mirror of its own, so a guide can be landed (or not) without the
+    /// shared test database.
+    #[derive(Clone)]
+    struct OwnMirror(Arc<std::sync::Mutex<rusqlite::Connection>>);
+
+    impl Mirror for OwnMirror {
+        fn write<R>(&self, f: impl FnOnce(&rusqlite::Connection) -> Result<R>) -> Result<R> {
+            f(&self.0.lock().unwrap())
+        }
+        fn reindex(&self) -> Result<usize> {
+            Ok(0)
+        }
+    }
+
+    /// Answers one request with `head` (status line and headers) and `body`,
+    /// then hangs up: a `Content-Length` larger than the body is a download
+    /// cut short.
+    fn answer_once(head: String, body: Vec<u8>) -> String {
+        use std::io::Write;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            let mut req = [0u8; 4096];
+            let _ = s.read(&mut req);
+            let _ = s.write_all(head.as_bytes());
+            let _ = s.write_all(&body);
+            let _ = s.flush();
+            // Dropped: the connection closes with the body unfinished.
+        });
+        base
+    }
+
+    fn programme(channel: &str, hour: u32) -> String {
+        format!(
+            "<programme start=\"20990908{hour:02}0000 +0000\" stop=\"20990908{:02}0000 +0000\" \
+             channel=\"{channel}\"><title>Hour {hour}</title></programme>\n",
+            hour + 1
+        )
+    }
+
+    #[tokio::test]
+    async fn a_guide_cut_short_leaves_the_guide_that_was_there() {
+        let mirror = OwnMirror(Arc::new(std::sync::Mutex::new(
+            crate::catalog::open_in_memory().unwrap(),
+        )));
+        let count = |m: &OwnMirror| -> i64 {
+            m.0.lock()
+                .unwrap()
+                .query_row("SELECT COUNT(*) FROM epg", [], |r| r.get(0))
+                .unwrap()
+        };
+        // Yesterday's guide, landed whole.
+        let whole = format!("<tv>\n{}{}</tv>\n", programme("old.uk", 1), programme("old.uk", 2));
+        let base = answer_once(
+            format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", whole.len()),
+            whole.into_bytes(),
+        );
+        let resp = reqwest::get(format!("{base}/xmltv.php")).await.unwrap();
+        assert_eq!(land_xtream_guide(resp, mirror.clone()).await.unwrap(), 2);
+        assert_eq!(count(&mirror), 2);
+
+        // Today's, cut off between two programmes: what arrived parses, as
+        // far as it goes, and must not be committed.
+        let mut part = String::from("<tv>\n");
+        for h in 3..9 {
+            part.push_str(&programme("new.uk", h));
+        }
+        let base = answer_once(
+            format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", part.len() * 50),
+            part.into_bytes(),
+        );
+        let resp = reqwest::get(format!("{base}/xmltv.php")).await.unwrap();
+        let err = land_xtream_guide(resp, mirror.clone()).await.unwrap_err();
+        assert!(format!("{err:#}").contains("the guide"), "{err:#}");
+        assert_eq!(count(&mirror), 2, "a guide cut short was committed");
     }
 
     #[test]
