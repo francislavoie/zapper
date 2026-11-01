@@ -31,7 +31,9 @@ import {
   type SettingKey,
 } from "../logic/settings";
 import { MAX_GUIDE_HOURS, MIN_GUIDE_HOURS } from "../logic/guide";
+import { chordKeys } from "../logic/keys";
 import { MOUSE_WORDS, SHORTCUT_GROUPS } from "../logic/shortcuts";
+import { IS_MAC } from "../platform";
 import { SEARCH_SYNTAX } from "../logic/searchQuery";
 import { VOLUME_MAX, VOLUME_UNITY } from "../logic/volume";
 import { kindLabel, statusLine as updateStatusLine } from "../logic/updates";
@@ -770,9 +772,10 @@ function KeyboardPane() {
                   {it.keys.map((chord, i) => (
                     <span key={chord.join("+")} className="kb-alt">
                       {i > 0 ? <span className="kb-sep">{it.pair ? "/" : "or"}</span> : null}
-                      {chord.map((k, j) => (
+                      {chordKeys(chord, IS_MAC).map((k, j) => (
                         <span key={k} className="kb-chord">
-                          {j > 0 ? <span className="kb-plus">+</span> : null}
+                          {/* A Mac writes ⌘ P with nothing between. */}
+                          {j > 0 && !IS_MAC ? <span className="kb-plus">+</span> : null}
                           <kbd className={MOUSE_WORDS.has(k) ? "mouse" : ""}>{k}</kbd>
                         </span>
                       ))}

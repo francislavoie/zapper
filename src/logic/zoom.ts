@@ -13,6 +13,8 @@
 //
 // Checked in src/__checks__/zoom.test.mjs.
 
+import { shortcutModifier } from "./keys.ts";
+
 export const ZOOM_DEFAULT = 1;
 export const ZOOM_MIN = 0.7;
 export const ZOOM_MAX = 2;
@@ -107,11 +109,12 @@ const RESET_CODES = new Set(["Digit0", "Numpad0"]);
 
 /** Which zoom command a keystroke is, or null.
  *
- *  Ctrl or Cmd is required and Alt disqualifies: Ctrl+Alt+- is a layout's dead
- *  key on some keyboards, not a zoom. Shift is allowed, because shift is how
- *  half the world types "+". */
-export function zoomKeyCommand(e: ZoomKeyEvent): ZoomCommand | null {
-  if (!(e.ctrlKey || e.metaKey)) return null;
+ *  The shortcut modifier is required (Ctrl, or Cmd as well; on a Mac, Cmd
+ *  alone: see logic/keys.ts) and Alt disqualifies: Ctrl+Alt+- is a layout's
+ *  dead key on some keyboards, not a zoom. Shift is allowed, because shift is
+ *  how half the world types "+". */
+export function zoomKeyCommand(e: ZoomKeyEvent, mac = false): ZoomCommand | null {
+  if (!shortcutModifier(e, mac)) return null;
   if (e.altKey) return null;
   const code = e.code ?? "";
   if (IN_KEYS.has(e.key) || IN_CODES.has(code)) return "in";
@@ -126,7 +129,8 @@ export interface ZoomWheelEvent {
   metaKey?: boolean;
 }
 
-/** Ctrl+wheel, the other reflex. Only the sign is used, for the same reason
+/** Ctrl+wheel, the other reflex. On a Mac too, and on purpose: a trackpad
+ *  pinch arrives as a wheel event with Ctrl held. Only the sign is used, for the same reason
  *  the volume wheel only uses the sign. */
 export function zoomWheelCommand(e: ZoomWheelEvent): ZoomCommand | null {
   if (!(e.ctrlKey || e.metaKey)) return null;

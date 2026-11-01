@@ -7,7 +7,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import { stepZoom } from "../hooks/useZoom";
+import { chordLabel } from "../logic/keys";
 import { formatZoom, isDefaultZoom } from "../logic/zoom";
+import { IS_MAC } from "../platform";
 import { useApp, useDispatch } from "../store";
 
 const SHOW_MS = 1600;
@@ -34,11 +36,11 @@ export function ZoomBadge() {
     <div className="zoom-badge" role="status" aria-live="polite">
       <span className="zoom-level">{formatZoom(zoom)}</span>
       {isDefaultZoom(zoom) ? (
-        <span className="zoom-hint">Ctrl + − 0</span>
+        <span className="zoom-hint">{chordLabel(["Ctrl"], IS_MAC)} + − 0</span>
       ) : (
         <button
           className="ctl ghost"
-          data-tip="Back to 100% (Ctrl+0)"
+          data-tip={`Back to 100% (${chordLabel(["Ctrl", "0"], IS_MAC)})`}
           onClick={() => stepZoom(dispatch, "reset")}
         >
           Reset
