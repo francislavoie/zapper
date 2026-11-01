@@ -1,0 +1,17 @@
+/* Held back until the zoom mechanism has settled (boot.js). Under Tauri the
+   real one is WebKit's page zoom, which is reached over async IPC, so without
+   this the first frame paints at 100% and visibly snaps. The window is dark
+   and undecorated, so a few milliseconds of nothing reads as the app opening
+   rather than as a flash.
+
+   Nothing here paints a background. The page is deliberately transparent all
+   the way down — mpv draws beneath the webview, and an opaque background
+   anywhere in this document is a hole punched in the picture. What stops the
+   uncovered window reading as a white flash is the window's own background,
+   which is set to black in Rust.
+
+   A file rather than a <style> in index.html for the same reason as boot.js:
+   the policy the web interface is served under applies no inline style. */
+html.zoom-pending {
+  visibility: hidden;
+}
