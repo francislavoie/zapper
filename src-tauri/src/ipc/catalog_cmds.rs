@@ -10,12 +10,12 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::catalog::settings as settings_store;
-use crate::catalog::{db, reads, status, sync_engine};
+use crate::catalog::{account_form, db, reads, status, sync_engine};
 #[cfg(test)]
 use crate::catalog::{guide_search, index, store};
 use crate::ipc::types::{
-    CategoryDto, ChannelDto, FavouriteDto, GuideRowDto, ProgrammeDto, ProgrammeHitDto, SettingsDto,
-    SyncStatusDto,
+    AccountCandidateDto, AccountDto, CategoryDto, ChannelDto, FavouriteDto, GuideRowDto,
+    ProgrammeDto, ProgrammeHitDto, SettingsDto, SyncStatusDto,
 };
 
 #[cfg(test)]
@@ -429,89 +429,92 @@ mod tests {
         let s = sync_status().await.unwrap();
         assert!(s.channels_total >= 0);
     }
+}
 
-    fn on_file_playlist() -> crate::m3u::M3uAccount {
-        crate::m3u::M3uAccount {
-            playlist: "http://p.example/get.php?username=u&password=pw".into(),
-            epg_urls: vec!["http://p.example/xmltv.php?username=u&password=pw".into()],
-            user_agent: Some("Old/1".into()),
-        }
-    }
+// ----------------------------------------------------------------- account
+//
+// The form's rules are [`account_form`]'s, shared with the recording
+// service's `/api/account`; what is the app's alone is dropping its cached
+// client, so the next request goes to the new account without a restart.
 
-    #[test]
-    fn an_untouched_redacted_playlist_and_guide_are_kept() {
-        let got = resolve_m3u_form(Some(on_file_playlist()), None, None, "".into()).unwrap();
-        assert_eq!(got.playlist, on_file_playlist().playlist);
-        assert_eq!(got.epg_urls, on_file_playlist().epg_urls);
-        // The agent is not secret, so it is always sent, and empty clears it.
-        assert_eq!(got.user_agent, None);
-    }
+/// The account, without its secrets.
+#[tauri::command]
+pub async fn account() -> Result<AccountDto, String> {
+    Ok(account_form::view())
+}
 
-    #[test]
-    fn typed_values_replace_and_an_empty_guide_list_clears() {
-        let got = resolve_m3u_form(
-            Some(on_file_playlist()),
-            Some("  /home/me/tv.m3u ".into()),
-            Some(vec![" ".into()]),
-            " Kodi/21 ".into(),
-        )
-        .unwrap();
-        assert_eq!(got.playlist, "/home/me/tv.m3u");
-        assert!(got.epg_urls.is_empty());
-        assert_eq!(got.user_agent.as_deref(), Some("Kodi/21"));
-    }
+/// Saves the form, then drops the cached client and asks for a pass: new
+/// credentials are the thing a refused sync was waiting for.
+fn save(candidate: AccountCandidateDto) -> Result<(), String> {
+    account_form::save(candidate)?;
+    crate::ipc::player_cmds::forget_source();
+    sync_engine::request_now();
+    Ok(())
+}
 
-    #[test]
-    fn a_tuner_needs_an_address_and_keeps_a_redacted_guide_list() {
-        assert!(resolve_hdhomerun_form(None, "  ".into(), None).is_err());
-        let on_file = crate::hdhomerun::HdhrAccount {
-            device: "10.0.0.7".into(),
-            epg_urls: vec!["http://g.example/x.xml?key=k".into()],
-        };
-        let kept = resolve_hdhomerun_form(Some(on_file.clone()), " 10.0.0.8 ".into(), None).unwrap();
-        assert_eq!(kept.device, "10.0.0.8");
-        assert_eq!(kept.epg_urls, on_file.epg_urls);
-        let cleared = resolve_hdhomerun_form(Some(on_file), "10.0.0.8".into(), Some(vec![])).unwrap();
-        assert!(cleared.epg_urls.is_empty(), "empty means SiliconDust's guide");
-    }
+/// Makes an Xtream login the account in use. An empty password keeps the
+/// one already on file, which is what lets the interface show the field as
+/// set without ever being given the value to send back.
+#[tauri::command]
+pub async fn set_account(host: String, username: String, password: String) -> Result<(), String> {
+    save(AccountCandidateDto::Xtream {
+        host,
+        username,
+        password,
+    })
+}
 
-    #[test]
-    fn a_tvheadend_password_is_kept_when_left_empty_and_dropped_without_a_user() {
-        let on_file = crate::tvheadend::TvhAccount {
-            url: "http://tvh.lan:9981".into(),
-            username: "viewer".into(),
-            password: "pw".into(),
-        };
-        let kept = resolve_tvheadend_form(
-            Some(on_file.clone()),
-            "http://tvh.lan:9981".into(),
-            "viewer".into(),
-            "".into(),
-        )
-        .unwrap();
-        assert_eq!(kept.password, "pw");
-        let anon =
-            resolve_tvheadend_form(Some(on_file), "tvh.lan:9981".into(), " ".into(), "x".into()).unwrap();
-        assert_eq!((anon.username.as_str(), anon.password.as_str()), ("", ""));
-        let err = resolve_tvheadend_form(None, "tvh.lan".into(), "viewer".into(), "".into()).unwrap_err();
-        assert!(err.contains("password is required"), "{err}");
-        let err = resolve_tvheadend_form(None, "http://a:b@tvh.lan".into(), "".into(), "".into())
-            .unwrap_err();
-        assert!(err.contains("own fields"), "{err}");
-    }
+/// Makes an M3U playlist the account in use. `playlist` and `epg_urls` of
+/// `None` keep what is on file (it was shown redacted); an empty guide list
+/// is a real value: the guide the playlist names for itself, if any.
+#[tauri::command]
+pub async fn set_m3u_account(
+    playlist: Option<String>,
+    epg_urls: Option<Vec<String>>,
+    user_agent: String,
+) -> Result<(), String> {
+    save(AccountCandidateDto::M3u {
+        playlist,
+        epg_urls,
+        user_agent,
+    })
+}
 
-    #[test]
-    fn a_playlist_is_required_and_redacted_text_is_refused() {
-        assert!(resolve_m3u_form(None, None, None, "".into()).is_err());
-        let err = resolve_m3u_form(
-            None,
-            Some("http://p.example/get.php?username=<redacted>".into()),
-            None,
-            "".into(),
-        )
-        .unwrap_err();
-        assert!(err.contains("redacted"), "{err}");
-    }
+/// Makes an HDHomeRun the account in use. `epg_urls` of `None` keeps the
+/// guide list on file; an empty list is SiliconDust's guide.
+#[tauri::command]
+pub async fn set_hdhomerun_account(
+    device: String,
+    epg_urls: Option<Vec<String>>,
+) -> Result<(), String> {
+    save(AccountCandidateDto::Hdhomerun { device, epg_urls })
+}
+
+/// Makes a Tvheadend server the account in use. An empty password keeps the
+/// one on file; an empty username is a server that needs no login.
+#[tauri::command]
+pub async fn set_tvheadend_account(
+    url: String,
+    username: String,
+    password: String,
+) -> Result<(), String> {
+    save(AccountCandidateDto::Tvheadend {
+        url,
+        username,
+        password,
+    })
+}
+
+/// Asks the account in use who we are, through the client playback uses.
+#[tauri::command]
+pub async fn test_account() -> Result<String, String> {
+    account_form::probe(crate::ipc::player_cmds::source()?).await
+}
+
+/// Tests an account as typed, without saving it or touching the one in use.
+#[tauri::command]
+pub async fn test_account_candidate(candidate: AccountCandidateDto) -> Result<String, String> {
+    account_form::test(candidate).await
 }
 
 /// Settings as stored. Defaults on first run; never fails for a missing row.
@@ -519,382 +522,6 @@ mod tests {
 /// Infallible by construction: a missing row, an unparseable blob, or a
 /// database that will not open all read as defaults. Settings must never be
 /// the reason the app will not open.
-/// The Xtream account, without the password.
-#[tauri::command]
-pub async fn account() -> Result<crate::ipc::types::AccountDto, String> {
-    use crate::catalog::credentials::{account_path, on_file, summary, Source};
-    use crate::m3u::redact::redact_url;
-    let (creds, source) = summary();
-    let f = on_file();
-    let m3u = f.m3u.unwrap_or_default();
-    let (playlist, playlist_redacted) = redact_url(&m3u.playlist);
-    let epg: Vec<(String, bool)> = m3u.epg_urls.iter().map(|u| redact_url(u)).collect();
-    let tuner = f.hdhomerun.unwrap_or_default();
-    let tuner_epg: Vec<(String, bool)> = tuner.epg_urls.iter().map(|u| redact_url(u)).collect();
-    let tvh = f.tvheadend.unwrap_or_default();
-    Ok(crate::ipc::types::AccountDto {
-        hdhomerun_device: tuner.device,
-        hdhomerun_epg_redacted: tuner_epg.iter().any(|(_, r)| *r),
-        hdhomerun_epg_urls: tuner_epg.into_iter().map(|(u, _)| u).collect(),
-        // Checked at save to carry no login; redacted anyway, for a file
-        // edited by hand.
-        tvheadend_url: redact_url(&tvh.url).0,
-        tvheadend_has_password: !tvh.password.is_empty(),
-        tvheadend_username: tvh.username,
-        kind: f.kind.as_str().to_owned(),
-        playlist,
-        playlist_redacted,
-        epg_redacted: epg.iter().any(|(_, r)| *r),
-        epg_urls: epg.into_iter().map(|(u, _)| u).collect(),
-        user_agent: m3u.user_agent.unwrap_or_default(),
-        host: creds.as_ref().map(|c| c.host.clone()).unwrap_or_default(),
-        username: creds.as_ref().map(|c| c.username.clone()).unwrap_or_default(),
-        has_password: creds.as_ref().is_some_and(|c| !c.password.is_empty()),
-        source: match source {
-            Source::Zapper => "zapper",
-            Source::None => "none",
-        }
-        .to_owned(),
-        path: account_path().display().to_string(),
-    })
-}
-
-/// Replaces the stored account and drops the cached client, so the next
-/// request goes to the new server without a restart.
-///
-/// An empty password means "keep the one already on file", which is what
-/// lets the interface show the field as set without ever being given the
-/// value to send back.
-#[tauri::command]
-pub async fn set_account(
-    host: String,
-    username: String,
-    password: String,
-) -> Result<(), String> {
-    use crate::catalog::credentials;
-    let (existing, _) = credentials::summary();
-    let creds = resolve_xtream_form(existing, host, username, password)?;
-    credentials::save(&creds).map_err(|e| e.to_string())?;
-    crate::ipc::player_cmds::forget_source();
-    // New credentials are the thing a refused sync was waiting for.
-    sync_engine::request_now();
-    Ok(())
-}
-
-/// The credentials `set_account` would save. Pure, so the keep-the-password
-/// rule is shared with the connection test and checked without a file.
-fn resolve_xtream_form(
-    existing: Option<crate::xtream::Credentials>,
-    host: String,
-    username: String,
-    password: String,
-) -> Result<crate::xtream::Credentials, String> {
-    let host = host.trim().to_owned();
-    let username = username.trim().to_owned();
-    if host.is_empty() {
-        return Err("a host is required".to_owned());
-    }
-    if username.is_empty() {
-        return Err("a username is required".to_owned());
-    }
-    let password = if password.is_empty() {
-        match existing.map(|c| c.password).filter(|p| !p.is_empty()) {
-            Some(p) => p,
-            None => return Err("a password is required".to_owned()),
-        }
-    } else {
-        password
-    };
-    Ok(crate::xtream::Credentials {
-        host,
-        username,
-        password,
-    })
-}
-
-/// Makes an M3U playlist the account in use.
-///
-/// `playlist` and `epg_urls` of `None` mean "keep what is on file" — the
-/// pane sends that when the stored value had credentials redacted out of it
-/// and nobody typed a new one, which is the playlist equivalent of an empty
-/// password field. An empty list of guide URLs is a real value: use the
-/// guide the playlist names for itself, if any.
-#[tauri::command]
-pub async fn set_m3u_account(
-    playlist: Option<String>,
-    epg_urls: Option<Vec<String>>,
-    user_agent: String,
-) -> Result<(), String> {
-    use crate::catalog::credentials;
-    let existing = credentials::on_file().m3u;
-    let account = resolve_m3u_form(existing, playlist, epg_urls, user_agent)?;
-    credentials::save_m3u(&account).map_err(|e| e.to_string())?;
-    crate::ipc::player_cmds::forget_source();
-    sync_engine::request_now();
-    Ok(())
-}
-
-/// Makes an HDHomeRun the account in use.
-///
-/// `epg_urls` of `None` keeps the guide list on file, for the same reason as
-/// the playlist's: it was shown redacted and nobody typed over it. An empty
-/// list is a real value — SiliconDust's guide.
-#[tauri::command]
-pub async fn set_hdhomerun_account(
-    device: String,
-    epg_urls: Option<Vec<String>>,
-) -> Result<(), String> {
-    use crate::catalog::credentials;
-    let existing = credentials::on_file().hdhomerun;
-    let account = resolve_hdhomerun_form(existing, device, epg_urls)?;
-    credentials::save_hdhomerun(&account).map_err(|e| e.to_string())?;
-    crate::ipc::player_cmds::forget_source();
-    sync_engine::request_now();
-    Ok(())
-}
-
-fn resolve_hdhomerun_form(
-    existing: Option<crate::hdhomerun::HdhrAccount>,
-    device: String,
-    epg_urls: Option<Vec<String>>,
-) -> Result<crate::hdhomerun::HdhrAccount, String> {
-    let device = device.trim().to_owned();
-    crate::hdhomerun::device::base_url(&device).map_err(|e| e.to_string())?;
-    let epg_urls = match epg_urls {
-        Some(list) => list
-            .into_iter()
-            .map(|u| u.trim().to_owned())
-            .filter(|u| !u.is_empty())
-            .collect(),
-        None => existing.unwrap_or_default().epg_urls,
-    };
-    if epg_urls.iter().any(|u| u.contains("<redacted>")) {
-        return Err("type the full address, including the parts shown as <redacted>".to_owned());
-    }
-    Ok(crate::hdhomerun::HdhrAccount { device, epg_urls })
-}
-
-/// Makes a Tvheadend server the account in use.
-///
-/// The password is write-only, as the Xtream one is: empty keeps the one on
-/// file. An empty username is a server that needs no login, and clears the
-/// password with it — a password with nobody to log in as is a password
-/// kept for nothing.
-#[tauri::command]
-pub async fn set_tvheadend_account(
-    url: String,
-    username: String,
-    password: String,
-) -> Result<(), String> {
-    use crate::catalog::credentials;
-    let existing = credentials::on_file().tvheadend;
-    let account = resolve_tvheadend_form(existing, url, username, password)?;
-    credentials::save_tvheadend(&account).map_err(|e| e.to_string())?;
-    crate::ipc::player_cmds::forget_source();
-    sync_engine::request_now();
-    Ok(())
-}
-
-fn resolve_tvheadend_form(
-    existing: Option<crate::tvheadend::TvhAccount>,
-    url: String,
-    username: String,
-    password: String,
-) -> Result<crate::tvheadend::TvhAccount, String> {
-    let url = url.trim().to_owned();
-    crate::tvheadend::client::base_url(&url).map_err(|e| e.to_string())?;
-    let username = username.trim().to_owned();
-    let password = if username.is_empty() {
-        String::new()
-    } else if password.is_empty() {
-        match existing.map(|a| a.password).filter(|p| !p.is_empty()) {
-            Some(p) => p,
-            None => {
-                return Err(
-                    "a password is required with a username (leave both empty if the server needs no login)"
-                        .to_owned(),
-                )
-            }
-        }
-    } else {
-        password
-    };
-    Ok(crate::tvheadend::TvhAccount {
-        url,
-        username,
-        password,
-    })
-}
-
-/// The account `set_m3u_account` would save. Pure, so the keep-or-replace
-/// rules can be tested without an account file.
-fn resolve_m3u_form(
-    existing: Option<crate::m3u::M3uAccount>,
-    playlist: Option<String>,
-    epg_urls: Option<Vec<String>>,
-    user_agent: String,
-) -> Result<crate::m3u::M3uAccount, String> {
-    let existing = existing.unwrap_or_default();
-    let playlist = match playlist.map(|p| p.trim().to_owned()).filter(|p| !p.is_empty()) {
-        Some(p) => p,
-        None if !existing.playlist.is_empty() => existing.playlist,
-        None => return Err("a playlist URL or file is required".to_owned()),
-    };
-    let epg_urls = match epg_urls {
-        Some(list) => list
-            .into_iter()
-            .map(|u| u.trim().to_owned())
-            .filter(|u| !u.is_empty())
-            .collect(),
-        None => existing.epg_urls,
-    };
-    // A redacted value sent back verbatim would replace the real one with
-    // `<redacted>`; refuse it rather than save something that cannot work.
-    if playlist.contains("<redacted>") || epg_urls.iter().any(|u| u.contains("<redacted>")) {
-        return Err("type the full address, including the parts shown as <redacted>".to_owned());
-    }
-    let user_agent = Some(user_agent.trim().to_owned()).filter(|u| !u.is_empty());
-    Ok(crate::m3u::M3uAccount {
-        playlist,
-        epg_urls,
-        user_agent,
-    })
-}
-
-/// Asks the server who we are. The one honest test of an account: it either
-/// answers or it does not.
-///
-/// The message is scrubbed, because a failure from `reqwest` quotes the URL
-/// it was given and that URL carries the username and password.
-#[tauri::command]
-pub async fn test_account() -> Result<String, String> {
-    probe_source(crate::ipc::player_cmds::source()?).await
-}
-
-/// Tests an account as typed, without saving it: the Test button checks the
-/// form, so a change can be tried before it replaces the account in use.
-///
-/// Nothing is written and nothing in use is touched — not the account file,
-/// not the cached client playback uses, not the catalogue, and no sync is
-/// asked for. Blank secret fields are filled from the file exactly as a save
-/// would fill them, so what is tested is what Save would then keep.
-#[tauri::command]
-pub async fn test_account_candidate(
-    candidate: crate::ipc::types::AccountCandidateDto,
-) -> Result<String, String> {
-    let account = resolve_candidate(candidate, crate::catalog::credentials::on_file())?;
-    test_unsaved(account).await
-}
-
-/// What a candidate means once its blanks are filled from the file.
-fn resolve_candidate(
-    candidate: crate::ipc::types::AccountCandidateDto,
-    on_file: crate::catalog::credentials::OnFile,
-) -> Result<crate::catalog::credentials::Account, String> {
-    use crate::catalog::credentials::Account;
-    use crate::ipc::types::AccountCandidateDto as C;
-    Ok(match candidate {
-        C::Xtream {
-            host,
-            username,
-            password,
-        } => Account::Xtream(resolve_xtream_form(on_file.xtream, host, username, password)?),
-        C::M3u {
-            playlist,
-            epg_urls,
-            user_agent,
-        } => Account::M3u(resolve_m3u_form(on_file.m3u, playlist, epg_urls, user_agent)?),
-        C::Hdhomerun { device, epg_urls } => {
-            Account::HdHomeRun(resolve_hdhomerun_form(on_file.hdhomerun, device, epg_urls)?)
-        }
-        C::Tvheadend {
-            url,
-            username,
-            password,
-        } => Account::Tvheadend(resolve_tvheadend_form(on_file.tvheadend, url, username, password)?),
-    })
-}
-
-/// Probes an account that is not the one in use, with a client of its own
-/// that is dropped afterwards.
-///
-/// Its answer is masked as well as scrubbed. The scrub finds secrets by
-/// where they sit — a query parameter, a URL's login — and a candidate is
-/// the one place a password arrives that the app has never stored, so its
-/// literal value is taken out of whatever comes back too.
-async fn test_unsaved(account: crate::catalog::credentials::Account) -> Result<String, String> {
-    use crate::catalog::credentials::Account;
-    let secret = match &account {
-        Account::Xtream(c) => c.password.clone(),
-        Account::Tvheadend(t) => t.password.clone(),
-        Account::M3u(_) | Account::HdHomeRun(_) => String::new(),
-    };
-    let mask = |text: String| mask_secret(&text, &secret);
-    let source = crate::source::Source::from_account(account)
-        .map_err(|e| mask(crate::catalog::sync_engine::scrub(&format!("{e:#}"))))?;
-    probe_source(&source).await.map(mask).map_err(mask)
-}
-
-/// `text` with every occurrence of `secret` replaced. Too short a secret is
-/// left alone: masking every "ab" in a sentence would garble the message and
-/// protect nothing a guess would not find.
-fn mask_secret(text: &str, secret: &str) -> String {
-    if secret.chars().count() < 4 {
-        return text.to_owned();
-    }
-    text.replace(secret, "<redacted>")
-}
-
-/// The connection test for any source, saved or not.
-async fn probe_source(source: &crate::source::Source) -> Result<String, String> {
-    use crate::source::Source;
-    let scrubbed = |e: anyhow::Error| crate::catalog::sync_engine::scrub(&format!("{e:#}"));
-    let server = match source {
-        Source::Xtream(server) => server,
-        // A playlist has nobody to ask "who am I"; the honest test is
-        // whether it can be fetched and parsed, and whether its guide answers.
-        Source::M3u(m) => return m.probe().await.map_err(scrubbed),
-        // A tuner says what it is and what it can tune.
-        Source::HdHomeRun(h) => return h.probe().await.map_err(scrubbed),
-        // A server is logged in to, and asked for the playlist this login
-        // gets, which is also the persistent-authentication check. Its
-        // refusals already say what to do; the chain behind them would only
-        // repeat it.
-        Source::Tvheadend(t) => {
-            return t.probe().await.map_err(|e| {
-                match e.chain().find_map(|c| c.downcast_ref::<crate::source::Refused>()) {
-                    Some(r) => crate::catalog::sync_engine::scrub(&r.why),
-                    None => scrubbed(e),
-                }
-            })
-        }
-    };
-    let info = server
-        .login()
-        .await
-        .map_err(|e| crate::catalog::sync_engine::scrub(&format!("{e:#}")))?;
-    if !info.auth {
-        // The server answered and said no, which is a different thing from
-        // not answering and worth saying differently.
-        let status = if info.status.is_empty() {
-            "rejected".to_owned()
-        } else {
-            info.status.clone()
-        };
-        return Err(format!("the server rejected these credentials ({status})"));
-    }
-    let conns = match (info.active_cons, info.max_connections) {
-        (Some(a), Some(m)) => format!(" · {a} of {m} connections in use"),
-        _ => String::new(),
-    };
-    let status = if info.status.is_empty() {
-        "Active".to_owned()
-    } else {
-        info.status
-    };
-    Ok(format!("{status}{conns}"))
-}
-
 #[tauri::command]
 pub async fn settings() -> Result<SettingsDto, String> {
     Ok(settings_store::load_or_default())
@@ -942,262 +569,4 @@ pub async fn favourites(limit: u32) -> Result<Vec<FavouriteDto>, String> {
 #[tauri::command]
 pub async fn forget_activity(stream_id: i64) -> Result<(), String> {
     reads::forget_activity(stream_id).map_err(words)
-}
-
-#[cfg(test)]
-mod candidate_tests {
-    //! The connection test of an account that has not been saved.
-    //!
-    //! Each test runs in a config directory of its own (`paths::with_test_root`)
-    //! on a current-thread runtime, so the thread-local root holds for every
-    //! await, and talks to a fake server on 127.0.0.1.
-
-    use super::*;
-    use crate::catalog::credentials::{self, Account, Kind};
-    use crate::ipc::types::AccountCandidateDto as C;
-    use crate::test_http::{serve, Reply, Request, Server};
-
-    fn in_own_config<T>(name: &str, f: impl FnOnce() -> T) -> T {
-        let dir = std::env::temp_dir().join(format!(
-            "zapper-candidate-{name}-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let out = crate::paths::with_test_root(&dir, f);
-        let _ = std::fs::remove_dir_all(&dir);
-        out
-    }
-
-    fn block_on<F: std::future::Future>(f: F) -> F::Output {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap()
-            .block_on(f)
-    }
-
-    /// An Xtream server that knows one user, with either of two passwords.
-    fn xtream_server(status: u16) -> Server {
-        serve(move |req: &Request, _| {
-            if req.route() != "/player_api.php" {
-                return Reply::new(404, "");
-            }
-            if status != 200 {
-                return Reply::new(status, "");
-            }
-            let known = req.query("username") == Some("viewer")
-                && matches!(req.query("password"), Some("typed-secret") | Some("saved-secret"));
-            let body = if known {
-                r#"{"user_info":{"auth":1,"status":"Active","active_cons":"1","max_connections":"2"}}"#
-            } else {
-                r#"{"user_info":{"auth":0}}"#
-            };
-            Reply::ok(body).header("Content-Type", "application/json")
-        })
-    }
-
-    fn save_saved_xtream() {
-        credentials::save(&crate::xtream::Credentials {
-            host: "http://saved.invalid".into(),
-            username: "viewer".into(),
-            password: "saved-secret".into(),
-        })
-        .unwrap();
-    }
-
-    fn xtream(host: &str, password: &str) -> C {
-        C::Xtream {
-            host: host.into(),
-            username: " viewer ".into(),
-            password: password.into(),
-        }
-    }
-
-    #[test]
-    fn what_is_typed_is_tested_and_nothing_is_saved() {
-        in_own_config("typed", || {
-            save_saved_xtream();
-            let server = xtream_server(200);
-            let got = block_on(test_account_candidate(xtream(&server.base, "typed-secret")));
-            assert_eq!(got.unwrap(), "Active · 1 of 2 connections in use");
-            // The typed host and password were the ones asked, not the saved.
-            let asked = server.requests();
-            assert_eq!(asked.len(), 1);
-            assert_eq!(asked[0].query("password"), Some("typed-secret"));
-            // And the file is as it was.
-            let f = credentials::on_file();
-            assert_eq!(f.kind, Kind::Xtream);
-            let saved = f.xtream.unwrap();
-            assert_eq!(saved.host, "http://saved.invalid");
-            assert_eq!(saved.password, "saved-secret");
-        });
-    }
-
-    #[test]
-    fn a_blank_password_tests_the_one_on_file() {
-        in_own_config("blank", || {
-            save_saved_xtream();
-            let server = xtream_server(200);
-            let got = block_on(test_account_candidate(xtream(&server.base, "")));
-            assert!(got.is_ok(), "{got:?}");
-            assert_eq!(server.requests()[0].query("password"), Some("saved-secret"));
-        });
-    }
-
-    #[test]
-    fn a_blank_password_with_none_on_file_is_refused_before_asking() {
-        in_own_config("none", || {
-            let server = xtream_server(200);
-            let err = block_on(test_account_candidate(xtream(&server.base, ""))).unwrap_err();
-            assert!(err.contains("password is required"), "{err}");
-            assert!(server.requests().is_empty());
-        });
-    }
-
-    #[test]
-    fn a_refusal_is_reported_without_the_password() {
-        in_own_config("refused", || {
-            let server = xtream_server(200);
-            let err = block_on(test_account_candidate(xtream(&server.base, "wrong-secret")))
-                .unwrap_err();
-            assert!(err.contains("rejected"), "{err}");
-            assert!(!err.contains("wrong-secret"), "{err}");
-        });
-    }
-
-    #[test]
-    fn a_failing_server_is_reported_without_the_password() {
-        in_own_config("failing", || {
-            let server = xtream_server(500);
-            let err = block_on(test_account_candidate(xtream(&server.base, "typed-secret")))
-                .unwrap_err();
-            // reqwest quotes the URL it asked, and that URL carries the login.
-            assert!(err.contains("500"), "{err}");
-            assert!(!err.contains("typed-secret"), "{err}");
-        });
-    }
-
-    #[test]
-    fn another_kind_is_tested_without_switching_to_it() {
-        in_own_config("kind", || {
-            save_saved_xtream();
-            let server = serve(|req, base| match req.route() {
-                "/tv.m3u" => Reply::ok(format!(
-                    "#EXTM3U\n#EXTINF:-1 group-title=\"News\",One\n{base}/1.ts\n\
-                     #EXTINF:-1 group-title=\"News\",Two\n{base}/2.ts\n"
-                )),
-                _ => Reply::new(404, ""),
-            });
-            let got = block_on(test_account_candidate(C::M3u {
-                playlist: Some(format!("{}/tv.m3u", server.base)),
-                epg_urls: Some(vec![]),
-                user_agent: String::new(),
-            }))
-            .unwrap();
-            assert!(got.starts_with("Playlist OK: 2 channels"), "{got}");
-            let f = credentials::on_file();
-            assert_eq!(f.kind, Kind::Xtream, "testing a playlist made it the account");
-            assert!(f.m3u.is_none());
-        });
-    }
-
-    #[test]
-    fn blanks_are_filled_from_the_file_as_a_save_would() {
-        let on_file = || credentials::OnFile {
-            kind: Kind::Xtream,
-            xtream: Some(crate::xtream::Credentials {
-                host: "http://a.invalid".into(),
-                username: "u".into(),
-                password: "kept-secret".into(),
-            }),
-            m3u: Some(crate::m3u::M3uAccount {
-                playlist: "http://p.invalid/get.php?username=u&password=pw".into(),
-                epg_urls: vec!["http://p.invalid/xmltv.php?password=pw".into()],
-                user_agent: None,
-            }),
-            hdhomerun: None,
-            tvheadend: Some(crate::tvheadend::TvhAccount {
-                url: "http://tvh.invalid:9981".into(),
-                username: "viewer".into(),
-                password: "tvh-secret".into(),
-            }),
-        };
-        match resolve_candidate(xtream("http://b.invalid", ""), on_file()).unwrap() {
-            Account::Xtream(c) => {
-                assert_eq!((c.host.as_str(), c.username.as_str()), ("http://b.invalid", "viewer"));
-                assert_eq!(c.password, "kept-secret");
-            }
-            _ => panic!("not an Xtream account"),
-        }
-        match resolve_candidate(
-            C::M3u {
-                playlist: None,
-                epg_urls: None,
-                user_agent: "".into(),
-            },
-            on_file(),
-        )
-        .unwrap()
-        {
-            Account::M3u(m) => {
-                assert!(m.playlist.ends_with("password=pw"));
-                assert_eq!(m.epg_urls.len(), 1);
-            }
-            _ => panic!("not a playlist"),
-        }
-        match resolve_candidate(
-            C::Tvheadend {
-                url: "http://tvh.invalid:9981".into(),
-                username: "viewer".into(),
-                password: "".into(),
-            },
-            on_file(),
-        )
-        .unwrap()
-        {
-            Account::Tvheadend(t) => assert_eq!(t.password, "tvh-secret"),
-            _ => panic!("not a Tvheadend server"),
-        }
-        let err = resolve_candidate(
-            C::Hdhomerun {
-                device: " ".into(),
-                epg_urls: None,
-            },
-            on_file(),
-        )
-        .unwrap_err();
-        assert!(!err.is_empty());
-    }
-
-    #[test]
-    fn the_candidate_arrives_in_the_shape_the_pane_sends() {
-        let c: C = serde_json::from_str(
-            r#"{"kind":"hdhomerun","device":"10.0.0.7","epgUrls":null}"#,
-        )
-        .unwrap();
-        assert!(matches!(c, C::Hdhomerun { ref device, epg_urls: None } if device == "10.0.0.7"));
-        let c: C = serde_json::from_str(
-            r#"{"kind":"m3u","playlist":null,"epgUrls":["a"],"userAgent":"UA/1"}"#,
-        )
-        .unwrap();
-        assert!(matches!(c, C::M3u { playlist: None, .. }));
-        let c: C = serde_json::from_str(
-            r#"{"kind":"tvheadend","url":"http://t","username":"","password":""}"#,
-        )
-        .unwrap();
-        assert!(matches!(c, C::Tvheadend { .. }));
-    }
-
-    #[test]
-    fn a_secret_is_masked_wherever_it_appears() {
-        assert_eq!(
-            mask_secret("could not log in as viewer:hunter22 at /x/hunter22", "hunter22"),
-            "could not log in as viewer:<redacted> at /x/<redacted>"
-        );
-        // Too short to mask without garbling the message.
-        assert_eq!(mask_secret("a bad answer", "a"), "a bad answer");
-        assert_eq!(mask_secret("nothing to hide", ""), "nothing to hide");
-    }
 }
