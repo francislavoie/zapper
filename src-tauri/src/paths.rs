@@ -120,11 +120,23 @@ fn root_override() -> Option<PathBuf> {
     }
 }
 
+/// Each directory on its own, named exactly: `ZAPPER_CONFIG_DIR`,
+/// `ZAPPER_DATA_DIR` and `ZAPPER_CACHE_DIR` are the directories themselves,
+/// not a root to put `zapper` in. For a process that runs as another
+/// account than the person whose zapper it serves: the recording service
+/// installed as a Windows service at boot runs as an account of its own,
+/// whose `%APPDATA%` is not theirs, and is handed theirs this way
+/// (`zapper-server --config-dir` and the rest). [`HOME_OVERRIDE`] comes
+/// first.
+pub const CONFIG_DIR_OVERRIDE: &str = "ZAPPER_CONFIG_DIR";
+pub const DATA_DIR_OVERRIDE: &str = "ZAPPER_DATA_DIR";
+pub const CACHE_DIR_OVERRIDE: &str = "ZAPPER_CACHE_DIR";
+
 /// Where the account and window state live.
 pub fn config_dir() -> PathBuf {
     match root_override() {
         Some(root) => root.join("config"),
-        None => config_dir_for(OS, &env),
+        None => env(CONFIG_DIR_OVERRIDE).unwrap_or_else(|| config_dir_for(OS, &env)),
     }
 }
 
@@ -132,7 +144,7 @@ pub fn config_dir() -> PathBuf {
 pub fn data_dir() -> PathBuf {
     match root_override() {
         Some(root) => root.join("data"),
-        None => data_dir_for(OS, &env),
+        None => env(DATA_DIR_OVERRIDE).unwrap_or_else(|| data_dir_for(OS, &env)),
     }
 }
 
@@ -140,7 +152,7 @@ pub fn data_dir() -> PathBuf {
 pub fn cache_dir() -> PathBuf {
     match root_override() {
         Some(root) => root.join("cache"),
-        None => cache_dir_for(OS, &env),
+        None => env(CACHE_DIR_OVERRIDE).unwrap_or_else(|| cache_dir_for(OS, &env)),
     }
 }
 

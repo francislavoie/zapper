@@ -250,22 +250,34 @@ libc = { version = "0.2", optional = true }
 [target.'cfg(windows)'.dependencies]
 # Com, Ole, Variant and TaskScheduler: the recording service's sign-in task
 # (recording::service). Console, Security and Storage_FileSystem:
-# zapper-server finding its terminal's console.
+# zapper-server finding its terminal's console. Services,
+# Security_Authorization and Threading: the boot-time Windows service's
+# permissions, this user's SID, and asking for elevation to install it
+# (recording::service::winsvc); Registry, which ShellExecuteExW needs.
 windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
     "Win32_Security",
+    "Win32_Security_Authorization",
     "Win32_Storage_FileSystem",
     "Win32_System_Com",
     "Win32_System_Console",
     "Win32_System_LibraryLoader",
     "Win32_System_Ole",
+    "Win32_System_Registry",
+    "Win32_System_Services",
     "Win32_System_TaskScheduler",
+    "Win32_System_Threading",
     "Win32_System_Time",
     "Win32_System_Variant",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
+# The boot-time Windows service (recording::service::winsvc): its entry
+# point and control handler in zapper-server, and creating, starting,
+# stopping and deleting it through the Service Control Manager. MIT OR
+# Apache-2.0, on the windows-sys 0.61 already in the tree; adds widestring.
+windows-service = "0.8"
 
 # The macOS surface: a Core Animation OpenGL layer beneath the WKWebView, in
 # AppKit's view hierarchy, that mpv's render API draws into. The objc2

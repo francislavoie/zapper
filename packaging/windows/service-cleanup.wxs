@@ -14,12 +14,29 @@
   in the installer service's session, so no window shows; a failure is
   ignored rather than holding the uninstall back.
 
+  With Settings > Recording > Start at boot it is instead a Windows service of
+  the same name, zapper-server-<user>, running this folder's zapper-server.exe
+  as an account of its own (recording::service::winsvc). The same action
+  stops and deletes every such service that runs this installation's
+  program: stopping one through the Service
+  Control Manager is how it is stopped cleanly.
+
   The script, which has no [ ] or { } for Windows Installer to read as
-  properties:
+  properties but [INSTALLDIR], meant as one (only this installation's
+  services; a per-user setup's are its own uninstaller's):
 
     $tasks = Get-ScheduledTask -TaskName 'zapper-server-*' | Where-Object Author -EQ 'zapper'
     $tasks | Stop-ScheduledTask
     $tasks | Unregister-ScheduledTask -Confirm:$false
+    $svcs = @(Get-CimInstance Win32_Service | Where-Object Name -Like 'zapper-server-*' |
+              Where-Object PathName -Like '*[INSTALLDIR]zapper-server.exe*')
+    $svcs | Stop-Service -Force
+    $svcs | Invoke-CimMethod -MethodName Delete
+
+  And after the files are installed (an install, a repair, an upgrade), it
+  starts every such service set to start automatically that is not running,
+  as the NSIS setup starts the task and the service again: the stop before
+  the files were replaced had stopped them.
 
   The per-user NSIS setup does the same for its user from its uninstaller
   (packaging/windows/installer-hooks.nsh).
@@ -47,7 +64,14 @@
                   Execute="deferred"
                   Impersonate="no"
                   Return="ignore"
-                  ExeCommand="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command &quot;$tasks = Get-ScheduledTask -TaskName 'zapper-server-*' -ErrorAction SilentlyContinue | Where-Object Author -EQ 'zapper'; $tasks | Stop-ScheduledTask -ErrorAction SilentlyContinue; $tasks | Unregister-ScheduledTask -Confirm:$false -ErrorAction SilentlyContinue&quot;" />
+                  ExeCommand="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command &quot;$tasks = Get-ScheduledTask -TaskName 'zapper-server-*' -ErrorAction SilentlyContinue | Where-Object Author -EQ 'zapper'; $tasks | Stop-ScheduledTask -ErrorAction SilentlyContinue; $tasks | Unregister-ScheduledTask -Confirm:$false -ErrorAction SilentlyContinue; $svcs = @(Get-CimInstance Win32_Service -ErrorAction SilentlyContinue | Where-Object Name -Like 'zapper-server-*' | Where-Object PathName -Like '*[INSTALLDIR]zapper-server.exe*'); $svcs | Stop-Service -Force -ErrorAction SilentlyContinue; $svcs | Invoke-CimMethod -MethodName Delete -ErrorAction SilentlyContinue | Out-Null&quot;" />
+
+    <CustomAction Id="ZapperStartServices"
+                  Directory="TARGETDIR"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="ignore"
+                  ExeCommand="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command &quot;Get-CimInstance Win32_Service -ErrorAction SilentlyContinue | Where-Object Name -Like 'zapper-server-*' | Where-Object PathName -Like '*[INSTALLDIR]zapper-server.exe*' | Where-Object StartMode -EQ 'Auto' | Where-Object State -EQ 'Stopped' | Start-Service -ErrorAction SilentlyContinue&quot;" />
 
     <CustomAction Id="ZapperStopServiceAsk"
                   Directory="INSTALLDIR"
@@ -69,6 +93,7 @@
       <Custom Action="ZapperStopServiceAsk" Before="InstallValidate">(Installed OR WIX_UPGRADE_DETECTED) AND UILevel &gt;= 5</Custom>
       <Custom Action="ZapperStopServiceQuiet" Before="InstallValidate">(Installed OR WIX_UPGRADE_DETECTED) AND UILevel &lt; 5</Custom>
       <Custom Action="ZapperRemoveServiceTasks" Before="RemoveFiles">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>
+      <Custom Action="ZapperStartServices" After="InstallFiles">NOT REMOVE="ALL"</Custom>
     </InstallExecuteSequence>
   </Fragment>
 </Wix>

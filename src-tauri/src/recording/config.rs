@@ -185,11 +185,20 @@ pub fn save_to(path: &Path, cfg: &ServerConfig) -> Result<()> {
     Ok(())
 }
 
+/// The variable naming [`default_output_dir`] outright, for a service that
+/// runs as another account than the person it records for (the boot-time
+/// Windows service, handed theirs as `--recordings-dir`).
+pub const RECORDINGS_DIR_OVERRIDE: &str = "ZAPPER_RECORDINGS_DIR";
+
 /// `~/Videos/zapper`, or under `ZAPPER_HOME` when that is set: a run pointed
 /// at a scratch directory (a harness) must not write into the real videos.
+/// `ZAPPER_RECORDINGS_DIR` names it outright.
 pub fn default_output_dir() -> PathBuf {
     if cfg!(test) || std::env::var_os(crate::paths::HOME_OVERRIDE).is_some_and(|v| !v.is_empty()) {
         return crate::paths::data_dir().join("recordings");
+    }
+    if let Some(dir) = std::env::var_os(RECORDINGS_DIR_OVERRIDE).filter(|v| !v.is_empty()) {
+        return PathBuf::from(dir);
     }
     let home = std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))

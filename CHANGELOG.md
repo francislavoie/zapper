@@ -40,6 +40,11 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
 - `zapper-server --import-account`, `--set-password` and `--network on|off` set up a service with
   no app beside it: the provider account from an `account.json`, the password other devices sign
   in with (read from standard input, never the command line), and network access.
+- Windows: Settings → Recording → *Start at boot (Windows service)* runs the recording service as
+  a Windows service that starts with the computer and records whether or not anyone is signed in.
+  Windows asks once for an administrator's permission; it runs as an account of its own that may
+  use only your zapper folders and recordings folder. Switching back to the sign-in task, updating
+  and uninstalling ask nothing more.
 - macOS: Settings → Recording → Install (and `zapper-server --install-service`) installs the
   recording service as a LaunchAgent, which starts it when you log in and again after a crash.
 
