@@ -33,7 +33,7 @@ use super::api::{
 use super::backup::SetBackupRequest;
 use super::now;
 use super::server::Server;
-use super::{account, browse, watch, web};
+use super::{account, browse, strm, watch, web};
 
 type Shared = Arc<Server>;
 
@@ -422,6 +422,8 @@ pub fn router(server: Shared) -> Router {
         .route("/api/version", get(version))
         .route("/api/login", post(login))
         .route("/api/session", get(session))
+        // Its own key in the address stands in for signing in (`strm`).
+        .merge(strm::routes())
         .merge(authed)
         .merge(app)
         .fallback(web::files)
@@ -432,7 +434,7 @@ pub fn router(server: Shared) -> Router {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::net::SocketAddr;
     use std::time::Duration;
 

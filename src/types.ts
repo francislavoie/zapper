@@ -687,6 +687,10 @@ export interface ScheduleRequest {
 /** How recordings are named and grouped in folders (src/logic/naming.ts). */
 export type Naming = "mediaServer" | "byChannel" | "byDate" | "flat" | "custom";
 
+/** What other programs see of a recording while it records
+ *  (src-tauri/src/recording/api.rs). */
+export type WhileRecording = "hidden" | "visible" | "strm";
+
 export interface RecordingSettingsDto {
   outputDir: string;
   naming: Naming;
@@ -697,9 +701,17 @@ export interface RecordingSettingsDto {
   padBefore: number;
   padAfter: number;
   clockTrack: boolean;
-  /** Name the file being recorded so other programs (a media server) see
-   *  it while it grows. */
-  showWhileRecording: boolean;
+  /** What other programs (a media server) see of a recording while it
+   *  records: nothing, the growing file, or a `.strm` for Jellyfin. */
+  whileRecording?: WhileRecording;
+  /** `whileRecording` is "visible": for clients that know only the on/off
+   *  setting it was. */
+  showWhileRecording?: boolean;
+  /** The host `.strm` files point at; empty for the service's choice. */
+  strmHost?: string;
+  /** Where `.strm` files point now (`https://192.168.1.20:8796`). Read
+   *  only. */
+  strmBase?: string;
   /** The folder used when none is chosen; an empty `outputDir` sent back
    *  means this one. */
   defaultOutputDir: string;

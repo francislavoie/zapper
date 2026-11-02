@@ -173,6 +173,24 @@ pub struct ScheduleRequest {
     pub pad_after: Option<i64>,
 }
 
+/// What other programs see of a recording while it records
+/// (docs/recording.md, "Files").
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WhileRecording {
+    /// Nothing: the part being written is a hidden `.<name> - part1.ts`,
+    /// and only the finished `.mkv` appears.
+    #[default]
+    Hidden,
+    /// The part being written, as `<name> (recording).ts`, for a media
+    /// server that plays a growing file.
+    Visible,
+    /// A `[RECORDING] <name>.strm` pointing at the service's live stream of
+    /// the recording, for Jellyfin, which plays a growing file only as far
+    /// as it was when it looked. The part itself stays hidden.
+    Strm,
+}
+
 /// `GET`/`PUT /api/settings`: what the service does with every recording.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -194,12 +212,24 @@ pub struct RecordingSettingsDto {
     /// Add the wall-clock subtitle track to each file. It is never marked as
     /// a default track, so players leave it off until it is chosen.
     pub clock_track: bool,
-    /// Name the file being recorded so other programs (a media server) see
-    /// it and can play it while it grows: `<name> (recording).ts` instead
-    /// of a hidden `.<name> - part1.ts`. Off unless chosen; an older client
-    /// leaves it off.
+    /// What other programs (a media server) see of a recording while it
+    /// records. Omitted by an older client, which sends
+    /// `show_while_recording` alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub while_recording: Option<WhileRecording>,
+    /// `while_recording` is `visible`: kept for clients that know only the
+    /// on/off setting it was. Ignored when `while_recording` is sent.
     #[serde(default)]
     pub show_while_recording: bool,
+    /// The host a `.strm` file points at, in place of the one the service
+    /// picks (see `strm_base`). Empty: the service's choice.
+    #[serde(default)]
+    pub strm_host: String,
+    /// Where a `.strm` file points now (`https://192.168.1.20:8796`), from
+    /// `strm_host`, network access and this computer's addresses. Ignored
+    /// when settings are written.
+    #[serde(default)]
+    pub strm_base: String,
     /// The folder used when none is chosen, so a client can offer to go back
     /// to it. Ignored when settings are written.
     #[serde(default)]

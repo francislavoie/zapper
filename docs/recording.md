@@ -113,15 +113,87 @@ the recording ends. If that remux fails, the `.ts` is kept (renamed like the `.m
 been) and the recording says so. Two recordings that come out with the same name (the same
 airing on two channels) never share a file: the second one's gets a ` (2)`.
 
-**Show recordings to other programs while they record** (Settings → Recording, off by default)
-names that file so a media server can see it and play it as it grows: `<name> (recording).ts`
-for the first part, `<name> - part2 (recording).ts` after a switch of feed. When the recording
-ends it is remuxed into the `.mkv` as usual and the `.ts` is removed. A media server may list
-both for a while, the finished `.mkv` and the `(recording).ts` that is gone, until it next scans
-the folder; and a part that is still being written has no clock track yet (that is added to the
-`.mkv`). Recordings keep track of their own files, so turning this on or off is safe at any time:
-it applies from the next part recorded, and a recording that was interrupted is finished the
-same way whatever its files are called.
+**Show recordings to other programs while they record** (Settings → Recording) has three choices:
+
+- **No** (the default): the file being recorded stays hidden; other programs see the `.mkv` once
+  the recording has finished.
+- **Growing file** names that file so a media server can see it and play it as it grows:
+  `<name> (recording).ts` for the first part, `<name> - part2 (recording).ts` after a switch of
+  feed. When the recording ends it is remuxed into the `.mkv` as usual and the `.ts` is removed.
+  A media server may list both for a while, the finished `.mkv` and the `(recording).ts` that is
+  gone, until it next scans the folder; and a part that is still being written has no clock track
+  yet (that is added to the `.mkv`). Recordings keep track of their own files, so turning this on
+  or off is safe at any time: it applies from the next part recorded, and a recording that was
+  interrupted is finished the same way whatever its files are called. Jellyfin plays such a file
+  only as far as it went when Jellyfin looked at it; the next choice is for Jellyfin.
+- **Jellyfin (.strm)**: see below.
+
+### Watching a recording in Jellyfin while it records
+
+Jellyfin cannot keep following a library file that is still growing: it plays it to the length it
+measured. With **Jellyfin (.strm)** chosen, the file being recorded stays hidden, and while the
+recording records the service keeps a small text file beside where its `.mkv` will be:
+
+```text
+<folder>/<Show>/[RECORDING] <Show> - 2026-11-03 20.00.strm
+```
+
+(square brackets, since Windows does not allow `<>` in a name; ` (2)` when two recordings of one
+airing share a name). It holds one line, the address of the recording's live stream on the
+service:
+
+```text
+https://192.168.1.20:8796/api/recordings/42/live?key=3f9c…
+```
+
+Jellyfin treats a `.strm` as a stream: played, it gets the recording from its first byte, and
+then the service follows the file as it is written, like `tail -f`, until the recording ends;
+then the stream ends. A recording that switched feeds carries on from its first part into the
+next, with the new feed's packets as they came: the player sees a jump in time, and if the backup
+feed's streams differ (another resolution or codec), some players stop there and need starting
+again. When the recording finishes its `.mkv` lands as usual and the `.strm` is removed.
+
+- **The address** is the one Jellyfin reaches the service by. With network access on it is this
+  computer's address on the network (the first of those Settings lists), over HTTPS unless plain
+  HTTP was chosen. With network access off it is `127.0.0.1`, which only a Jellyfin on this
+  computer reaches; turn network access on (it needs the sign-in password) for a Jellyfin
+  elsewhere. **Address in .strm files** takes a name or address of your own instead
+  (`nas.local`, `192.168.1.20`; the host alone, the service's port is added), for a computer with
+  several networks or a name Jellyfin knows it by. A change of address, or of network access, is
+  written into the `.strm` files of recordings in progress at once.
+- **The key** in the address is the recording's own: 256 random bits, made when its `.strm` is
+  first written, kept by the service only as a SHA-256 hash, and good for that recording's live
+  stream alone (no other recording, no other request), while it records and for a minute after it
+  finishes; after that the address answers `410`. It needs no sign-in, so **anyone who can read
+  the recording's folder can watch that recording while it records** — keep the folder as private
+  as the recordings in it. Wrong keys are counted per address and slowed down like wrong
+  passwords (separately from them, so a Jellyfin replaying an old address cannot lock its computer
+  out of signing in). The key is never written to the log. Over plain HTTP the stream and the key
+  cross the network unencrypted.
+- **HTTPS.** The service's certificate is its own, which no authority vouches for. Jellyfin's
+  FFmpeg does not check certificates by default; a Jellyfin client that is handed the address
+  directly (direct play) may refuse it. If a client cannot play the `.strm`, choose plain HTTP on
+  a network you trust, or have Jellyfin transcode it.
+- **After a restart** of the service the `.strm` keeps its key, so what Jellyfin read from it
+  stays good; one whose recording finished or failed while the service was down is removed when
+  it starts again, and one whose recording carries on is written again for the address as it is
+  now.
+
+What to expect in Jellyfin:
+
+- No runtime is shown until it is played, and the length grows as it plays.
+- Seeking far ahead may not work: the stream can only start where the recording has got to.
+  `Range: bytes=N-` resumes from byte N of what is written; nothing past it can be asked for.
+- The swap from the `.strm` to the `.mkv` shows after a library scan, or at once with real-time
+  monitoring on for the library. Until then Jellyfin may list both, or still the `.strm` that is
+  gone.
+- Watched state and the position reached in the `.strm` do not carry over to the `.mkv`: Jellyfin
+  sees two different items.
+- Only the parts still being captured are in the stream. A recording interrupted by the service
+  stopping cleanly has what it recorded before finished into `… - part1.mkv` already (see
+  [Stopping and updating](#stopping-and-updating)); its stream starts with the part after.
+
+This was checked with FFmpeg and ffprobe reading the stream; not with Jellyfin itself.
 
 ### The clock track
 
@@ -181,6 +253,9 @@ only on a network you trust.
 - A device may also change the provider account and test it (`/api/account`), as Settings →
   Account does: the service keeps the catalogue from it. It is never sent a saved password, and
   a blank one keeps what is on file.
+- **A media server** with a recording's `.strm` file reads that recording's live stream with the
+  key in it, and nothing else, while it records ([Watching a recording in Jellyfin while it
+  records](#watching-a-recording-in-jellyfin-while-it-records)).
 - From another machine, nothing at all is answered while network access is off, and nothing over
   plain HTTP while HTTPS is on (a `403` saying to use `https://`).
 - Nothing secret is kept as given. The password is kept only as an Argon2id hash
@@ -608,7 +683,8 @@ already.
 
 HTTP with JSON bodies: on `127.0.0.1`, and on the network too while network access is on (HTTPS
 there, unless plain HTTP was chosen; see [Network access](#network-access)). Every request except
-`GET /api/version`, `GET /api/session` and `POST /api/login` needs `Authorization: Bearer <token>`:
+`GET /api/version`, `GET /api/session`, `POST /api/login` and a recording's live stream (which
+carries its own key) needs `Authorization: Bearer <token>`:
 the contents of `server-token` from this computer, or a device's token; or, from a browser, the
 cookie signing in set (see [Web access](#web-access) for what requests relying on it must also
 carry). Field names are camelCase; times are Unix
@@ -627,8 +703,9 @@ token, or the app's token from another machine; `403` for what no token changes)
 | `PUT /api/recordings/{id}/backup` | body `{streamId}`, or `{streamId: null}` for none: chooses the backup of a scheduled or recording one → `Recording`. `400` for its own channel, a channel the catalogue does not list (or a divider), or a recording that has finished. While recording, used from the next time a feed fails |
 | `POST /api/recordings/{id}/cancel` | a scheduled one is removed (`{id, cancelled: true}`); one recording stops and keeps what it has (`Recording`) |
 | `DELETE /api/recordings/{id}?files=true` | forgets a finished recording; `files=true` deletes its files too. Refused while recording |
-| `GET /api/settings` | `{outputDir, naming, namingPattern, padBefore, padAfter, clockTrack, showWhileRecording, defaultOutputDir}` (padding in seconds; `naming` is `mediaServer`, `byChannel`, `byDate`, `flat` or `custom`, which uses `namingPattern`) |
-| `PUT /api/settings` | the same fields (`defaultOutputDir` is ignored; an empty `outputDir` means the default; omitted naming fields mean the default layout). A `namingPattern` that cannot be used is refused with `400 {"error": "file name pattern: …"}`, even while a preset is chosen; returns what was saved |
+| `GET /api/recordings/{id}/live?key=` | no sign-in: the key from the recording's `.strm` ([Watching a recording in Jellyfin while it records](#watching-a-recording-in-jellyfin-while-it-records)). The recording as MPEG-TS (`video/mp2t`) from its first byte, following its parts as they are written, ending when it stops recording. `Range: bytes=N-` → `206` from byte N on (`Content-Range` names what was written when it answered), `bytes=N-M` → that slice as written now, `416` past what is written. `401` for a missing or wrong key (`429` with `Retry-After` after too many), `410` once the recording has finished, `503` when too many streams are read at once |
+| `GET /api/settings` | `{outputDir, naming, namingPattern, padBefore, padAfter, clockTrack, whileRecording, showWhileRecording, strmHost, strmBase, defaultOutputDir}` (padding in seconds; `naming` is `mediaServer`, `byChannel`, `byDate`, `flat` or `custom`, which uses `namingPattern`; `whileRecording` is `hidden`, `visible` or `strm`, and `showWhileRecording` is `true` for `visible`, for older clients; `strmHost` is the host chosen for `.strm` files, empty for the service's; `strmBase` is where they point now) |
+| `PUT /api/settings` | the same fields (`defaultOutputDir` and `strmBase` are ignored; an empty `outputDir` means the default; omitted naming fields mean the default layout; without `whileRecording`, `showWhileRecording` turns the growing file on or off). A `namingPattern` that cannot be used is refused with `400 {"error": "file name pattern: …"}`, even while a preset is chosen, and a `strmHost` that is not a bare host name or address likewise; returns what was saved |
 
 Network access and devices:
 

@@ -375,11 +375,11 @@ impl Devices {
     }
 }
 
-fn token_hash(token: &str) -> String {
+pub(crate) fn token_hash(token: &str) -> String {
     hex(&Sha256::digest(token.as_bytes()))
 }
 
-fn random_hex(n: usize) -> Result<String> {
+pub(crate) fn random_hex(n: usize) -> Result<String> {
     let mut bytes = vec![0u8; n];
     getrandom::fill(&mut bytes).map_err(|e| anyhow!("no randomness for a token: {e}"))?;
     Ok(hex(&bytes))
@@ -560,6 +560,10 @@ pub struct Access {
     password: Mutex<Option<String>>,
     pub devices: Mutex<Devices>,
     limiter: Mutex<Limiter>,
+    /// Wrong live-stream keys (`recording::strm`), per address, by the same
+    /// rules as wrong passwords but counted apart: a media server replaying
+    /// an old `.strm` must not lock its address out of signing in.
+    keys: Mutex<Limiter>,
     /// Argon2 takes tens of milliseconds and 19 MiB a try: at most two at
     /// once, so a flood of sign-ins cannot take the machine's memory or
     /// every thread a recording needs.
@@ -578,6 +582,7 @@ impl Access {
             password: Mutex::new(password),
             devices: Mutex::new(Devices::load(&devices_path(dir))),
             limiter: Mutex::new(Limiter::default()),
+            keys: Mutex::new(Limiter::default()),
             hashing: tokio::sync::Semaphore::new(2),
         }
     }
@@ -589,8 +594,23 @@ impl Access {
             password: Mutex::new(None),
             devices: Mutex::new(Devices::in_memory()),
             limiter: Mutex::new(Limiter::default()),
+            keys: Mutex::new(Limiter::default()),
             hashing: tokio::sync::Semaphore::new(2),
         }
+    }
+
+    /// Whether `ip` may try a live-stream key now; if not, for how long.
+    pub fn key_allowed(&self, ip: IpAddr) -> Result<(), Duration> {
+        lock(&self.keys).check(ip, Instant::now())
+    }
+
+    /// Notes a wrong live-stream key from `ip`; how long it must now wait.
+    pub fn key_wrong(&self, ip: IpAddr) -> Option<Duration> {
+        lock(&self.keys).failed(ip, Instant::now())
+    }
+
+    pub fn key_right(&self, ip: IpAddr) {
+        lock(&self.keys).succeeded(ip);
     }
 
     pub fn password_set(&self) -> bool {

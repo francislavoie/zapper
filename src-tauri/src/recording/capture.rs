@@ -20,7 +20,7 @@ use anyhow::{Context, Result};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::watch;
 
-use super::api::{PartDto, RecordingState};
+use super::api::{PartDto, RecordingState, WhileRecording};
 use super::budget::{jitter, wait_for_slot, Slots};
 use super::clock::{self, Arrival};
 use super::fallback::{Failure, Fallback};
@@ -28,7 +28,7 @@ use super::hub::{Subscription, SETTLE_LOOK_SECS};
 use super::naming;
 use super::server::Server;
 use super::sharing::{self, Full, Rider};
-use super::{now, now_ms, remux, store};
+use super::{now, now_ms, remux, store, strm};
 
 /// The arrival log beside a part: `<part>.clock`.
 pub fn log_path(part: &Path) -> PathBuf {
@@ -246,6 +246,14 @@ async fn run_inner(server: &Arc<Server>, id: i64, stop: &mut watch::Receiver<boo
     };
     let info = server.db(|c| store::capture_info(c, id))?;
     server.db(|c| store::set_state(c, id, RecordingState::Recording, None))?;
+    // For Jellyfin: a file pointing at the live stream of what is about to
+    // be written (see `strm`). Without one the recording goes on all the
+    // same.
+    if server.config().while_recording == WhileRecording::Strm {
+        if let Err(e) = strm::ensure(server, id) {
+            server.note(id, &format!("could not write its .strm file: {e:#}"));
+        }
+    }
     let until = rec.stop + rec.pad_after;
     let me = Rider {
         id,
@@ -351,10 +359,10 @@ async fn run_inner(server: &Arc<Server>, id: i64, stop: &mut watch::Receiver<boo
         // part (the remuxer joins the timeline across the reconnect).
         if open.as_ref().is_none_or(|p| p.stream_id != stream_id) {
             if let Some(p) = open.take() {
-                close(server, id, &mut parts, p)?;
+                close(server, id, &mut parts, p).await?;
             }
             let index = parts.len() + 1;
-            let visible = server.config().show_while_recording;
+            let visible = server.config().while_recording == WhileRecording::Visible;
             let p = OpenPart::create(&folder, &info.base, index, stream_id, visible).await?;
             parts.push(p.dto(None));
             server.db(|c| store::set_parts(c, id, &parts))?;
@@ -397,7 +405,7 @@ async fn run_inner(server: &Arc<Server>, id: i64, stop: &mut watch::Receiver<boo
         next_at = next.at;
     }
     if let Some(p) = open.take() {
-        close(server, id, &mut parts, p)?;
+        close(server, id, &mut parts, p).await?;
     }
     if parts.iter().all(|p| p.bytes == 0) {
         let why = last_failure.map_or("nothing was received".to_string(), |f| f.describe());
@@ -406,8 +414,11 @@ async fn run_inner(server: &Arc<Server>, id: i64, stop: &mut watch::Receiver<boo
     Ok(())
 }
 
-/// Records a part's final size and end.
-fn close(server: &Server, id: i64, parts: &mut [PartDto], p: OpenPart) -> Result<()> {
+/// Records a part's final size and end, once all of it is in the file: a
+/// reader following the part (`strm`) takes "ended" to mean nothing more
+/// will come.
+async fn close(server: &Server, id: i64, parts: &mut [PartDto], mut p: OpenPart) -> Result<()> {
+    let _ = p.file.flush().await;
     if let Some(slot) = parts
         .iter_mut()
         .rev()
@@ -429,6 +440,7 @@ pub async fn finish(server: &Arc<Server>, id: i64) {
             server.note(id, &format!("finishing failed: {e:#}"));
             let _ = server
                 .db(|c| store::set_state(c, id, RecordingState::Failed, Some(&format!("{e:#}"))));
+            strm::finished(server, id);
         }
         Err(e) => tracing::error!("recording {id}: the finishing thread failed: {e}"),
     }
@@ -477,6 +489,9 @@ fn finish_blocking(server: &Server, id: i64) -> Result<()> {
     } else {
         server.db(|c| store::set_state(c, id, RecordingState::Done, None))?;
     }
+    // Its `.mkv` is in place (or it failed): the `.strm` that stood in for
+    // it goes.
+    strm::finished(server, id);
     Ok(())
 }
 

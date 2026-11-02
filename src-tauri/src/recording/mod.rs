@@ -19,8 +19,9 @@
 //! browser, [`livemux`], as [`tsprobe`] decides), the HTTP server with its listeners ([`listen`]), who may use it
 //! ([`access`]), the provider account a signed-in browser may change
 //! ([`account`]), its HTTPS certificate ([`tls`]), and the web interface it
-//! serves ([`web`]) with the catalogue API that interface reads ([`browse`])
-//! — is in the `server` feature, so the app links none of it.
+//! serves ([`web`]) with the catalogue API that interface reads ([`browse`]),
+//! and the live stream of a recording a `.strm` file points Jellyfin at
+//! ([`strm`]) — is in the `server` feature, so the app links none of it.
 
 pub mod api;
 pub mod backup;
@@ -56,6 +57,8 @@ pub mod livemux;
 pub mod remux;
 #[cfg(feature = "server")]
 pub mod server;
+#[cfg(feature = "server")]
+pub mod strm;
 #[cfg(feature = "server")]
 pub mod tls;
 #[cfg(feature = "server")]

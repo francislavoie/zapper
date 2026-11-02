@@ -33,5 +33,10 @@
     {"pattern": "C:\\{show}", "error": "the pattern cannot start with a drive: it names a place inside the output folder"},
     {"pattern": "Con/{show}", "error": "“Con” is a reserved name on Windows"},
     {"pattern": "{show}: {date}", "error": "names cannot contain : (Windows does not allow it)"}
+  ],
+  "strm": [
+    {"base": "Harbour Lights - S02E04 - 2026-11-03 20.00", "file": "[RECORDING] Harbour Lights - S02E04 - 2026-11-03 20.00.strm"},
+    {"base": "20.00 Meridian 24 - The Evening News", "file": "[RECORDING] 20.00 Meridian 24 - The Evening News.strm"},
+    {"base": "Odd (recording)", "file": "[RECORDING] Odd (recording).strm"}
   ]
 }

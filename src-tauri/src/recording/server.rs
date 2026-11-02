@@ -25,7 +25,7 @@ use super::naming::{self, Programme};
 use super::schedule::{busy, plan, sleep_for, window, Busy};
 use super::sharing::{self, Loss, Planned};
 use super::watch::Viewers;
-use super::{capture, http, lifecycle, now, store, tls};
+use super::{capture, http, lifecycle, now, store, strm, tls};
 use crate::source::{Playable, Source};
 use crate::localtime::Civil;
 
@@ -490,6 +490,9 @@ impl Server {
             bail!("it is being recorded; stop it first");
         }
         let rec = self.get(id)?;
+        // A .strm left by a service that stopped hard is not the recording's
+        // file; it goes either way.
+        strm::forget(self, id);
         if files {
             for p in &rec.parts {
                 remove_if_present(Path::new(&p.path))?;
@@ -509,15 +512,29 @@ impl Server {
     }
 
     pub fn settings(&self) -> RecordingSettingsDto {
-        self.config().settings()
+        let mut s = self.config().settings();
+        s.strm_base = self.strm_base();
+        s
     }
 
     pub fn set_settings(&self, s: RecordingSettingsDto) -> Result<RecordingSettingsDto> {
         let mut cfg = self.config();
         cfg.apply(s).map_err(|e| anyhow!(e))?;
         config::save_to(&self.config_path, &cfg)?;
-        *self.config.lock().unwrap_or_else(|e| e.into_inner()) = cfg.clone();
-        Ok(cfg.settings())
+        *self.config.lock().unwrap_or_else(|e| e.into_inner()) = cfg;
+        strm::refresh(self);
+        Ok(self.settings())
+    }
+
+    /// Where `.strm` files point now (`strm::base_url`).
+    pub fn strm_base(&self) -> String {
+        let cfg = self.config();
+        strm::base_url(
+            &cfg.strm_host,
+            cfg.network,
+            cfg.port,
+            &listen::interface_ips(),
+        )
     }
 
     pub fn status(&self) -> StatusDto {
@@ -796,6 +813,7 @@ impl Server {
         }
         config::save_to(&self.config_path, &cfg)?;
         drop(slot);
+        strm::refresh(self);
         Ok(self.network())
     }
 

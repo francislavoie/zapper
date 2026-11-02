@@ -40,6 +40,17 @@ CREATE TABLE IF NOT EXISTS recordings (
     created          INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS recordings_by_state ON recordings(state, start);
+-- The key a recording's live stream is read with from its .strm file
+-- (recording::strm), as its SHA-256 only. A table of its own, so a
+-- database from before it gains it with nothing to migrate.
+CREATE TABLE IF NOT EXISTS live_keys (
+    recording_id INTEGER PRIMARY KEY,
+    hash         TEXT NOT NULL,
+    -- The .strm file written for it, while there is one.
+    strm         TEXT,
+    -- When the recording finished: the key lapses a little after.
+    finished     INTEGER
+);
 "#;
 
 pub fn open(path: &Path) -> Result<Connection> {
@@ -289,7 +300,68 @@ pub fn set_backup(conn: &Connection, id: i64, backup: Option<i64>) -> Result<()>
 }
 
 pub fn delete(conn: &Connection, id: i64) -> Result<bool> {
+    conn.execute("DELETE FROM live_keys WHERE recording_id = ?1", [id])?;
     Ok(conn.execute("DELETE FROM recordings WHERE id = ?1", [id])? > 0)
+}
+
+/// A recording's live-stream key, as kept: never the key itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiveKey {
+    /// The key's SHA-256, in hex.
+    pub hash: String,
+    /// The `.strm` file that names it, while there is one.
+    pub strm: Option<String>,
+    /// When the recording finished.
+    pub finished: Option<i64>,
+}
+
+pub fn live_key(conn: &Connection, id: i64) -> Result<Option<LiveKey>> {
+    Ok(conn
+        .query_row(
+            "SELECT hash, strm, finished FROM live_keys WHERE recording_id = ?1",
+            [id],
+            |r| {
+                Ok(LiveKey {
+                    hash: r.get(0)?,
+                    strm: r.get(1)?,
+                    finished: r.get(2)?,
+                })
+            },
+        )
+        .optional()?)
+}
+
+/// Keeps a new key (its hash) and the `.strm` that names it, for a
+/// recording that has not finished.
+pub fn set_live_key(conn: &Connection, id: i64, hash: &str, strm: &str) -> Result<()> {
+    conn.execute(
+        "INSERT INTO live_keys (recording_id, hash, strm, finished) VALUES (?1, ?2, ?3, NULL)
+         ON CONFLICT(recording_id) DO UPDATE SET hash = ?2, strm = ?3, finished = NULL",
+        params![id, hash, strm],
+    )?;
+    Ok(())
+}
+
+/// The recording finished at `at` and its `.strm` is gone; the key's hash
+/// stays, so a player still holding it is told the recording is over
+/// rather than taken for someone guessing.
+pub fn finish_live_key(conn: &Connection, id: i64, at: i64) -> Result<()> {
+    conn.execute(
+        "UPDATE live_keys SET strm = NULL, finished = ?2 WHERE recording_id = ?1",
+        params![id, at],
+    )?;
+    Ok(())
+}
+
+/// The recordings with a `.strm` file on record.
+pub fn with_strm(conn: &Connection) -> Result<Vec<(i64, String)>> {
+    let mut st = conn.prepare(
+        "SELECT recording_id, strm FROM live_keys WHERE strm IS NOT NULL ORDER BY recording_id",
+    )?;
+    let rows = st
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
 }
 
 #[cfg(test)]

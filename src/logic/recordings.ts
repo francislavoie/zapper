@@ -16,6 +16,7 @@ import type {
   RecordingDto,
   RecordingState,
   ScheduleRequest,
+  WhileRecording,
 } from "../types";
 import { duration, hhmm, timeRange } from "./format.ts";
 import { dayLabel } from "./guide.ts";
@@ -305,8 +306,39 @@ export const RECORDING_DEFAULTS = {
   padBefore: 60,
   padAfter: 300,
   clockTrack: true,
-  showWhileRecording: false,
+  whileRecording: "hidden" as WhileRecording,
+  strmHost: "",
 } as const;
+
+/** The choices of "Show recordings to other programs while they record". */
+export const WHILE_RECORDING: readonly { id: WhileRecording; label: string; tip: string }[] = [
+  { id: "hidden", label: "No", tip: "Only the finished .mkv appears" },
+  {
+    id: "visible",
+    label: "Growing file",
+    tip: "The file being recorded, as “… (recording).ts”",
+  },
+  {
+    id: "strm",
+    label: "Jellyfin (.strm)",
+    tip: "A “[RECORDING] ….strm” pointing at the service’s live stream of the recording",
+  },
+];
+
+/** What the `.strm` address needs said about it, from where it points
+ *  (`strmBase`) and whether a host was chosen: nothing; that only this
+ *  computer reaches it; or that it is plain HTTP across the network. */
+export function strmReach(strmBase: string, hostChosen: boolean): "fine" | "local" | "plain" {
+  let host = "";
+  try {
+    host = new URL(strmBase).hostname;
+  } catch {
+    return "fine";
+  }
+  const local = host === "127.0.0.1" || host === "localhost" || host === "[::1]";
+  if (local) return hostChosen ? "fine" : "local";
+  return strmBase.startsWith("http://") ? "plain" : "fine";
+}
 
 /** Minutes from the seconds the service keeps padding in, and back. */
 export const padMinutes = (seconds: number) => Math.round(seconds / 60);

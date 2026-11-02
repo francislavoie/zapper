@@ -42,6 +42,15 @@
 //!   it ended early, and for which), and the other starts within seconds of
 //!   its start rather than after a back-off.
 //!
+//! Then *Jellyfin (.strm)*: a recording's `[RECORDING] ….strm` appears,
+//! naming its live stream on this service; a wrong key is refused; the
+//! stream sends more than was on disk when it was asked for; the part being
+//! recorded stays hidden. The service is killed part way and started again:
+//! the `.strm` names the same address, the stream (asked for again) carries
+//! on from the first part into the second and ends when the recording does,
+//! and what it sent probes as H.264. Finished, the `.strm` is gone, the two
+//! `.mkv` parts are there, and the key is answered `410`.
+//!
 //! Needs python3, ffprobe and ffmpeg (`ZAPPER_PYTHON3`, `ZAPPER_FFPROBE` and
 //! `ZAPPER_FFMPEG` name them when `PATH` does not; see `harness::tool`), and
 //! the fixtures (tools/make_fixtures.sh, or a folder named by `ZAPPER_FIXTURES`).
@@ -51,7 +60,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use zapper_lib::recording::api::{RecordingDto, RecordingState, ScheduleRequest};
+use zapper_lib::recording::api::{RecordingDto, RecordingState, ScheduleRequest, WhileRecording};
 use zapper_lib::recording::client::Client;
 
 fn main() {
@@ -327,6 +336,7 @@ async fn check(seconds: i64) -> Result<(), String> {
     })
     .ok_or("the playlist's other channels are missing")?;
     shared(p_api, id_two, &two).await?;
+    followed_through_strm(p_api, id_two).await?;
     padding_gives_way(p_api, id_two, id_three, &two, &three).await
 }
 
@@ -384,7 +394,7 @@ async fn finished(client: &Client, ids: &[i64], limit: Duration) -> Result<Vec<R
 async fn shared(port: u16, stream_id: i64, fixture: &Fixture) -> Result<(), String> {
     let (_service, client) = service_and_client(port).await?;
     let mut settings = client.settings().await.map_err(|e| e.to_string())?;
-    settings.show_while_recording = true;
+    settings.while_recording = Some(WhileRecording::Visible);
     client.set_settings(&settings).await.map_err(|e| e.to_string())?;
     let before = fixture.requests();
 
@@ -490,7 +500,7 @@ async fn shared(port: u16, stream_id: i64, fixture: &Fixture) -> Result<(), Stri
             hms(b1)
         ));
     }
-    settings.show_while_recording = false;
+    settings.while_recording = Some(WhileRecording::Hidden);
     client.set_settings(&settings).await.map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -549,6 +559,183 @@ async fn padding_gives_way(
     if r1 != 1 || r2 != 1 {
         return Err(format!("expected one stream request per channel, saw {r1} and {r2}"));
     }
+    Ok(())
+}
+
+/// Recording `id` as the service has it now.
+async fn one(client: &Client, id: i64) -> Result<RecordingDto, String> {
+    client
+        .list()
+        .await
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .find(|r| r.id == id)
+        .ok_or_else(|| "the recording vanished".to_string())
+}
+
+/// The files in `folder` whose names pass `keep`.
+fn files_in(folder: &str, keep: impl Fn(&str) -> bool) -> Vec<PathBuf> {
+    std::fs::read_dir(folder)
+        .map(|d| {
+            d.flatten()
+                .map(|e| e.path())
+                .filter(|p| keep(&file_name(&p.to_string_lossy())))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The bytes of the capture files in `folder` so far.
+fn captured(folder: &str) -> u64 {
+    files_in(folder, |n| n.starts_with('.') && n.ends_with(".ts"))
+        .iter()
+        .map(|p| std::fs::metadata(p).map_or(0, |m| m.len()))
+        .sum()
+}
+
+/// Reads a live stream into `out` for at most `limit`; how it ended:
+/// `true` when the service ended it.
+async fn read_stream(
+    resp: reqwest::Response,
+    out: &mut Vec<u8>,
+    limit: Duration,
+) -> Result<bool, String> {
+    let mut resp = resp;
+    let deadline = tokio::time::Instant::now() + limit;
+    loop {
+        match tokio::time::timeout_at(deadline, resp.chunk()).await {
+            Err(_) => return Ok(false),
+            Ok(Ok(Some(c))) => out.extend_from_slice(&c),
+            Ok(Ok(None)) => return Ok(true),
+            Ok(Err(e)) => return Err(format!("reading the live stream: {e}")),
+        }
+    }
+}
+
+/// A recording in Jellyfin (.strm) mode: its `.strm` appears, its address
+/// streams the recording as it grows, through a hard stop of the service
+/// and the second part that follows, and ends with the recording; then the
+/// `.strm` is gone and the `.mkv` files are there.
+async fn followed_through_strm(port: u16, stream_id: i64) -> Result<(), String> {
+    let (mut service, client) = service_and_client(port).await?;
+    let mut settings = client.settings().await.map_err(|e| e.to_string())?;
+    settings.while_recording = Some(WhileRecording::Strm);
+    client.set_settings(&settings).await.map_err(|e| e.to_string())?;
+
+    let start = zapper_lib::recording::now();
+    let rec = client
+        .schedule(&request(stream_id, "Fixture: Followed", start, start + 35))
+        .await
+        .map_err(|e| e.to_string())?;
+    let strm = wait_for(Duration::from_secs(20), || {
+        files_in(&rec.folder, |n| n.starts_with("[RECORDING] ") && n.ends_with(".strm"))
+            .into_iter()
+            .next()
+    })
+    .ok_or("no .strm appeared")?;
+    let url = std::fs::read_to_string(&strm).map_err(|e| e.to_string())?;
+    let url = url.trim().to_string();
+    let prefix = format!("http://127.0.0.1:{port}/api/recordings/{}/live?key=", rec.id);
+    if !url.starts_with(&prefix) || url.len() < prefix.len() + 32 {
+        return Err(format!("the .strm does not name the live stream: {}", file_name(&strm.to_string_lossy())));
+    }
+    println!("strm: {}", file_name(&strm.to_string_lossy()));
+    let http = reqwest::Client::new();
+    let wrong = http
+        .get(format!("{prefix}{}", "0".repeat(64)))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?
+        .status();
+    if wrong != 401 {
+        return Err(format!("a wrong key got {wrong}"));
+    }
+
+    // Read it for a while: what is written after connecting comes too.
+    wait_until(Duration::from_secs(20), || async { captured(&rec.folder) > 500_000 }).await?;
+    let resp = http.get(&url).send().await.map_err(|e| e.to_string())?;
+    let at_connect = captured(&rec.folder);
+    if resp.status() != 200
+        || resp.headers().get("content-type").is_none_or(|v| v != "video/mp2t")
+    {
+        return Err(format!("the live stream answered {} {:?}", resp.status(), resp.headers()));
+    }
+    let mut first = Vec::new();
+    let ended = read_stream(resp, &mut first, Duration::from_secs(6)).await?;
+    println!("strm: {} bytes in 6 s; {at_connect} on disk at connect", first.len());
+    if ended || first.len() as u64 <= at_connect + 100_000 {
+        return Err(format!(
+            "the stream did not follow the file: {} bytes read, {at_connect} on disk at connect",
+            first.len()
+        ));
+    }
+    if !files_in(&rec.folder, |n| n.contains("(recording)")).is_empty() {
+        return Err("in .strm mode the part being recorded must stay hidden".into());
+    }
+
+    // A hard stop; started again, the recording carries on in a second
+    // part, and the .strm names the same address.
+    service.stop();
+    drop(service);
+    let (_service, client) = service_and_client(port).await?;
+    let again = std::fs::read_to_string(&strm).map_err(|e| format!("the .strm after a restart: {e}"))?;
+    if again.trim() != url {
+        return Err("the .strm changed across a restart".into());
+    }
+    wait_until(Duration::from_secs(30), || async {
+        one(&client, rec.id).await.is_ok_and(|r| r.parts.len() >= 2)
+    })
+    .await?;
+    let resp = http.get(&url).send().await.map_err(|e| e.to_string())?;
+    let at_connect = captured(&rec.folder);
+    let mut whole = Vec::new();
+    let ended = read_stream(resp, &mut whole, Duration::from_secs(90)).await?;
+    let state = one(&client, rec.id).await?.state;
+    println!(
+        "strm: {} bytes from the start, ended {ended} with the recording {state:?}; {at_connect} on disk at connect",
+        whole.len()
+    );
+    if !ended || state == RecordingState::Recording {
+        return Err("the stream did not end with the recording".into());
+    }
+    if (whole.len() as u64) <= at_connect + 100_000 {
+        return Err("the stream did not carry on past what was on disk".into());
+    }
+    let done = finished(&client, &[rec.id], Duration::from_secs(90)).await?;
+    let done = &done[0];
+    let names: Vec<String> = done.parts.iter().map(|p| file_name(&p.path)).collect();
+    println!("strm: finished {:?} as {names:?}", done.state);
+    if done.state != RecordingState::Done
+        || names.len() != 2
+        || !names.iter().all(|n| n.ends_with(".mkv") && Path::new(&done.folder).join(n).is_file())
+    {
+        return Err(format!("expected two .mkv parts: {:?} {names:?}", done.state));
+    }
+    if strm.exists() || !files_in(&done.folder, |n| n.ends_with(".strm")).is_empty() {
+        return Err("the .strm was left behind".into());
+    }
+    let gone = http.get(&url).send().await.map_err(|e| e.to_string())?.status();
+    if gone != 410 {
+        return Err(format!("its key after the recording finished got {gone}"));
+    }
+
+    // What was streamed plays: every video frame decodes. (Its duration
+    // says little: the fixture loops, and the second part's timestamps
+    // start elsewhere.)
+    let saved = std::env::temp_dir().join(format!("zapper-strm-{}.ts", std::process::id()));
+    std::fs::write(&saved, &whole).map_err(|e| e.to_string())?;
+    let probe = ffprobe(&saved.to_string_lossy());
+    let frames = decoded_frames(&saved.to_string_lossy());
+    let _ = std::fs::remove_file(&saved);
+    let (probe, frames) = (probe?, frames?);
+    println!("strm: streamed {}; {frames} video frames decode", probe.streams.join(", "));
+    // Some 30 s of 60 frames a second were recorded; a good part of it is
+    // plenty to say it plays.
+    if !probe.streams.iter().any(|s| s.starts_with("video:h264")) || frames < 600 {
+        return Err(format!("the stream is not playable: {:?}, {frames} frames", probe.streams));
+    }
+    settings.while_recording = Some(WhileRecording::Hidden);
+    client.set_settings(&settings).await.map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -797,6 +984,29 @@ fn ffprobe(path: &str) -> Result<Probe, String> {
         .and_then(|d| d.parse().ok())
         .unwrap_or(0.0);
     Ok(Probe { streams, duration })
+}
+
+/// How many video frames of `path` ffmpeg decodes, failing on a decoding
+/// error.
+fn decoded_frames(path: &str) -> Result<u64, String> {
+    let out = Command::new(zapper_lib::harness::tool("ffmpeg"))
+        .args([
+            "-v", "error", "-nostdin", "-i", path, "-map", "0:v:0", "-f", "null", "-progress",
+            "pipe:1", "-",
+        ])
+        .output()
+        .map_err(|e| format!("running ffmpeg: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "ffmpeg could not decode {path}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|l| l.strip_prefix("frame=")?.trim().parse().ok())
+        .next_back()
+        .ok_or_else(|| format!("ffmpeg decoded no frame of {path}"))
 }
 
 /// The clock track's cues as seconds of the day, in order. `slack`: how far

@@ -23,9 +23,32 @@ import {
   pollDelay,
   recordingStatus,
   recordingWhen,
+  RECORDING_DEFAULTS,
   scheduleRequest,
+  strmReach,
+  WHILE_RECORDING,
 } from "../logic/recordings.ts";
 import { setTimeFormat } from "../logic/format.ts";
+
+test("what other programs see while recording: three choices, hidden by default", () => {
+  assert.deepEqual(
+    WHILE_RECORDING.map((w) => w.id),
+    ["hidden", "visible", "strm"],
+  );
+  assert.equal(RECORDING_DEFAULTS.whileRecording, "hidden");
+  assert.ok(WHILE_RECORDING.every((w) => w.label && w.tip));
+});
+
+test("the .strm address says who can reach it", () => {
+  // Network access off: this computer only, unless a host was typed.
+  assert.equal(strmReach("http://127.0.0.1:8796", false), "local");
+  assert.equal(strmReach("http://127.0.0.1:8796", true), "fine");
+  assert.equal(strmReach("http://[::1]:8796", false), "local");
+  assert.equal(strmReach("https://192.168.1.20:8796", false), "fine");
+  assert.equal(strmReach("http://192.168.1.20:8796", false), "plain");
+  assert.equal(strmReach("http://nas.local:8796", true), "plain");
+  assert.equal(strmReach("", false), "fine");
+});
 
 const NOON = Math.floor(new Date(2026, 8, 8, 12, 0, 0).getTime() / 1000);
 

@@ -124,8 +124,9 @@ Download the package for your system from the
   backup channel if the channel's feed fails (picked for you, or chosen in the guide), and never
   takes a connection someone is watching on. Back-to-back programmes on one channel share one
   connection, so both are recorded whole on an account of one stream, and the Record menu warns
-  when overlaps on other channels need more streams than the account has. On Linux and Windows;
-  see [docs/recording.md](docs/recording.md).
+  when overlaps on other channels need more streams than the account has. Jellyfin can play a
+  recording while it records, through a `.strm` file pointing at the service. On Linux and
+  Windows; see [docs/recording.md](docs/recording.md).
 - **In a browser:** with network access turned on, the recording service serves zapper's own
   interface to other devices on your network, behind a password: browse the channels and the
   guide, search, schedule or cancel recordings, and watch live TV from a phone or another

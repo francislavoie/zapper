@@ -12,6 +12,7 @@ import {
   place,
   placePath,
   previewPath,
+  strmFile,
   validatePattern,
 } from "../logic/naming.ts";
 
@@ -32,6 +33,14 @@ test("the shared cases render as the service renders them", () => {
 test("the shared cases are checked as the service checks them", () => {
   for (const c of cases.validate) {
     assert.equal(validatePattern(c.pattern), c.error, c.pattern);
+  }
+});
+
+test("the shared .strm names are the service's", () => {
+  assert.ok(cases.strm.length > 0);
+  for (const c of cases.strm) {
+    assert.equal(strmFile(c.base), c.file, c.base);
+    assert.equal(clean(c.file, 255), c.file, "a name every file system accepts");
   }
 });
 

@@ -15,15 +15,27 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { refreshRecordings } from "../actions";
 import { backend, capabilities } from "../backend";
 import { errorMessage } from "../logic/async";
-import { presetLabel } from "../logic/naming";
-import { RECORDING_DEFAULTS, bytes, padMinutes, padSeconds } from "../logic/recordings";
+import { NAMING_EXAMPLES, patternFor, place, presetLabel, strmFile } from "../logic/naming";
+import {
+  RECORDING_DEFAULTS,
+  WHILE_RECORDING,
+  bytes,
+  padMinutes,
+  padSeconds,
+  strmReach,
+} from "../logic/recordings";
 import { DEFAULT_SETTINGS, STREAMS_MAX, STREAMS_MIN } from "../logic/settings";
 import type { SettingsControl } from "../hooks/useSettings";
 import { useDispatch } from "../store";
-import type { RecordingSettingsDto, RecordingStatusDto, ServiceStatusDto } from "../types";
+import type {
+  RecordingSettingsDto,
+  RecordingStatusDto,
+  ServiceStatusDto,
+  WhileRecording,
+} from "../types";
 import { NamingField } from "./NamingField";
 import { NetworkAccess } from "./NetworkAccess";
-import { RangeField, SettingRow, SettingsGroup } from "./SettingsParts";
+import { RangeField, Segmented, SettingRow, SettingsGroup } from "./SettingsParts";
 import { Switch } from "./Switch";
 
 const SAVE_AFTER_MS = 400;
@@ -39,6 +51,8 @@ export function RecordingPane({ s }: { s: SettingsControl }) {
    *  rather than the service's value, so the refresh below cannot replace
    *  what is being typed. Null when not editing. */
   const [folderDraft, setFolderDraft] = useState<string | null>(null);
+  /** The .strm host as typed, likewise. */
+  const [hostDraft, setHostDraft] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [linger, setLinger] = useState(false);
@@ -112,6 +126,17 @@ export function RecordingPane({ s }: { s: SettingsControl }) {
     timer.current = setTimeout(() => void flush(), SAVE_AFTER_MS);
   };
 
+  const commitHost = () => {
+    if (hostDraft === null) return;
+    const strmHost = hostDraft.trim();
+    if (settings && strmHost !== (settings.strmHost ?? "")) patch({ strmHost });
+    setHostDraft(null);
+  };
+
+  // Sent with the on/off it replaces, for a service that knows only that.
+  const setMode = (whileRecording: WhileRecording) =>
+    patch({ whileRecording, showWhileRecording: whileRecording === "visible" });
+
   const commitFolder = () => {
     if (folderDraft === null) return;
     if (settings && folderDraft !== settings.outputDir) patch({ outputDir: folderDraft });
@@ -150,6 +175,9 @@ export function RecordingPane({ s }: { s: SettingsControl }) {
             : "Not installed";
   const d = RECORDING_DEFAULTS;
   const minutes = (v: number) => `${v} min`;
+  // A service that knows only the on/off setting sends that alone.
+  const mode: WhileRecording =
+    settings?.whileRecording ?? (settings?.showWhileRecording ? "visible" : "hidden");
 
   return (
     <>
@@ -327,18 +355,48 @@ export function RecordingPane({ s }: { s: SettingsControl }) {
             </SettingRow>
             <SettingRow
               label="Show recordings to other programs while they record"
-              htmlFor="rec-visible"
-              description="The file being recorded is named “… (recording).ts” rather than hidden, so a media server such as Jellyfin can list and play it as it grows. When it finishes, the .mkv takes its place; the server may list both until it next scans the folder."
-              modified={(settings.showWhileRecording ?? false) !== d.showWhileRecording}
-              onReset={() => patch({ showWhileRecording: d.showWhileRecording })}
-              resetTo={d.showWhileRecording ? "on" : "off"}
+              layout="stack"
+              description={whileDescription(mode, settings)}
+              modified={mode !== d.whileRecording}
+              onReset={() => setMode(d.whileRecording)}
+              resetTo={WHILE_RECORDING.find((w) => w.id === d.whileRecording)?.label}
             >
-              <Switch
+              <Segmented<WhileRecording>
                 id="rec-visible"
-                checked={settings.showWhileRecording ?? false}
-                onChange={(showWhileRecording) => patch({ showWhileRecording })}
+                label="Show recordings to other programs while they record"
+                value={mode}
+                options={WHILE_RECORDING}
+                onChange={setMode}
               />
             </SettingRow>
+            {mode === "strm" ? (
+              <SettingRow
+                label="Address in .strm files"
+                htmlFor="rec-strm-host"
+                layout="stack"
+                description={<StrmAddress settings={settings} />}
+                modified={(settings.strmHost ?? "") !== d.strmHost}
+                onReset={() => {
+                  setHostDraft(null);
+                  patch({ strmHost: d.strmHost });
+                }}
+                resetTo="this computer’s own address"
+              >
+                <input
+                  id="rec-strm-host"
+                  className="field"
+                  value={hostDraft ?? settings.strmHost ?? ""}
+                  placeholder={hostOf(settings.strmBase ?? "")}
+                  spellCheck={false}
+                  autoComplete="off"
+                  onChange={(e) => setHostDraft(e.target.value)}
+                  onBlur={() => commitHost()}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") commitHost();
+                  }}
+                />
+              </SettingRow>
+            ) : null}
           </SettingsGroup>
           {/* Network access, the password and the devices are the app's
               alone; the service refuses them to anyone else. */}
@@ -373,6 +431,69 @@ export function RecordingPane({ s }: { s: SettingsControl }) {
           </SettingRow>
         </SettingsGroup>
       ) : null}
+    </>
+  );
+}
+
+/** The host in a `.strm` address, for the field's placeholder: what is used
+ *  when none is typed. */
+function hostOf(base: string): string {
+  try {
+    return new URL(base).hostname;
+  } catch {
+    return "";
+  }
+}
+
+function whileDescription(mode: WhileRecording, settings: RecordingSettingsDto) {
+  switch (mode) {
+    case "hidden":
+      return "Off: the file being recorded is hidden, and other programs see a recording once its .mkv is there.";
+    case "visible":
+      return "The file being recorded is named “… (recording).ts” rather than hidden, so a media server can list and play it as it grows. When it finishes, the .mkv takes its place; the server may list both until it next scans the folder. Jellyfin plays such a file only as far as it went when it looked: choose Jellyfin (.strm) for it.";
+    case "strm": {
+      const ex = NAMING_EXAMPLES[0];
+      const base = place(patternFor(settings.naming, settings.namingPattern), ex.programme, ex.start).base;
+      return (
+        <>
+          While a recording records, <code data-selectable>{strmFile(base)}</code> stands in for
+          it: Jellyfin plays it from the start and follows it live, through the service. When it
+          finishes, the .mkv takes its place. The file being recorded stays hidden. Jellyfin shows
+          no length until it is played, and may not seek far ahead; a library scan (or real-time
+          monitoring) picks up the swap, and what was watched of the .strm does not carry over.
+        </>
+      );
+    }
+  }
+}
+
+/** Where `.strm` files point, and what that means for who can play them. */
+function StrmAddress({ settings }: { settings: RecordingSettingsDto }) {
+  const base = settings.strmBase ?? "";
+  const reach = strmReach(base, (settings.strmHost ?? "") !== "");
+  return (
+    <>
+      They point at <code data-selectable>{base}</code>. Leave empty for the service’s own
+      address, or type the name or address Jellyfin reaches this computer by.
+      {reach === "local" ? (
+        <>
+          {" "}
+          <span className="set-warn">
+            Network access is off, so only a Jellyfin on this computer can play them; with it on,
+            one elsewhere can too.
+          </span>
+        </>
+      ) : reach === "plain" ? (
+        <>
+          {" "}
+          <span className="set-warn">
+            Plain HTTP: the recording, and the key in the .strm that opens it, cross the network
+            unencrypted.
+          </span>
+        </>
+      ) : null}{" "}
+      The key opens that one recording’s stream, until it finishes; anyone who can read the
+      folder can watch it.
     </>
   );
 }
