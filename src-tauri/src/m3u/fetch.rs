@@ -15,6 +15,20 @@
 use anyhow::{Context, Result};
 use std::io::{self, BufRead, BufReader, Read};
 use std::path::PathBuf;
+use std::time::Duration;
+
+/// How long a download may go without a byte before it is given up on.
+///
+/// A server that stops sending without closing the connection would
+/// otherwise hold a sync pass forever: TCP keeps an idle connection open as
+/// long as nobody gives up on it. A minute is far longer than any pause a
+/// working server takes mid-body, and short enough that the next pass is
+/// not far off.
+pub const STALL: Duration = Duration::from_secs(60);
+
+/// How long a server may take to start answering. Longer than [`STALL`]:
+/// some panels build the whole guide before they send its first byte.
+pub const FIRST_ANSWER: Duration = Duration::from_secs(120);
 
 /// Sent when the account does not name an agent. The same VLC string the
 /// Xtream client and mpv use: providers that filter agents at all let VLC
@@ -94,10 +108,8 @@ pub enum Opened {
 pub async fn open(http: &reqwest::Client, location: &str, what: &str) -> Result<Opened> {
     match locate(location) {
         Location::Http(url) => {
-            let resp = http
-                .get(&url)
-                .send()
-                .await
+            let resp = answer(http.get(&url).send(), what)
+                .await?
                 .map_err(reqwest::Error::without_url)
                 .with_context(|| format!("fetching {what}"))?
                 .error_for_status()
@@ -118,15 +130,44 @@ pub async fn open(http: &reqwest::Client, location: &str, what: &str) -> Result<
     }
 }
 
+/// Waits at most [`FIRST_ANSWER`] for a request's response to begin.
+pub async fn answer<T>(send: impl std::future::Future<Output = T>, what: &str) -> Result<T> {
+    tokio::time::timeout(FIRST_ANSWER, send).await.map_err(|_| {
+        anyhow::anyhow!(
+            "the server did not start sending {what} within {} s",
+            FIRST_ANSWER.as_secs()
+        )
+    })
+}
+
 /// Reads the next chunk of a response, dropping the URL from any error.
 /// Owned bytes, because every caller hands them to another thread anyway.
+/// A server that sends nothing for [`STALL`] is an error.
 pub async fn next_chunk(resp: &mut reqwest::Response, what: &str) -> Result<Option<Vec<u8>>> {
-    Ok(resp
-        .chunk()
+    next_chunk_within(resp, what, STALL).await
+}
+
+/// [`next_chunk`], giving up after `stall` without a byte.
+pub async fn next_chunk_within(
+    resp: &mut reqwest::Response,
+    what: &str,
+    stall: Duration,
+) -> Result<Option<Vec<u8>>> {
+    let chunk = tokio::time::timeout(stall, resp.chunk())
         .await
+        .map_err(|_| stalled(what, stall))?;
+    Ok(chunk
         .map_err(reqwest::Error::without_url)
         .with_context(|| format!("reading {what}"))?
         .map(|b| b.to_vec()))
+}
+
+/// The error a download that stopped arriving fails with.
+pub fn stalled(what: &str, stall: Duration) -> anyhow::Error {
+    anyhow::anyhow!(
+        "the server stopped sending {what}: nothing arrived for {} s",
+        stall.as_secs()
+    )
 }
 
 /// Wraps `src` in a gzip decoder if it starts with the gzip magic number,

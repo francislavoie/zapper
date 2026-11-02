@@ -104,6 +104,11 @@ impl TvhClient {
         let http = reqwest::Client::builder()
             .user_agent(concat!("zapper/", env!("CARGO_PKG_VERSION")))
             .connect_timeout(Duration::from_secs(10))
+            // A server that stops answering must not hold a sync pass
+            // forever; the playlist and guide downloads have their own,
+            // clearer deadline (`m3u::fetch::STALL`), and this one is for
+            // the API calls read whole.
+            .read_timeout(Duration::from_secs(150))
             // A redirect would change the URI the Digest response was
             // computed over, and Tvheadend has no reason to send one.
             .redirect(reqwest::redirect::Policy::none())

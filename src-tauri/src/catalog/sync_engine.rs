@@ -308,7 +308,7 @@ impl Read for ChunkReader {
 }
 
 async fn step_epg(client: &XtreamClient) -> Result<String> {
-    let resp = client.xmltv_stream().await?;
+    let resp = fetch::answer(client.xmltv_stream(), "the guide").await??;
     let programmes = land_xtream_guide(resp, AppMirror).await?;
     if programmes == 0 {
         // Not a failure the pass can name — the server sent a guide with
@@ -327,7 +327,15 @@ async fn step_epg(client: &XtreamClient) -> Result<String> {
 /// guide would replace the programmes it reached and report the download's
 /// error while the commit went ahead behind it.)
 async fn land_xtream_guide<M: Mirror>(resp: reqwest::Response, mirror: M) -> Result<usize> {
-    pump_into(resp, "the guide", None, move |r| {
+    land_xtream_guide_within(resp, mirror, Deadlines::default()).await
+}
+
+async fn land_xtream_guide_within<M: Mirror>(
+    resp: reqwest::Response,
+    mirror: M,
+    limits: Deadlines,
+) -> Result<usize> {
+    pump_into_within(resp, "the guide", None, limits, move |r| {
         mirror.write(|conn| {
             let n = crate::catalog::epg::parse_xmltv(BufReader::new(r), conn)?;
             // What the guide just landed on top of may be weeks old; see
@@ -661,12 +669,51 @@ impl Read for Abortable {
     }
 }
 
+/// How long one download may take in all, however steadily it trickles in.
+///
+/// [`fetch::STALL`] catches a server that stops; this catches one that
+/// sends a byte every few seconds forever. Half an hour is many times what
+/// a large guide takes on a slow line (tens of megabytes at a few hundred
+/// kilobytes a second is a few minutes), and the pass after it is only
+/// hours away.
+pub(crate) const DOWNLOAD_CAP: Duration = Duration::from_secs(30 * 60);
+
+/// What gives up on a download: no byte for `stall`, or `total` in all.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Deadlines {
+    pub stall: Duration,
+    pub total: Duration,
+}
+
+impl Default for Deadlines {
+    fn default() -> Self {
+        Self {
+            stall: fetch::STALL,
+            total: DOWNLOAD_CAP,
+        }
+    }
+}
+
 /// Streams a response into `work`, which runs on a blocking thread and
 /// reads it as a `Read`. The same bridge as [`step_epg`], plus [`Abortable`].
+///
+/// A download that stalls ([`fetch::STALL`]) or runs past
+/// [`DOWNLOAD_CAP`] fails like one cut short: the parse sees an error, its
+/// transaction rolls back, and what was in the mirror stays.
 pub(crate) async fn pump_into<T: Send + 'static>(
+    resp: reqwest::Response,
+    what: &'static str,
+    first: Option<Vec<u8>>,
+    work: impl FnOnce(Box<dyn Read + Send>) -> Result<T> + Send + 'static,
+) -> Result<T> {
+    pump_into_within(resp, what, first, Deadlines::default(), work).await
+}
+
+pub(crate) async fn pump_into_within<T: Send + 'static>(
     mut resp: reqwest::Response,
     what: &'static str,
     first: Option<Vec<u8>>,
+    limits: Deadlines,
     work: impl FnOnce(Box<dyn Read + Send>) -> Result<T> + Send + 'static,
 ) -> Result<T> {
     let (tx, rx) = tokio::sync::mpsc::channel::<Vec<u8>>(8);
@@ -676,21 +723,27 @@ pub(crate) async fn pump_into<T: Send + 'static>(
         aborted: aborted.clone(),
     };
     let job = tokio::task::spawn_blocking(move || work(Box::new(reader)));
-    let pumped: Result<()> = async {
+    let pump = async {
         if let Some(f) = first {
             if tx.send(f).await.is_err() {
                 return Ok(());
             }
         }
-        while let Some(chunk) = fetch::next_chunk(&mut resp, what).await? {
+        while let Some(chunk) = fetch::next_chunk_within(&mut resp, what, limits.stall).await? {
             // The parser having gone away is reported by the join below.
             if tx.send(chunk).await.is_err() {
                 break;
             }
         }
         Ok(())
-    }
-    .await;
+    };
+    let pumped: Result<()> = match tokio::time::timeout(limits.total, pump).await {
+        Ok(r) => r,
+        Err(_) => Err(anyhow::anyhow!(
+            "{what} took longer than {} minutes to download; giving up on it",
+            limits.total.as_secs() / 60
+        )),
+    };
     if pumped.is_err() {
         // Before the sender drops, so the reader sees it at the end.
         aborted.store(true, Ordering::SeqCst);
@@ -1383,6 +1436,118 @@ mod tests {
         let err = land_xtream_guide(resp, mirror.clone()).await.unwrap_err();
         assert!(format!("{err:#}").contains("the guide"), "{err:#}");
         assert_eq!(count(&mirror), 2, "a guide cut short was committed");
+    }
+
+    /// Answers one request with `head` and then `body` a piece at a time,
+    /// `gap` apart, then holds the connection open for `hold` without
+    /// sending another byte: a server that stops without hanging up.
+    fn answer_and_stall(head: String, pieces: Vec<Vec<u8>>, gap: Duration, hold: Duration) -> String {
+        use std::io::Write;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            let mut req = [0u8; 4096];
+            let _ = s.read(&mut req);
+            let _ = s.write_all(head.as_bytes());
+            for p in pieces {
+                if s.write_all(&p).and_then(|_| s.flush()).is_err() {
+                    return;
+                }
+                std::thread::sleep(gap);
+            }
+            std::thread::sleep(hold);
+        });
+        base
+    }
+
+    fn mirror_with_yesterdays_guide() -> OwnMirror {
+        let c = crate::catalog::open_in_memory().unwrap();
+        let whole = format!("<tv>\n{}{}</tv>\n", programme("old.uk", 1), programme("old.uk", 2));
+        crate::catalog::epg::parse_xmltv(whole.as_bytes(), &c).unwrap();
+        OwnMirror(Arc::new(std::sync::Mutex::new(c)))
+    }
+
+    fn guide_rows(m: &OwnMirror) -> i64 {
+        m.0.lock()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM epg", [], |r| r.get(0))
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_guide_that_stops_arriving_fails_and_keeps_the_guide_that_was_there() {
+        let mirror = mirror_with_yesterdays_guide();
+        let mut part = String::from("<tv>\n");
+        for h in 3..9 {
+            part.push_str(&programme("new.uk", h));
+        }
+        // Half the body, then silence with the connection still open.
+        let base = answer_and_stall(
+            format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", part.len() * 50),
+            vec![part.into_bytes()],
+            Duration::ZERO,
+            Duration::from_secs(5),
+        );
+        let resp = reqwest::get(format!("{base}/xmltv.php")).await.unwrap();
+        let limits = Deadlines {
+            stall: Duration::from_millis(300),
+            total: Duration::from_secs(30),
+        };
+        let started = std::time::Instant::now();
+        let err = land_xtream_guide_within(resp, mirror.clone(), limits)
+            .await
+            .unwrap_err();
+        assert!(started.elapsed() < Duration::from_secs(3), "the stall was waited out");
+        assert_eq!(
+            format!("{err:#}"),
+            "the server stopped sending the guide: nothing arrived for 0 s"
+        );
+        assert_eq!(guide_rows(&mirror), 2, "a stalled guide was committed");
+    }
+
+    #[tokio::test]
+    async fn a_guide_that_only_trickles_in_is_given_up_on() {
+        let mirror = mirror_with_yesterdays_guide();
+        let body = format!("<tv>\n{}</tv>\n", programme("new.uk", 3)).into_bytes();
+        let len = body.len();
+        // A byte every 50 ms: never a stall, never done in time.
+        let pieces = body.into_iter().map(|b| vec![b]).collect();
+        let base = answer_and_stall(
+            format!("HTTP/1.1 200 OK\r\nContent-Length: {len}\r\n\r\n"),
+            pieces,
+            Duration::from_millis(50),
+            Duration::ZERO,
+        );
+        let resp = reqwest::get(format!("{base}/xmltv.php")).await.unwrap();
+        let limits = Deadlines {
+            stall: Duration::from_secs(2),
+            total: Duration::from_millis(500),
+        };
+        let err = land_xtream_guide_within(resp, mirror.clone(), limits)
+            .await
+            .unwrap_err();
+        assert!(format!("{err:#}").contains("the guide took longer than"), "{err:#}");
+        assert_eq!(guide_rows(&mirror), 2);
+    }
+
+    #[tokio::test]
+    async fn a_server_that_never_answers_is_given_up_on_by_its_first_chunk() {
+        // Headers, then nothing: the playlist's first read is a chunk too.
+        let base = answer_and_stall(
+            "HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n\r\n".into(),
+            Vec::new(),
+            Duration::ZERO,
+            Duration::from_secs(5),
+        );
+        let mut resp = reqwest::get(format!("{base}/list.m3u")).await.unwrap();
+        let err = fetch::next_chunk_within(&mut resp, "the playlist", Duration::from_millis(200))
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().starts_with("the server stopped sending the playlist"),
+            "{err}"
+        );
     }
 
     #[test]

@@ -30,6 +30,14 @@ impl fmt::Debug for Credentials {
     }
 }
 
+/// No byte from the server for this long fails a request. Longer than
+/// `m3u::fetch::FIRST_ANSWER`, so the guide download says why in its own
+/// words first.
+const API_STALL: std::time::Duration = std::time::Duration::from_secs(150);
+/// The most a catalogue call may take in all: a list of 100,000 channels is
+/// tens of megabytes, a few minutes on a slow line.
+const API_TOTAL: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
 pub struct XtreamClient {
     creds: Credentials,
     http: reqwest::Client,
@@ -38,9 +46,15 @@ pub struct XtreamClient {
 impl XtreamClient {
     pub fn new(mut creds: Credentials) -> Result<Self> {
         creds.host = creds.host.trim_end_matches('/').to_owned();
+        // A server that stops answering must not hold a sync pass forever.
+        // The guide's download has its own, clearer deadlines
+        // (`m3u::fetch::STALL`); this one, a little longer, is for the
+        // catalogue's API calls, whose bodies are read whole by `json()`.
         let http = reqwest::Client::builder()
             .user_agent(USER_AGENT)
             .redirect(reqwest::redirect::Policy::limited(5))
+            .connect_timeout(std::time::Duration::from_secs(15))
+            .read_timeout(API_STALL)
             .build()
             .context("building http client")?;
         Ok(Self { creds, http })
@@ -128,6 +142,7 @@ impl XtreamClient {
     pub async fn categories(&self) -> Result<Vec<Category>> {
         self.http
             .get(self.api_url(Some("get_live_categories")))
+            .timeout(API_TOTAL)
             .send()
             .await?
             .error_for_status()?
@@ -139,6 +154,7 @@ impl XtreamClient {
     pub async fn channels(&self) -> Result<Vec<Channel>> {
         self.http
             .get(self.api_url(Some("get_live_streams")))
+            .timeout(API_TOTAL)
             .send()
             .await?
             .error_for_status()?
