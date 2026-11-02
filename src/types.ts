@@ -586,7 +586,9 @@ export type AccountCandidateDto =
 // recording service (zapper-server) answers, passed through the app's Rust
 // side unchanged.
 
-export type RecordingState = "scheduled" | "recording" | "done" | "failed";
+/** `finishing`: no longer capturing (stopped, or its window over) and being
+ *  turned into its files, which for a long recording takes a while. */
+export type RecordingState = "scheduled" | "recording" | "finishing" | "done" | "failed";
 
 export interface PartDto {
   /** Absolute path: a `.ts` while capturing, the `.mkv` once finished. */
@@ -712,6 +714,8 @@ export interface ActiveRecordingDto {
   waiting?: string;
   /** When it stops, padding included (Unix seconds). */
   until: number;
+  /** No longer capturing: being finished into its files. */
+  finishing?: boolean;
 }
 
 export interface RecordingStatusDto {

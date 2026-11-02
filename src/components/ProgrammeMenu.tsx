@@ -74,7 +74,13 @@ export function ProgrammeMenu() {
       onClose={close}
       takeFocus={menu.keyboard}
     >
-      {rec ? (
+      {rec?.state === "finishing" ? (
+        <button className="tb-menu-item" role="menuitem" disabled>
+          <span className="tb-menu-label" data-tip-overflow="">
+            <span className="rec-dot saving" aria-hidden="true" /> Saving…
+          </span>
+        </button>
+      ) : rec ? (
         <button
           className="tb-menu-item"
           role="menuitem"
@@ -130,6 +136,8 @@ export function ProgrammeMenu() {
           "The recording service is not running: Settings › Recording."
         ) : !rec && !canRecord(programme, now) ? (
           "This programme is over."
+        ) : rec?.state === "finishing" ? (
+          "Recorded, and being saved into its file: a long recording takes a minute or two."
         ) : rec?.state === "recording" ? (
           "Stopping keeps what has been recorded."
         ) : clashes.length > 0 ? (

@@ -269,6 +269,9 @@ export interface State {
   recordings: RecordingDto[] | null;
   /** Why the last fetch failed, when it did. */
   recordingsError: string | null;
+  /** When (ms) something was last asked of the recording service: for a
+   *  while after, its list is fetched often, to show what it did. */
+  recordingsTouchedAt: number;
   /** The menu over a programme in the guide or the programme results. */
   programmeMenu: ProgrammeMenu | null;
   recordingsOpen: boolean;
@@ -379,6 +382,7 @@ export const initialState: State = {
   toasts: [],
   recordings: null,
   recordingsError: null,
+  recordingsTouchedAt: 0,
   programmeMenu: null,
   recordingsOpen: false,
 };
@@ -386,6 +390,8 @@ export const initialState: State = {
 export type Action =
   /** A fetch of the recordings: the list, or why there is none. */
   | { type: "recordings"; list: RecordingDto[] | null; error?: string | null }
+  /** Something was asked of the recording service (record, stop, …). */
+  | { type: "recordingsTouched"; at: number }
   | { type: "programmeMenu"; menu: ProgrammeMenu | null }
   | { type: "recordingsDialog"; open: boolean }
   | { type: "categories"; value: Async<CategoryDto[]> }
@@ -604,6 +610,8 @@ export function reducer(state: State, action: Action): State {
       return { ...state, menuOpen: action.open };
     case "recordings":
       return { ...state, recordings: action.list, recordingsError: action.error ?? null };
+    case "recordingsTouched":
+      return { ...state, recordingsTouchedAt: action.at };
     case "programmeMenu":
       return { ...state, programmeMenu: action.menu };
     case "recordingsDialog":

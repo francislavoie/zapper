@@ -638,7 +638,9 @@ function Programme({
   const recTip = recording
     ? recording.state === "recording"
       ? " · recording"
-      : " · will be recorded"
+      : recording.state === "finishing"
+        ? " · recorded, saving"
+        : " · will be recorded"
     : "";
 
   if (act === "inert") {

@@ -284,6 +284,17 @@ export async function loadCategories(dispatch: Dispatch<Action>, quiet = false) 
  *  answer is not an error to shout about: it is simply not running, which
  *  the guide shows by having no red dots and the menu by saying so. */
 export async function refreshRecordings(dispatch: Dispatch<Action>): Promise<void> {
+  await fetchRecordings(dispatch);
+}
+
+/** Says something was just asked of the recording service, so the list is
+ *  followed closely for a few seconds (RecordingsWatcher), and fetches it. */
+async function afterRecordingAction(dispatch: Dispatch<Action>): Promise<void> {
+  dispatch({ type: "recordingsTouched", at: Date.now() });
+  await fetchRecordings(dispatch);
+}
+
+async function fetchRecordings(dispatch: Dispatch<Action>): Promise<void> {
   try {
     dispatch({ type: "recordings", list: await backend.recordings() });
   } catch (e) {
@@ -310,7 +321,7 @@ export async function recordProgramme(
   } catch (e) {
     dispatch({ type: "toast", text: `Record: ${errorMessage(e)}` });
   }
-  await refreshRecordings(dispatch);
+  await afterRecordingAction(dispatch);
 }
 
 /** Cancels a scheduled recording, or stops one being recorded (which keeps
@@ -322,7 +333,7 @@ export async function cancelRecording(dispatch: Dispatch<Action>, rec: Recording
   } catch (e) {
     dispatch({ type: "toast", text: `Cancel recording: ${errorMessage(e)}` });
   }
-  await refreshRecordings(dispatch);
+  await afterRecordingAction(dispatch);
 }
 
 /** Chooses `streamId` (`null`: none) as the channel a recording falls back
@@ -348,7 +359,7 @@ export async function setRecordingBackup(
   } catch (e) {
     dispatch({ type: "toast", text: `Backup channel: ${errorMessage(e)}` });
   }
-  await refreshRecordings(dispatch);
+  await afterRecordingAction(dispatch);
   return out;
 }
 
@@ -359,5 +370,5 @@ export async function deleteRecording(dispatch: Dispatch<Action>, rec: Recording
   } catch (e) {
     dispatch({ type: "toast", text: `Delete recording: ${errorMessage(e)}` });
   }
-  await refreshRecordings(dispatch);
+  await afterRecordingAction(dispatch);
 }

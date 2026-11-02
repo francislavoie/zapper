@@ -19,8 +19,9 @@ schedules recordings from the guide and shows them; the service does the recordi
      Uninstalling zapper removes the task too ([Stopping and updating](#stopping-and-updating)).
    - **macOS:** not yet; run `zapper-server` yourself.
 2. **Right-click a programme** in the guide, or in the programme search results, and choose
-   **Record**. A red dot marks it; it pulses while recording. Right-click again to cancel, or to
-   stop a recording early (what was recorded is kept).
+   **Record**. A red dot marks it; it pulses while recording, and turns grey while a recording
+   that has ended is saved into its file. Right-click again to cancel, or to stop a recording
+   early (what was recorded is kept).
 3. **Recordings** (in the menu and the command palette) lists what is recording, scheduled,
    recorded and failed, with *Open folder*, *Cancel*/*Stop* and *Delete*, and the channel each
    one falls back to if its own fails ([backup feeds](#how-it-behaves)).
@@ -345,7 +346,8 @@ or a clock change cannot make it late.
 ### Stopping and updating
 
 The service never cuts a recording short without saying so. It counts as **idle** when nothing is
-recording and nothing starts within five minutes (padding included); `GET /api/status` says
+recording or being saved into its file, and nothing starts within five minutes (padding
+included); `GET /api/status` says
 whether it is (`idle`), and if not, when it will be (`idleAt`: the end of what records now, and
 of anything starting too soon after that to stop between).
 
@@ -477,7 +479,7 @@ token, or the app's token from another machine; `403` for what no token changes)
 | Request | Answer |
 |---|---|
 | `GET /api/version` | `{version, apiVersion}` |
-| `GET /api/status` | `{version, apiVersion, active: [{id, title, streamId, bytes, since, until, waiting?}], outputDir, diskFree, diskTotal, now, idle, idleAt?, nextStart?}` ([Stopping and updating](#stopping-and-updating)) |
+| `GET /api/status` | `{version, apiVersion, active: [{id, title, streamId, bytes, since, until, waiting?, finishing?}], outputDir, diskFree, diskTotal, now, idle, idleAt?, nextStart?}` ([Stopping and updating](#stopping-and-updating)) |
 | `GET /api/recordings` | `[Recording]`, soonest first |
 | `GET /api/recordings/{id}` | `Recording` |
 | `POST /api/recordings` | schedule: body `{streamId, title, start, stop, backupStreamId?, channelName?, episodeTitle?, season?, episode?, padBefore?, padAfter?}` → `201 Recording`; the same channel and start again returns the existing one |
@@ -544,7 +546,10 @@ as a port taken when the service started, in which case it listens on `127.0.0.1
 }
 ```
 
-`state` is `scheduled`, `recording`, `done` or `failed` (with `error`). `waiting` is set while
+`state` is `scheduled`, `recording`, `finishing`, `done` or `failed` (with `error`).
+`finishing` is a recording no longer capturing — stopped, or its window over — that is being
+turned into its files, which for a long one takes a minute or two; it is `finishing` from the
+moment it is stopped, and `active` in the status says `finishing: true`. `waiting` is set while
 a recording is not capturing, such as "waiting for a free connection (1 of 1 in use)".
 `conflicts`, when there are any still ahead, is `[Conflict]`: `{title, with, kind, secs,
 streams}`, what recording `title` loses to `with` on another channel when the account allows

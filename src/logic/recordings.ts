@@ -25,12 +25,13 @@ import { dayLabel } from "./guide.ts";
 export const markKey = (streamId: number, start: number) => `${streamId}:${start}`;
 
 /** The recordings that still mark a programme in the guide: those waiting
- *  to start and those being captured. Finished ones are the list's, not the
- *  guide's. */
+ *  to start, those being captured, and those being saved into their files
+ *  (a grey dot). Finished ones are the list's, not the guide's. */
 export function marks(recs: readonly RecordingDto[]): Map<string, RecordingDto> {
   const out = new Map<string, RecordingDto>();
   for (const r of recs) {
-    if (r.state === "scheduled" || r.state === "recording") out.set(markKey(r.streamId, r.start), r);
+    if (r.state === "scheduled" || r.state === "recording" || r.state === "finishing")
+      out.set(markKey(r.streamId, r.start), r);
   }
   return out;
 }
@@ -113,6 +114,7 @@ export function backupCandidateLabel(b: BackupDto): string {
 
 const ORDER: { state: RecordingState; label: string }[] = [
   { state: "recording", label: "Recording" },
+  { state: "finishing", label: "Saving" },
   { state: "scheduled", label: "Scheduled" },
   { state: "done", label: "Recorded" },
   { state: "failed", label: "Failed" },
@@ -130,7 +132,8 @@ export interface RecordingGroup {
 export function groupRecordings(recs: readonly RecordingDto[]): RecordingGroup[] {
   return ORDER.map(({ state, label }) => {
     const items = recs.filter((r) => r.state === state);
-    items.sort((a, b) => (state === "scheduled" || state === "recording" ? a.start - b.start : b.start - a.start));
+    const ahead = state === "scheduled" || state === "recording" || state === "finishing";
+    items.sort((a, b) => (ahead ? a.start - b.start : b.start - a.start));
     return { state, label, items };
   }).filter((g) => g.items.length > 0);
 }
@@ -152,6 +155,8 @@ export function recordingStatus(r: RecordingDto, now: number): string {
     }
     case "recording":
       return r.waiting ? capitalise(r.waiting) : `${size} so far${parts}`;
+    case "finishing":
+      return `Saving ${size}${parts}…`;
     case "done":
       return `${size}${parts}`;
     case "failed":
@@ -210,6 +215,30 @@ export function bytes(n: number): string {
     i++;
   }
   return `${v >= 100 ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
+}
+
+/** How often the recordings are fetched (ms). */
+export const POLL_IDLE_MS = 30_000;
+export const POLL_OPEN_MS = 4_000;
+export const POLL_BUSY_MS = 2_000;
+/** How long after something is asked of the service it is followed
+ *  closely: a recording that was just scheduled starts, one stopped is
+ *  saved, and the list should say so without waiting half a minute. */
+export const TOUCHED_MS = 10_000;
+
+/** How long to wait before fetching the recordings again: often while any
+ *  is recording or being saved (its size grows, it finishes) and just after
+ *  something was asked of the service; every few seconds while Recordings
+ *  is open; otherwise every half minute, which is what keeps the guide's
+ *  dots current. */
+export function pollDelay(
+  recs: readonly Pick<RecordingDto, "state">[] | null,
+  dialogOpen: boolean,
+  sinceTouchedMs: number,
+): number {
+  const busy = recs?.some((r) => r.state === "recording" || r.state === "finishing") ?? false;
+  if (busy || (sinceTouchedMs >= 0 && sinceTouchedMs < TOUCHED_MS)) return POLL_BUSY_MS;
+  return dialogOpen ? POLL_OPEN_MS : POLL_IDLE_MS;
 }
 
 /** The service's defaults (src-tauri/src/recording/config.rs), for the ↺

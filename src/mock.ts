@@ -1266,8 +1266,13 @@ const mockRecordingApi = {
     if (!r) throw "no such recording";
     if (r.state === "scheduled") mockRecordings = list.filter((x) => x.id !== id);
     else if (r.state === "recording") {
-      r.state = "done";
+      // Stopped, it is saved into its file first, as the service does: a
+      // few seconds here, minutes for a long recording there.
+      r.state = "finishing";
       r.notes = [...r.notes, "stopped before its end"];
+      setTimeout(() => {
+        if (r.state === "finishing") r.state = "done";
+      }, 6_000);
     }
   },
   deleteRecording: async (id: number, _files: boolean) => {
@@ -1277,7 +1282,7 @@ const mockRecordingApi = {
   recordingStatus: async (): Promise<RecordingStatusDto> => {
     const list = recordingsOrRefuse();
     const active = list
-      .filter((r) => r.state === "recording")
+      .filter((r) => r.state === "recording" || r.state === "finishing")
       .map((r) => ({
         id: r.id,
         title: r.title,
@@ -1285,6 +1290,8 @@ const mockRecordingApi = {
         bytes: r.parts[0]?.bytes ?? 0,
         since: r.start,
         until: r.stop + r.padAfter,
+        waiting: r.waiting,
+        finishing: r.state === "finishing" ? true : undefined,
       }));
     return {
       version: "0.1.0",

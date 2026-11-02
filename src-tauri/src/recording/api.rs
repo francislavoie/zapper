@@ -18,6 +18,10 @@ pub enum RecordingState {
     Scheduled,
     /// Capturing now.
     Recording,
+    /// No longer capturing — stopped, or its window over — and being
+    /// finished into its files, which for a long recording takes a while.
+    /// The service is busy until it is done.
+    Finishing,
     /// Finished, with at least one file.
     Done,
     /// Finished with nothing to show for it: never started (the service was
@@ -30,6 +34,7 @@ impl RecordingState {
         match self {
             Self::Scheduled => "scheduled",
             Self::Recording => "recording",
+            Self::Finishing => "finishing",
             Self::Done => "done",
             Self::Failed => "failed",
         }
@@ -39,6 +44,7 @@ impl RecordingState {
         Some(match s {
             "scheduled" => Self::Scheduled,
             "recording" => Self::Recording,
+            "finishing" => Self::Finishing,
             "done" => Self::Done,
             "failed" => Self::Failed,
             _ => return None,
@@ -217,6 +223,9 @@ pub struct ActiveDto {
     /// Unix seconds when it stops: the programme's end plus the padding.
     #[serde(default)]
     pub until: i64,
+    /// No longer capturing: being finished into its files.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub finishing: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

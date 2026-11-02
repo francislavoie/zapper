@@ -28,6 +28,10 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
 
 ### Fixed
 
+- Stopping a recording no longer leaves its red dot up until the next look a while later: it
+  turns grey at once ("Saving…") while the recording is saved into its file, and the list is
+  followed every two seconds while anything records or saves. An update or a restart of the
+  recording service waits for the saving to finish too.
 - A provider that stops sending the guide or the playlist halfway without closing the connection
   no longer stalls the refresh for good: after a minute with nothing arriving (or half an hour
   in all) the refresh fails with that reason, keeps the guide it had, and tries again later. The
