@@ -19,7 +19,7 @@ import type {
   ProgrammeHitDto,
   RecordingDto,
 } from "./types";
-import { recordingWhen, scheduleRequest } from "./logic/recordings";
+import { conflictLosesProgramme, conflictText, recordingWhen, scheduleRequest } from "./logic/recordings";
 import { NO_PLAYBACK } from "./logic/web";
 
 export interface PlayOptions {
@@ -301,10 +301,11 @@ export async function recordProgramme(
   try {
     const rec = await backend.recordProgramme(scheduleRequest(ch, p));
     const now = Math.floor(Date.now() / 1000);
+    const conflict = rec.conflicts?.[0];
     dispatch({
       type: "toast",
-      kind: "info",
-      text: `Recording “${rec.title}”, ${recordingWhen(rec, now)}`,
+      kind: conflict && conflictLosesProgramme(conflict) ? "error" : "info",
+      text: `Recording “${rec.title}”, ${recordingWhen(rec, now)}${conflict ? `. ${conflictText(conflict)}` : ""}`,
     });
   } catch (e) {
     dispatch({ type: "toast", text: `Record: ${errorMessage(e)}` });

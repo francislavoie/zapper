@@ -87,7 +87,18 @@ The date and time are the programme's start in this computer's time zone. Nothin
 re-encoded: the provider's video and audio are copied into the file as they came. While
 recording, the stream goes to a hidden `.… - partN.ts` beside it, which becomes the `.mkv` when
 the recording ends. If that remux fails, the `.ts` is kept (renamed like the `.mkv` would have
-been) and the recording says so.
+been) and the recording says so. Two recordings that come out with the same name (the same
+airing on two channels) never share a file: the second one's gets a ` (2)`.
+
+**Show recordings to other programs while they record** (Settings → Recording, off by default)
+names that file so a media server can see it and play it as it grows: `<name> (recording).ts`
+for the first part, `<name> - part2 (recording).ts` after a switch of feed. When the recording
+ends it is remuxed into the `.mkv` as usual and the `.ts` is removed. A media server may list
+both for a while, the finished `.mkv` and the `(recording).ts` that is gone, until it next scans
+the folder; and a part that is still being written has no clock track yet (that is added to the
+`.mkv`). Recordings keep track of their own files, so turning this on or off is safe at any time:
+it applies from the next part recorded, and a recording that was interrupted is finished the
+same way whatever its files are called.
 
 ### The clock track
 
@@ -238,6 +249,57 @@ and Tvheadend allot their own tuners. When the account is full the recording wai
 for a free connection"), asking again after 30 s, doubling to five minutes, with jitter. It
 never takes the connection from someone watching, and never alternates grabbing it with another
 client.
+
+### Sharing connections
+
+Recordings share the account's connections by these rules (`recording::sharing`, which also
+foresees the conflicts below):
+
+1. **One connection per channel.** Recordings of the same channel at the same time share one
+   connection: the service hands its stream to each recording's file. One that starts while
+   another of the channel is recording joins it, and its padding before comes from the live
+   stream; one whose end comes leaves, and the connection closes when nobody is left on it.
+   Joining costs no connection. So two programmes back to back on one channel are both recorded
+   whole, padding and all, on an account of one stream — the second one starts a minute early on
+   the first one's connection, and the first one's five minutes after are the second one's first
+   five. If the stream fails, each recording on it decides for itself what to do (its own
+   [backup feed](#how-it-behaves)), and those that go back to the same channel share again.
+2. **A free connection is taken** when the account has one.
+3. **On a full account, the next programme's start beats the last one's padding.** When a
+   recording needs a connection, the account is full, and one of the service's own connections
+   carries only recordings past their programme's end (in their padding after), that connection
+   is closed and the recording takes its place. The recordings it carried end there, keep what
+   they recorded and say so in their notes ("ended 4 min early for “The Match” on another
+   channel…"). Of several such connections, the one with the least padding left goes.
+4. **A programme is never cut.** A connection carrying a programme that is still on is never
+   closed for another recording. The one that wants it waits, giving up its own padding before,
+   and takes the connection the moment that programme ends (rule 3): a recording that waits is
+   woken then, and whenever one of the service's own connections closes, rather than at its next
+   back-off.
+5. **A viewer's connection is never taken.** Only the service's own connections are closed; one
+   the account counts for another device or the app's player is left alone, and the recording
+   waits for it as before. A recording past its own programme's end does not take another
+   recording's padding for its own.
+
+For example, on an account of one stream: *The Film* 20:00–21:00 on one channel and *The Match*
+21:00–22:00 on another (with 1 minute before and 5 after): the film is recorded 19:59–21:00 and
+the match 21:00–22:05 — the match's minute before gives way to the film's last minute, and the
+film's five minutes after to the match. Were the match at 21:02, the film would end at 21:01, the
+match's padded start. On the same channel both would be recorded whole.
+
+An account that counts its connections (Xtream) may take a few seconds to notice one closed.
+For 20 seconds after the service closes one, a recording that finds the account full looks again
+every 3 seconds, and closes no other connection for the same need.
+
+**Conflicts when scheduling.** The Record item in a programme's menu, and each scheduled row in
+Recordings, say when recordings on other channels overlap with more connections needed than the
+account allows: "Overlaps “The Film” on another channel: starts 1m late", "…: the last 5m will be
+cut", or, red when part of a programme is lost, "…and the account allows 1 stream: the first 30m
+will be missed" or "…: it can’t be recorded". They play the schedule through the rules above on
+the account's limit (Xtream's maximum connections, the playlist's "Simultaneous streams", the
+HDHomeRun's tuners; Tvheadend's is unknown, so nothing is said), as if nothing else used the
+account: someone watching can still make a recording wait. Overlaps on the same channel are not
+conflicts.
 
 **Main and backup feeds.** A recording has a main feed (the channel chosen) and, when there is
 one, a backup: another channel carrying the same guide channel. It switches only when the
@@ -394,9 +456,10 @@ token, or the app's token from another machine; `403` for what no token changes)
 | `GET /api/recordings` | `[Recording]`, soonest first |
 | `GET /api/recordings/{id}` | `Recording` |
 | `POST /api/recordings` | schedule: body `{streamId, title, start, stop, backupStreamId?, channelName?, episodeTitle?, season?, episode?, padBefore?, padAfter?}` → `201 Recording`; the same channel and start again returns the existing one |
+| `POST /api/recordings/preview` | the same body: `[Conflict]` scheduling it would bring, nothing scheduled. Those of the one asked about, and with `other: true` those of recordings already scheduled |
 | `POST /api/recordings/{id}/cancel` | a scheduled one is removed (`{id, cancelled: true}`); one recording stops and keeps what it has (`Recording`) |
 | `DELETE /api/recordings/{id}?files=true` | forgets a finished recording; `files=true` deletes its files too. Refused while recording |
-| `GET /api/settings` | `{outputDir, naming, namingPattern, padBefore, padAfter, clockTrack, defaultOutputDir}` (padding in seconds; `naming` is `mediaServer`, `byChannel`, `byDate`, `flat` or `custom`, which uses `namingPattern`) |
+| `GET /api/settings` | `{outputDir, naming, namingPattern, padBefore, padAfter, clockTrack, showWhileRecording, defaultOutputDir}` (padding in seconds; `naming` is `mediaServer`, `byChannel`, `byDate`, `flat` or `custom`, which uses `namingPattern`) |
 | `PUT /api/settings` | the same fields (`defaultOutputDir` is ignored; an empty `outputDir` means the default; omitted naming fields mean the default layout). A `namingPattern` that cannot be used is refused with `400 {"error": "file name pattern: …"}`, even while a preset is chosen; returns what was saved |
 
 Network access and devices:
@@ -456,13 +519,19 @@ as a port taken when the service started, in which case it listens on `127.0.0.1
 
 `state` is `scheduled`, `recording`, `done` or `failed` (with `error`). `waiting` is set while
 a recording is not capturing, such as "waiting for a free connection (1 of 1 in use)".
+`conflicts`, when there are any still ahead, is `[Conflict]`: `{title, with, kind, secs,
+streams}`, what recording `title` loses to `with` on another channel when the account allows
+`streams` — `kind` is `cutEnd` (its padding after ends `secs` early), `lateStart` (it starts
+`secs` into its padding before), `lostStart` (`secs` into its programme) or `missed`.
 `backupStreamId` omitted when scheduling means "find one"; the main feed's own id means "none".
 
 ## Not yet
 
 - Watching in the browser: the service proxying streams to it (so provider credentials never
-  reach the browser), sharing one connection between a recording and its viewers, and audio the
-  browser cannot play turned into audio it can.
+  reach the browser) and audio the browser cannot play turned into audio it can. Sharing one
+  connection between a recording and its viewers is what the service's per-channel connection
+  (`recording::hub`) is built for: a viewer would join it as one more subscriber, one the rules
+  never cut off.
 - Installing the service on macOS (a LaunchAgent); waking the computer from suspend to record
   (on Windows, a task per recording with a wake timer); recording on Windows while nobody is
   signed in.

@@ -321,6 +321,20 @@ export function RecordingPane({ s }: { s: SettingsControl }) {
                 onChange={(clockTrack) => patch({ clockTrack })}
               />
             </SettingRow>
+            <SettingRow
+              label="Show recordings to other programs while they record"
+              htmlFor="rec-visible"
+              description="The file being recorded is named “… (recording).ts” rather than hidden, so a media server such as Jellyfin can list and play it as it grows. When it finishes, the .mkv takes its place; the server may list both until it next scans the folder."
+              modified={(settings.showWhileRecording ?? false) !== d.showWhileRecording}
+              onReset={() => patch({ showWhileRecording: d.showWhileRecording })}
+              resetTo={d.showWhileRecording ? "on" : "off"}
+            >
+              <Switch
+                id="rec-visible"
+                checked={settings.showWhileRecording ?? false}
+                onChange={(showWhileRecording) => patch({ showWhileRecording })}
+              />
+            </SettingRow>
           </SettingsGroup>
           {/* Network access, the password and the devices are the app's
               alone; the service refuses them to anyone else. */}

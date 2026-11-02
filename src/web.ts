@@ -43,6 +43,7 @@ import type {
   ProgrammeDto,
   ProgrammeHitDto,
   RecordingDto,
+  ConflictDto,
   RecordingSettingsDto,
   RecordingStatusDto,
   ScheduleRequest,
@@ -269,6 +270,9 @@ export const webBackend: typeof api = {
 
   recordings: () => get<RecordingDto[]>("/api/recordings"),
   recordProgramme: (req: ScheduleRequest) => post<RecordingDto>("/api/recordings", req),
+  // A service too old to say has no conflicts to tell.
+  previewRecording: (req: ScheduleRequest) =>
+    post<ConflictDto[]>("/api/recordings/preview", req).catch(() => []),
   cancelRecording: (id) => post<unknown>(`/api/recordings/${id}/cancel`).then(() => undefined),
   deleteRecording: (id, files) =>
     del<unknown>(apiUrl(`/api/recordings/${id}`, { files: files ? "true" : "false" })).then(

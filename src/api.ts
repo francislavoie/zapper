@@ -38,6 +38,7 @@ import {
   type NetworkDto,
   type NetworkSettingsDto,
   type RecordingDto,
+  type ConflictDto,
   type RecordingSettingsDto,
   type RecordingStatusDto,
   type ScheduleRequest,
@@ -169,6 +170,8 @@ export const api = {
   recordings: () => invoke<RecordingDto[]>("recordings"),
   recordProgramme: (request: ScheduleRequest) =>
     invoke<RecordingDto>("record_programme", { request }),
+  previewRecording: (request: ScheduleRequest) =>
+    invoke<ConflictDto[]>("preview_recording", { request }),
   cancelRecording: (id: number) => invoke<void>("cancel_recording", { id }),
   deleteRecording: (id: number, files: boolean) =>
     invoke<void>("delete_recording", { id, files }),
