@@ -10,6 +10,8 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-01
+
 ### Added
 
 - Windows: an installer for you alone (`zapper_<version>_x64-setup.exe`, no administrator needed)
