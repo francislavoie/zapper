@@ -450,6 +450,18 @@ pub fn capture_file(base: &str, part: usize, visible: bool) -> String {
     }
 }
 
+/// What starts the name of a recording's `.strm` file. Square brackets
+/// rather than angle ones, which Windows does not allow in a name.
+pub const STRM_MARK: &str = "[RECORDING] ";
+
+/// The `.strm` file that stands for a recording while it records, for
+/// Jellyfin (`recording::strm`): `[RECORDING] <base>.strm`, beside where the
+/// `.mkv` will be. The mark keeps it apart from the finished file in a
+/// library listing, and sorts it with the other recordings in progress.
+pub fn strm_file(base: &str) -> String {
+    format!("{STRM_MARK}{base}.strm")
+}
+
 /// Whether `name` is one of the capture files of a recording named `base`
 /// (as [`capture_file`] names them, with or without a [`numbered`] suffix)
 /// rather than a finished file: the `.mkv`, or a `.ts` kept because it could
@@ -922,9 +934,15 @@ mod tests {
             error: Option<String>,
         }
         #[derive(Deserialize)]
+        struct Strm {
+            base: String,
+            file: String,
+        }
+        #[derive(Deserialize)]
         struct Cases {
             render: Vec<Render>,
             validate: Vec<Check>,
+            strm: Vec<Strm>,
         }
         let cases: Cases = serde_json::from_str(include_str!("naming_cases.json")).unwrap();
         for c in &cases.render {
@@ -951,6 +969,12 @@ mod tests {
                 (None, got) => assert_eq!(got, Ok(()), "{}", c.pattern),
                 (Some(want), got) => assert_eq!(got.as_ref().err(), Some(want), "{}", c.pattern),
             }
+        }
+        assert!(!cases.strm.is_empty());
+        for c in &cases.strm {
+            assert_eq!(strm_file(&c.base), c.file, "{}", c.base);
+            // Whatever the title, a name Windows accepts.
+            assert_eq!(clean(&c.file, 255), c.file, "{}", c.file);
         }
     }
 }

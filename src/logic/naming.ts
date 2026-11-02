@@ -359,6 +359,16 @@ export const NAMING_EXAMPLES: readonly { programme: NamingProgramme; start: Civi
   },
 ];
 
+/** What starts a recording's `.strm` file name: square brackets, since
+ *  Windows does not allow angle ones. */
+export const STRM_MARK = "[RECORDING] ";
+
+/** The `.strm` file that stands for a recording named `base` while it
+ *  records, in Jellyfin (.strm) mode: `[RECORDING] <base>.strm`. */
+export function strmFile(base: string): string {
+  return `${STRM_MARK}${base}.strm`;
+}
+
 /** The full path a programme would be recorded to, with the folder's own
  *  separator (a Windows folder gets `\`). */
 export function previewPath(

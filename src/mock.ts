@@ -987,9 +987,22 @@ const mockRecordingSettings: RecordingSettingsDto = {
   padBefore: 60,
   padAfter: 300,
   clockTrack: true,
+  whileRecording: "hidden",
   showWhileRecording: false,
+  strmHost: "",
   defaultOutputDir: "/home/viewer/Videos/zapper",
 };
+
+/** Where the service would point `.strm` files (recording::strm::base_url):
+ *  the host chosen, else the network address while network access is on,
+ *  else this computer. */
+function mockStrmBase(): string {
+  const host = mockRecordingSettings.strmHost?.trim() || (mockNetwork.enabled ? "192.168.1.20" : "127.0.0.1");
+  const local = host === "127.0.0.1" || host === "localhost" || host === "::1" || host === "[::1]";
+  const scheme = !local && mockNetwork.enabled && mockNetwork.https ? "https" : "http";
+  const shown = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+  return `${scheme}://${shown}:${mockNetwork.port}`;
+}
 let mockService: ServiceStatusDto = SERVICE_WINDOWS
   ? {
       supported: true,
@@ -1358,7 +1371,7 @@ const mockRecordingApi = {
   },
   recordingSettings: async (): Promise<RecordingSettingsDto> => {
     recordingsOrRefuse();
-    return { ...mockRecordingSettings };
+    return { ...mockRecordingSettings, strmBase: mockStrmBase() };
   },
   setRecordingSettings: async (next: RecordingSettingsDto): Promise<RecordingSettingsDto> => {
     recordingsOrRefuse();
@@ -1369,12 +1382,19 @@ const mockRecordingApi = {
       const why = validatePattern(namingPattern);
       if (why) throw `file name pattern: ${why}`;
     }
+    const strmHost = (next.strmHost ?? "").trim();
+    if (/[/@?#\s]|:\d+$/.test(strmHost) && !strmHost.includes("::"))
+      throw `“${strmHost}” is not a host name or address for .strm files (just the host: no port, no http://)`;
+    const whileRecording = next.whileRecording ?? mockRecordingSettings.whileRecording;
     Object.assign(mockRecordingSettings, next, {
       outputDir,
       namingPattern,
+      whileRecording,
+      showWhileRecording: whileRecording === "visible",
+      strmHost,
       defaultOutputDir: mockRecordingSettings.defaultOutputDir,
     });
-    return { ...mockRecordingSettings };
+    return { ...mockRecordingSettings, strmBase: mockStrmBase() };
   },
   recordingNetwork: async (): Promise<NetworkDto> => {
     recordingsOrRefuse();

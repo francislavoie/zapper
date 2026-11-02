@@ -967,8 +967,9 @@ struct StreamQuery {
     audio: Option<usize>,
 }
 
-/// The chunks of a reading, as a response body.
-struct Chunks(mpsc::Receiver<Bytes>);
+/// The chunks of a reading, as a response body (a recording's live stream,
+/// `strm`, is sent the same way).
+pub(super) struct Chunks(pub(super) mpsc::Receiver<Bytes>);
 
 impl futures_core::Stream for Chunks {
     type Item = Result<Bytes, std::io::Error>;

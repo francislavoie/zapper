@@ -60,7 +60,7 @@ use zapper_lib::recording::budget::SourceBudget;
 use zapper_lib::recording::api::{ShutdownRequest, ShutdownWhen};
 use zapper_lib::recording::client::Client;
 use zapper_lib::recording::lifecycle::{self, Exit, FileId};
-use zapper_lib::recording::{config, server::Server, store};
+use zapper_lib::recording::{config, server::Server, store, strm};
 
 /// The sync's progress, to the log: nobody is watching a toolbar.
 struct LogSink;
@@ -561,6 +561,11 @@ fn serve(args: Args, phase: &(dyn Fn(Phase) + Sync)) -> Result<(Exit, Option<Pat
     // the catalogue the two share; see `recording::budget`.
     let budget = Box::new(SourceBudget);
     let server = Server::new(db, cfg, cfg_path, token, budget);
+    // `.strm` files a hard stop left behind go; those of recordings that
+    // carry on are written for how the service is reached now.
+    if let Err(e) = strm::recover(&server) {
+        tracing::warn!("tidying up .strm files: {e:#}");
+    }
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

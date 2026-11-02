@@ -47,6 +47,14 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
   and uninstalling ask nothing more.
 - macOS: Settings → Recording → Install (and `zapper-server --install-service`) installs the
   recording service as a LaunchAgent, which starts it when you log in and again after a crash.
+- Watch a recording in Jellyfin while it records: *Show recordings to other programs while they
+  record* (Settings → Recording) has a *Jellyfin (.strm)* choice. While a recording records, a
+  `[RECORDING] <name>.strm` beside it points Jellyfin at the recording service, which streams the
+  recording from the start and keeps following it live until it ends; then the `.mkv` takes its
+  place. Each `.strm` carries a key that opens that one recording's stream and nothing else, until
+  it finishes. For a Jellyfin on another computer it needs network access on; the address in the
+  files can be set by hand. See "Watching a recording in Jellyfin while it records" in
+  docs/recording.md for what Jellyfin shows and doesn't.
 
 ### Changed
 

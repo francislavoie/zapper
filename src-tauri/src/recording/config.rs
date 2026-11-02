@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use super::api::RecordingSettingsDto;
+use super::api::{RecordingSettingsDto, WhileRecording};
 use super::naming::{self, Naming};
 
 /// Chosen to stay clear of the common development ports and of zapper's own
@@ -44,8 +44,15 @@ pub struct ServerConfig {
     pub clock_track: bool,
     pub naming: Naming,
     pub naming_pattern: String,
-    /// Name the file being recorded so other programs see it (see
-    /// `naming::capture_file`); hidden otherwise.
+    /// What other programs see of a recording while it records: nothing,
+    /// the part being written (`naming::capture_file`), or a `.strm` file
+    /// (`recording::strm`).
+    pub while_recording: WhileRecording,
+    /// The host `.strm` files point at; empty for the service's choice.
+    pub strm_host: String,
+    /// The on/off setting `while_recording` was: read from an older file,
+    /// never written.
+    #[serde(skip_serializing)]
     pub show_while_recording: bool,
 }
 
@@ -60,6 +67,8 @@ impl Default for ServerConfig {
             clock_track: true,
             naming: Naming::default(),
             naming_pattern: String::new(),
+            while_recording: WhileRecording::Hidden,
+            strm_host: String::new(),
             show_while_recording: false,
         }
     }
@@ -104,7 +113,10 @@ impl ServerConfig {
             clock_track: self.clock_track,
             naming: self.naming,
             naming_pattern: self.naming_pattern.clone(),
-            show_while_recording: self.show_while_recording,
+            while_recording: Some(self.while_recording),
+            show_while_recording: self.while_recording == WhileRecording::Visible,
+            strm_host: self.strm_host.clone(),
+            strm_base: String::new(),
             default_output_dir: default_output_dir().to_string_lossy().into_owned(),
         }
     }
@@ -130,13 +142,23 @@ impl ServerConfig {
         if s.naming == Naming::Custom || !pattern.is_empty() {
             naming::validate(pattern).map_err(|e| format!("file name pattern: {e}"))?;
         }
+        let host = s.strm_host.trim();
+        validate_strm_host(host)?;
+        // A client that knows only the on/off setting turns the visible
+        // file on or off, and leaves a `.strm` choice it cannot show alone.
+        let mode = s.while_recording.unwrap_or(match self.while_recording {
+            _ if s.show_while_recording => WhileRecording::Visible,
+            WhileRecording::Visible => WhileRecording::Hidden,
+            other => other,
+        });
         self.output_dir = dir.to_string();
         self.pad_before = s.pad_before;
         self.pad_after = s.pad_after;
         self.clock_track = s.clock_track;
         self.naming = s.naming;
         self.naming_pattern = pattern.to_string();
-        self.show_while_recording = s.show_while_recording;
+        self.while_recording = mode;
+        self.strm_host = host.to_string();
         Ok(())
     }
 
@@ -161,11 +183,53 @@ pub fn load() -> ServerConfig {
 
 pub fn load_from(path: &Path) -> ServerConfig {
     match std::fs::read_to_string(path) {
-        Ok(text) => serde_json::from_str(&text).unwrap_or_else(|e| {
-            tracing::warn!("{} is not valid ({e}); using the defaults", path.display());
-            ServerConfig::default()
-        }),
+        Ok(text) => {
+            let mut c: ServerConfig = serde_json::from_str(&text).unwrap_or_else(|e| {
+                tracing::warn!("{} is not valid ({e}); using the defaults", path.display());
+                ServerConfig::default()
+            });
+            if c.show_while_recording && c.while_recording == WhileRecording::Hidden {
+                c.while_recording = WhileRecording::Visible;
+            }
+            c.show_while_recording = false;
+            if validate_strm_host(&c.strm_host).is_err() {
+                c.strm_host.clear();
+            }
+            c
+        }
         Err(_) => ServerConfig::default(),
+    }
+}
+
+/// A host `.strm` files may name: a name (`nas.local`), an IPv4 address,
+/// or an IPv6 one with or without its brackets. Nothing that would change
+/// what the address means (`/`, `@`, `?`, a port, spaces). Empty is the
+/// service's own choice.
+pub fn validate_strm_host(host: &str) -> Result<(), String> {
+    if host.is_empty() {
+        return Ok(());
+    }
+    let inner = host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host);
+    if inner.parse::<std::net::Ipv6Addr>().is_ok() {
+        return Ok(());
+    }
+    let name_ok = host.len() <= 253
+        && host.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        });
+    if name_ok {
+        Ok(())
+    } else {
+        Err(format!(
+            "“{host}” is not a host name or address for .strm files (just the host: no port, no http://)"
+        ))
     }
 }
 
@@ -366,6 +430,67 @@ mod tests {
         assert_eq!((c.naming, c.pattern()), (Naming::Custom, naming::MEDIA_SERVER));
         std::fs::write(&p, r#"{"naming": "flat"}"#).unwrap();
         assert_eq!(load_from(&p).pattern(), Naming::Flat.preset().unwrap());
+    }
+
+    #[test]
+    fn what_other_programs_see_while_recording_carries_over_from_the_switch() {
+        let d = scratch("while");
+        let p = d.join("server.json");
+        std::fs::write(&p, r#"{"showWhileRecording": true}"#).unwrap();
+        let c = load_from(&p);
+        assert_eq!(c.while_recording, WhileRecording::Visible);
+        save_to(&p, &c).unwrap();
+        let text = std::fs::read_to_string(&p).unwrap();
+        assert!(!text.contains("showWhileRecording"), "{text}");
+        assert!(text.contains(r#""whileRecording": "visible""#), "{text}");
+        assert_eq!(load_from(&p).while_recording, WhileRecording::Visible);
+
+        // A client that knows the choice sends it; one that knows only the
+        // switch flips the visible file and leaves a .strm choice alone.
+        let mut c = ServerConfig::default();
+        let mut s = c.settings();
+        s.while_recording = Some(WhileRecording::Strm);
+        c.apply(s).unwrap();
+        assert_eq!(c.while_recording, WhileRecording::Strm);
+        assert!(!c.settings().show_while_recording);
+        let mut old = c.settings();
+        old.while_recording = None;
+        c.apply(old.clone()).unwrap();
+        assert_eq!(c.while_recording, WhileRecording::Strm);
+        old.show_while_recording = true;
+        c.apply(old.clone()).unwrap();
+        assert_eq!(c.while_recording, WhileRecording::Visible);
+        old.show_while_recording = false;
+        c.apply(old).unwrap();
+        assert_eq!(c.while_recording, WhileRecording::Hidden);
+    }
+
+    #[test]
+    fn a_strm_host_is_a_bare_host() {
+        for ok in ["", "nas.local", "192.168.1.20", "media-box", "fd00::20", "[fd00::20]"] {
+            assert_eq!(validate_strm_host(ok), Ok(()), "{ok}");
+        }
+        for bad in [
+            "http://nas",
+            "nas:8096",
+            "user@nas",
+            "nas/x",
+            "nas x",
+            "-nas",
+            "nas..local",
+            "nas?x=1",
+            "[nas]",
+        ] {
+            assert!(validate_strm_host(bad).is_err(), "{bad}");
+        }
+        let mut c = ServerConfig::default();
+        let mut s = c.settings();
+        s.strm_host = " nas.local ".into();
+        c.apply(s.clone()).unwrap();
+        assert_eq!(c.strm_host, "nas.local");
+        s.strm_host = "http://nas.local".into();
+        assert!(c.apply(s).is_err());
+        assert_eq!(c.strm_host, "nas.local", "nothing changed");
     }
 
     #[test]
