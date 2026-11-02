@@ -216,8 +216,8 @@ until the manifest names a published build.
 3. Run the **libmpv** workflow (`.github/workflows/libmpv.yml`, Run workflow) with the next
    revision for those versions. It builds Linux and Windows on Ubuntu and, with **macOS**
    ticked, macOS on the Mac runners, and publishes the pre-release. (The macOS workflow,
-   `macos.yml`, builds macOS's from the same script on every pull request, so a change that
-   breaks it shows there first.)
+   `macos.yml`, builds macOS's from the same script on any pull request that changes it, so a
+   change that breaks it shows there first.)
 4. Commit that release's `manifest.json` as `packaging/libmpv/manifest.json` (or regenerate it:
    `python3 scripts/libmpv-manifest.py write <tag> francislavoie/zapper SHA256SUMS
    packaging/libmpv/manifest.json` from its `SHA256SUMS`). The next build fetches it.
