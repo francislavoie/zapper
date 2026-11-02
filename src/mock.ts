@@ -314,6 +314,10 @@ function schedule(row: ChannelDto, from: number, to: number): ProgrammeDto[] {
       stop: start + dur,
       title: slot === 0 ? seed.title : PROGRAMMES[Math.abs(slot * 7 + row.streamId) % PROGRAMMES.length],
       description: slot % 3 === 0 ? seed.description : null,
+      // Some guides number their episodes; most programmes are not series.
+      ...(Math.abs(slot) % 4 === 1
+        ? { season: 1 + (row.streamId % 5), episode: 1 + (Math.abs(slot) % 12) }
+        : {}),
     });
     if (out.length > 400) break;
   }

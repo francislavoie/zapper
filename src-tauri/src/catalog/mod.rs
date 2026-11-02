@@ -7,6 +7,7 @@ pub mod account_form;
 pub mod activity;
 pub mod credentials;
 pub mod db;
+pub mod episode;
 pub mod epg;
 pub mod epg_match;
 pub mod guide_search;

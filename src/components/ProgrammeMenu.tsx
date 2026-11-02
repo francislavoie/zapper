@@ -15,6 +15,7 @@ import {
   canRecord,
   conflictLosesProgramme,
   conflictText,
+  episodeLabel,
   markKey,
   marks,
   scheduleRequest,
@@ -65,7 +66,7 @@ export function ProgrammeMenu() {
     <ContextMenu
       x={menu.x}
       y={menu.y}
-      heading={programme.title}
+      heading={episodeLabel(programme) ? `${programme.title} · ${episodeLabel(programme)}` : programme.title}
       onClose={close}
       takeFocus={menu.keyboard}
     >

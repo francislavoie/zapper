@@ -40,14 +40,29 @@ export function canRecord(p: Pick<ProgrammeDto, "stop">, now: number): boolean {
   return p.stop > now;
 }
 
+/** "S02E04", "E12" (no season known), or "" — as recordings are named. */
+export function episodeLabel(p: { season?: number | null; episode?: number | null }): string {
+  if (p.episode == null) return "";
+  const e = `E${String(p.episode).padStart(2, "0")}`;
+  return p.season != null ? `S${String(p.season).padStart(2, "0")}${e}` : e;
+}
+
+/** What scheduling a programme sends. The guide's season and episode go
+ *  along when it has them, so the file is named `S02E04` rather than by
+ *  date; an episode without a season goes alone (`E04`). */
 export function scheduleRequest(ch: ChannelDto, p: ProgrammeDto): ScheduleRequest {
-  return {
+  const req: ScheduleRequest = {
     streamId: ch.streamId,
     channelName: ch.cleanName || ch.name,
     title: p.title,
     start: p.start,
     stop: p.stop,
   };
+  if (p.episode != null) {
+    req.episode = p.episode;
+    if (p.season != null) req.season = p.season;
+  }
+  return req;
 }
 
 const ORDER: { state: RecordingState; label: string }[] = [

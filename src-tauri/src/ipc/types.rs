@@ -53,6 +53,12 @@ pub struct ProgrammeDto {
     pub stop: i64,
     pub title: String,
     pub description: Option<String>,
+    /// One-based, from the guide's episode number when it gives a clean one
+    /// (`catalog::episode`); absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub season: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub episode: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

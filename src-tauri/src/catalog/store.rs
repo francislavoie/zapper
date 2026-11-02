@@ -86,6 +86,8 @@ fn programme_from_row(row: &Row) -> rusqlite::Result<(i64, ProgrammeDto)> {
             stop: row.get(2)?,
             title: row.get(3)?,
             description: row.get(4)?,
+            season: row.get(5)?,
+            episode: row.get(6)?,
         },
     ))
 }
@@ -261,7 +263,7 @@ pub fn programmes(
     let mut buckets: HashMap<i64, Vec<ProgrammeDto>> = HashMap::with_capacity(ids.len());
     if !ids.is_empty() {
         let sql = format!(
-            "SELECT ch.stream_id, e.start, e.stop, e.title, e.description
+            "SELECT ch.stream_id, e.start, e.stop, e.title, e.description, e.season, e.episode
              FROM channels ch JOIN epg e ON e.channel_ref = ch.epg_channel_id
              WHERE ch.stream_id IN ({})
                AND e.start < ?{} AND e.stop > ?{}
@@ -292,7 +294,7 @@ pub fn now_playing(conn: &Connection, ids: &[i64], at: i64) -> Result<HashMap<i6
         return Ok(out);
     }
     let sql = format!(
-        "SELECT ch.stream_id, e.start, e.stop, e.title, e.description
+        "SELECT ch.stream_id, e.start, e.stop, e.title, e.description, e.season, e.episode
          FROM channels ch JOIN epg e ON e.channel_ref = ch.epg_channel_id
          WHERE ch.stream_id IN ({})
            AND e.start <= ?{} AND e.stop > ?{}
@@ -337,7 +339,7 @@ pub fn guide_rows(conn: &Connection, ids: &[i64], from: i64, to: i64) -> Result<
     // predicate precedes the `IN` list would silently renumber the ids.
     let sql = format!(
         "SELECT ch.stream_id, ch.name, ch.logo_url, ch.has_archive, ch.archive_days,
-                e.start, e.stop, e.title, e.description
+                e.start, e.stop, e.title, e.description, e.season, e.episode
          FROM channels ch
          LEFT JOIN epg e
                 ON e.channel_ref = ch.epg_channel_id
@@ -374,6 +376,8 @@ pub fn guide_rows(conn: &Connection, ids: &[i64], from: i64, to: i64) -> Result<
                 stop: row.get(6)?,
                 title: row.get(7)?,
                 description: row.get(8)?,
+                season: row.get(9)?,
+                episode: row.get(10)?,
             });
         }
     }
