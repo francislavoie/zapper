@@ -50,6 +50,9 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
   no longer stalls the refresh for good: after a minute with nothing arriving (or half an hour
   in all) the refresh fails with that reason, keeps the guide it had, and tries again later. The
   provider's channel and category lists have a deadline too.
+- Windows: installing the MSI after uninstalling the per-user setup puts zapper in
+  `Program Files\zapper`, rather than in the setup's old folder, which the uninstall had left
+  remembered in the registry.
 
 ## [0.2.1] - 2026-11-01
 

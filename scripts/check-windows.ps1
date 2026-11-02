@@ -35,6 +35,12 @@
       * MSI (administrator): installed for real, the task added, and a full
         uninstall deletes it (packaging/windows/service-cleanup.wxs).
 
+    And the install folder the NSIS setup remembers in the registry (the
+    default value of HKCU\Software\<manufacturer>\zapper), which Tauri's MSI
+    also reads its own folder from: kept by an upgrade, cleared by a real
+    uninstall, so that an MSI installed after it goes to Program Files rather
+    than into the setup's old per-user folder.
+
     The release workflow uses -Install; on a desktop you care about, leave it
     off: it installs and uninstalls zapper, and refuses to start when this
     user already has the task.
@@ -65,6 +71,16 @@ $conf = Get-Content -Raw (Join-Path $repo "src-tauri\tauri.windows.conf.json") |
 $dlls = @($conf.bundle.resources.PSObject.Properties | ForEach-Object { $_.Value } | Where-Object { $_ -like "*.dll" })
 if ($dlls.Count -lt 2) { throw "tauri.windows.conf.json bundles no DLLs?" }
 $programs = @("zapper.exe", "zapper-server.exe")
+# Where both installers remember their folder: Software\<manufacturer>\<product>,
+# the manufacturer being the publisher, else the identifier's second part, as
+# Tauri's bundler names it.
+$tauri = Get-Content -Raw (Join-Path $repo "src-tauri\tauri.conf.json") | ConvertFrom-Json
+$manufacturer = if ($tauri.bundle.publisher) { $tauri.bundle.publisher } else { ($tauri.identifier -split '\.')[1] }
+$folderKey = "HKCU:\Software\$manufacturer\$($tauri.productName)"
+function Remembered-Folder {
+    $k = Get-Item -Path $folderKey -ErrorAction SilentlyContinue
+    if ($k) { $k.GetValue("") } else { $null }
+}
 $notices = @("LICENSE.txt", "MPV-FFMPEG-NOTICE.txt", "THIRD-PARTY-NOTICES-libmpv.txt",
     "THIRD-PARTY-NOTICES-rust.txt", "THIRD-PARTY-NOTICES-ui.txt")
 
@@ -187,6 +203,7 @@ $fromMsi = Check-Installed "MSI" $msiDir "msi"
 # The NSIS installer, installed and later removed, or unpacked.
 $nsisDir = Join-Path $work "nsis"
 if ($Install) {
+    if (Remembered-Folder) { throw "zapper is installed for this user here ($folderKey); not touching it" }
     # /D must come last and unquoted.
     $p = Start-Process -Wait -PassThru $nsis -ArgumentList "/S", "/D=$nsisDir"
     if ($p.ExitCode -ne 0) { throw "the NSIS installer failed with $($p.ExitCode)" }
@@ -274,6 +291,9 @@ if ($Install) {
     # installing"): in place, from the install folder.
     $p = Start-Process -Wait -PassThru (Join-Path $nsisDir "uninstall.exe") -ArgumentList "/S", "_?=$nsisDir"
     if (-not (Task)) { Fail "the uninstall a newer setup runs deleted the task" } else { Write-Host "  after the uninstall an upgrade runs: still there" }
+    $remembered = Remembered-Folder
+    if ($remembered -ne $nsisDir) { Fail "after the uninstall an upgrade runs, the remembered folder is '$remembered', not '$nsisDir'" }
+    else { Write-Host "  its folder still remembered ($folderKey)" }
     $p = Start-Process -Wait -PassThru $nsis -ArgumentList "/S", "/D=$nsisDir"
     if ($p.ExitCode -ne 0) { Fail "reinstalling failed with $($p.ExitCode)" }
 
@@ -284,6 +304,9 @@ if ($Install) {
     if (Task) { Fail "the NSIS uninstall left the task $task" } else { Write-Host "  task gone" }
     if ($ownHome -and (Test-Path $serverLog)) { Fail "the NSIS uninstall left $serverLog" }
     if (Get-Process zapper-server -ErrorAction SilentlyContinue) { Fail "zapper-server still runs after the uninstall" }
+    $remembered = Remembered-Folder
+    if ($remembered) { Fail "the NSIS uninstall left its folder in the registry ($folderKey = $remembered)" }
+    else { Write-Host "  remembered folder cleared" }
 
     Step "MSI: installed, then uninstalled with the recording service"
     $log = Join-Path $work "msi-install.log"
@@ -295,6 +318,10 @@ if ($Install) {
         $m = Select-String -Path $log -Pattern 'Property\(S\): INSTALLDIR = (.+)$' | Select-Object -Last 1
         $at = if ($m) { $m.Matches[0].Groups[1].Value.Trim().TrimEnd('\') } else { Join-Path $env:ProgramFiles "zapper" }
         Write-Host "  installed in $at"
+        # The setup was uninstalled above: nothing may send the MSI into its
+        # old per-user folder.
+        $expected = Join-Path $env:ProgramFiles "zapper"
+        if ($at -ne $expected) { Fail "the MSI installed in $at, not $expected" }
         Install-Service $at | Out-Null
         $log = Join-Path $work "msi-remove.log"
         $p = Start-Process -Wait -PassThru msiexec.exe -ArgumentList "/x", "`"$msi`"", "/qn", "/L*v", "`"$log`""
