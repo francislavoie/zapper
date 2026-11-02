@@ -259,6 +259,23 @@ pub fn set_parts(conn: &Connection, id: i64, parts: &[PartDto]) -> Result<()> {
     Ok(())
 }
 
+/// Changes a recording's parts as they are on record now. The capture and
+/// a part handed in by the app ([`super::capture::add_prelude`]) both add
+/// parts while it records; each changes the list it reads here, under the
+/// one connection's lock, so neither writes over the other's.
+pub fn edit_parts<R>(
+    conn: &Connection,
+    id: i64,
+    f: impl FnOnce(&mut Vec<PartDto>) -> R,
+) -> Result<R> {
+    let mut parts = get(conn, id)?
+        .ok_or_else(|| anyhow!("recording {id} is gone"))?
+        .parts;
+    let out = f(&mut parts);
+    set_parts(conn, id, &parts)?;
+    Ok(out)
+}
+
 pub fn add_note(conn: &Connection, id: i64, note: &str) -> Result<()> {
     let Some(rec) = get(conn, id)? else {
         return Ok(());
@@ -427,6 +444,7 @@ mod tests {
             bytes: 10,
             started: 940,
             ended: None,
+            handed_over: false,
         };
         set_parts(&c, id, std::slice::from_ref(&part)).unwrap();
         add_note(&c, id, "switched").unwrap();

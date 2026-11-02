@@ -369,10 +369,16 @@ fn parse_range(v: &str) -> Option<(u64, Option<u64>)> {
 }
 
 /// The parts of a recording the stream is made of: its capture files, in
-/// order.
+/// order. Not a part handed over by the app (what its player had buffered of
+/// the programme): it arrives after the stream has begun and goes in front
+/// of what was received, so following it would move every byte a reader
+/// has already been sent (a `Range` resuming would land elsewhere, and one
+/// reading on would be sent the start after the middle). It is in the
+/// finished files.
 fn followable(parts: &[PartDto], base: &str) -> Vec<PartDto> {
     parts
         .iter()
+        .filter(|p| !p.handed_over)
         .filter(|p| {
             Path::new(&p.path)
                 .file_name()
@@ -837,6 +843,7 @@ mod tests {
             bytes: 0,
             started: now(),
             ended: ended.then(now),
+            handed_over: false,
         }
     }
 
@@ -1019,6 +1026,52 @@ mod tests {
         assert_eq!(read(&mut body, 10).await, vec![4u8; 10]);
         assert_eq!(next(&mut body).await, None);
         assert_eq!(read(&mut resumed, 10).await, vec![4u8; 10]);
+        assert_eq!(next(&mut resumed).await, None);
+    }
+
+    #[tokio::test]
+    async fn a_part_handed_over_in_front_moves_nothing_a_reader_has() {
+        let s = server("strm-handed-over");
+        strm_mode(&s);
+        let dir = scratch("handed-over");
+        let base = "News - 2026-11-03 18.00";
+        let id = recording(&s, &dir, base, RecordingState::Recording);
+        capture(&s, id);
+        let live = dir.join(naming::capture_file(base, 1, false));
+        append(&live, &[1u8; 500]);
+        set_parts(&s, id, &[part(&live, false)]);
+        ensure(&s, id).unwrap();
+        let (key, _) = strm_of(&s, id);
+        let uri = format!("/api/recordings/{id}/live?key={key}");
+        let mut body = call(&s, get(&uri, "127.0.0.1", None))
+            .await
+            .into_body()
+            .into_data_stream();
+        assert_eq!(read(&mut body, 500).await, vec![1u8; 500]);
+
+        // The app hands over what its player had buffered: a part in front
+        // of the one being followed.
+        let buffer = dir.join(naming::numbered(&naming::capture_file(base, 1, false), 2));
+        append(&buffer, &[7u8; 300]);
+        let handed = PartDto {
+            handed_over: true,
+            ..part(&buffer, true)
+        };
+        set_parts(&s, id, &[handed.clone(), part(&live, false)]);
+
+        // The reader carries on where it was, and never gets the buffer.
+        append(&live, &[2u8; 100]);
+        assert_eq!(read(&mut body, 100).await, vec![2u8; 100]);
+        // Resuming names the same bytes as before.
+        let resp = call(&s, get(&uri, "127.0.0.1", Some("bytes=550-"))).await;
+        assert_eq!(resp.headers()[header::CONTENT_RANGE], "bytes 550-599/*");
+        let mut resumed = resp.into_body().into_data_stream();
+        assert_eq!(read(&mut resumed, 50).await, vec![2u8; 50]);
+        // The part being received closes: the stream ends there, rather
+        // than going back to the buffer.
+        set_parts(&s, id, &[handed, part(&live, true)]);
+        stop_capturing(&s, id);
+        assert_eq!(next(&mut body).await, None);
         assert_eq!(next(&mut resumed).await, None);
     }
 

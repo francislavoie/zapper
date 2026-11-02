@@ -49,9 +49,7 @@ struct OpenPart {
 }
 
 impl OpenPart {
-    /// A new part file, under a name nothing else has: two recordings of
-    /// the same airing (on two channels) have the same name, and must never
-    /// write into one file.
+    /// A new part file and its arrival log.
     async fn create(
         folder: &Path,
         base: &str,
@@ -59,28 +57,7 @@ impl OpenPart {
         stream_id: i64,
         visible: bool,
     ) -> Result<Self> {
-        tokio::fs::create_dir_all(folder)
-            .await
-            .with_context(|| format!("creating {}", folder.display()))?;
-        let name = naming::capture_file(base, index, visible);
-        let mut n = 1;
-        let (path, file) = loop {
-            let path = folder.join(if n == 1 {
-                name.clone()
-            } else {
-                naming::numbered(&name, n)
-            });
-            match tokio::fs::OpenOptions::new()
-                .create_new(true)
-                .append(true)
-                .open(&path)
-                .await
-            {
-                Ok(f) => break (path, f),
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => n += 1,
-                Err(e) => return Err(e).with_context(|| format!("creating {}", path.display())),
-            }
-        };
+        let (path, file) = create_capture_file(folder, base, index, visible).await?;
         let log = tokio::fs::OpenOptions::new()
             .create(true)
             .write(true)
@@ -105,6 +82,7 @@ impl OpenPart {
             bytes: self.bytes,
             started: self.started,
             ended,
+            handed_over: false,
         }
     }
 
@@ -132,6 +110,39 @@ impl OpenPart {
             self.log(a).await;
         }
         Ok(())
+    }
+}
+
+/// A new capture file for part `index`, under a name nothing else has: two
+/// recordings of the same airing (on two channels) have the same name, and
+/// must never write into one file.
+async fn create_capture_file(
+    folder: &Path,
+    base: &str,
+    index: usize,
+    visible: bool,
+) -> Result<(PathBuf, tokio::fs::File)> {
+    tokio::fs::create_dir_all(folder)
+        .await
+        .with_context(|| format!("creating {}", folder.display()))?;
+    let name = naming::capture_file(base, index, visible);
+    let mut n = 1;
+    loop {
+        let path = folder.join(if n == 1 {
+            name.clone()
+        } else {
+            naming::numbered(&name, n)
+        });
+        match tokio::fs::OpenOptions::new()
+            .create_new(true)
+            .append(true)
+            .open(&path)
+            .await
+        {
+            Ok(f) => return Ok((path, f)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => n += 1,
+            Err(e) => return Err(e).with_context(|| format!("creating {}", path.display())),
+        }
     }
 }
 
@@ -266,7 +277,6 @@ async fn run_inner(server: &Arc<Server>, id: i64, stop: &mut watch::Receiver<boo
         feeds.push(b);
     }
     let mut fallback = Fallback::new(feeds.len());
-    let mut parts = rec.parts.clone();
     let mut open: Option<OpenPart> = None;
     let mut next_at = now();
     let mut slot_waits: u32 = 0;
@@ -359,13 +369,18 @@ async fn run_inner(server: &Arc<Server>, id: i64, stop: &mut watch::Receiver<boo
         // part (the remuxer joins the timeline across the reconnect).
         if open.as_ref().is_none_or(|p| p.stream_id != stream_id) {
             if let Some(p) = open.take() {
-                close(server, id, &mut parts, p).await?;
+                close(server, id, p).await?;
             }
-            let index = parts.len() + 1;
+            // Numbered among what the service received: a part handed over
+            // by the app is not one other programs see (`add_prelude`).
+            let index = server
+                .db(|c| store::get(c, id))?
+                .map_or(0, |r| r.parts.iter().filter(|p| !p.handed_over).count())
+                + 1;
             let visible = server.config().while_recording == WhileRecording::Visible;
             let p = OpenPart::create(&folder, &info.base, index, stream_id, visible).await?;
-            parts.push(p.dto(None));
-            server.db(|c| store::set_parts(c, id, &parts))?;
+            let dto = p.dto(None);
+            server.db(|c| store::edit_parts(c, id, |ps| ps.push(dto)))?;
             server.update_live(id, |l| {
                 l.stream_id = stream_id;
                 l.since = p.started;
@@ -405,8 +420,9 @@ async fn run_inner(server: &Arc<Server>, id: i64, stop: &mut watch::Receiver<boo
         next_at = next.at;
     }
     if let Some(p) = open.take() {
-        close(server, id, &mut parts, p).await?;
+        close(server, id, p).await?;
     }
+    let parts = server.db(|c| store::get(c, id))?.map(|r| r.parts).unwrap_or_default();
     if parts.iter().all(|p| p.bytes == 0) {
         let why = last_failure.map_or("nothing was received".to_string(), |f| f.describe());
         server.db(|c| store::set_error(c, id, Some(&why)))?;
@@ -414,19 +430,168 @@ async fn run_inner(server: &Arc<Server>, id: i64, stop: &mut watch::Receiver<boo
     Ok(())
 }
 
+/// The most a part handed over by the app may weigh: far more than any
+/// player's rewind buffer holds.
+pub const PRELUDE_MAX: u64 = 8 << 30;
+
+/// Takes what the app's player had buffered of the programme before the
+/// recording began, as a part of its own ahead of what the capture receives
+/// (docs/recording.md, "Recording what you watch"). `first_ms`: when its
+/// first packet arrived, Unix milliseconds, which places it on the clock
+/// track. `body` is MPEG-TS, as the player wrote it out of its cache.
+///
+/// Only while the recording is still to come or being captured: once it is
+/// being saved into its files there is no part left to put it in front of.
+pub async fn add_prelude<S, E>(
+    server: &Arc<Server>,
+    id: i64,
+    first_ms: i64,
+    mut body: S,
+) -> Result<PartDto>
+where
+    S: futures_core::Stream<Item = std::result::Result<bytes::Bytes, E>> + Unpin,
+    E: std::fmt::Display,
+{
+    let open = |r: &super::api::RecordingDto| {
+        matches!(r.state, RecordingState::Scheduled | RecordingState::Recording)
+    };
+    let rec = server
+        .db(|c| store::get(c, id))?
+        .ok_or_else(|| anyhow::anyhow!("no such recording"))?;
+    if !open(&rec) {
+        anyhow::bail!("that recording is no longer being recorded");
+    }
+    let info = server.db(|c| store::capture_info(c, id))?;
+    // Hidden whatever the setting: other programs following a recording
+    // while it records (the growing file, or the `.strm`'s live stream) see
+    // what the service receives, in the order it is received, and a part
+    // put in front of it later would move everything they have read. It
+    // joins in the finished files.
+    let (path, mut file) =
+        create_capture_file(Path::new(&rec.folder), &info.base, rec.parts.len() + 1, false)
+            .await?;
+    let written = async {
+        let mut bytes = 0u64;
+        let mut head: Vec<u8> = Vec::new();
+        while let Some(chunk) =
+            std::future::poll_fn(|cx| futures_core::Stream::poll_next(std::pin::Pin::new(&mut body), cx))
+                .await
+        {
+            let chunk = chunk.map_err(|e| anyhow::anyhow!("the upload broke off: {e}"))?;
+            if head.len() < 2 * 188 + 1 {
+                head.extend_from_slice(&chunk[..chunk.len().min(400)]);
+            }
+            bytes += chunk.len() as u64;
+            if bytes > PRELUDE_MAX {
+                anyhow::bail!("that is more than a player buffers");
+            }
+            file.write_all(&chunk).await.context("writing the recording")?;
+        }
+        file.flush().await?;
+        if super::hub::sync_at(&head) != Some(0) {
+            anyhow::bail!("that is not an MPEG transport stream");
+        }
+        Ok::<u64, anyhow::Error>(bytes)
+    }
+    .await;
+    drop(file);
+    let discard = |p: &Path| {
+        let _ = std::fs::remove_file(p);
+        let _ = std::fs::remove_file(log_path(p));
+    };
+    let bytes = match written {
+        Ok(b) => b,
+        Err(e) => {
+            discard(&path);
+            return Err(e);
+        }
+    };
+    // Read for its timeline now, so a file the remuxer cannot read is
+    // refused while the app can still say so, and the clock has its log.
+    let scanned = {
+        let p = path.clone();
+        tokio::task::spawn_blocking(move || remux::scan(&p))
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?
+    };
+    let scan = match scanned {
+        Ok(s) if !s.samples.is_empty() => s,
+        Ok(_) => {
+            discard(&path);
+            anyhow::bail!("there is no picture or sound in it");
+        }
+        Err(e) => {
+            discard(&path);
+            return Err(e.context("it cannot be read"));
+        }
+    };
+    let log: String = clock::replayed(&scan.samples, first_ms)
+        .iter()
+        .map(clock::log_line)
+        .collect();
+    tokio::fs::write(log_path(&path), log).await?;
+    let started = first_ms.div_euclid(1000);
+    let part = PartDto {
+        path: path.to_string_lossy().into_owned(),
+        stream_id: rec.stream_id,
+        bytes,
+        started,
+        ended: Some(started + scan.duration_ms / 1000),
+        handed_over: true,
+    };
+    // In order of when each began: ahead of what the capture has received
+    // since, and behind anything from before it (a service that stopped and
+    // started again in the middle).
+    let added = server.db(|c| {
+        let Some(now_rec) = store::get(c, id)? else {
+            return Ok(false);
+        };
+        if !open(&now_rec) {
+            return Ok(false);
+        }
+        let p = part.clone();
+        store::edit_parts(c, id, move |parts| {
+            let at = parts.partition_point(|x| x.started <= p.started);
+            parts.insert(at, p);
+        })?;
+        Ok(true)
+    })?;
+    if !added {
+        discard(&path);
+        anyhow::bail!("that recording is no longer being recorded");
+    }
+    server.note(
+        id,
+        &format!(
+            "the first {} came from what this computer's player had already received",
+            length(scan.duration_ms / 1000)
+        ),
+    );
+    Ok(part)
+}
+
+/// "40 s", "3 min 20 s": a length for a note.
+fn length(secs: i64) -> String {
+    match secs.max(0) {
+        s if s < 60 => format!("{s} s"),
+        s if s % 60 == 0 => format!("{} min", s / 60),
+        s => format!("{} min {} s", s / 60, s % 60),
+    }
+}
+
 /// Records a part's final size and end, once all of it is in the file: a
 /// reader following the part (`strm`) takes "ended" to mean nothing more
 /// will come.
-async fn close(server: &Server, id: i64, parts: &mut [PartDto], mut p: OpenPart) -> Result<()> {
+async fn close(server: &Server, id: i64, mut p: OpenPart) -> Result<()> {
     let _ = p.file.flush().await;
-    if let Some(slot) = parts
-        .iter_mut()
-        .rev()
-        .find(|d| d.path == p.path.to_string_lossy())
-    {
-        *slot = p.dto(Some(now()));
-    }
-    server.db(|c| store::set_parts(c, id, parts))
+    let done = p.dto(Some(now()));
+    server.db(|c| {
+        store::edit_parts(c, id, |parts| {
+            if let Some(slot) = parts.iter_mut().rev().find(|d| d.path == done.path) {
+                *slot = done;
+            }
+        })
+    })
 }
 
 /// Turns every captured part into its finished file, and the recording into

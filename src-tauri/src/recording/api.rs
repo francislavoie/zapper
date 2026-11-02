@@ -65,6 +65,11 @@ pub struct PartDto {
     /// Unix seconds.
     pub started: i64,
     pub ended: Option<i64>,
+    /// What the app's player had buffered of the programme, handed over
+    /// rather than received by the service (`capture::add_prelude`): in the
+    /// finished files, never in what is followed while it records.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub handed_over: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

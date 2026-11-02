@@ -231,6 +231,37 @@ async fn set_backup(
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PreludeQuery {
+    /// When the first packet arrived, Unix milliseconds.
+    first_ms: i64,
+}
+
+/// What the app's player had buffered of the programme before the recording
+/// began, as its first part (capture::add_prelude). The app's alone: only
+/// its player has such a buffer, and the body is written to disk as it
+/// comes.
+async fn prelude(
+    State(s): State<Shared>,
+    Path(id): Path<i64>,
+    Query(q): Query<PreludeQuery>,
+    req: Request,
+) -> Result<impl IntoResponse, ApiError> {
+    let body = req.into_body().into_data_stream();
+    let part = super::capture::add_prelude(&s, id, q.first_ms, body)
+        .await
+        .map_err(|e| {
+            let text = format!("{e:#}");
+            if text.contains("no longer being recorded") {
+                ApiError(StatusCode::CONFLICT, text)
+            } else {
+                bad(e)
+            }
+        })?;
+    Ok((StatusCode::CREATED, Json(part)))
+}
+
+#[derive(Deserialize)]
 struct DeleteQuery {
     #[serde(default)]
     files: bool,
@@ -417,6 +448,7 @@ pub fn router(server: Shared) -> Router {
         .route("/api/devices", get(devices))
         .route("/api/devices/{id}", delete_route(revoke))
         .route("/api/shutdown", post(shutdown))
+        .route("/api/recordings/{id}/prelude", put(prelude))
         .route_layer(middleware::from_fn_with_state(server.clone(), app_only));
     Router::new()
         .route("/api/version", get(version))
@@ -2549,5 +2581,213 @@ pub(crate) mod tests {
             call(&s, from_page("POST", "/api/watch", Some(&cookie), watch_body(99, false))).await;
         assert_eq!(st, StatusCode::TOO_MANY_REQUESTS, "{body}");
         assert_eq!(body["reason"], "limit");
+    }
+
+    // ------------------------------------------------- the app's own player
+
+    fn player_body(stream_id: i64, only_shared: bool) -> Option<serde_json::Value> {
+        Some(serde_json::json!({
+            "streamId": stream_id, "player": true, "onlyShared": only_shared, "anyway": true
+        }))
+    }
+
+    #[tokio::test]
+    async fn the_apps_player_joins_a_recordings_connection_and_never_opens_one_when_told_not_to() {
+        let s = server_with("watch-player", Box::new(Full));
+        enable(&s, true).await;
+        let (base, connections) = feed_server().await;
+        feeds_from(&s, &base);
+        let app = |body| req_body("POST", "/api/watch", HOME, false, Some(APP), body);
+
+        // Nothing recorded on 66 (MPEG-2, which no browser plays): "only a
+        // connection you have" opens none.
+        let (st, body) = call(&s, app(player_body(66, true))).await;
+        assert_eq!(st, StatusCode::CONFLICT, "{body}");
+        assert_eq!(body["reason"], "notOpen");
+        assert_eq!(s.hubs.open_count(), 0);
+        assert_eq!(connections.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+        // A recording of it: the player rides its connection, and is given
+        // the stream as it comes, MPEG-2 and all.
+        let rec = s.hubs.open(
+            66,
+            crate::source::Playable::plain(format!("{base}/mpeg2.ts")),
+            crate::recording::sharing::Rider {
+                id: 1,
+                stop: now() + 3600,
+                until: now() + 3900,
+            },
+        );
+        let (st, body) = call(&s, app(player_body(66, true))).await;
+        assert_eq!(st, StatusCode::OK, "{body}");
+        assert_eq!(body["shared"], true);
+        assert_eq!(body["converting"], false);
+        let stream = body["stream"].as_str().unwrap().to_string();
+        let (st, bytes) = read_some(&s, req("GET", &stream, HOME, false, Some(APP)), 188 * 20).await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(bytes[0], 0x47);
+        assert_eq!(s.hubs.conns()[0].riders.len(), 2);
+        assert_eq!(connections.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        // Letting go frees its place at once.
+        let id = viewer_id(&body);
+        let (st, _) = call(&s, req("DELETE", &format!("/api/watch/{id}"), HOME, false, Some(APP))).await;
+        assert_eq!(st, StatusCode::NO_CONTENT);
+        until("the player leaves", || s.hubs.conns()[0].riders.len() == 1).await;
+        drop(rec);
+
+        // A browser is not the app's player.
+        let cookie = browser_login(&s).await;
+        let (st, _) = call(&s, from_page("POST", "/api/watch", Some(&cookie), player_body(5, false))).await;
+        assert_eq!(st, StatusCode::FORBIDDEN);
+    }
+
+    /// A few seconds of test pattern and tone as MPEG-TS, made with the
+    /// ffmpeg command when there is one; `None` without it.
+    fn ts_fixture(dir: &std::path::Path) -> Option<Vec<u8>> {
+        let out = dir.join("pattern.ts");
+        let made = std::process::Command::new("ffmpeg")
+            .args(["-hide_banner", "-loglevel", "error", "-y"])
+            .args(["-f", "lavfi", "-i", "testsrc2=size=320x180:rate=25"])
+            .args(["-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000"])
+            .args(["-t", "4", "-map", "0:v", "-map", "1:a"])
+            .args(["-c:v", "mpeg2video", "-g", "25", "-b:v", "500k", "-c:a", "mp2", "-f", "mpegts"])
+            .arg(&out)
+            .status()
+            .ok()?
+            .success();
+        let bytes = made.then(|| std::fs::read(&out).ok()).flatten();
+        let _ = std::fs::remove_file(&out);
+        bytes
+    }
+
+    fn put_prelude(id: i64, first_ms: i64, token: &str, body: Vec<u8>) -> Request {
+        let mut r = Request::builder()
+            .method("PUT")
+            .uri(format!("/api/recordings/{id}/prelude?firstMs={first_ms}"))
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .header(header::CONTENT_TYPE, "video/mp2t")
+            .body(Body::from(body))
+            .unwrap();
+        r.extensions_mut().insert(Peer {
+            addr: SocketAddr::new(HOME.parse().unwrap(), 40000),
+            tls: false,
+        });
+        r
+    }
+
+    #[tokio::test]
+    async fn a_players_buffer_becomes_the_first_part_and_is_finished_with_the_rest() {
+        let s = server("prelude");
+        let folder = s.dir_for_test().join("Recorded");
+        std::fs::create_dir_all(&folder).unwrap();
+        let Some(ts) = ts_fixture(&folder) else {
+            eprintln!("skipped: no ffmpeg command to make a fixture with");
+            return;
+        };
+        let t = now();
+        let id = s
+            .db(|c| {
+                let req = ScheduleRequest {
+                    stream_id: 7,
+                    backup_stream_id: None,
+                    channel_name: Some("One".into()),
+                    title: "News".into(),
+                    episode_title: None,
+                    season: None,
+                    episode: None,
+                    start: t - 600,
+                    stop: t + 3600,
+                    pad_before: None,
+                    pad_after: None,
+                };
+                store::insert(
+                    c,
+                    &store::NewRecording {
+                        req: &req,
+                        backup_stream_id: None,
+                        channel_name: "One",
+                        pad_before: 60,
+                        pad_after: 300,
+                        folder: &folder.to_string_lossy(),
+                        base: "News",
+                        clock_track: true,
+                        now: t,
+                    },
+                )
+            })
+            .unwrap();
+        // What the capture has received since, as it writes it.
+        let live = crate::recording::api::PartDto {
+            path: folder.join(".News - part1.ts").to_string_lossy().into_owned(),
+            stream_id: 7,
+            bytes: ts.len() as u64,
+            started: t,
+            ended: Some(t + 4),
+            handed_over: false,
+        };
+        std::fs::write(&live.path, &ts).unwrap();
+        s.db(|c| store::set_parts(c, id, std::slice::from_ref(&live))).unwrap();
+
+        // Not a transport stream, or not from the app: refused, nothing kept.
+        let (st, _) = call(&s, put_prelude(id, (t - 120) * 1000, APP, b"hello".repeat(100))).await;
+        assert_eq!(st, StatusCode::BAD_REQUEST);
+        let cookie = {
+            enable(&s, true).await;
+            browser_login(&s).await
+        };
+        let mut r = from_page("PUT", &format!("/api/recordings/{id}/prelude?firstMs=1"), Some(&cookie), None);
+        *r.body_mut() = Body::from(ts.clone());
+        assert_eq!(call(&s, r).await.0, StatusCode::FORBIDDEN);
+        assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 1, "nothing left behind");
+        let (st, _) = call(&s, put_prelude(99, 0, APP, ts.clone())).await;
+        assert_eq!(st, StatusCode::NOT_FOUND);
+
+        // The app's: in front of what the capture received, with a clock log
+        // placing it when it arrived.
+        let first_ms = (t - 120) * 1000;
+        let (st, part) = call(&s, put_prelude(id, first_ms, APP, ts.clone())).await;
+        assert_eq!(st, StatusCode::CREATED, "{part}");
+        let rec = s.get(id).unwrap();
+        assert_eq!(rec.parts.len(), 2);
+        assert_eq!(rec.parts[0].started, t - 120);
+        assert!(rec.parts[0].handed_over, "kept out of what is followed while it records");
+        assert!(
+            std::path::Path::new(&rec.parts[0].path)
+                .file_name()
+                .is_some_and(|n| n.to_string_lossy().starts_with('.')),
+            "hidden whatever the setting"
+        );
+        assert_eq!(rec.parts[0].bytes, ts.len() as u64);
+        assert_eq!(rec.parts[1], live);
+        let log = std::fs::read_to_string(crate::recording::capture::log_path(
+            std::path::Path::new(&rec.parts[0].path),
+        ))
+        .unwrap();
+        let arrivals = crate::recording::clock::parse_log(&log);
+        assert!(arrivals.len() > 5, "{log}");
+        assert!(arrivals[0].wall_ms >= first_ms && arrivals[0].wall_ms < first_ms + 1000);
+        assert!(rec.notes.iter().any(|n| n.contains("already received")), "{:?}", rec.notes);
+
+        // Finished, both are files of their own, in order.
+        crate::recording::capture::finish(&s, id).await;
+        let rec = s.get(id).unwrap();
+        assert_eq!(rec.state, RecordingState::Done, "{:?}", rec.notes);
+        let names: Vec<String> = rec
+            .parts
+            .iter()
+            .map(|p| std::path::Path::new(&p.path).file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, ["News - part1.mkv", "News - part2.mkv"]);
+        let left: Vec<String> = std::fs::read_dir(&folder)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with('.'))
+            .collect();
+        assert!(left.is_empty(), "{left:?}");
+
+        // Once it is saved there is nothing to put a part in front of.
+        let (st, _) = call(&s, put_prelude(id, first_ms, APP, ts)).await;
+        assert_eq!(st, StatusCode::CONFLICT);
     }
 }

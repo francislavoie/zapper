@@ -176,6 +176,34 @@ pub fn ass_packet(read_order: usize, text: &str) -> String {
     format!("{read_order},0,Clock,,0,0,0,,{text}")
 }
 
+/// The arrival log of a part that was not received as it aired but handed
+/// over whole: what the app's player had buffered of the programme before
+/// the recording began (`capture::add_prelude`). Its first packet arrived at
+/// `first_ms`, and the rest followed as the stream's own timeline runs, so
+/// each sample is put down at that time, a few a second: the clock then reads
+/// exactly as it would have, had the part been captured live.
+pub fn replayed(samples: &[Sample], first_ms: i64) -> Vec<Arrival> {
+    let Some(base) = samples.first().map(|s| s.out_ms) else {
+        return Vec::new();
+    };
+    let mut out: Vec<Arrival> = Vec::new();
+    let mut last: Option<i64> = None;
+    for s in samples {
+        if last.is_some_and(|l| s.out_ms - l < 200 && !s.disc) {
+            continue;
+        }
+        last = Some(s.out_ms);
+        // "By then the file was this long": just past the sample's packet,
+        // so it is this record that places it.
+        out.push(Arrival {
+            pos: s.pos + 1,
+            wall_ms: first_ms + (s.out_ms - base),
+            connect: false,
+        });
+    }
+    out
+}
+
 /// The capture's arrival log, one line per record: `<pos> <wall_ms>`, or
 /// `<pos> <wall_ms> connect`. Text, so a capture cut off mid-write loses at
 /// most its last line.
@@ -333,6 +361,35 @@ mod tests {
         };
         assert_eq!(at(4_000), "20:00:04");
         assert_eq!(at(5_000), "20:01:05");
+    }
+
+    #[test]
+    fn a_part_handed_over_whole_reads_as_if_it_had_been_captured_live() {
+        // Thirty frames a second for ten seconds, its timeline starting at
+        // 1.4 s (as a muxer's delay puts it), 2000 bytes a frame.
+        let s: Vec<Sample> = (0..300)
+            .map(|i| Sample {
+                pos: i as u64 * 2000,
+                out_ms: 1400 + i * 1000 / 30,
+                disc: false,
+            })
+            .collect();
+        let a = replayed(&s, EIGHT_PM);
+        assert!(a.len() < 80, "a few records a second, not one a frame: {}", a.len());
+        assert!(a.windows(2).all(|w| w[0].pos < w[1].pos));
+        let c = cues(&s, &a, 11_400, UTC);
+        let at = |ms: i64| {
+            c.iter()
+                .find(|q| q.start_ms <= ms && ms < q.end_ms)
+                .unwrap()
+                .text
+                .clone()
+        };
+        assert_eq!(at(1_400), "20:00:00");
+        assert_eq!(at(2_399), "20:00:00");
+        assert_eq!(at(2_400), "20:00:01");
+        assert_eq!(at(11_399), "20:00:09");
+        assert!(replayed(&[], EIGHT_PM).is_empty());
     }
 
     #[test]
