@@ -68,6 +68,9 @@ pub struct RecordingDto {
     pub stream_id: i64,
     /// The feed switched to when the main one fails.
     pub backup_stream_id: Option<i64>,
+    /// The backup's channel name, when the catalogue has it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backup_name: Option<String>,
     pub channel_name: String,
     pub title: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]

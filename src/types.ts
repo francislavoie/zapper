@@ -618,11 +618,36 @@ export interface RecordingDto {
   notes: string[];
   error?: string;
   folder: string;
+  /** The backup's channel name, when the catalogue has it. */
+  backupName?: string;
   /** While recording: why it is not capturing right now. */
   waiting?: string;
   /** What it would lose to recordings on other channels when the account
    *  has too few connections for them all; absent when nothing. */
   conflicts?: ConflictDto[];
+}
+
+/** Why a channel is offered as a recording's backup: it carries the same
+ *  guide channel, or its guide has the same programme at the same time. */
+export type BackupReason = "guide" | "programme";
+
+/** A channel a recording could fall back to (src-tauri/src/recording/backup.rs). */
+export interface BackupDto {
+  streamId: number;
+  name: string;
+  num?: number;
+  numLabel?: string;
+  reason: BackupReason;
+  /** The last measured picture height, when it has been played. */
+  height?: number;
+  /** The last time it was opened, it failed to load. */
+  failing?: boolean;
+}
+
+/** A recording's backup now, and the candidates, best first. */
+export interface BackupsDto {
+  current?: number;
+  candidates: BackupDto[];
 }
 
 /** What a recording loses to another one on another channel. */

@@ -37,6 +37,7 @@ import {
   type VideoRect,
   type NetworkDto,
   type NetworkSettingsDto,
+  type BackupsDto,
   type RecordingDto,
   type ConflictDto,
   type RecordingSettingsDto,
@@ -173,6 +174,9 @@ export const api = {
   previewRecording: (request: ScheduleRequest) =>
     invoke<ConflictDto[]>("preview_recording", { request }),
   cancelRecording: (id: number) => invoke<void>("cancel_recording", { id }),
+  recordingBackups: (id: number) => invoke<BackupsDto>("recording_backups", { id }),
+  setRecordingBackup: (id: number, streamId: number | null) =>
+    invoke<RecordingDto>("set_recording_backup", { id, streamId }),
   deleteRecording: (id: number, files: boolean) =>
     invoke<void>("delete_recording", { id, files }),
   recordingStatus: () => invoke<RecordingStatusDto>("recording_status"),

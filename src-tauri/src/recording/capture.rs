@@ -281,6 +281,18 @@ async fn run_inner(server: &Arc<Server>, id: i64, stop: &mut watch::Receiver<boo
             continue;
         }
 
+        // The backup may have been chosen by hand since the last attempt
+        // (the request that changed it left a note): it applies from this
+        // one.
+        let backup = server
+            .db(|c| store::backup_of(c, id))?
+            .filter(|&b| b != rec.stream_id);
+        if backup != feeds.get(1).copied() {
+            feeds.truncate(1);
+            feeds.extend(backup);
+            fallback.backup_changed(backup.is_some());
+        }
+
         // Ride a connection already open for one of its feeds, the current
         // one first: that costs the account nothing.
         let current = fallback.current();

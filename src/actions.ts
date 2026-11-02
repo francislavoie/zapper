@@ -325,6 +325,33 @@ export async function cancelRecording(dispatch: Dispatch<Action>, rec: Recording
   await refreshRecordings(dispatch);
 }
 
+/** Chooses `streamId` (`null`: none) as the channel a recording falls back
+ *  to when its own feed fails. While it records, the service uses it from
+ *  the next failure on. */
+export async function setRecordingBackup(
+  dispatch: Dispatch<Action>,
+  rec: RecordingDto,
+  streamId: number | null,
+): Promise<RecordingDto | null> {
+  dispatch({ type: "programmeMenu", menu: null });
+  let out: RecordingDto | null = null;
+  try {
+    out = await backend.setRecordingBackup(rec.id, streamId);
+    dispatch({
+      type: "toast",
+      kind: "info",
+      text:
+        out.backupStreamId == null
+          ? `“${rec.title}” has no backup channel now`
+          : `“${rec.title}” falls back to ${out.backupName ?? `channel ${out.backupStreamId}`}`,
+    });
+  } catch (e) {
+    dispatch({ type: "toast", text: `Backup channel: ${errorMessage(e)}` });
+  }
+  await refreshRecordings(dispatch);
+  return out;
+}
+
 /** Forgets a finished recording and deletes its files. */
 export async function deleteRecording(dispatch: Dispatch<Action>, rec: RecordingDto): Promise<void> {
   try {

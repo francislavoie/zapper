@@ -12,6 +12,7 @@ use rusqlite::{Connection, OptionalExtension};
 use tokio::sync::{watch, Notify};
 
 use super::access::Access;
+use super::backup::{self, BackupsDto};
 use super::api::{
     ActiveDto, ConflictDto, ConflictKind, NetworkDto, NetworkSettingsDto, RecordingDto,
     RecordingSettingsDto, RecordingState, ScheduleRequest, ShutdownRequest, StatusDto, API_VERSION,
@@ -280,6 +281,7 @@ impl Server {
                 }
             }
         });
+        name_backups(&mut list);
         Ok(list)
     }
 
@@ -288,7 +290,59 @@ impl Server {
             .db(|c| store::get(c, id))?
             .ok_or_else(|| anyhow!("no such recording"))?;
         r.waiting = self.live(|m| m.get(&id).and_then(|l| l.waiting.clone()));
+        name_backups(std::slice::from_mut(&mut r));
         Ok(r)
+    }
+
+    /// The channels recording `id` could fall back to, best first
+    /// ([`backup`]), and the one it falls back to now.
+    pub fn backups(&self, id: i64) -> Result<BackupsDto> {
+        let r = self.get(id)?;
+        let candidates = crate::catalog::db::with_db(|c| {
+            backup::candidates(c, r.stream_id, &r.title, r.start, backup::MAX_CANDIDATES)
+        })?;
+        Ok(BackupsDto {
+            current: r.backup_stream_id,
+            candidates,
+        })
+    }
+
+    /// Chooses recording `id`'s backup feed by hand, or none. Any channel
+    /// the catalogue lists will do, not only the candidates: the person
+    /// choosing may know a simulcast the guide does not. While it records,
+    /// the change applies from its next fallback decision (`capture`): a
+    /// feed that is delivering is kept.
+    pub fn set_backup(&self, id: i64, backup: Option<i64>) -> Result<RecordingDto> {
+        let rec = self.get(id)?;
+        if !matches!(rec.state, RecordingState::Scheduled | RecordingState::Recording) {
+            bail!("that recording has finished");
+        }
+        let name = match backup {
+            Some(b) if b == rec.stream_id => {
+                bail!("the backup must be another channel than the one recorded")
+            }
+            Some(b) => Some(
+                crate::catalog::db::with_db(|c| backup::usable(c, b))?
+                    .ok_or_else(|| anyhow!("there is no channel {b} to use as a backup"))?,
+            ),
+            None => None,
+        };
+        if rec.backup_stream_id == backup {
+            return Ok(rec);
+        }
+        self.db(|c| store::set_backup(c, id, backup))?;
+        if rec.state == RecordingState::Recording {
+            self.note(
+                id,
+                &match &name {
+                    Some(n) => format!(
+                        "the backup feed is now “{n}”, used from the next time a feed fails"
+                    ),
+                    None => "no backup feed from now on".to_string(),
+                },
+            );
+        }
+        self.get(id)
     }
 
     pub fn schedule(&self, req: ScheduleRequest) -> Result<RecordingDto> {
@@ -309,7 +363,7 @@ impl Server {
         let backup = match req.backup_stream_id {
             Some(b) if b == req.stream_id => None,
             Some(b) => Some(b),
-            None => backup_for(req.stream_id).unwrap_or(None),
+            None => backup_for(req.stream_id, &req.title, req.start).unwrap_or(None),
         };
         let channel_name = match &req.channel_name {
             Some(n) if !n.trim().is_empty() => n.clone(),
@@ -824,23 +878,24 @@ fn empty_folders<'a>(folder: &'a Path, output: &Path) -> Vec<&'a Path> {
         .collect()
 }
 
-/// Another live channel carrying the same guide channel: the same programme
+/// The best backup for a new recording ([`backup`]): the same programme
 /// from another feed, which is what a backup is for.
-fn backup_for(stream_id: i64) -> Result<Option<i64>> {
-    crate::catalog::db::with_db(|c| backup_in(c, stream_id))
+fn backup_for(stream_id: i64, title: &str, start: i64) -> Result<Option<i64>> {
+    crate::catalog::db::with_db(|c| backup::best(c, stream_id, title, start))
 }
 
-pub fn backup_in(c: &Connection, stream_id: i64) -> Result<Option<i64>> {
-    Ok(c.query_row(
-        "SELECT b.stream_id FROM channels a JOIN channels b
-           ON b.epg_channel_id = a.epg_channel_id AND b.stream_id != a.stream_id
-         WHERE a.stream_id = ?1 AND a.epg_channel_id IS NOT NULL AND a.epg_channel_id != ''
-           AND b.deleted_at IS NULL AND b.is_separator = 0
-         ORDER BY b.num IS NULL, b.num, b.stream_id LIMIT 1",
-        [stream_id],
-        |r| r.get(0),
-    )
-    .optional()?)
+/// Fills in each recording's backup channel name from the catalogue.
+fn name_backups(recs: &mut [RecordingDto]) {
+    let ids: Vec<i64> = recs.iter().filter_map(|r| r.backup_stream_id).collect();
+    if ids.is_empty() {
+        return;
+    }
+    let Ok(names) = crate::catalog::db::with_db(|c| backup::names(c, &ids)) else {
+        return;
+    };
+    for r in recs {
+        r.backup_name = r.backup_stream_id.and_then(|b| names.get(&b).cloned());
+    }
 }
 
 fn channel_name(stream_id: i64) -> Option<String> {
@@ -901,10 +956,11 @@ mod tests {
              UPDATE channels SET deleted_at = 1 WHERE stream_id = 3;",
         )
         .unwrap();
-        assert_eq!(backup_in(&c, 1).unwrap(), Some(2));
-        assert_eq!(backup_in(&c, 2).unwrap(), Some(1));
-        assert_eq!(backup_in(&c, 4).unwrap(), None);
-        assert_eq!(backup_in(&c, 5).unwrap(), None);
+        let best = |id| backup::best(&c, id, "Harbour Lights", 0).unwrap();
+        assert_eq!(best(1), Some(2));
+        assert_eq!(best(2), Some(1));
+        assert_eq!(best(4), None);
+        assert_eq!(best(5), None);
     }
 
     #[test]

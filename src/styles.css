@@ -5773,6 +5773,84 @@ textarea.field {
   color: var(--bad);
 }
 
+/* The backup channel under a scheduled or recording row, and its picker. */
+.rec-backup {
+  margin-top: 0.125rem;
+  font-size: 0.6875rem;
+  color: var(--dim);
+}
+
+.rec-backup-now {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.rec-backup-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.rec-backup-now .link {
+  flex: 0 0 auto;
+  font-size: inherit;
+}
+
+.rec-backup-pick {
+  display: flex;
+  flex-direction: column;
+  margin-top: 0.25rem;
+  padding: 0.25rem;
+  max-height: 10rem;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 0.25rem;
+  background: var(--bg-3);
+}
+
+.rec-backup-pick .pane-note {
+  margin: 0.25rem;
+  font-size: inherit;
+}
+
+.rec-backup-option {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  padding: 0.25rem 0.375rem;
+  border: 0;
+  border-radius: 0.1875rem;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.rec-backup-option span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rec-backup-option:hover,
+.rec-backup-option:focus-visible {
+  background: var(--line);
+}
+
+.rec-backup-option.on {
+  color: var(--accent);
+}
+
+.rec-backup-option:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
 /* What a recording would lose to another on a full account: padding only
    in the text's colour, part of a programme in red. */
 .rec-conflicts {

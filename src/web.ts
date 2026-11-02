@@ -42,6 +42,7 @@ import type {
   PlayerOptionsDto,
   ProgrammeDto,
   ProgrammeHitDto,
+  BackupsDto,
   RecordingDto,
   ConflictDto,
   RecordingSettingsDto,
@@ -274,6 +275,9 @@ export const webBackend: typeof api = {
   previewRecording: (req: ScheduleRequest) =>
     post<ConflictDto[]>("/api/recordings/preview", req).catch(() => []),
   cancelRecording: (id) => post<unknown>(`/api/recordings/${id}/cancel`).then(() => undefined),
+  recordingBackups: (id) => get<BackupsDto>(`/api/recordings/${id}/backups`),
+  setRecordingBackup: (id, streamId) =>
+    put<RecordingDto>(`/api/recordings/${id}/backup`, { streamId }),
   deleteRecording: (id, files) =>
     del<unknown>(apiUrl(`/api/recordings/${id}`, { files: files ? "true" : "false" })).then(
       () => undefined,

@@ -121,6 +121,23 @@ impl Fallback {
         self.current
     }
 
+    /// The backup feed was changed, added or taken away while recording.
+    /// The new one starts with a clean slate (its failures were another
+    /// channel's), and with no backup left the main feed is the only one.
+    /// What the recording does next is decided as before: this changes
+    /// which channel "the backup" is, not whether to switch to it.
+    pub fn backup_changed(&mut self, present: bool) {
+        self.feeds = if present { 2 } else { 1 };
+        if self.current >= self.feeds {
+            self.current = 0;
+        }
+        if self.last_good == Some(1) {
+            self.last_good = None;
+        }
+        self.failures[1] = 0;
+        self.last_failed[1] = i64::MIN;
+    }
+
     /// Rides a connection the service already has open on `feed` (another
     /// recording's): it is the current feed from now on. Nothing failed, so
     /// it is not a switch and the flap guard does not count it.
@@ -387,6 +404,30 @@ mod tests {
         assert_eq!(f.failed(20, REFUSED, 0).feed, 0);
         f.ride(5);
         assert_eq!(f.current(), 0, "no such feed: nothing changes");
+    }
+
+    #[test]
+    fn a_backup_chosen_while_recording_is_used_at_the_next_failure() {
+        // No backup at first: the main feed is retried.
+        let mut f = Fallback::new(1);
+        assert_eq!(f.failed(0, REFUSED, 0).feed, 0);
+        f.backup_changed(true);
+        let n = f.failed(10, REFUSED, 0);
+        assert_eq!((n.feed, n.at), (1, 10), "switched to the new backup at once");
+
+        // The backup it is on is taken away: back to the main feed alone.
+        f.backup_changed(false);
+        assert_eq!(f.current(), 0);
+        let n = f.failed(20, Failure::Ended, 40);
+        assert_eq!(n.feed, 0);
+
+        // A replaced backup carries none of the old one's failures.
+        let mut f = Fallback::new(2);
+        f.failed(0, REFUSED, 0); // main → backup
+        f.failed(1, REFUSED, 0); // backup → main
+        f.backup_changed(true);
+        let n = f.failed(2, REFUSED, 0);
+        assert_eq!((n.feed, n.at), (1, 2), "no back-off inherited");
     }
 
     #[test]

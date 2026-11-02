@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  backupCandidateLabel,
+  backupMenuLabel,
+  backupTargets,
+  backupText,
   bytes,
   canRecord,
   conflictLosesProgramme,
@@ -79,6 +83,46 @@ test("the guide's season and episode go along when it has them", () => {
   assert.ok(!("season" in e));
   // A season alone names nothing.
   assert.ok(!("season" in scheduleRequest(ch, { ...p, season: 3 })));
+});
+
+test("a programme is offered as backup for overlapping recordings on other channels", () => {
+  const recs = [
+    rec({ id: 1, streamId: 7, start: NOON, stop: NOON + 1800 }),
+    rec({ id: 2, streamId: 8, start: NOON + 900, stop: NOON + 2700, state: "recording" }),
+    rec({ id: 3, streamId: 9, start: NOON + 1800, stop: NOON + 3600 }),
+    rec({ id: 4, streamId: 10, start: NOON - 600, stop: NOON + 600, state: "done" }),
+    rec({ id: 5, streamId: 11, start: NOON + 60, stop: NOON + 120 }),
+    rec({ id: 6, streamId: 12, start: NOON + 100, stop: NOON + 200 }),
+  ];
+  const p = { start: NOON, stop: NOON + 1800 };
+  // Not its own channel (7), not a finished one (4), not one that starts as
+  // it ends (3); soonest first, three at most.
+  assert.deepEqual(
+    backupTargets(recs, 7, p).map((r) => r.id),
+    [5, 6, 2],
+  );
+  assert.deepEqual(
+    backupTargets(recs, 99, p, 10).map((r) => r.id),
+    [1, 5, 6, 2],
+  );
+  assert.deepEqual(backupTargets(recs, 7, { start: NOON + 4000, stop: NOON + 5000 }), []);
+});
+
+test("the menu offers to use a channel as backup, or to stop", () => {
+  assert.equal(backupMenuLabel({ title: "Film", backupStreamId: null }, 5), "Use as backup for “Film”");
+  assert.equal(backupMenuLabel({ title: "Film", backupStreamId: 6 }, 5), "Use as backup for “Film”");
+  assert.equal(backupMenuLabel({ title: "Film", backupStreamId: 5 }, 5), "Stop using as backup for “Film”");
+});
+
+test("a recording's backup and the candidates read plainly", () => {
+  assert.equal(backupText({ backupStreamId: null }), "No backup channel");
+  assert.equal(backupText({ backupStreamId: 4, backupName: "One SD" }), "Backup: One SD");
+  assert.equal(backupText({ backupStreamId: 4 }), "Backup: channel 4");
+  assert.equal(backupCandidateLabel({ streamId: 1, name: "One HD", reason: "guide", height: 1080 }), "One HD · 1080p");
+  assert.equal(
+    backupCandidateLabel({ streamId: 2, name: "Sim", reason: "programme", failing: true }),
+    "Sim · failed last time · same programme",
+  );
 });
 
 test("episode labels read as recordings are named", () => {

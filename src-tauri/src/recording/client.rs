@@ -8,6 +8,7 @@ use std::time::Duration;
 use anyhow::{anyhow, Result};
 use serde::de::DeserializeOwned;
 
+use super::backup::{BackupsDto, SetBackupRequest};
 use super::api::{
     ConflictDto, ErrorDto, NetworkDto, NetworkSettingsDto, PasswordRequest, RecordingDto,
     RecordingSettingsDto, ScheduleRequest, ShutdownRequest, StatusDto, VersionDto,
@@ -122,6 +123,25 @@ impl Client {
         )
         .await
         .map(|_| ())
+    }
+
+    /// The channels recording `id` could fall back to, and its backup now.
+    pub async fn backups(&self, id: i64) -> Result<BackupsDto> {
+        self.send(
+            self.http
+                .get(self.url(&format!("/api/recordings/{id}/backups"))),
+        )
+        .await
+    }
+
+    /// Chooses recording `id`'s backup feed; `None` for none.
+    pub async fn set_backup(&self, id: i64, stream_id: Option<i64>) -> Result<RecordingDto> {
+        self.send(
+            self.http
+                .put(self.url(&format!("/api/recordings/{id}/backup")))
+                .json(&SetBackupRequest { stream_id }),
+        )
+        .await
     }
 
     /// Forgets a recording; with `files`, deletes what it recorded too.

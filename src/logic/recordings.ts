@@ -8,6 +8,7 @@
 // Checked in src/__checks__/recordings.test.mjs.
 
 import type {
+  BackupDto,
   ChannelDto,
   ConflictDto,
   Naming,
@@ -63,6 +64,51 @@ export function scheduleRequest(ch: ChannelDto, p: ProgrammeDto): ScheduleReques
     if (p.season != null) req.season = p.season;
   }
   return req;
+}
+
+/** The recordings a programme on channel `streamId` could stand in for:
+ *  scheduled or recording, on another channel, overlapping it in time.
+ *  Soonest first, at most `max`, so the menu stays short. */
+export function backupTargets(
+  recs: readonly RecordingDto[],
+  streamId: number,
+  p: Pick<ProgrammeDto, "start" | "stop">,
+  max = 3,
+): RecordingDto[] {
+  return recs
+    .filter(
+      (r) =>
+        (r.state === "scheduled" || r.state === "recording") &&
+        r.streamId !== streamId &&
+        r.start < p.stop &&
+        p.start < r.stop,
+    )
+    .sort((a, b) => a.start - b.start || a.id - b.id)
+    .slice(0, max);
+}
+
+/** The programme menu's entry for one of `backupTargets`: offers the
+ *  channel as its backup, or, when it already is, to stop. */
+export function backupMenuLabel(r: Pick<RecordingDto, "title" | "backupStreamId">, streamId: number): string {
+  return r.backupStreamId === streamId
+    ? `Stop using as backup for “${r.title}”`
+    : `Use as backup for “${r.title}”`;
+}
+
+/** A recording's backup, in a few words, for its row in Recordings. */
+export function backupText(r: Pick<RecordingDto, "backupStreamId" | "backupName">): string {
+  if (r.backupStreamId == null) return "No backup channel";
+  return `Backup: ${r.backupName ?? `channel ${r.backupStreamId}`}`;
+}
+
+/** A candidate as the picker lists it: "One HD · 1080p", with why it is
+ *  offered when that is the programme rather than the guide channel. */
+export function backupCandidateLabel(b: BackupDto): string {
+  const bits = [b.name];
+  if (b.height) bits.push(`${b.height}p`);
+  if (b.failing) bits.push("failed last time");
+  if (b.reason === "programme") bits.push("same programme");
+  return bits.join(" · ");
 }
 
 const ORDER: { state: RecordingState; label: string }[] = [
