@@ -7,6 +7,7 @@ use crate::recording::api::{
     ConflictDto, NetworkDto, NetworkSettingsDto, RecordingDto, RecordingSettingsDto,
     ScheduleRequest, StatusDto,
 };
+use crate::recording::backup::BackupsDto;
 use crate::recording::client::Client;
 use crate::recording::service::{self, ServiceStatusDto};
 
@@ -33,6 +34,18 @@ pub async fn record_programme(request: ScheduleRequest) -> Result<RecordingDto, 
 #[tauri::command]
 pub async fn preview_recording(request: ScheduleRequest) -> Result<Vec<ConflictDto>, String> {
     Ok(client()?.preview(&request).await.unwrap_or_default())
+}
+
+/// The channels a recording could fall back to, best first.
+#[tauri::command]
+pub async fn recording_backups(id: i64) -> Result<BackupsDto, String> {
+    client()?.backups(id).await.map_err(words)
+}
+
+/// Chooses a recording's backup feed, or none.
+#[tauri::command]
+pub async fn set_recording_backup(id: i64, stream_id: Option<i64>) -> Result<RecordingDto, String> {
+    client()?.set_backup(id, stream_id).await.map_err(words)
 }
 
 #[tauri::command]

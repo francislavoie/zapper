@@ -149,6 +149,15 @@ const EPG_EPISODE_COLUMNS: &[(&str, &str, &str)] = &[
     ("epg", "episode", "INTEGER"),
 ];
 
+/// Migration step `backup_lookup`: what choosing a recording's backup feed
+/// needs to stay fast on a large catalogue (`recording::backup`). Channels
+/// by guide channel are already indexed (`channels_by_epg`); programmes by
+/// start time across every guide channel are not, and the title match looks
+/// a few minutes either side of one start.
+const BACKUP_INDEXES: &str = r#"
+CREATE INDEX IF NOT EXISTS epg_by_start ON epg(start);
+"#;
+
 fn add_missing_columns(conn: &Connection, columns: &[(&str, &str, &str)]) -> Result<()> {
     for (table, column, decl) in columns {
         let present: bool = conn
@@ -173,6 +182,8 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     conn.execute_batch(CHANNEL_QUALITY)
         .context("migrating channel_quality")?;
     add_missing_columns(conn, EPG_EPISODE_COLUMNS).context("migrating epg_episode")?;
+    conn.execute_batch(BACKUP_INDEXES)
+        .context("migrating backup_lookup")?;
     crate::catalog::guide_search::install(conn)
 }
 
@@ -311,6 +322,19 @@ mod tests {
             })
             .unwrap();
         assert_eq!((title.as_str(), season, episode), ("Kept", None, None));
+    }
+
+    #[test]
+    fn programmes_are_indexed_by_start_for_the_backup_lookup() {
+        let c = open_in_memory().unwrap();
+        let plan: String = c
+            .query_row(
+                "EXPLAIN QUERY PLAN SELECT channel_ref FROM epg WHERE start BETWEEN 1 AND 2",
+                [],
+                |r| r.get(3),
+            )
+            .unwrap();
+        assert!(plan.contains("epg_by_start"), "{plan}");
     }
 
     #[test]

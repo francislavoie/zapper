@@ -140,6 +140,7 @@ fn from_row(r: &Row<'_>) -> rusqlite::Result<RecordingDto> {
         notes: serde_json::from_str(&notes).unwrap_or_default(),
         error: r.get(15)?,
         folder: r.get(16)?,
+        backup_name: None,
         waiting: None,
         conflicts: Vec::new(),
     })
@@ -248,6 +249,27 @@ pub fn add_note(conn: &Connection, id: i64, note: &str) -> Result<()> {
     Ok(())
 }
 
+/// The recording's backup feed now: read again before each connection, so
+/// a change while it records is used from its next fallback decision.
+pub fn backup_of(conn: &Connection, id: i64) -> Result<Option<i64>> {
+    Ok(conn
+        .query_row(
+            "SELECT backup_stream_id FROM recordings WHERE id = ?1",
+            [id],
+            |r| r.get(0),
+        )
+        .optional()?
+        .flatten())
+}
+
+pub fn set_backup(conn: &Connection, id: i64, backup: Option<i64>) -> Result<()> {
+    conn.execute(
+        "UPDATE recordings SET backup_stream_id = ?2 WHERE id = ?1",
+        params![id, backup],
+    )?;
+    Ok(())
+}
+
 pub fn delete(conn: &Connection, id: i64) -> Result<bool> {
     Ok(conn.execute("DELETE FROM recordings WHERE id = ?1", [id])? > 0)
 }
@@ -301,6 +323,12 @@ mod tests {
         );
         assert_eq!(slots(&c).unwrap()[0].from, 940);
         assert_eq!(find(&c, 5, 1000).unwrap(), Some(id));
+
+        set_backup(&c, id, Some(12)).unwrap();
+        assert_eq!(backup_of(&c, id).unwrap(), Some(12));
+        set_backup(&c, id, None).unwrap();
+        assert_eq!(backup_of(&c, id).unwrap(), None);
+        assert_eq!(backup_of(&c, id + 100).unwrap(), None);
 
         set_state(&c, id, RecordingState::Recording, None).unwrap();
         let part = PartDto {

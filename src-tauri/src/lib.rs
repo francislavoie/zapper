@@ -152,6 +152,8 @@ pub fn run() {
             ipc::recording_cmds::recordings,
             ipc::recording_cmds::record_programme,
             ipc::recording_cmds::preview_recording,
+            ipc::recording_cmds::recording_backups,
+            ipc::recording_cmds::set_recording_backup,
             ipc::recording_cmds::cancel_recording,
             ipc::recording_cmds::delete_recording,
             ipc::recording_cmds::recording_status,

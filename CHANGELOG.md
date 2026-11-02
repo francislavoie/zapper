@@ -15,6 +15,16 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
 - Recordings of a series are named by season and episode (`Show - S02E05 - …`) when the guide
   numbers its episodes, as XMLTV guides (Xtream servers', Tvheadend's, a playlist's) and
   SiliconDust's guide for HDHomeRun often do. The programme menu shows the number too.
+- A recording's backup channel (the one it switches to if its own fails) can be chosen by hand:
+  right-click a programme on another channel at the same time in the guide and choose *Use as
+  backup for “…”*, or use *Change…* under the recording in Recordings, which lists the
+  candidates best first. A change while recording applies the next time a feed fails.
+
+### Changed
+
+- The backup channel picked when scheduling is the best of several: one in the same category
+  first, then the one that has played better, then the lower number. When no channel shares
+  the guide channel, one showing the same programme at the same time is used.
 
 ### Fixed
 

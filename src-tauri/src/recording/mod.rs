@@ -2,7 +2,8 @@
 //! to talk to it. See docs/recording.md.
 //!
 //! The pure parts are in every build and unit-tested on their own:
-//! [`naming`] (file names from a pattern), [`budget`] (whether the
+//! [`naming`] (file names from a pattern), [`backup`] (which channel a
+//! recording falls back to), [`budget`] (whether the
 //! account has a connection to spare), [`sharing`] (how recordings share
 //! the account's connections, and the conflicts that follow), [`fallback`] (when to switch
 //! between a channel's main and backup feeds), [`schedule`] (what to start,
@@ -20,6 +21,7 @@
 //! — is in the `server` feature, so the app links none of it.
 
 pub mod api;
+pub mod backup;
 pub mod budget;
 pub mod client;
 pub mod clock;

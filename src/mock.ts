@@ -33,6 +33,8 @@ import type {
   QualityDto,
   NetworkDto,
   NetworkSettingsDto,
+  BackupDto,
+  BackupsDto,
   RecordingDto,
   ConflictDto,
   RecordingSettingsDto,
@@ -1067,7 +1069,14 @@ function seedRecordings(): RecordingDto[] {
         }),
       );
     }
-    if (next) out.push(mockRecording(a, next, "scheduled"));
+    if (next) {
+      const spare = getCatalog().rows.find(
+        (r) => r.categoryId === a.categoryId && r.streamId !== a.streamId && !r.isSeparator,
+      );
+      out.push(
+        mockRecording(a, next, "scheduled", spare ? { backupStreamId: spare.streamId, backupName: spare.cleanName } : {}),
+      );
+    }
   }
   if (b) {
     const later = schedule(b, now + 3600, now + 8 * 3600)[1];
@@ -1210,6 +1219,45 @@ const mockRecordingApi = {
       }
     }
     return out;
+  },
+  // The service ranks channels on the same guide channel, then the same
+  // programme elsewhere (src-tauri/src/recording/backup.rs). The mock has no
+  // guide channels, so its neighbours in the category stand in.
+  recordingBackups: async (id: number): Promise<BackupsDto> => {
+    await delay(50);
+    const r = recordingsOrRefuse().find((x) => x.id === id);
+    if (!r) throw "no such recording";
+    const rows = getCatalog().rows;
+    const main = rows.find((c) => c.streamId === r.streamId);
+    const candidates = rows
+      .filter((c) => !c.isSeparator && c.streamId !== r.streamId && c.categoryId === main?.categoryId)
+      .slice(0, 6)
+      .map((c, i) => ({
+        streamId: c.streamId,
+        name: c.cleanName || c.name,
+        num: c.num ?? undefined,
+        reason: (i < 4 ? "guide" : "programme") as BackupDto["reason"],
+        height: c.quality?.height ?? undefined,
+        failing: c.quality?.failedAt != null ? true : undefined,
+      }));
+    return { current: r.backupStreamId ?? undefined, candidates };
+  },
+  setRecordingBackup: async (id: number, streamId: number | null): Promise<RecordingDto> => {
+    await delay(50);
+    const r = recordingsOrRefuse().find((x) => x.id === id);
+    if (!r) throw "no such recording";
+    if (r.state !== "scheduled" && r.state !== "recording") throw "that recording has finished";
+    if (streamId === r.streamId) throw "the backup must be another channel than the one recorded";
+    if (streamId == null) {
+      r.backupStreamId = null;
+      delete r.backupName;
+    } else {
+      const ch = getCatalog().rows.find((c) => c.streamId === streamId && !c.isSeparator);
+      if (!ch) throw `there is no channel ${streamId} to use as a backup`;
+      r.backupStreamId = streamId;
+      r.backupName = ch.cleanName || ch.name;
+    }
+    return { ...r };
   },
   cancelRecording: async (id: number) => {
     await delay(40);

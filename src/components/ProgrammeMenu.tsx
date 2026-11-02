@@ -1,5 +1,7 @@
 // The context menu over a programme, in the guide and in the programme
-// search results: record it, or cancel its recording.
+// search results: record it, or cancel its recording; and, over a programme
+// on another channel at the time of a recording, use its channel as that
+// recording's backup feed.
 //
 // Recording is the recording service's job (zapper-server, Settings ›
 // Recording); when it is not running the menu says so rather than offering
@@ -8,10 +10,12 @@
 // (docs/recording.md, "Sharing connections"), and the menu says so.
 
 import { useEffect, useState } from "react";
-import { cancelRecording, recordProgramme } from "../actions";
+import { cancelRecording, recordProgramme, setRecordingBackup } from "../actions";
 import { backend } from "../backend";
 import { useClock } from "../hooks/useClock";
 import {
+  backupMenuLabel,
+  backupTargets,
   canRecord,
   conflictLosesProgramme,
   conflictText,
@@ -92,6 +96,26 @@ export function ProgrammeMenu() {
           </span>
         </button>
       )}
+      {running && !channel.isSeparator
+        ? backupTargets(recordings ?? [], channel.streamId, programme).map((r) => (
+            <button
+              key={`backup-${r.id}`}
+              className="tb-menu-item"
+              role="menuitem"
+              onClick={() =>
+                void setRecordingBackup(
+                  dispatch,
+                  r,
+                  r.backupStreamId === channel.streamId ? null : channel.streamId,
+                )
+              }
+            >
+              <span className="tb-menu-label" data-tip-overflow="">
+                {backupMenuLabel(r, channel.streamId)}
+              </span>
+            </button>
+          ))
+        : null}
       <button
         className="tb-menu-item"
         role="menuitem"

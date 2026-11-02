@@ -30,6 +30,7 @@ use super::api::{
     ErrorDto, LoginRequest, NetworkSettingsDto, PasswordRequest, RecordingSettingsDto,
     ScheduleRequest, ShutdownRequest, VersionDto, API_VERSION,
 };
+use super::backup::SetBackupRequest;
 use super::now;
 use super::server::Server;
 use super::{account, browse, web};
@@ -206,6 +207,29 @@ async fn cancel(State(s): State<Shared>, Path(id): Path<i64>) -> Result<Response
     }
 }
 
+/// The channels a recording could fall back to, best first.
+async fn backups(State(s): State<Shared>, Path(id): Path<i64>) -> Result<impl IntoResponse, ApiError> {
+    let s2 = s.clone();
+    // The catalogue read can take a moment on a large guide: off the async
+    // threads, like the browse API's.
+    tokio::task::spawn_blocking(move || s2.backups(id))
+        .await
+        .map_err(|e| bad(anyhow::anyhow!("{e}")))?
+        .map(Json)
+        .map_err(bad)
+}
+
+/// Chooses a recording's backup feed, or none (`{"streamId": null}`).
+async fn set_backup(
+    State(s): State<Shared>,
+    Path(id): Path<i64>,
+    Json(req): Json<SetBackupRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let mut r = s.set_backup(id, req.stream_id).map_err(bad)?;
+    s.add_conflicts(std::slice::from_mut(&mut r), s.account_max().await);
+    Ok(Json(r))
+}
+
 #[derive(Deserialize)]
 struct DeleteQuery {
     #[serde(default)]
@@ -379,6 +403,8 @@ pub fn router(server: Shared) -> Router {
         .route("/api/recordings/preview", post(preview))
         .route("/api/recordings/{id}", get(one).delete(delete))
         .route("/api/recordings/{id}/cancel", post(cancel))
+        .route("/api/recordings/{id}/backups", get(backups))
+        .route("/api/recordings/{id}/backup", put(set_backup))
         .route("/api/settings", get(settings).put(set_settings))
         .route("/api/logout", post(logout))
         .merge(browse::routes())
@@ -1330,6 +1356,136 @@ mod tests {
         .await;
         assert_eq!(st, StatusCode::OK);
         assert_eq!(body["cancelled"], true);
+    }
+
+    #[tokio::test]
+    async fn a_backup_is_chosen_by_hand_through_the_page_and_checked() {
+        use crate::catalog::db;
+        let s = server("backup");
+        enable(&s, true).await;
+        // Its own channels, apart from the other tests' in the shared
+        // catalogue: 94001 recorded, 94002 and 94003 on the same guide
+        // channel (94003 measured better), 94004 elsewhere, 94005 a divider.
+        db::install_test_db();
+        db::with_db(|c| {
+            for (id, name, epg, num) in [
+                (94001, "Bay One", "bay.test", 1),
+                (94002, "Bay One SD", "bay.test", 2),
+                (94003, "Bay One HD", "bay.test", 3),
+                (94004, "Cove", "cove.test", 4),
+                (94005, "--- Divider ---", "none.test", 5),
+            ] {
+                c.execute(
+                    "INSERT INTO channels (stream_id, category_id, name, clean_name, num, epg_channel_id)
+                     VALUES (?1, 'bay', ?2, ?2, ?3, ?4)",
+                    rusqlite::params![id, name, num, epg],
+                )?;
+            }
+            c.execute("UPDATE channels SET is_separator = 1 WHERE stream_id = 94005", [])?;
+            c.execute(
+                &format!(
+                    "INSERT INTO channel_quality (origin, stream_id, height) VALUES ({}, 94003, 1080)",
+                    crate::catalog::origin::current_origin_sql!()
+                ),
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        let token = browser_login(&s).await;
+        let soon = now() + 3600;
+        let (st, rec) = call(
+            &s,
+            from_page(
+                "POST",
+                "/api/recordings",
+                Some(&token),
+                Some(serde_json::json!({
+                    "streamId": 94001, "title": "Bay Report", "start": soon, "stop": soon + 1800
+                })),
+            ),
+        )
+        .await;
+        assert_eq!(st, StatusCode::CREATED, "{rec}");
+        // Chosen when scheduled: the better of the two on its guide channel.
+        assert_eq!(rec["backupStreamId"], 94003);
+        assert_eq!(rec["backupName"], "Bay One HD");
+        let id = rec["id"].as_i64().unwrap();
+
+        let (st, b) = call(&s, from_page("GET", &format!("/api/recordings/{id}/backups"), Some(&token), None)).await;
+        assert_eq!(st, StatusCode::OK, "{b}");
+        assert_eq!(b["current"], 94003);
+        let ids: Vec<i64> = b["candidates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["streamId"].as_i64().unwrap())
+            .collect();
+        assert_eq!(ids, [94003, 94002]);
+        assert_eq!(b["candidates"][0]["reason"], "guide");
+        assert_eq!(b["candidates"][0]["height"], 1080);
+
+        let put = |body: serde_json::Value| from_page("PUT", &format!("/api/recordings/{id}/backup"), Some(&token), Some(body));
+        // Without the page's header, or from another site: refused.
+        let mut r = put(serde_json::json!({"streamId": 94004}));
+        r.headers_mut().remove("x-zapper");
+        assert_eq!(call(&s, r).await.0, StatusCode::FORBIDDEN);
+        let mut r = put(serde_json::json!({"streamId": 94004}));
+        r.headers_mut()
+            .insert(header::ORIGIN, HeaderValue::from_static("https://evil.example"));
+        assert_eq!(call(&s, r).await.0, StatusCode::FORBIDDEN);
+        // Without a token at all.
+        let r = req_body(
+            "PUT",
+            &format!("/api/recordings/{id}/backup"),
+            HOME,
+            false,
+            None,
+            Some(serde_json::json!({"streamId": 94004})),
+        );
+        assert_eq!(call(&s, r).await.0, StatusCode::UNAUTHORIZED);
+        assert_eq!(s.get(id).unwrap().backup_stream_id, Some(94003), "nothing changed");
+
+        // Its own channel, a divider, a channel that is not there: refused.
+        for (bad_id, words) in [
+            (94001, "another channel"),
+            (94005, "no channel 94005"),
+            (99_999_999, "no channel 99999999"),
+        ] {
+            let (st, e) = call(&s, put(serde_json::json!({"streamId": bad_id}))).await;
+            assert_eq!(st, StatusCode::BAD_REQUEST, "{bad_id}: {e}");
+            assert!(e["error"].as_str().unwrap().contains(words), "{e}");
+        }
+
+        // Any listed channel will do, candidate or not; null is none.
+        let (st, r) = call(&s, put(serde_json::json!({"streamId": 94004}))).await;
+        assert_eq!(st, StatusCode::OK, "{r}");
+        assert_eq!((r["backupStreamId"].as_i64(), r["backupName"].as_str()), (Some(94004), Some("Cove")));
+        // The app, by its token, the same.
+        let (st, r) = call(
+            &s,
+            req_body(
+                "PUT",
+                &format!("/api/recordings/{id}/backup"),
+                HOME,
+                false,
+                Some(APP),
+                Some(serde_json::json!({"streamId": null})),
+            ),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK, "{r}");
+        assert!(r["backupStreamId"].is_null());
+        assert!(r.get("backupName").is_none());
+
+        // No such recording; a finished one.
+        let (st, _) = call(&s, from_page("PUT", "/api/recordings/987654/backup", Some(&token), Some(serde_json::json!({"streamId": 94002})))).await;
+        assert_eq!(st, StatusCode::NOT_FOUND);
+        s.db(|c| store::set_state(c, id, crate::recording::api::RecordingState::Done, None))
+            .unwrap();
+        let (st, e) = call(&s, put(serde_json::json!({"streamId": 94002}))).await;
+        assert_eq!(st, StatusCode::BAD_REQUEST);
+        assert!(e["error"].as_str().unwrap().contains("finished"), "{e}");
     }
 
     /// An account of one stream, which nothing else uses.

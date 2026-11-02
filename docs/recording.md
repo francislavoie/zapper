@@ -22,7 +22,8 @@ schedules recordings from the guide and shows them; the service does the recordi
    **Record**. A red dot marks it; it pulses while recording. Right-click again to cancel, or to
    stop a recording early (what was recorded is kept).
 3. **Recordings** (in the menu and the command palette) lists what is recording, scheduled,
-   recorded and failed, with *Open folder*, *Cancel*/*Stop* and *Delete*.
+   recorded and failed, with *Open folder*, *Cancel*/*Stop* and *Delete*, and the channel each
+   one falls back to if its own fails ([backup feeds](#how-it-behaves)).
 
 Settings → Recording also sets the folder, how files are named, how early to start and how late
 to stop (1 and 5 minutes by default), whether to add the clock track, and — for playlists, which
@@ -309,7 +310,24 @@ account: someone watching can still make a recording wait. Overlaps on the same 
 conflicts.
 
 **Main and backup feeds.** A recording has a main feed (the channel chosen) and, when there is
-one, a backup: another channel carrying the same guide channel. It switches only when the
+one, a backup. Scheduling picks it, best first:
+
+1. another channel carrying the same guide channel; among several, one in the same category as
+   the main channel, then the one playing has shown to be better (not failing the last time it
+   was opened, then the higher resolution, then the higher frame rate; a channel never opened
+   comes after one that was), then the lower channel number;
+2. only when no channel shares the guide channel, one whose guide has the same programme — the
+   same title, ignoring case and spacing, starting within five minutes of the recording. A
+   title that names a kind of programme rather than one ("News", "Movie", "Weather", anything
+   under four letters) matches nothing, and neither does one on more than ten guide channels at
+   once.
+
+It can be chosen by hand too. In the guide, right-click a programme on another channel at the
+same time as a recording and choose **Use as backup for “…”** (or **Stop using as backup**). In
+**Recordings**, each scheduled or recording row says its backup, and *Change…* lists the
+candidates above, best first, with *No backup*. Any channel will do, not only a candidate. A
+change while recording takes effect the next time a feed fails: a feed that is delivering is
+kept, and the recording notes the change. It switches only when the
 current feed *fails* — no data for 10 s, a refusal, the stream ending, the server unreachable —
 and never back while the current one works. A refusal for the account's connection limit (509,
 429, "max connections" in words, or a `200` carrying text instead of video) is not a feed
@@ -464,6 +482,8 @@ token, or the app's token from another machine; `403` for what no token changes)
 | `GET /api/recordings/{id}` | `Recording` |
 | `POST /api/recordings` | schedule: body `{streamId, title, start, stop, backupStreamId?, channelName?, episodeTitle?, season?, episode?, padBefore?, padAfter?}` → `201 Recording`; the same channel and start again returns the existing one |
 | `POST /api/recordings/preview` | the same body: `[Conflict]` scheduling it would bring, nothing scheduled. Those of the one asked about, and with `other: true` those of recordings already scheduled |
+| `GET /api/recordings/{id}/backups` | `{current?, candidates: [Backup]}`: the backup now and the channels it could be, best first (at most 20). `Backup` is `{streamId, name, num?, numLabel?, reason, height?, failing?}`, `reason` `guide` (same guide channel) or `programme` (same programme at the same time) |
+| `PUT /api/recordings/{id}/backup` | body `{streamId}`, or `{streamId: null}` for none: chooses the backup of a scheduled or recording one → `Recording`. `400` for its own channel, a channel the catalogue does not list (or a divider), or a recording that has finished. While recording, used from the next time a feed fails |
 | `POST /api/recordings/{id}/cancel` | a scheduled one is removed (`{id, cancelled: true}`); one recording stops and keeps what it has (`Recording`) |
 | `DELETE /api/recordings/{id}?files=true` | forgets a finished recording; `files=true` deletes its files too. Refused while recording |
 | `GET /api/settings` | `{outputDir, naming, namingPattern, padBefore, padAfter, clockTrack, showWhileRecording, defaultOutputDir}` (padding in seconds; `naming` is `mediaServer`, `byChannel`, `byDate`, `flat` or `custom`, which uses `namingPattern`) |
@@ -513,7 +533,7 @@ as a port taken when the service started, in which case it listens on `127.0.0.1
 
 ```json
 {
-  "id": 3, "streamId": 1201, "backupStreamId": 1305, "channelName": "One HD",
+  "id": 3, "streamId": 1201, "backupStreamId": 1305, "backupName": "One SD", "channelName": "One HD",
   "title": "The Evening News", "season": 2, "episode": 5,
   "start": 1793736000, "stop": 1793737800, "padBefore": 60, "padAfter": 300,
   "state": "done",
@@ -531,6 +551,7 @@ streams}`, what recording `title` loses to `with` on another channel when the ac
 `streams` — `kind` is `cutEnd` (its padding after ends `secs` early), `lateStart` (it starts
 `secs` into its padding before), `lostStart` (`secs` into its programme) or `missed`.
 `backupStreamId` omitted when scheduling means "find one"; the main feed's own id means "none".
+`backupName` is the backup's channel name, when the catalogue has it.
 
 ## Not yet
 
