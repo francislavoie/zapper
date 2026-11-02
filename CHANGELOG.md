@@ -16,6 +16,13 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
   numbers its episodes, as XMLTV guides (Xtream servers', Tvheadend's, a playlist's) and
   SiliconDust's guide for HDHomeRun often do. The programme menu shows the number too.
 
+### Fixed
+
+- A provider that stops sending the guide or the playlist halfway without closing the connection
+  no longer stalls the refresh for good: after a minute with nothing arriving (or half an hour
+  in all) the refresh fails with that reason, keeps the guide it had, and tries again later. The
+  provider's channel and category lists have a deadline too.
+
 ## [0.2.1] - 2026-11-01
 
 ### Added
