@@ -627,6 +627,7 @@ function Programme({
     span.clippedStart ? "clip-start" : "",
     span.clippedEnd ? "clip-end" : "",
     recording ? "rec" : "",
+    recording?.state === "finishing" ? "saving" : "",
   ]
     .filter(Boolean)
     .join(" ");

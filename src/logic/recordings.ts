@@ -17,7 +17,7 @@ import type {
   RecordingState,
   ScheduleRequest,
 } from "../types";
-import { duration, timeRange } from "./format.ts";
+import { duration, hhmm, timeRange } from "./format.ts";
 import { dayLabel } from "./guide.ts";
 
 /** A recording is found by its channel and its programme's start, which is
@@ -215,6 +215,62 @@ export function bytes(n: number): string {
     i++;
   }
   return `${v >= 100 ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
+}
+
+/** The title bar's indicator while the service records: how many, in a
+ *  word, and the tooltip listing each. */
+export interface RecordingIndicator {
+  /** "Recording", "Recording 2", or "Saving" when all that is left is
+   *  being saved into files. */
+  label: string;
+  /** Red and pulsing while anything records; grey while only saving. */
+  tone: "live" | "saving";
+  /** One line per recording; see `activeRecordingLine`. */
+  tip: string;
+}
+
+/** Whole minutes from a minute on: "23m", "1h05m"; seconds before that. */
+function elapsed(secs: number): string {
+  return duration(secs >= 60 ? Math.floor(secs / 60) * 60 : secs);
+}
+
+/** "Channel · Title — 23m, until 21:05", and on lines of their own what is
+ *  worth knowing: waiting for a connection, a conflict ahead, the backup
+ *  channel in use. A recording being saved says so instead of the times. */
+export function activeRecordingLine(r: RecordingDto, now: number): string {
+  const head = `${r.channelName} · ${r.title}`;
+  if (r.state === "finishing") return `${head} — saving into its file…`;
+  const began = r.parts[0]?.started ?? r.start - r.padBefore;
+  const lines = [`${head} — ${elapsed(Math.max(0, now - began))}, until ${hhmm(r.stop + r.padAfter)}`];
+  // The tooltip collapses leading spaces, so the details are marked instead
+  // of indented.
+  if (r.waiting) lines.push(`↳ ${capitalise(r.waiting)}`);
+  const feed = r.parts[r.parts.length - 1]?.streamId;
+  if (feed != null && feed !== r.streamId) {
+    lines.push(`↳ On its backup channel${r.backupName ? `, ${r.backupName}` : ""}`);
+  }
+  const conflict = r.conflicts?.[0];
+  if (conflict) lines.push(`↳ ${conflictText(conflict)}`);
+  return lines.join("\n");
+}
+
+/** What the title bar shows, or `null` — nothing recording or being saved,
+ *  or no service answering (`recs` null) — for no indicator at all. */
+export function recordingIndicator(
+  recs: readonly RecordingDto[] | null,
+  now: number,
+): RecordingIndicator | null {
+  if (!recs) return null;
+  const recording = recs.filter((r) => r.state === "recording");
+  const saving = recs.filter((r) => r.state === "finishing");
+  if (recording.length === 0 && saving.length === 0) return null;
+  const label =
+    recording.length === 0 ? "Saving" : recording.length === 1 ? "Recording" : `Recording ${recording.length}`;
+  const order = (a: RecordingDto, b: RecordingDto) => a.start - b.start || a.id - b.id;
+  const tip = [...recording.sort(order), ...saving.sort(order)]
+    .map((r) => activeRecordingLine(r, now))
+    .join("\n");
+  return { label, tone: recording.length > 0 ? "live" : "saving", tip };
 }
 
 /** How often the recordings are fetched (ms). */

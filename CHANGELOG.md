@@ -19,6 +19,10 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
   right-click a programme on another channel at the same time in the guide and choose *Use as
   backup for “…”*, or use *Change…* under the recording in Recordings, which lists the
   candidates best first. A change while recording applies the next time a feed fails.
+- While the recording service records, the title bar says so beside Settings: a red dot and
+  "Recording" (or "Recording 2"), with each recording in its tooltip — channel, programme, how
+  long so far and until when, and whether it waits for a connection, is on its backup channel
+  or has a conflict ahead. A click opens Recordings. In the app and in a browser.
 
 ### Changed
 

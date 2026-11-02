@@ -5158,6 +5158,47 @@ textarea.field {
   height: 0.75rem;
 }
 
+/* Recording now (RecordingBadge): the guide's red dot and a word, quiet
+   enough to sit beside a channel someone is watching; the list is in its
+   tooltip. */
+.tb-rec {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  margin-right: 0.375rem;
+  padding: 0.125rem 0.5rem 0.125rem 0.4375rem;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: none;
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  white-space: nowrap;
+  user-select: none;
+  cursor: pointer;
+}
+
+.tb-rec:hover,
+.tb-rec:focus-visible {
+  border-color: var(--line);
+  background: var(--bg-3);
+}
+
+.tb-rec.saving {
+  color: var(--dim);
+}
+
+/* A narrow window keeps the dot and drops the word. */
+@media (max-width: 760px) {
+  .tb-rec-label {
+    display: none;
+  }
+
+  .tb-rec .rec-dot {
+    margin-right: 0;
+  }
+}
+
 .tb-update:hover {
   background: var(--accent-dim);
 }
@@ -5549,6 +5590,10 @@ textarea.field {
    says the same at a glance when it is too narrow for a title. */
 .prog.rec {
   border-left: 2px solid var(--bad);
+}
+
+.prog.rec.saving {
+  border-left-color: var(--dim);
 }
 
 .prog .rec-dot {

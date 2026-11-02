@@ -1166,9 +1166,47 @@ function networkView(): NetworkDto {
   };
 }
 
+/** `?recording=busy`: two recordings at once, one of them waiting for a
+ *  connection on its backup channel with a conflict ahead, and a third
+ *  being saved — the title bar's indicator and Recordings with everything
+ *  they can say. */
+const RECORDING_BUSY =
+  typeof location !== "undefined" &&
+  new URLSearchParams(location.search).get("recording") === "busy";
+
+function busyRecordings(out: RecordingDto[]): void {
+  const now = Math.floor(Date.now() / 1000);
+  const rows = getCatalog().rows.filter((r) => r.nowPlaying && !r.isSeparator);
+  const [b, c, d] = rows.slice(3, 6);
+  if (b) {
+    const on = schedule(b, now, now + 3600)[0];
+    if (on)
+      out.push(
+        mockRecording(b, on, "recording", {
+          backupStreamId: c?.streamId ?? null,
+          backupName: c?.cleanName,
+          waiting: "waiting for a free connection (1 of 1 in use)",
+          parts: [
+            { path: "/home/viewer/Videos/zapper/x/.part1.ts", streamId: b.streamId, bytes: 80e6, started: on.start - 60, ended: on.start + 300 },
+            { path: "/home/viewer/Videos/zapper/x/.part2.ts", streamId: c?.streamId ?? b.streamId, bytes: 30e6, started: on.start + 300, ended: null },
+          ],
+          conflicts: [{ title: on.title, with: out[0]?.title ?? "Film", kind: "cutEnd", secs: 300, streams: 1 }],
+        }),
+      );
+  }
+  if (d) {
+    const was = { start: now - 3600, stop: now - 60, title: "Evening Concert", description: null };
+    out.push(mockRecording(d, was, "finishing", { parts: [{ path: "/home/viewer/Videos/zapper/x/.part1.ts", streamId: d.streamId, bytes: 3.2e9, started: was.start - 60, ended: now - 30 }] }));
+  }
+}
+
 function recordingsOrRefuse(): RecordingDto[] {
   if (RECORDING_OFF || !mockService.installed) throw "The recording service is not running.";
-  return (mockRecordings ??= seedRecordings());
+  if (!mockRecordings) {
+    mockRecordings = seedRecordings();
+    if (RECORDING_BUSY) busyRecordings(mockRecordings);
+  }
+  return mockRecordings;
 }
 
 const mockRecordingApi = {

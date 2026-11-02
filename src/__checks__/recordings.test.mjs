@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  activeRecordingLine,
+  recordingIndicator,
   backupCandidateLabel,
   backupMenuLabel,
   backupTargets,
@@ -78,6 +80,64 @@ test("the list is followed closely while anything records or saves, and just aft
   assert.equal(pollDelay(quiet, false, 10_000), POLL_IDLE_MS);
   assert.equal(pollDelay(null, true, 3_000), POLL_BUSY_MS);
   assert.ok(POLL_BUSY_MS <= 2_000 && POLL_IDLE_MS >= 30_000);
+});
+
+test("the title bar's indicator counts what records and lists each", () => {
+  setTimeFormat("24h");
+  const now = NOON + 23 * 60 + 30;
+  const one = rec({
+    id: 1,
+    state: "recording",
+    channelName: "Northwind One",
+    title: "Harbour Lights",
+    start: NOON,
+    stop: NOON + 3600,
+    padBefore: 60,
+    padAfter: 300,
+    parts: [{ path: "/v/a.ts", streamId: 7, bytes: 1, started: NOON - 60, ended: null }],
+  });
+  assert.equal(recordingIndicator(null, now), null, "no service: nothing");
+  assert.equal(recordingIndicator([rec({ state: "scheduled" }), rec({ state: "done" })], now), null);
+  const i = recordingIndicator([one], now);
+  assert.equal(i.label, "Recording");
+  assert.equal(i.tone, "live");
+  assert.equal(i.tip, "Northwind One · Harbour Lights — 24m, until 13:05");
+
+  // A second one waiting for a connection, on its backup, with a conflict.
+  const two = rec({
+    id: 2,
+    state: "recording",
+    streamId: 8,
+    backupStreamId: 9,
+    backupName: "Meridian SD",
+    channelName: "Meridian",
+    title: "Quayside",
+    start: NOON + 600,
+    stop: NOON + 7200,
+    padBefore: 0,
+    padAfter: 0,
+    waiting: "waiting for a free connection (1 of 1 in use)",
+    parts: [
+      { path: "/v/b1.ts", streamId: 8, bytes: 1, started: NOON + 600, ended: NOON + 700 },
+      { path: "/v/b2.ts", streamId: 9, bytes: 1, started: NOON + 700, ended: null },
+    ],
+    conflicts: [{ title: "Quayside", with: "Harbour Lights", kind: "lateStart", secs: 60, streams: 1 }],
+  });
+  const saving = rec({ id: 3, state: "finishing", channelName: "Cove", title: "Old Film" });
+  const many = recordingIndicator([saving, two, one], now);
+  assert.equal(many.label, "Recording 2");
+  assert.deepEqual(many.tip.split("\n"), [
+    "Northwind One · Harbour Lights — 24m, until 13:05",
+    "Meridian · Quayside — 13m, until 14:00",
+    "↳ Waiting for a free connection (1 of 1 in use)",
+    "↳ On its backup channel, Meridian SD",
+    "↳ Overlaps “Harbour Lights” on another channel: starts 1m late",
+    "Cove · Old Film — saving into its file…",
+  ]);
+  const left = recordingIndicator([saving], now);
+  assert.deepEqual([left.label, left.tone], ["Saving", "saving"]);
+  // Under a minute in, the seconds.
+  assert.match(activeRecordingLine({ ...one, parts: [] , start: now - 20, padBefore: 0 }, now), /— 20s, until/);
 });
 
 test("anything not over can be recorded", () => {

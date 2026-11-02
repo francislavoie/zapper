@@ -24,7 +24,11 @@ schedules recordings from the guide and shows them; the service does the recordi
    early (what was recorded is kept).
 3. **Recordings** (in the menu and the command palette) lists what is recording, scheduled,
    recorded and failed, with *Open folder*, *Cancel*/*Stop* and *Delete*, and the channel each
-   one falls back to if its own fails ([backup feeds](#how-it-behaves)).
+   one falls back to if its own fails ([backup feeds](#how-it-behaves)). While anything records,
+   the title bar says so beside Settings ("Recording", "Recording 2"; the dot alone on a narrow
+   window): its tooltip lists each one with how long it has recorded and until when, and whether
+   it waits for a connection, is on its backup channel or has a conflict ahead, and a click
+   opens Recordings.
 
 Settings → Recording also sets the folder, how files are named, how early to start and how late
 to stop (1 and 5 minutes by default), whether to add the clock track, and — for playlists, which
