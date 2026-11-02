@@ -153,7 +153,8 @@ The encoders are PNG and MJPEG (mpv's screenshots) and FFmpeg's own AAC encoder 
 non-free libfdk-aac), with which zapper-server turns sound a browser can't play into AAC while a
 browser watches (docs/recording.md, "Watching in the browser"); the build fails without it. A
 bundle from before it was added (`libmpv-0.41.0-ffmpeg-8.1.3-r1`) has none, and zapper-server
-then plays such channels in a browser without their sound.
+then plays such channels in a browser without their sound; `-r2`, the same versions rebuilt, is
+the first with it.
 
 What it leaves out, because it is GPL:
 

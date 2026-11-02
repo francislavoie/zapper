@@ -1,15 +1,15 @@
 {
-  "tag": "libmpv-0.41.0-ffmpeg-8.1.3-r1",
+  "tag": "libmpv-0.41.0-ffmpeg-8.1.3-r2",
   "mpv": "0.41.0",
   "ffmpeg": "8.1.3",
   "platforms": {
     "linux-x86_64": {
-      "url": "https://github.com/francislavoie/zapper/releases/download/libmpv-0.41.0-ffmpeg-8.1.3-r1/libmpv-linux-x86_64.tar.xz",
-      "sha256": "5265ace89e5041fb9a9f1314e1f4466de87a40eb50748cfdb4e5ad4fc9159eaa"
+      "url": "https://github.com/francislavoie/zapper/releases/download/libmpv-0.41.0-ffmpeg-8.1.3-r2/libmpv-linux-x86_64.tar.xz",
+      "sha256": "cbafd723b60c5ab3d3e519ac414f533f8ece2be3a1c21bda00123a7957dc351c"
     },
     "windows-x86_64": {
-      "url": "https://github.com/francislavoie/zapper/releases/download/libmpv-0.41.0-ffmpeg-8.1.3-r1/libmpv-windows-x86_64.zip",
-      "sha256": "0ef338929a305859e2304e06799738f125f2a0ebeb42af11abef5de2eca8d212"
+      "url": "https://github.com/francislavoie/zapper/releases/download/libmpv-0.41.0-ffmpeg-8.1.3-r2/libmpv-windows-x86_64.zip",
+      "sha256": "2276ee721003f8789a2f08c6f9361ad991a188897cdfd2cf3b8b071e22a7ddd3"
     }
   }
 }
