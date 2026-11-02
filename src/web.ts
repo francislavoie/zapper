@@ -8,16 +8,16 @@
 // means the sign-in is gone (revoked in the app, or signed out elsewhere),
 // and the page goes back to the sign-in (src/components/WebGate.tsx).
 //
-// What has no meaning here — the player, the window, the updater, backups,
-// installing the service — is hidden through `BROWSER`'s capabilities. The
-// calls are still answered, harmlessly: player controls do nothing with
-// nothing playing, and the rest say they are not available.
+// Watching plays in a <video> element through the service's own stream
+// (src/webPlayer.ts). What has no meaning here — the window, the updater,
+// backups, installing the service, mpv's own settings and statistics, the
+// provider's archive — is hidden through `BROWSER`'s capabilities. The calls
+// are still answered, harmlessly: they say they are not available.
 
 import type { api } from "./api";
 import { DEFAULT_SETTINGS } from "./logic/settings";
 import {
   BROWSER_SETTINGS_KEY,
-  NO_PLAYBACK,
   NOT_HERE,
   SYNC_BURST_MS,
   apiUrl,
@@ -29,7 +29,7 @@ import {
   syncPollMs,
   withBrowserSettings,
 } from "./logic/web";
-import { initialPlayer } from "./store";
+import * as player from "./webPlayer";
 import type {
   AccountCandidateDto,
   AccountDto,
@@ -40,6 +40,7 @@ import type {
   GuideRowDto,
   NetworkDto,
   PlayerOptionsDto,
+  PlayerStateDto,
   ProgrammeDto,
   ProgrammeHitDto,
   BackupsDto,
@@ -173,12 +174,7 @@ async function saveAccount(form: AccountCandidateDto): Promise<void> {
 
 // ------------------------------------------------------------------ backend
 
-const noOptions: PlayerOptionsDto = {
-  audio: [],
-  subtitles: [],
-  aspect: "auto",
-  deinterlace: "auto",
-};
+player.onPlayerSignedOut(signedOut);
 
 export const webBackend: typeof api = {
   categories: () => get<CategoryDto[]>("/api/categories"),
@@ -203,24 +199,29 @@ export const webBackend: typeof api = {
   syncStatus: () => get<SyncStatusDto>("/api/sync"),
   syncNow: () => post<unknown>("/api/sync").then(watchSyncStart),
 
-  // Nothing plays here yet, so there is nothing to control.
-  play: () => Promise.reject(new Error(NO_PLAYBACK)),
-  playCatchup: () => Promise.reject(new Error(NO_PLAYBACK)),
-  stop: nothing,
-  togglePause: nothing,
-  seekRelative: nothing,
-  seekLive: nothing,
-  setVolume: nothing,
-  setMuted: nothing,
-  setCompressor: nothing,
-  setVideoRect: nothing,
-  playerState: () => Promise.resolve(initialPlayer),
+  // The player is a <video> element here (src/webPlayer.ts). The provider's
+  // archive, mpv's statistics, deinterlacing and subtitles are not.
+  play: (streamId) => player.play(streamId),
+  playCatchup: notHere,
+  stop: () => player.stop(),
+  togglePause: () => player.togglePause(),
+  seekRelative: (seconds) => player.seekRelative(seconds),
+  seekLive: () => player.seekLive(),
+  setVolume: (volume) => player.setVolume(volume),
+  setMuted: (muted) => player.setMuted(muted),
+  setCompressor: (enabled) => player.setCompressor(enabled),
+  // Placed by the page itself (App.tsx paints the element).
+  setVideoRect: () => {
+    player.applyAspect();
+    return Promise.resolve();
+  },
+  playerState: () => Promise.resolve(player.state()),
   playerStats: notHere,
-  playerOptions: () => Promise.resolve(noOptions),
-  setAudioTrack: () => Promise.resolve(noOptions),
-  setSubtitleTrack: () => Promise.resolve(noOptions),
-  setAspect: () => Promise.resolve(noOptions),
-  setDeinterlace: () => Promise.resolve(noOptions),
+  playerOptions: () => Promise.resolve(player.options()),
+  setAudioTrack: (id) => player.setAudioTrack(id),
+  setSubtitleTrack: () => Promise.resolve(player.options()),
+  setAspect: (mode) => player.setAspect(mode),
+  setDeinterlace: () => Promise.resolve(player.options()),
   thumbnailAt: () => Promise.resolve(null),
   cancelReconnect: nothing,
   setMediaSession: nothing,
@@ -341,6 +342,12 @@ export function onWebSyncStatus(f: (s: SyncStatusDto) => void): Promise<Unsub> {
   });
 }
 
-/** For pushes a browser never gets: the player's, the updater's, the media
- *  keys'. */
+/** The player's state and options, as the <video> element changes. */
+export const onWebPlayerState = (f: (s: PlayerStateDto) => void): Promise<Unsub> =>
+  Promise.resolve(player.playerFeed.on(f));
+export const onWebPlayerOptions = (f: (s: PlayerOptionsDto) => void): Promise<Unsub> =>
+  Promise.resolve(player.optionsFeed.on(f));
+
+/** For pushes a browser never gets: the updater's, the media keys', a
+ *  channel's measured quality. */
 export const onNothing = (): Promise<Unsub> => Promise.resolve(() => {});

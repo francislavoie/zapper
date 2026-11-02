@@ -199,6 +199,9 @@ What a browser can do there:
 
 - browse the categories and channels, the guide and the favourites, and search channels (`a|b`
   matches either) and programmes;
+- watch live TV: choosing a channel plays it in the page, with the same picture band, player,
+  transport, volume, fullscreen and audio tracks as the app ([Watching in the
+  browser](#watching-in-the-browser));
 - schedule a recording from the guide's or the search results' right-click menu, and see, cancel
   and delete recordings (**Recordings** in the menu);
 - change what the service does with recordings (Settings → Recording), as the app can;
@@ -208,10 +211,10 @@ What a browser can do there:
 - change the provider account and test it (Settings → Account), for every kind the app takes;
 - sign out.
 
-Watching is not there yet: choosing a channel says so. What belongs to the computer the app runs
-on is left out rather than shown and refused: the player and its settings (how many streams the
-account allows among them), the window, the media keys, the updater, backups, installing the
-service, opening a folder, and network access, the password and the devices.
+What belongs to the computer the app runs on is left out rather than shown and refused: mpv's
+settings (Settings → Playback, Audio and Subtitles, and how many streams the account allows),
+stats for nerds, the window, the media keys, the updater, backups, installing the service,
+opening a folder, and network access, the password and the devices.
 
 **The account in a browser.** The page is sent the account as the app's own Settings shows it:
 whether a password is on file but never the password, and a playlist or guide address with any
@@ -242,15 +245,80 @@ and kept by the browser for a year; the page itself is asked for again each time
   (`Sec-Fetch-Site`) they came from another site. A request with a bearer token needs no header:
   no page can attach one for it. Reading changes nothing.
 - **Every answer** carries a content security policy that runs only the service's own scripts and
-  styles (no inline script anywhere), loads images and data only from the service, and lets no
-  page frame it (`frame-ancestors 'none'`); and `X-Content-Type-Options: nosniff`,
+  styles (no inline script anywhere), loads images, data and media only from the service (media
+  also from `blob:`, the address the page's player gives the Media Source it fills from the
+  service's stream), and lets no page frame it (`frame-ancestors 'none'`); and `X-Content-Type-Options: nosniff`,
   `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`. Still no CORS headers.
 - **Provider addresses stay in the service.** A channel's logo is fetched by the service and served
   as `/api/logo/{streamId}` (an image only, up to 1 MB, under a policy that runs nothing if opened
   on its own), so the browser never sees the provider's URL, and stream addresses, which carry the
-  account's password, are never sent.
+  account's password, are never sent. A channel is watched by its id: the service opens the
+  stream itself and hands the browser a viewer of its own to read (`/api/stream/{viewer}`), which
+  only the device that started it may read, and only from the service's own page.
 - A browser that asks for a page over plain HTTP while HTTPS is on is sent to the same page over
   HTTPS; the API is refused there, as before.
+
+### Watching in the browser
+
+Choosing a channel in the page plays it there. The page asks the service to watch the channel
+(`POST /api/watch`, by its id), and the service streams it back as MPEG-TS from its own address,
+which the page's player ([mpegts.js](https://github.com/xqq/mpegts.js), bundled in the page)
+feeds to the browser's video element through Media Source Extensions.
+
+**Connections.** The browser takes part in the [sharing rules](#sharing-connections) as one more
+rider on the service's connection to the channel, one whose programme never ends:
+
+- Watching a channel the service already has open, because it is recording it or another browser
+  watches it, joins that connection and costs the account nothing.
+- Otherwise it needs a connection of its own, asked of the same count the recordings ask. On a
+  full account the page says why instead of playing:
+  - **Recordings hold the connections**: "The account's connection is recording", naming the
+    recording and its channel, which can be watched for nothing. Nothing is offered to override it:
+    a recording's connection is never taken.
+  - **Another browser watches through the service**, or **another device** has the account's
+    connections: "Your account is in use on another device", with **Watch here anyway**, as in the
+    app. Pressing it ends the other browser's stream (it is told why), or, when the service holds
+    no connection at all, connects as the app's player would and leaves the provider to end
+    whichever other device it ends. Where a recording holds one of the connections, it is not
+    offered: connecting regardless could end the recording's rather than the other device's.
+  - The same browser (a reloaded page, a second tab) is not asked: its newer stream takes the
+    connection from its older one, and changing channel hands the old channel's connection to the
+    new one.
+- Leaving (stopping, changing channel, closing the page) gives the connection up: the service lets
+  go of a stream nobody reads within 15 seconds.
+
+**A recording that needs the connection.** A browser is never cut off for a recording, so on an
+account with no connection to spare a recording due on another channel would wait for it. The page
+says so instead: from two minutes before the recording's padded start, and for as long as it
+waits, a card names it ("“The Match” starts recording on Sport One at 21:00 and needs this
+connection") with **Watch Sport One**, which shares one connection with the recording, and **Stop
+watching**. Kept watching, the recording waits and starts the moment the browser lets go, and says
+in its notes that a browser was watching; a page in a background tab lets go by itself as soon as
+a recording waits for it. A recording of the channel being watched simply joins its connection.
+
+**What a browser can play.** The service reads the stream's own tables (its first packets) before
+answering, and decides from them, never from a channel's name:
+
+- The video is never re-encoded. H.264 plays in every browser with Media Source Extensions, HEVC
+  where the browser says it can; a channel whose video is MPEG-2 (much broadcast SD, and most
+  over-the-air TV through an HDHomeRun) says "Not playable in the browser" and why. What a channel
+  carries is remembered for six hours, so asking again costs no connection.
+- Sound a browser cannot play (MPEG-1 Layer II, and AC-3 or E-AC-3 where the browser lacks them)
+  is converted to stereo AAC on the way by FFmpeg's own AAC encoder (LGPL, in zapper's bundled
+  FFmpeg); AAC and the sound the browser does play go as they are. Another audio track goes through
+  the same remuxer, which keeps only the chosen one. A zapper-server whose FFmpeg has no AAC
+  encoder plays such a channel without its sound, and the page says so.
+- Subtitles are not shown in the browser.
+
+**The player.** Volume and mute are the page's own, never the computer's; the compressor is the
+browser's own. Fullscreen is the browser's. Rewinding is what the browser holds: up to the last two
+and a half minutes, through which back, forward, pause and Live move. Paused for more than three
+minutes, the stream is let go (and the account's connection with it), and Play starts again at live.
+The provider's archive (catch-up) plays in the app, not in the browser. A browser without Media
+Source Extensions (an iPhone or iPad before iOS 17.1) says it cannot play live TV.
+
+**Limits.** A device may hold three streams at once and start forty a minute; the service streams
+to sixteen browsers at most.
 
 ## How it behaves
 
@@ -291,8 +359,9 @@ foresees the conflicts below):
    back-off.
 5. **A viewer's connection is never taken.** Only the service's own connections are closed; one
    the account counts for another device or the app's player is left alone, and the recording
-   waits for it as before. A recording past its own programme's end does not take another
-   recording's padding for its own.
+   waits for it as before. So is one a browser watches through the service, whose page is told
+   that the recording waits ([Watching in the browser](#watching-in-the-browser)). A recording
+   past its own programme's end does not take another recording's padding for its own.
 
 For example, on an account of one stream: *The Film* 20:00–21:00 on one channel and *The Match*
 21:00–22:00 on another (with 1 minute before and 5 after): the film is recorded 19:59–21:00 and
@@ -530,6 +599,15 @@ The catalogue, for the web interface (the app or a device); channels come as the
 | `PUT /api/account` | saves a form and makes its kind the one in use: `{kind: "xtream", host, username, password}`, `{kind: "m3u", playlist, epgUrls, userAgent}`, `{kind: "hdhomerun", device, epgUrls}` or `{kind: "tvheadend", url, username, password}`. An empty password, or `null` for `playlist` or `epgUrls`, keeps what is on file. Asks for a sync; returns the same as `GET`. `400 {"error"}` with what is wrong, never with what was sent |
 | `POST /api/account/test` | the same body, tested as typed and not saved (`{result}`, or `400 {"error"}`); with no body, the account on file |
 
+Watching (the app or a device; a viewer is its device's alone, `404` to anyone else):
+
+| Request | Answer |
+|---|---|
+| `POST /api/watch` | body `{streamId, anyway?, replaces?, audio?, can?: {hevc, ac3, eac3}}` (`can`: what the browser decodes beyond H.264 and AAC; `replaces`: the viewer this one follows, which is stopped first) → `{viewer, stream, video, audio: [{index, codec, lang, described, impaired}], audioIndex, converting, silent?, shared, notice?}`. Refused with `{error, reason, anyway, slots?, ending?, watchInstead}`: `409` `recording`, `viewers` or `inUse` (the account is full; `anyway` says whether "Watch here anyway" may be offered), `422` `notPlayable`, `429` `limit`, `502` `feed` (the channel did not start; `ending` as the app's player reports it), `404` `channel` |
+| `GET /api/stream/{viewer}?audio=` | the stream, `video/mp2t`, for as long as it is read; `audio` switches to another track (from live). Refused when the browser says the request came from another site |
+| `GET /api/watch/{viewer}` | `{ended?, takenOver, notice?}`: why it stopped, and the recording it is in the way of (`{recordingId, title, channel, streamId, from, start, waiting}`) |
+| `DELETE /api/watch/{viewer}` | stops it at once (`204`) |
+
 "The app" is the `server-token` from a loopback address; a device's token is refused there
 (`403`). `Device` is `{id, name, userAgent, created, lastUsed?, address?}`; `fingerprint` is the
 certificate's SHA-256 as `AB:CD:…`; `error` says why network access is not working as set (such
@@ -564,11 +642,8 @@ streams}`, what recording `title` loses to `with` on another channel when the ac
 
 ## Not yet
 
-- Watching in the browser: the service proxying streams to it (so provider credentials never
-  reach the browser) and audio the browser cannot play turned into audio it can. Sharing one
-  connection between a recording and its viewers is what the service's per-channel connection
-  (`recording::hub`) is built for: a viewer would join it as one more subscriber, one the rules
-  never cut off.
+- In the browser: rewinding further than the browser holds (a buffer kept by the service), the
+  provider's archive, subtitles, and MPEG-2 video (it would need re-encoding).
 - Installing the service on macOS (a LaunchAgent); waking the computer from suspend to record
   (on Windows, a task per recording with a wake timer); recording on Windows while nobody is
   signed in.

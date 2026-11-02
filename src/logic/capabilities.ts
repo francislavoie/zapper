@@ -3,17 +3,24 @@
 //
 // The same interface runs in three places: the app's own window (everything),
 // the browser mock under `vite dev` (stands in for the app, so everything),
-// and a browser signed in to the recording service (src/web.ts), where
-// whatever needs this computer's window, its player or its files has no
+// and a browser signed in to the recording service (src/web.ts), which plays
+// through the service's own stream in a <video> element (src/webPlayer.ts)
+// and where whatever needs this computer's window, mpv or its files has no
 // meaning. A component asks whether a capability is there; which backend
 // grants it is decided once, in src/backend.ts.
 //
 // Checked in src/__checks__/capabilities.test.mjs.
 
 export interface Capabilities {
-  /** Plays channels here: the picture, the transport, tracks, stats, the
+  /** Plays channels here: the picture, the transport, audio tracks, the
    *  sleep timer, recall. */
   playback: boolean;
+  /** The provider's archive: a finished programme from the guide, and
+   *  seeking past what the player holds. */
+  catchup: boolean;
+  /** mpv's own: Settings › Playback, Audio and Subtitles, the account's
+   *  connection count, subtitles, deinterlacing, and stats for nerds. */
+  mpv: boolean;
   /** The undecorated window's own title bar: dragging, minimise, maximise,
    *  close, the resize edges, Quit. */
   window: boolean;
@@ -45,6 +52,8 @@ export interface Capabilities {
 /** The app's window, and the mock that stands in for it. */
 export const DESKTOP: Capabilities = {
   playback: true,
+  catchup: true,
+  mpv: true,
   window: true,
   mediaKeys: true,
   updater: true,
@@ -58,9 +67,13 @@ export const DESKTOP: Capabilities = {
 
 /** A browser signed in to the recording service. Browsing, the guide,
  *  search and recordings, the provider account and refreshing from it (the
- *  service keeps both, docs/recording.md); nothing of this computer's. */
+ *  service keeps both, docs/recording.md), and watching live through the
+ *  service (where the browser has Media Source Extensions: src/backend.ts
+ *  turns `playback` off where it hasn't); nothing of this computer's. */
 export const BROWSER: Capabilities = {
-  playback: false,
+  playback: true,
+  catchup: false,
+  mpv: false,
   window: false,
   mediaKeys: false,
   updater: false,
@@ -93,9 +106,9 @@ export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
 /** What each page needs; a page not listed needs nothing. */
 const SECTION_NEEDS: Partial<Record<SettingsSection, Capability>> = {
   Account: "account",
-  Playback: "playback",
-  Audio: "playback",
-  Subtitles: "playback",
+  Playback: "mpv",
+  Audio: "mpv",
+  Subtitles: "mpv",
   Data: "resync",
   Updates: "updater",
 };

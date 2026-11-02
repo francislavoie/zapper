@@ -5469,6 +5469,7 @@ dependencies = [
  "dbus",
  "dispatch2",
  "flate2",
+ "futures-core",
  "getrandom 0.3.4",
  "glib",
  "gtk",

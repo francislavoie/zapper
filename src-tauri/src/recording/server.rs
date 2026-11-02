@@ -24,7 +24,9 @@ use super::listen::{self, Listening};
 use super::naming::{self, Programme};
 use super::schedule::{busy, plan, sleep_for, window, Busy};
 use super::sharing::{self, Loss, Planned};
+use super::watch::Viewers;
 use super::{capture, http, lifecycle, now, store, tls};
+use crate::source::{Playable, Source};
 use crate::localtime::Civil;
 
 /// A capture's live state, for status and for stopping it.
@@ -67,7 +69,15 @@ pub struct Server {
     pub shutdown_asked: Notify,
     /// Stopping: start nothing more, and leave what stops resumable.
     stopping: AtomicBool,
+    /// Browsers watching channels (`watch`).
+    pub viewers: Viewers,
+    /// Where a channel's stream is, in place of the account's own answer:
+    /// tests' fixture servers.
+    playables: Mutex<Option<Arc<Resolve>>>,
 }
+
+/// A channel's stream, by its id.
+pub type Resolve = dyn Fn(i64) -> Result<Playable> + Send + Sync;
 
 impl Server {
     /// The password, devices and certificate are read from beside
@@ -99,7 +109,28 @@ impl Server {
             shutdown: Mutex::new(None),
             shutdown_asked: Notify::new(),
             stopping: AtomicBool::new(false),
+            viewers: Viewers::default(),
+            playables: Mutex::new(None),
         })
+    }
+
+    /// Where channel `stream_id`'s stream is, and how to ask for it: the
+    /// account's answer, read afresh (the app may have changed the account).
+    pub fn playable(&self, stream_id: i64) -> Result<Playable> {
+        let over = self
+            .playables
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        match over {
+            Some(f) => f(stream_id),
+            None => Source::load().and_then(|s| s.live(stream_id)),
+        }
+    }
+
+    /// Answers [`Self::playable`] with `f` instead of the account.
+    pub fn set_playables(&self, f: Arc<Resolve>) {
+        *self.playables.lock().unwrap_or_else(|e| e.into_inner()) = Some(f);
     }
 
     /// Where the password, devices and certificate are kept.

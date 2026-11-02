@@ -1,6 +1,7 @@
 // The shell. Three things live at this level: the two subscriptions the
 // backend pushes into (sync + player), the browse/watch layout, and the
-// transparent hole that tells mpv where to draw.
+// transparent hole that tells mpv where to draw (in a browser, where the
+// page's own <video> element is placed: src/webPlayer.ts).
 //
 // Nothing here may paint an opaque pixel over the video region. The page
 // background stays transparent; only chrome surfaces get colour.
@@ -8,6 +9,7 @@
 import { Activity, useEffect, useLayoutEffect, useRef } from "react";
 import {
   backend,
+  backendKind,
   capabilities,
   isMock,
   subscribeChannelQuality,
@@ -59,6 +61,7 @@ import { StatsPanel } from "./components/StatsPanel";
 import { VideoMenu } from "./components/VideoMenu";
 import { SleepTimer } from "./components/SleepTimer";
 import { TooltipHost } from "./components/TooltipHost";
+import { WebVideo } from "./components/WebVideo";
 
 /** How long "Jumped 12s to live" stays over the picture: long enough to be
  *  read by someone who looked up because the picture jumped. */
@@ -69,7 +72,7 @@ export function App() {
   const dispatch = useDispatch();
   const dockRef = useRef<HTMLDivElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
-  const planeRef = useRef<HTMLDivElement | null>(null);
+  const planeRef = useRef<HTMLElement | null>(null);
   useEffect(() => {
     if (import.meta.env.DEV && isMock && planeRef.current) paintMockStill(planeRef.current);
   }, []);
@@ -319,7 +322,7 @@ export function App() {
     // changed too) and the way out snapped, which reads as a glitch rather
     // than as a different animation.
     fullscreen,
-    paintRef: isMock ? planeRef : undefined,
+    paintRef: isMock || backendKind === "web" ? planeRef : undefined,
     onError: (m) => dispatch({ type: "toast", text: `video placement: ${m}` }),
   });
 
@@ -400,7 +403,10 @@ export function App() {
     <div className={`app ${fullscreen ? "fullscreen" : ""}`} data-mode={state.mode}>
       {/* Mock only. In Tauri this never renders, because a painted rectangle
           here would sit on top of the video plane and hide it. */}
-      {isMock ? <div className="mock-video" ref={planeRef} /> : null}
+      {isMock ? <div className="mock-video" ref={(el) => void (planeRef.current = el)} /> : null}
+      {/* A browser's picture: the page's own video element, beneath the
+          same hole mpv's would be drawn under. */}
+      {backendKind === "web" && capabilities.playback ? <WebVideo planeRef={planeRef} /> : null}
 
       {/* The window's own title bar. It owns the top of the app, and the stage
           below it owns everything else — including where the video goes. */}

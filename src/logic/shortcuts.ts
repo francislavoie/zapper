@@ -46,7 +46,7 @@ export const SHORTCUT_GROUPS: readonly ShortcutGroup[] = [
       { keys: [["Ctrl", "Q"]], does: "Quit zapper", needs: "window" },
       { keys: [["/"]], does: "Search channels" },
       { keys: [["G"]], does: "Switch between the list and the guide" },
-      { keys: [["S"]], does: "Stats for nerds", needs: "playback" },
+      { keys: [["S"]], does: "Stats for nerds", needs: "mpv" },
       { keys: [["P"]], does: "Previous channel; again to come back", needs: "playback" },
       { keys: [["F"]], does: "Fullscreen" },
       { keys: [["Esc"]], does: "Back one step: a menu, a dialog, fullscreen, the player" },
@@ -111,8 +111,8 @@ export const SHORTCUT_GROUPS: readonly ShortcutGroup[] = [
 ];
 
 /** The groups as they apply here: what needs something that is not here
- *  left out, and a group left with nothing dropped. A browser lists no
- *  player keys, since nothing plays in it. */
+ *  left out, and a group left with nothing dropped. A browser that cannot
+ *  play lists no player keys, and no browser lists mpv's. */
 export function shortcutGroups(caps: Capabilities): ShortcutGroup[] {
   const here = (need: Capability | undefined) => need === undefined || caps[need];
   return SHORTCUT_GROUPS.filter((g) => here(g.needs))

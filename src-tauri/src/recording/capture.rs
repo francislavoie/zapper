@@ -29,7 +29,6 @@ use super::naming;
 use super::server::Server;
 use super::sharing::{self, Full, Rider};
 use super::{now, now_ms, remux, store};
-use crate::source::Source;
 
 /// The arrival log beside a part: `<part>.clock`.
 pub fn log_path(part: &Path) -> PathBuf {
@@ -155,7 +154,17 @@ async fn room(server: &Arc<Server>, me: Rider, title: &str, waits: &mut u32) -> 
     let Slots::Full { active, max } = server.budget.check(own).await else {
         return Room::Go;
     };
-    let why = format!("waiting for a free connection ({active} of {max} in use)");
+    // A browser watching through the service is never cut off (sharing,
+    // rule 5); its page is told this recording waits for it.
+    let watched = server
+        .hubs
+        .conns()
+        .iter()
+        .any(|c| c.riders.iter().any(|r| r.stop == i64::MAX));
+    let why = format!(
+        "waiting for a free connection ({active} of {max} in use{})",
+        if watched { ", one by a browser watching" } else { "" }
+    );
     let t = now();
     // A connection is being closed for a recording, or the provider counts
     // more than the service holds and one of the service's closed moments
@@ -321,7 +330,7 @@ async fn run_inner(server: &Arc<Server>, id: i64, stop: &mut watch::Receiver<boo
                     continue;
                 }
                 let stream_id = feeds[fallback.current()];
-                let playable = match Source::load().and_then(|s| s.live(stream_id)) {
+                let playable = match server.playable(stream_id) {
                     Ok(p) => p,
                     Err(e) => {
                         server.note(id, &format!("cannot play channel {stream_id}: {e:#}"));

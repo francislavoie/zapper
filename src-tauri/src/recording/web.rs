@@ -38,9 +38,11 @@ pub const CSRF_HEADER: &str = "x-zapper";
 const COOKIE_MAX_AGE: u64 = 365 * 24 * 3600;
 
 /// Only this origin's scripts, styles, images and requests; no plugins, no
-/// `<base>` elsewhere, forms only to here, and no framing.
+/// `<base>` elsewhere, forms only to here, and no framing. Media also from
+/// `blob:`: the page's player hands the video element a Media Source by a
+/// `blob:` address it makes itself, filled from this origin's streams.
 pub const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; \
-    img-src 'self'; connect-src 'self'; font-src 'self'; media-src 'self'; \
+    img-src 'self'; connect-src 'self'; font-src 'self'; media-src 'self' blob:; \
     object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
 
 /// A channel logo, fetched from the provider and served from here: drawn as

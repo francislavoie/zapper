@@ -3,7 +3,7 @@
 // it, it is instant. All the arithmetic is in logic/scrubber.ts.
 
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
-import { backend } from "../backend";
+import { backend, capabilities } from "../backend";
 import { duration, hhmm, scrubLabels } from "../logic/format";
 import {
   behindLiveAt,
@@ -53,7 +53,9 @@ export function Scrubber({ player, channel, onPin, compact = false, hintWithin }
 
   const g = geometry({
     width,
-    hasArchive: channel?.hasArchive ?? false,
+    // The provider's archive is the app's to play; a browser rewinds only
+    // what it holds.
+    hasArchive: capabilities.catchup && (channel?.hasArchive ?? false),
     archiveDays: channel?.archiveDays ?? null,
     bufferedBack: player.bufferedBack,
     now,

@@ -33,6 +33,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { playCatchupProgramme, playChannel } from "../actions";
+import { capabilities } from "../backend";
 import { useChannelPages } from "../hooks/useChannelPages";
 import { useClock } from "../hooks/useClock";
 import { useEasedTime } from "../hooks/useEasedTime";
@@ -613,7 +614,7 @@ function Programme({
 
   const status = programmeStatus(programme, now);
   let act = playability(status, channel.hasArchive);
-  if (act === "catchup" && !withinArchive(programme, now, channel.archiveDays)) {
+  if (act === "catchup" && (!capabilities.catchup || !withinArchive(programme, now, channel.archiveDays))) {
     act = "inert";
   }
 
@@ -648,9 +649,11 @@ function Programme({
     const why =
       status === "future"
         ? "Not on yet"
-        : channel.hasArchive
-          ? `Older than the ${channel.archiveDays ?? "?"}-day archive`
-          : "Already finished, and this channel has no catchup";
+        : channel.hasArchive && !capabilities.catchup
+          ? "Already finished: its catch-up plays in the zapper app"
+          : channel.hasArchive
+            ? `Older than the ${channel.archiveDays ?? "?"}-day archive`
+            : "Already finished, and this channel has no catchup";
     return (
       <div
         className={classes}

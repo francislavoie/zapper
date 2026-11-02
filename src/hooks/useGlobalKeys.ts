@@ -150,7 +150,7 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
 
       // Stats for nerds, from anywhere: the panel says what it can with
       // nothing playing, and its graphs are already recording when something is.
-      if ((e.key === "s" || e.key === "S") && capabilities.playback) {
+      if ((e.key === "s" || e.key === "S") && capabilities.mpv) {
         e.preventDefault();
         dispatch({ type: "stats", open: !state.statsOpen });
         return;

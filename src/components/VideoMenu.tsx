@@ -15,7 +15,7 @@
 // audio button and sleep moon open: the same choices, from a control.
 
 import { runAction, togglePictureFullscreen } from "../actions";
-import { backend } from "../backend";
+import { backend, capabilities } from "../backend";
 import { useFullscreen } from "../hooks/useFullscreen";
 import {
   ASPECT_CHOICES,
@@ -132,30 +132,35 @@ export function VideoMenu({ menu, onClose }: VideoMenuProps) {
               />
             ))}
           </SubMenu>
-          <SubMenu
-            label="Deinterlace"
-            value={choiceLabel(DEINTERLACE_CHOICES, options.deinterlace)}
-          >
-            {DEINTERLACE_CHOICES.map((c) => (
-              <RadioItem
-                key={c.value}
-                checked={options.deinterlace === c.value}
-                label={c.label}
-                onSelect={() => choose("deinterlace", backend.setDeinterlace(c.value))}
-              />
-            ))}
-          </SubMenu>
+          {/* mpv's; a browser deinterlaces by itself. */}
+          {capabilities.mpv ? (
+            <SubMenu
+              label="Deinterlace"
+              value={choiceLabel(DEINTERLACE_CHOICES, options.deinterlace)}
+            >
+              {DEINTERLACE_CHOICES.map((c) => (
+                <RadioItem
+                  key={c.value}
+                  checked={options.deinterlace === c.value}
+                  label={c.label}
+                  onSelect={() => choose("deinterlace", backend.setDeinterlace(c.value))}
+                />
+              ))}
+            </SubMenu>
+          ) : null}
           <SleepSubMenu />
           <div className="ctx-sep" role="separator" />
         </>
       ) : null}
 
-      <CheckItem
-        checked={state.statsOpen}
-        label="Stats for nerds"
-        hint="S"
-        onSelect={() => dispatch({ type: "stats", open: !state.statsOpen })}
-      />
+      {capabilities.mpv ? (
+        <CheckItem
+          checked={state.statsOpen}
+          label="Stats for nerds"
+          hint="S"
+          onSelect={() => dispatch({ type: "stats", open: !state.statsOpen })}
+        />
+      ) : null}
       {playing ? (
         <CheckItem
           checked={state.mode === "watch"}

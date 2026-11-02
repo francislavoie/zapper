@@ -30,7 +30,9 @@
 //! 5. **A viewer's connection is never taken.** Only the service's own
 //!    connections are closed; one the provider counts for another device (or
 //!    the app's player) is left alone, and the recording waits for it as it
-//!    always has.
+//!    always has. So is one a browser watches through the service
+//!    (`watch`): its rider's programme never ends, so rule 3 never applies
+//!    to it, and the browser is told instead that the recording waits.
 //! 6. **Waiting is woken from inside.** A recording waiting for a
 //!    connection tries again as soon as one of the service's own connections
 //!    closes or opens on a feed it wants, and at the moment the next
@@ -44,9 +46,8 @@ use std::collections::HashMap;
 /// Someone on a connection, as the rules see it.
 ///
 /// A recording rides from its padded start to `until` and its programme
-/// ends at `stop`. Anything else that may one day share a connection (a
-/// browser watching the channel) is a rider whose `stop` never comes, so the
-/// rules never close its connection.
+/// ends at `stop`. A browser watching the channel (`watch`) is a rider whose
+/// `stop` never comes, so the rules never close its connection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rider {
     pub id: i64,

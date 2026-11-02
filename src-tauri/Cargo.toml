@@ -44,6 +44,7 @@ server = [
     "dep:axum",
     "dep:bytes",
     "dep:cc",
+    "dep:futures-core",
     "dep:getrandom",
     "dep:libc",
     "dep:pkg-config",
@@ -175,6 +176,9 @@ sha2 = "0.10"
 # The chunks a shared connection hands to each recording on it
 # (`recording::hub`). Already in the tree under reqwest and hyper.
 bytes = { version = "1", optional = true }
+# The `Stream` a browser's live stream is answered with (`recording::watch`).
+# Already in the tree under axum and reqwest.
+futures-core = { version = "0.3", optional = true }
 # The recording service's API token. Already in the tree under rustls.
 getrandom = { version = "0.3", optional = true }
 # zapper-server's HTTP API (MIT), on the hyper and tower the HTTP client

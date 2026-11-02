@@ -45,8 +45,9 @@ export async function playChannel(
 ) {
   // Separators are inert by construction; nothing should be able to open one.
   if (ch.isSeparator) return;
-  // Where nothing plays (a browser, for now), say so rather than pretend to
-  // open it: the picture slot would only sit there empty.
+  // Where nothing plays (a browser without Media Source Extensions), say so
+  // rather than pretend to open it: the picture slot would only sit there
+  // empty.
   if (!capabilities.playback) {
     dispatch({ type: "toast", text: NO_PLAYBACK, kind: "info" });
     return;
@@ -220,7 +221,8 @@ export async function openProgrammeHit(
     void playChannel(dispatch, { ...hit.channel, nowPlaying: hit.programme });
     return;
   }
-  if (action === "catchup") {
+  // Where the archive can't be played, the guide shows the programme.
+  if (action === "catchup" && capabilities.catchup) {
     void playCatchupProgramme(dispatch, hit.channel, hit.programme, ctx.mode);
     return;
   }

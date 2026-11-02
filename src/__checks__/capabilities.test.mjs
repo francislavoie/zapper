@@ -17,7 +17,7 @@ test("the app's window can do everything but sign out", () => {
   assert.deepEqual(settingsSections(DESKTOP), [...SETTINGS_SECTIONS]);
 });
 
-test("a browser keeps the guide, recordings, the account and refreshing, and nothing of the computer's", () => {
+test("a browser keeps the guide, recordings, the account, refreshing and watching, and nothing of the computer's", () => {
   assert.deepEqual(settingsSections(BROWSER), [
     "Account",
     "Guide",
@@ -27,7 +27,8 @@ test("a browser keeps the guide, recordings, the account and refreshing, and not
     "About",
   ]);
   for (const k of [
-    "playback",
+    "catchup",
+    "mpv",
     "window",
     "mediaKeys",
     "updater",
@@ -40,6 +41,8 @@ test("a browser keeps the guide, recordings, the account and refreshing, and not
   // The service keeps the account and the catalogue, so a browser signed in
   // to it may change the one and refresh the other.
   assert.equal(BROWSER.account, true);
+  // Watching goes through the service's own stream (src/webPlayer.ts).
+  assert.equal(BROWSER.playback, true);
   assert.equal(BROWSER.resync, true);
   assert.equal(BROWSER.signOut, true);
   assert.equal(allows(BROWSER, undefined), true);
@@ -55,13 +58,34 @@ test("the menu and the palette offer only what can be done here", () => {
   assert.deepEqual(ids(availableActions(true, everything)), desktop);
   assert.equal(desktop.length, ACTIONS.length - 1);
 
-  // In a browser, even "playing" offers no player control: nothing plays there.
+  // In a browser the player's controls are there; mpv's statistics and the
+  // window's are not.
   const browser = ids(availableActions(true, { ...everything, capabilities: BROWSER }));
-  for (const gone of ["quit", "updates", "stats", "previous", "pause", "stop", "live", "sleep30"]) {
+  for (const gone of ["quit", "updates", "stats"]) {
     assert.ok(!browser.includes(gone), gone);
   }
-  for (const kept of ["browse", "guide", "sync", "recordings", "settings", "about", "signOut"]) {
+  for (const kept of [
+    "browse",
+    "guide",
+    "sync",
+    "recordings",
+    "settings",
+    "about",
+    "signOut",
+    "previous",
+    "pause",
+    "stop",
+    "live",
+    "sleep30",
+  ]) {
     assert.ok(browser.includes(kept), kept);
+  }
+  // Where it can't play, no player control either.
+  const cannot = ids(
+    availableActions(true, { ...everything, capabilities: { ...BROWSER, playback: false } }),
+  );
+  for (const gone of ["previous", "pause", "stop", "live", "sleep30"]) {
+    assert.ok(!cannot.includes(gone), gone);
   }
 });
 

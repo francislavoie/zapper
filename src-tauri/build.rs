@@ -186,18 +186,21 @@ fn libmpv(bundle: Option<&Path>) {
     }
 }
 
-/// Compiles the recording service's remuxer (`src/recording/remux.c`) against FFmpeg's
-/// libavformat, libavcodec and libavutil: the bundle's (their headers in `include/`), or, with
+/// Compiles the recording service's remuxers (`src/recording/remux.c`, a capture into Matroska,
+/// and `src/recording/livemux.c`, a live feed for a browser) against FFmpeg's libavformat,
+/// libavcodec, libswresample and libavutil: the bundle's (their headers in `include/`), or, with
 /// none fetched, whatever pkg-config finds. The C side does only what needs FFmpeg's structures
-/// (demuxing and muxing packets); every decision about timing and naming is Rust's.
+/// (demuxing, decoding, encoding and muxing); every decision about timing and naming is Rust's.
 #[cfg(feature = "server")]
 fn remuxer(bundle: Option<&Path>) {
-    let src = "src/recording/remux.c";
-    println!("cargo:rerun-if-changed={src}");
+    let srcs = ["src/recording/remux.c", "src/recording/livemux.c"];
+    for src in srcs {
+        println!("cargo:rerun-if-changed={src}");
+    }
     println!("cargo:rerun-if-env-changed=PKG_CONFIG_PATH");
     let mut build = cc::Build::new();
-    build.file(src).warnings(true).flag_if_supported("-std=c11");
-    let libs = ["avformat", "avcodec", "avutil"];
+    build.files(srcs).warnings(true).flag_if_supported("-std=c11");
+    let libs = ["avformat", "avcodec", "swresample", "avutil"];
     match bundle {
         Some(dir) => {
             build.include(dir.join("include"));
