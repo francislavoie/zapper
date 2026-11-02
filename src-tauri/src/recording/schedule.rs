@@ -62,6 +62,9 @@ pub fn plan(now: i64, slots: &[Slot], active: &HashSet<i64>) -> Plan {
             // while there is still something to record.
             RecordingState::Recording if now < s.until => p.start.push(s.id),
             RecordingState::Recording => p.finish.push(s.id),
+            // Being finished when the service stopped: finish it now. It
+            // was stopped, or its window had passed, so it never resumes.
+            RecordingState::Finishing => p.finish.push(s.id),
             RecordingState::Done | RecordingState::Failed => {}
         }
     }
@@ -92,18 +95,23 @@ pub struct Busy {
 }
 
 /// What [`Busy`] is at `now`. A recording counts as being recorded when it
-/// is captured (`active`), and also when it was mid-capture and its window
-/// is still open: the service resumes those at once.
+/// is captured or finished (`active`) — finishing into its files outlasts
+/// its window, and stopping then would leave no playable file — when it is
+/// finishing, and when it was mid-capture and its window is still open: the
+/// service resumes those at once.
 pub fn busy(now: i64, slots: &[Slot], active: &HashSet<i64>) -> Busy {
     let live = |s: &Slot| {
-        s.until > now
-            && (active.contains(&s.id) || (s.state == RecordingState::Recording && s.from <= now))
+        active.contains(&s.id)
+            || s.state == RecordingState::Finishing
+            || (s.until > now && s.state == RecordingState::Recording && s.from <= now)
     };
     let pending = |s: &Slot| s.state == RecordingState::Scheduled && !active.contains(&s.id) && s.until > now;
     let next_start = slots.iter().filter(|s| pending(s)).map(|s| s.from).min();
     // From the end of what records now, take in every recording that
     // starts within the margin of that end, until one leaves a gap.
-    let mut at = slots.iter().filter(|s| live(s)).map(|s| s.until).max();
+    // A finish past its window ends at no time anyone can say: as soon as
+    // it can, `now`.
+    let mut at = slots.iter().filter(|s| live(s)).map(|s| s.until.max(now)).max();
     let mut t = at.unwrap_or(now);
     loop {
         let soon = slots
@@ -223,6 +231,29 @@ mod tests {
         assert_eq!((b.idle, b.idle_at), (false, Some(2_000)));
         // Its window over, it is only finished, which a restart also does.
         assert!(busy(2_000, &[slot(1, Recording, 1_000, 2_000)], &HashSet::new()).idle);
+    }
+
+    #[test]
+    fn a_recording_being_finished_is_busy_and_is_finished_after_a_restart() {
+        // Its window over and its capture closed, it is still being turned
+        // into its files: busy, idle "now" at the earliest.
+        let finishing = [slot(1, Finishing, 1_000, 2_000)];
+        let b = busy(2_500, &finishing, &HashSet::from([1]));
+        assert_eq!((b.idle, b.idle_at), (false, Some(2_500)));
+        // Without the capture task (a restart in between), likewise.
+        assert!(!busy(2_500, &finishing, &HashSet::new()).idle);
+        // Stopped early, inside its window: busy until it would have ended,
+        // or until it is finished, whichever the service sees first.
+        let b = busy(1_500, &finishing, &HashSet::from([1]));
+        assert_eq!((b.idle, b.idle_at), (false, Some(2_000)));
+        // A capture still registered past its window is being finished too.
+        let b = busy(2_500, &[slot(1, Recording, 1_000, 2_000)], &HashSet::from([1]));
+        assert!(!b.idle);
+
+        // Not running when the service starts: finished, never resumed.
+        let p = plan(1_500, &finishing, &HashSet::new());
+        assert_eq!((p.start.len(), p.finish.as_slice()), (0, &[1][..]));
+        assert_eq!(plan(1_500, &finishing, &HashSet::from([1])), Plan::default());
     }
 
     #[test]

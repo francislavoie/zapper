@@ -175,7 +175,9 @@ function RecordingRow({ rec, now }: { rec: RecordingDto; now: number }) {
     <div className={`rec-row ${rec.state}`}>
       <div className="rec-main">
         <div className="rec-title" data-tip-overflow="">
-          {rec.state === "recording" || rec.state === "scheduled" ? <RecDot recording={rec} /> : null}
+          {rec.state === "recording" || rec.state === "scheduled" || rec.state === "finishing" ? (
+            <RecDot recording={rec} />
+          ) : null}
           {rec.title}
           {episode}
         </div>
@@ -222,7 +224,8 @@ function RecordingRow({ rec, now }: { rec: RecordingDto; now: number }) {
             Stop
           </button>
         ) : null}
-        {capabilities.localService && (rec.state === "recording" || rec.state === "done") ? (
+        {capabilities.localService &&
+        (rec.state === "recording" || rec.state === "finishing" || rec.state === "done") ? (
           <button className="ctl" onClick={() => void openFolder()}>
             Open folder
           </button>

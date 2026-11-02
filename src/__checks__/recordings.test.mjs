@@ -15,6 +15,10 @@ import {
   marks,
   padMinutes,
   padSeconds,
+  POLL_BUSY_MS,
+  POLL_IDLE_MS,
+  POLL_OPEN_MS,
+  pollDelay,
   recordingStatus,
   recordingWhen,
   scheduleRequest,
@@ -48,6 +52,32 @@ test("only scheduled and recording programmes are marked in the guide", () => {
     rec({ id: 4, state: "failed", start: NOON + 9000 }),
   ]);
   assert.deepEqual([...m.keys()], [markKey(7, NOON), markKey(7, NOON + 3600)]);
+});
+
+test("a recording being saved keeps its mark, and is listed as saving", () => {
+  const recs = [rec({ id: 1, state: "finishing", parts: [{ path: "/v/x.ts", streamId: 7, bytes: 2e9, started: 0, ended: 1 }] })];
+  assert.deepEqual([...marks(recs).keys()], [markKey(7, NOON)]);
+  assert.equal(recordingStatus(recs[0], NOON), "Saving 2.0 GB…");
+  assert.deepEqual(
+    groupRecordings([...recs, rec({ id: 2, state: "recording" }), rec({ id: 3, state: "done" })]).map((g) => g.label),
+    ["Recording", "Saving", "Recorded"],
+  );
+});
+
+test("the list is followed closely while anything records or saves, and just after an action", () => {
+  const quiet = [rec({ state: "scheduled" }), rec({ state: "done" })];
+  assert.equal(pollDelay(quiet, false, 60_000), POLL_IDLE_MS);
+  assert.equal(pollDelay(quiet, true, 60_000), POLL_OPEN_MS);
+  assert.equal(pollDelay(null, false, 60_000), POLL_IDLE_MS, "no service: the slow pace");
+  for (const state of ["recording", "finishing"]) {
+    assert.equal(pollDelay([...quiet, rec({ state })], false, 60_000), POLL_BUSY_MS, state);
+  }
+  // For ten seconds after something was asked of the service.
+  assert.equal(pollDelay(quiet, false, 0), POLL_BUSY_MS);
+  assert.equal(pollDelay(quiet, false, 9_999), POLL_BUSY_MS);
+  assert.equal(pollDelay(quiet, false, 10_000), POLL_IDLE_MS);
+  assert.equal(pollDelay(null, true, 3_000), POLL_BUSY_MS);
+  assert.ok(POLL_BUSY_MS <= 2_000 && POLL_IDLE_MS >= 30_000);
 });
 
 test("anything not over can be recorded", () => {

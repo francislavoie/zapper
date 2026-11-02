@@ -5528,6 +5528,11 @@ textarea.field {
   animation: rec-pulse 1.6s ease-in-out infinite;
 }
 
+/* Stopped, and being saved into its file: no longer red. */
+.rec-dot.saving {
+  background: var(--dim);
+}
+
 @keyframes rec-pulse {
   50% {
     opacity: 0.35;

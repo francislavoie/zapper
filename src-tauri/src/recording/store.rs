@@ -171,7 +171,7 @@ pub fn list(conn: &Connection) -> Result<Vec<RecordingDto>> {
 pub fn slots(conn: &Connection) -> Result<Vec<Slot>> {
     let mut st = conn.prepare(
         "SELECT id, state, start, stop, pad_before, pad_after FROM recordings
-         WHERE state IN ('scheduled', 'recording')",
+         WHERE state IN ('scheduled', 'recording', 'finishing')",
     )?;
     let rows = st
         .query_map([], |r| {
@@ -218,6 +218,24 @@ pub fn set_state(
     conn.execute(
         "UPDATE recordings SET state = ?2, error = ?3 WHERE id = ?1",
         params![id, state.as_str(), error],
+    )?;
+    Ok(())
+}
+
+/// Changes the state alone, keeping the error on record.
+pub fn mark(conn: &Connection, id: i64, state: RecordingState) -> Result<()> {
+    conn.execute(
+        "UPDATE recordings SET state = ?2 WHERE id = ?1",
+        params![id, state.as_str()],
+    )?;
+    Ok(())
+}
+
+/// Keeps why a recording has nothing to show, without changing its state.
+pub fn set_error(conn: &Connection, id: i64, error: Option<&str>) -> Result<()> {
+    conn.execute(
+        "UPDATE recordings SET error = ?2 WHERE id = ?1",
+        params![id, error],
     )?;
     Ok(())
 }
@@ -345,6 +363,12 @@ mod tests {
             (r.parts, r.notes),
             (vec![part], vec!["switched".to_string()])
         );
+
+        set_error(&c, id, Some("no data")).unwrap();
+        mark(&c, id, RecordingState::Finishing).unwrap();
+        let r = get(&c, id).unwrap().unwrap();
+        assert_eq!((r.state, r.error.as_deref()), (RecordingState::Finishing, Some("no data")));
+        assert_eq!(slots(&c).unwrap()[0].state, RecordingState::Finishing, "still the scheduler's");
 
         set_state(&c, id, RecordingState::Failed, Some("nothing")).unwrap();
         assert!(

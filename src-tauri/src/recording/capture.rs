@@ -392,7 +392,7 @@ async fn run_inner(server: &Arc<Server>, id: i64, stop: &mut watch::Receiver<boo
     }
     if parts.iter().all(|p| p.bytes == 0) {
         let why = last_failure.map_or("nothing was received".to_string(), |f| f.describe());
-        server.db(|c| store::set_state(c, id, RecordingState::Recording, Some(&why)))?;
+        server.db(|c| store::set_error(c, id, Some(&why)))?;
     }
     Ok(())
 }

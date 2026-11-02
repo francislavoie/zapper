@@ -36,6 +36,8 @@ pub struct Live {
     pub waiting: Option<String>,
     /// The end of its window, padding included.
     pub until: i64,
+    /// Capturing no more: being finished into its files.
+    pub finishing: bool,
     pub stop: watch::Sender<bool>,
 }
 
@@ -208,6 +210,7 @@ impl Server {
                     since: now(),
                     waiting: None,
                     until: rec.stop + rec.pad_after,
+                    finishing: false,
                     stop: tx,
                 },
             )
@@ -217,13 +220,34 @@ impl Server {
             if capture {
                 capture::run(&me, id, rx).await;
             }
-            if me.stopping.load(Ordering::SeqCst) {
+            // Stopped by hand, it finishes even while the service stops:
+            // it is never to be resumed.
+            let stopped = me.state_of(id) == Some(RecordingState::Finishing);
+            if me.stopping.load(Ordering::SeqCst) && !stopped {
                 capture::suspend(&me, id).await;
             } else {
+                me.finishing(id);
                 capture::finish(&me, id).await;
             }
             me.live(|m| m.remove(&id));
         });
+    }
+
+    fn state_of(&self, id: i64) -> Option<RecordingState> {
+        self.db(|c| store::get(c, id)).ok().flatten().map(|r| r.state)
+    }
+
+    /// Marks recording `id` as no longer capturing but being finished into
+    /// its files: what the interface shows (not the red dot), and still
+    /// busy to anything waiting to stop the service.
+    fn finishing(&self, id: i64) {
+        self.update_live(id, |l| {
+            l.finishing = true;
+            l.waiting = None;
+        });
+        if let Err(e) = self.db(|c| store::mark(c, id, RecordingState::Finishing)) {
+            tracing::warn!("recording {id}: could not mark it finishing: {e:#}");
+        }
     }
 
     // ------------------------------------------------------------ stopping
@@ -407,11 +431,18 @@ impl Server {
     }
 
     /// A scheduled recording is forgotten; one being captured stops, keeping
-    /// what it has, and is finished as usual.
+    /// what it has, and is finished as usual. It says `finishing` from the
+    /// moment it is asked, not once its files are written.
     pub fn cancel(&self, id: i64) -> Result<Option<RecordingDto>> {
-        let stopping = self.live(|m| m.get(&id).map(|l| l.stop.send(true)).is_some());
-        if stopping {
+        let capturing = self.live(|m| {
+            m.get(&id)
+                .filter(|l| !l.finishing)
+                .map(|l| l.stop.send(true))
+                .is_some()
+        });
+        if capturing {
             self.note(id, "stopped before its end");
+            self.finishing(id);
             return self.get(id).map(Some);
         }
         let rec = self.get(id)?;
@@ -473,6 +504,7 @@ impl Server {
                     since: l.since,
                     waiting: l.waiting.clone(),
                     until: l.until,
+                    finishing: l.finishing,
                 })
                 .collect();
             v.sort_by_key(|a| a.id);

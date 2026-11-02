@@ -440,6 +440,7 @@ mod tests {
     use super::*;
     use crate::recording::budget::{Budget, Slots};
     use crate::recording::config::{self, ServerConfig};
+    use crate::recording::api::RecordingState;
     use crate::recording::store;
 
     struct Free;
@@ -1481,11 +1482,95 @@ mod tests {
         // No such recording; a finished one.
         let (st, _) = call(&s, from_page("PUT", "/api/recordings/987654/backup", Some(&token), Some(serde_json::json!({"streamId": 94002})))).await;
         assert_eq!(st, StatusCode::NOT_FOUND);
-        s.db(|c| store::set_state(c, id, crate::recording::api::RecordingState::Done, None))
+        s.db(|c| store::set_state(c, id, RecordingState::Done, None))
             .unwrap();
         let (st, e) = call(&s, put(serde_json::json!({"streamId": 94002}))).await;
         assert_eq!(st, StatusCode::BAD_REQUEST);
         assert!(e["error"].as_str().unwrap().contains("finished"), "{e}");
+    }
+
+    #[tokio::test]
+    async fn a_stopped_recording_says_finishing_at_once_and_keeps_the_service_busy() {
+        let s = server("finishing");
+        let t = now();
+        // One being captured: in the store as recording, with its capture
+        // registered the way `spawn_capture` does.
+        let id = s
+            .db(|c| {
+                let req = ScheduleRequest {
+                    stream_id: 7,
+                    backup_stream_id: None,
+                    channel_name: Some("One".into()),
+                    title: "Long Film".into(),
+                    episode_title: None,
+                    season: None,
+                    episode: None,
+                    start: t - 600,
+                    stop: t + 3600,
+                    pad_before: None,
+                    pad_after: None,
+                };
+                let id = store::insert(
+                    c,
+                    &store::NewRecording {
+                        req: &req,
+                        backup_stream_id: None,
+                        channel_name: "One",
+                        pad_before: 60,
+                        pad_after: 300,
+                        folder: "/v",
+                        base: "Long Film",
+                        clock_track: false,
+                        now: t,
+                    },
+                )?;
+                store::set_state(c, id, RecordingState::Recording, None)?;
+                Ok(id)
+            })
+            .unwrap();
+        let (tx, mut stop) = tokio::sync::watch::channel(false);
+        s.live(|m| {
+            m.insert(
+                id,
+                crate::recording::server::Live {
+                    title: "Long Film".into(),
+                    stream_id: 7,
+                    bytes: 5_000_000_000,
+                    since: t - 600,
+                    waiting: None,
+                    until: t + 3900,
+                    finishing: false,
+                    stop: tx,
+                },
+            )
+        });
+        let get = |uri: &str| req("GET", uri, HOME, false, Some(APP));
+        let (_, st) = call(&s, get("/api/status")).await;
+        assert_eq!((st["idle"].as_bool(), st["active"][0].get("finishing")), (Some(false), None));
+
+        // Stopping answers at once with what it is now: being finished.
+        let (code, r) = call(&s, req("POST", &format!("/api/recordings/{id}/cancel"), HOME, false, Some(APP))).await;
+        assert_eq!(code, StatusCode::OK, "{r}");
+        assert_eq!(r["state"], "finishing");
+        assert!(*stop.borrow_and_update(), "the capture was told to stop");
+        let (_, list) = call(&s, get("/api/recordings")).await;
+        assert_eq!(list[0]["state"], "finishing");
+        // Busy while it is finished: an installer or a restart waits.
+        let (_, st) = call(&s, get("/api/status")).await;
+        assert_eq!(st["active"][0]["finishing"], true);
+        assert_eq!(st["idle"], false);
+        assert!(s.busy().idle_at.is_some());
+        // Asking again changes nothing, and nothing can be deleted meanwhile.
+        let (_, r) = call(&s, req("POST", &format!("/api/recordings/{id}/cancel"), HOME, false, Some(APP))).await;
+        assert_eq!(r["state"], "finishing");
+        assert!(s.delete(id, false).is_err());
+
+        // Finished: done, and idle once the capture is gone.
+        s.db(|c| store::set_state(c, id, RecordingState::Done, None)).unwrap();
+        s.live(|m| m.remove(&id));
+        let (_, st) = call(&s, get("/api/status")).await;
+        assert_eq!(st["idle"], true);
+        assert!(st["active"].as_array().unwrap().is_empty());
     }
 
     /// An account of one stream, which nothing else uses.
