@@ -16,8 +16,9 @@
 //           rather than in a strip floating over the window's content;
 //   centre  the app's name, centred on the window rather than on the space
 //           left over, so it does not drift as the status line grows;
-//   right   only when there is one, the badge for an update waiting, then the
-//           window buttons.
+//   right   only when there is one, the badge for an update waiting, and the
+//           sign that something is recording; then Settings and the window
+//           buttons.
 //
 // Everything that is not a button drags the window: the status line, and the
 // strip between it and the right-hand end, with the name drawn over that strip
@@ -53,6 +54,7 @@ import { useApp, useDispatch } from "../store";
 import { windowControls } from "../window";
 import { useMaximised } from "../hooks/useMaximised";
 import { Bolt, Gear, UpdateArrow } from "./icons";
+import { RecordingBadge } from "./RecordingBadge";
 import { SleepSubMenu } from "./SleepMenu";
 import { SubMenuHost } from "./SubMenu";
 
@@ -188,6 +190,10 @@ export function Toolbar() {
             {badgeShort(state.update.state)}
           </button>
         ) : null}
+        {/* While the recording service records: a dot, a word, and what it
+            records in the tooltip. A press that moves drags, like the
+            update badge. */}
+        <RecordingBadge onMouseDown={dragOnMove} />
         {/* Settings, one click away rather than at the bottom of the menu.
             Beside the window buttons but set apart from them, so it is not
             mistaken for one; a press that moves still drags the window. */}
