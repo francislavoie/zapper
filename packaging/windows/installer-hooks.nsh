@@ -14,6 +14,15 @@
 ; new ones are in place. This setup is per-user, so taskkill and schtasks
 ; reach only this user's.
 ;
+; Or, with Settings > Recording > Start at boot, it is a Windows service of
+; the same name, running as an account of its own (recording::service::winsvc).
+; Its person may stop, start and delete it without elevation (its security
+; descriptor says so), which is all this unelevated setup does with it:
+; --stop-for-setup stops it through the Service Control Manager too and waits
+; for its process to exit, sc start starts it again after an install, and a
+; real uninstall runs zapper-server.exe --remove-service, which stops it,
+; takes back the folder permissions it was given and deletes it.
+;
 ; Uninstalling removes the task too, and zapper-server's log, but only when it
 ; is an uninstall. The uninstaller also runs when a newer version is
 ; installed over this one, and the task must survive that. Tauri's template
@@ -83,6 +92,9 @@
   ReadEnvStr $0 USERNAME
   nsExec::Exec '"$SYSDIR\schtasks.exe" /Run /TN "zapper-server-$0"'
   Pop $0
+  ReadEnvStr $0 USERNAME
+  nsExec::Exec '"$SYSDIR\sc.exe" start "zapper-server-$0"'
+  Pop $0
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL
@@ -91,6 +103,14 @@
   !insertmacro ZAPPER_STOP_SERVER
   ${If} $UpdateMode <> 1
   ${AndIf} $EXEDIR != $INSTDIR
+    ${If} ${FileExists} "$INSTDIR\zapper-server.exe"
+      nsExec::Exec '"$INSTDIR\zapper-server.exe" --remove-service'
+      Pop $0
+    ${EndIf}
+    ; In case that could not: the boot-time service, then the task.
+    ReadEnvStr $0 USERNAME
+    nsExec::Exec '"$SYSDIR\sc.exe" delete "zapper-server-$0"'
+    Pop $0
     ReadEnvStr $0 USERNAME
     nsExec::Exec '"$SYSDIR\schtasks.exe" /End /TN "zapper-server-$0"'
     Pop $0

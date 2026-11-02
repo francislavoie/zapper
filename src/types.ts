@@ -743,11 +743,15 @@ export interface ServiceStatusDto {
   /** systemd's word (active, inactive, failed…), or Task Scheduler's in the
    *  same spirit (running, stopped, disabled). */
   state?: string;
-  /** Keeps running after logging out. */
+  /** Keeps running after logging out; on Windows, installed as the Windows
+   *  service that starts at boot. */
   linger: boolean;
   /** Whether keeping it running after logging out is offered here (not on
-   *  Windows, where the task runs while you are signed in). */
+   *  macOS, where the LaunchAgent runs while you are logged in). */
   canLinger: boolean;
+  /** Keeping it running is the Windows service that starts at boot, as an
+   *  account of its own, installed with an administrator's permission. */
+  bootService: boolean;
   binary?: string;
   /** Set when the service answered on its API. */
   version?: string;

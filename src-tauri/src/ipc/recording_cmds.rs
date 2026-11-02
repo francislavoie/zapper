@@ -72,6 +72,12 @@ pub async fn recording_settings() -> Result<RecordingSettingsDto, String> {
 pub async fn set_recording_settings(
     settings: RecordingSettingsDto,
 ) -> Result<RecordingSettingsDto, String> {
+    // A folder the boot-time Windows service, running as an account of its
+    // own, may not write yet: granted first, as this person.
+    let dir = std::path::PathBuf::from(settings.output_dir.trim());
+    if let Ok(Err(e)) = tokio::task::spawn_blocking(move || service::allow_folder(&dir)).await {
+        tracing::warn!("recording service: the recordings folder: {e:#}");
+    }
     client()?.set_settings(&settings).await.map_err(words)
 }
 

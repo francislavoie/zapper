@@ -174,7 +174,7 @@ export function RecordingPane({ s }: { s: SettingsControl }) {
                 ? service.unsupportedReason
                 : service?.supported && !service.installed && !service.binary
                   ? "zapper-server was not found beside zapper or on the PATH, so it cannot be installed from here yet."
-                  : `Records what you schedule from the guide, even with zapper closed. It runs as you${service?.kind ? ` (${service.kind})` : ""}, listens on ${service?.address ?? "127.0.0.1"} (and on your network only if you allow it below), and keeps the catalogue current like the app does.${service?.supported && !service.canLinger ? " It records while you are signed in to this computer." : ""} Removing it keeps your recordings.`
+                  : `Records what you schedule from the guide, even with zapper closed. It runs ${service?.bootService && service.installed && service.linger ? "as an account of its own, on your folders" : "as you"}${service?.kind ? ` (${service.kind})` : ""}, listens on ${service?.address ?? "127.0.0.1"} (and on your network only if you allow it below), and keeps the catalogue current like the app does.${service?.supported && !service.canLinger ? " It records while you are signed in to this computer." : ""} Removing it keeps your recordings.`
           }
         >
           {service?.supported ? (
@@ -199,9 +199,13 @@ export function RecordingPane({ s }: { s: SettingsControl }) {
         </SettingRow>
         {service?.supported && service.canLinger ? (
           <SettingRow
-            label="Keep running when logged out"
+            label={service.bootService ? "Start at boot (Windows service)" : "Keep running when logged out"}
             htmlFor="rec-linger"
-            description="Lets it record while nobody is logged in to this computer."
+            description={
+              service.bootService
+                ? "Runs it as a Windows service from when the computer starts, whether or not anyone signs in, as an account of its own that may use only your zapper folders and recordings folder (not a network drive). Windows asks once for an administrator’s permission; switching back or removing it does not."
+                : "Lets it record while nobody is logged in to this computer."
+            }
           >
             <Switch
               id="rec-linger"

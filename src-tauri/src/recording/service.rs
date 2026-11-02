@@ -14,10 +14,16 @@
 //! registered, started, stopped and deleted through Task Scheduler's COM
 //! interface. Unprivileged users may do all of that for their own account.
 //! The task runs while its user is signed in and no longer: running with
-//! nobody signed in needs the account's password stored with the task, or
-//! the right to log on as a batch job, so there is no "keep running when
-//! logged out" switch there. Nor does it wake the computer to record: that
-//! would be one more task per recording, with a wake timer.
+//! nobody signed in would need the account's password stored with the task.
+//! Nor does it wake the computer to record: that would be one more task per
+//! recording, with a wake timer.
+//!
+//! Or, with "Start at boot", a real Windows service of the same name that
+//! starts when the computer does, whether or not anyone signs in, as an
+//! account of its own on the person's folders, installed with one UAC
+//! prompt and managed by its person from then on ([`winsvc`]). One or the
+//! other, never both: switching stops the one cleanly before the other
+//! starts.
 //!
 //! macOS: a LaunchAgent, loaded into this user's login session with
 //! `launchctl`, that starts it at login and after a crash ([`launchd`]).
@@ -32,6 +38,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
 pub mod launchd;
+pub mod winsvc;
 
 pub const UNIT_NAME: &str = "zapper-server.service";
 
@@ -52,10 +59,15 @@ pub struct ServiceStatusDto {
     /// Scheduler's in the same spirit (`running`, `stopped`, `disabled`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state: Option<String>,
-    /// Keeps running after logging out.
+    /// Keeps running after logging out: on Windows, installed as the
+    /// Windows service that starts at boot.
     pub linger: bool,
     /// Whether keeping it running after logging out is offered here.
     pub can_linger: bool,
+    /// Keeping it running is the Windows service that starts at boot, which
+    /// asks for an administrator's permission, rather than lingering.
+    #[serde(default)]
+    pub boot_service: bool,
     /// The `zapper-server` that Install would run, if one was found.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub binary: Option<String>,
@@ -196,8 +208,21 @@ pub fn status() -> ServiceStatusDto {
         return s;
     }
     if cfg!(windows) {
+        s.can_linger = true;
+        s.boot_service = true;
         s.kind = Some("a scheduled task that starts it when you sign in".into());
         if let Some(user) = windows_user() {
+            match winsvc::scm::state(&task_name(&user)) {
+                Ok(Some(state)) => {
+                    s.kind = Some(winsvc::KIND.into());
+                    s.installed = true;
+                    s.linger = true;
+                    s.state = Some(state);
+                    return s;
+                }
+                Ok(None) => {}
+                Err(e) => tracing::warn!("recording service: Service Control Manager: {e:#}"),
+            }
             match scheduler::state(&task_name(&user)) {
                 Ok(state) => {
                     s.installed = state.is_some();
@@ -240,9 +265,11 @@ fn linger() -> bool {
 }
 
 /// Writes the unit and starts it; with `linger`, keeps it running after
-/// logging out. On Windows, registers the task and starts it; on macOS,
-/// loads the agent, which starts it. `linger` is not offered there and is
-/// ignored.
+/// logging out. On Windows, registers the task and starts it, or with
+/// `linger`, installs the Windows service that starts at boot (asking for
+/// an administrator's permission) and starts that; whichever was there
+/// before is removed. On macOS, loads the agent, which starts it; `linger`
+/// is not offered there and is ignored.
 pub fn install(linger: bool) -> Result<()> {
     if let Some(why) = unsupported() {
         bail!(why);
@@ -256,9 +283,13 @@ pub fn install(linger: bool) -> Result<()> {
         .map(PathBuf::from);
     if cfg!(windows) {
         let user = windows_user().context("no USERNAME in the environment")?;
-        return scheduler::install(&task_name(&user), |account| {
-            task_xml(&exe, account, home.as_deref())
-        });
+        let name = task_name(&user);
+        if linger {
+            return install_boot(&name, &exe);
+        }
+        // The service first, cleanly: the two never run at once.
+        remove_boot(&name)?;
+        return scheduler::install(&name, |account| task_xml(&exe, account, home.as_deref()));
     }
     if cfg!(target_os = "macos") {
         return launchd::install(&exe, home.as_deref());
@@ -277,9 +308,22 @@ pub fn install(linger: bool) -> Result<()> {
     set_linger(linger)
 }
 
-/// Turns lingering on or off for this user. Nothing to do where it is not
-/// offered.
+/// Turns lingering on or off for this user. On Windows, switches what is
+/// installed between the sign-in task and the boot-time service; nothing to
+/// do while neither is. Nothing to do where it is not offered.
 pub fn set_linger(on: bool) -> Result<()> {
+    if cfg!(windows) {
+        let Some(user) = windows_user() else {
+            return Ok(());
+        };
+        let name = task_name(&user);
+        let boot = winsvc::scm::exists(&name);
+        let task = scheduler::state(&name).ok().flatten().is_some();
+        if (boot || task) && boot != on {
+            return install(on);
+        }
+        return Ok(());
+    }
     if unsupported().is_some() || !cfg!(target_os = "linux") {
         return Ok(());
     }
@@ -311,7 +355,9 @@ pub fn remove() -> Result<()> {
         let Some(user) = windows_user() else {
             return Ok(());
         };
-        return scheduler::remove(&task_name(&user));
+        let name = task_name(&user);
+        remove_boot(&name)?;
+        return scheduler::remove(&name);
     }
     if cfg!(target_os = "macos") {
         return launchd::remove();
@@ -342,6 +388,22 @@ pub fn stop_for_update() {
             tracing::warn!("recording service: stopping it for the update: {e:#}");
         }
     }
+    stop_boot_service();
+}
+
+/// Stops the boot-time Windows service, if there is one, through the
+/// Service Control Manager (which it takes as Ctrl+C), and waits until its
+/// process has exited and its program can be replaced. Its person may.
+/// Nothing to do elsewhere.
+pub fn stop_boot_service() {
+    if !cfg!(windows) {
+        return;
+    }
+    if let Some(user) = windows_user() {
+        if let Err(e) = winsvc::scm::stop(&task_name(&user), std::time::Duration::from_secs(150)) {
+            tracing::warn!("recording service: stopping the Windows service: {e:#}");
+        }
+    }
 }
 
 /// Starts the installed service when it is not running, as zapper opens:
@@ -358,8 +420,137 @@ pub fn resume() {
             Ok(false) => {}
             Err(e) => tracing::warn!("recording service: starting its task: {e:#}"),
         }
+        match winsvc::scm::start(&task_name(&user)) {
+            Ok(true) => tracing::info!("recording service: started the Windows service"),
+            Ok(false) => {}
+            Err(e) => tracing::warn!("recording service: starting the Windows service: {e:#}"),
+        }
     }
 }
+
+/// The boot-time service's plan for `name` running `exe`: this person's
+/// folders as this process sees them (a home of its own included), and
+/// what to grant on them (winsvc).
+fn boot_plan(name: &str, exe: &Path) -> Result<winsvc::Plan> {
+    let (write, read) = boot_grants(exe);
+    Ok(winsvc::Plan {
+        name: name.to_owned(),
+        user_sid: winsvc::scm::user_sid()?,
+        config_dir: crate::paths::config_dir(),
+        data_dir: crate::paths::data_dir(),
+        cache_dir: crate::paths::cache_dir(),
+        recordings_dir: super::config::default_output_dir(),
+        write,
+        read,
+    })
+}
+
+/// The folders the boot-time service is granted: written, then read.
+fn boot_grants(exe: &Path) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    let dirs = [
+        crate::paths::config_dir(),
+        crate::paths::data_dir(),
+        crate::paths::cache_dir(),
+        super::config::default_output_dir(),
+    ];
+    let output = PathBuf::from(super::config::load().output_dir);
+    let profile = std::env::var_os("USERPROFILE").map(PathBuf::from);
+    winsvc::grants(
+        &dirs.iter().map(PathBuf::as_path).collect::<Vec<_>>(),
+        output.is_absolute().then_some(output.as_path()),
+        exe.parent(),
+        profile.as_deref(),
+    )
+}
+
+/// Installs the boot-time service (or brings it up to date) through the one
+/// UAC prompt, then stops cleanly whatever answers on the port now (the
+/// task, or an older service), removes the task, and starts the service.
+fn install_boot(name: &str, exe: &Path) -> Result<()> {
+    let plan = boot_plan(name, exe)?;
+    // Made as this person, so that they are theirs.
+    for d in [&plan.config_dir, &plan.data_dir, &plan.cache_dir, &plan.recordings_dir] {
+        std::fs::create_dir_all(d).with_context(|| format!("creating {}", d.display()))?;
+    }
+    winsvc::scm::install_as_administrator(&plan, exe)?;
+    stop_cleanly();
+    scheduler::remove(name)?;
+    winsvc::scm::stop(name, std::time::Duration::from_secs(150))?;
+    winsvc::scm::start(name)?;
+    Ok(())
+}
+
+/// Removes the boot-time service if there is one, taking back what it was
+/// granted. Its person may, without a prompt.
+fn remove_boot(name: &str) -> Result<()> {
+    if !winsvc::scm::exists(name) {
+        return Ok(());
+    }
+    let exe = find_binary().unwrap_or_default();
+    let (mut folders, read) = boot_grants(&exe);
+    folders.extend(read);
+    winsvc::scm::remove(name, &folders)
+}
+
+/// A recordings folder chosen while the boot-time service is installed:
+/// made, as this person, and granted to the service, which could do
+/// neither as its own account. Nothing to do otherwise.
+pub fn allow_folder(dir: &Path) -> Result<()> {
+    if !cfg!(windows) || !dir.is_absolute() {
+        return Ok(());
+    }
+    let Some(user) = windows_user() else {
+        return Ok(());
+    };
+    let name = task_name(&user);
+    if !winsvc::scm::exists(&name) {
+        return Ok(());
+    }
+    std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    winsvc::scm::grant(&name, dir, "M")
+}
+
+/// Asks the service answering on this computer to stop now, and waits
+/// until it no longer answers: what it records is finished into playable
+/// files, rather than cut off as ending its process would.
+fn stop_cleanly() {
+    use super::api::{ShutdownRequest, ShutdownWhen};
+    let wait = async {
+        let Ok(c) = super::client::Client::local() else {
+            return;
+        };
+        if c.version().await.is_err() {
+            return;
+        }
+        let now = ShutdownRequest {
+            when: ShutdownWhen::Now,
+            restart: false,
+        };
+        if c.shutdown(&now).await.is_err() {
+            return;
+        }
+        for _ in 0..300 {
+            if c.version().await.is_err() {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
+    };
+    // From the app's blocking threads, its own runtime; from zapper-server's
+    // command line, one of its own.
+    match tokio::runtime::Handle::try_current() {
+        Ok(h) => h.block_on(wait),
+        Err(_) => {
+            if let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                rt.block_on(wait);
+            }
+        }
+    }
+}
+
 
 /// This user's name, for naming the task. The task's own account comes
 /// from Task Scheduler (`scheduler::install`): `USERDOMAIN` is not always

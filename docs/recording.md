@@ -13,10 +13,14 @@ schedules recordings from the guide and shows them; the service does the recordi
      nobody is logged in (`loginctl enable-linger`).
    - **Windows:** a scheduled task, `zapper-server-<your user name>`, that starts
      `zapper-server.exe` when you sign in and is started right away. It records while you are
-     signed in; recording with nobody signed in would need your password stored with the task, so
-     it isn't offered. Having no window, it logs to `%LOCALAPPDATA%\zapper\zapper-server.log`.
-     Updating zapper stops it to replace it, and zapper starts it again when it reopens.
-     Uninstalling zapper removes the task too ([Stopping and updating](#stopping-and-updating)).
+     signed in. *Start at boot (Windows service)* installs it instead as a Windows service of the
+     same name, which starts with the computer and records whether or not anyone is signed in:
+     Windows asks once for an administrator's permission, and it runs as an account of its own
+     that may use only your zapper folders and recordings folder (not a network drive;
+     docs/windows.md has the details). Having no window, it logs to
+     `%LOCALAPPDATA%\zapper\zapper-server.log`. Updating zapper stops it to replace it, and it is
+     started again afterwards. Uninstalling zapper removes it too
+     ([Stopping and updating](#stopping-and-updating)).
    - **macOS:** a LaunchAgent, `~/Library/LaunchAgents/dev.lavoie.zapper.server.plist`, loaded
      into your login session (`launchctl bootstrap`), which starts it when you log in and again
      after a crash, but not after a clean stop. It records while you are logged in. It logs to
@@ -474,7 +478,11 @@ zapper-server --import-account FILE | --set-password | --network on|off [--home 
 - `--home DIR`: keep everything in `DIR`, as `ZAPPER_HOME` does. The service is given it when
   the app that installed it runs on a home of its own.
 - `--install-service`, `--remove-service`: what Settings → Recording's Install and Remove do,
-  with this `zapper-server`: for a computer without the app's window.
+  with this `zapper-server`: for a computer without the app's window. `--boot` (Windows): the
+  boot-time Windows service rather than the sign-in task, after a UAC prompt. That service runs
+  `zapper-server --service <name>` with `--config-dir`, `--data-dir`, `--cache-dir` and
+  `--recordings-dir` naming your folders (also `ZAPPER_CONFIG_DIR` and the like, each one
+  directory itself; `ZAPPER_HOME` comes first).
 - `--busy`: whether this user's running service is recording; exit status 3 and "recording until
   21:05" if it is, 0 otherwise. `--stop-for-setup`: stops it cleanly now and waits for it to go;
   with `--ask`, asks first (a message box on Windows) when it is recording, and exits 2 if not.
@@ -703,7 +711,6 @@ streams}`, what recording `title` loses to `with` on another channel when the ac
 - In the browser: rewinding further than the browser holds (a buffer kept by the service), the
   provider's archive, subtitles, and MPEG-2 video (it would need re-encoding).
 - Waking the computer from suspend to record
-  (on Windows, a task per recording with a wake timer); recording on Windows while nobody is
-  signed in.
+  (on Windows, a task per recording with a wake timer).
 - Series rules ("record every episode").
 - Joining parts whose codecs match into one file.

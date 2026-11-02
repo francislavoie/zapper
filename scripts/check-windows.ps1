@@ -33,7 +33,11 @@
         setup runs, keep the task (started again); a real uninstall deletes
         it and stops zapper-server;
       * MSI (administrator): installed for real, the task added, and a full
-        uninstall deletes it (packaging/windows/service-cleanup.wxs).
+        uninstall deletes it (packaging/windows/service-cleanup.wxs);
+      * the same for the Windows service Settings > Recording > Start at boot
+        installs instead (zapper-server --install-service --boot): automatic,
+        as its own virtual account, kept and started again by an upgrade,
+        deleted by either uninstall.
 
     And the install folder the NSIS setup remembers in the registry (the
     default value of HKCU\Software\<manufacturer>\zapper), which Tauri's MSI
@@ -246,6 +250,26 @@ if ($Install) {
     # --install-service (the same code), on a scratch home it hands the task.
     $task = "zapper-server-$env:USERNAME"
     function Task { Get-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue }
+    function Svc { Get-CimInstance Win32_Service -Filter "Name='$task'" -ErrorAction SilentlyContinue }
+    function Svc-State {
+        # Started again by an install's hook: give it a moment.
+        $deadline = (Get-Date).AddSeconds(20)
+        do { $s = Svc; if (-not $s -or $s.State -eq "Running") { break }; Start-Sleep 1 } while ((Get-Date) -lt $deadline)
+        if ($s) { $s.State } else { $null }
+    }
+    function Install-Boot([string]$at) {
+        $exe = Join-Path $at "zapper-server.exe"
+        if (-not (Test-Path $exe)) { Fail "no $exe"; return }
+        $out = (& $exe --install-service --boot 2>&1 | Out-String).Trim()
+        Write-Host "  zapper-server --install-service --boot: $out"
+        $s = Svc
+        if (-not $s) { Fail "no service $task after --install-service --boot from $at"; return }
+        if ($s.StartMode -ne "Auto") { Fail "the service starts $($s.StartMode), not at boot" }
+        if ($s.StartName -ne "NT SERVICE\$task") { Fail "the service runs as $($s.StartName), not its own account" }
+        if ((Svc-State) -ne "Running") { Fail "the service is $((Svc).State) once installed" }
+        if (Task) { Fail "the task is still there beside the service" }
+        Write-Host "  service $task`: $((Svc).State), $($s.StartMode), as $($s.StartName), runs $($s.PathName)"
+    }
     function Wait-Gone([string]$file) {
         # An uninstaller run normally copies itself elsewhere and returns at once.
         $deadline = (Get-Date).AddSeconds(120)
@@ -270,6 +294,7 @@ if ($Install) {
     if (-not $ownHome) { $env:ZAPPER_HOME = Join-Path $work "home" }
     $serverLog = Join-Path $env:LOCALAPPDATA "zapper\zapper-server.log"
     if (Task) { throw "a task $task is already registered here; not touching it" }
+    if (Svc) { throw "a service $task is already installed here; not touching it" }
 
     Step "NSIS: the recording service survives an upgrade"
     $state = Install-Service $nsisDir
@@ -308,6 +333,26 @@ if ($Install) {
     if ($remembered) { Fail "the NSIS uninstall left its folder in the registry ($folderKey = $remembered)" }
     else { Write-Host "  remembered folder cleared" }
 
+    Step "NSIS: the boot-time Windows service survives an upgrade, and goes with an uninstall"
+    $p = Start-Process -Wait -PassThru $nsis -ArgumentList "/S", "/D=$nsisDir"
+    if ($p.ExitCode -ne 0) { Fail "installing the setup again failed with $($p.ExitCode)" }
+    Install-Boot $nsisDir
+    $p = Start-Process -Wait -PassThru $nsis -ArgumentList "/S", "/D=$nsisDir"
+    if ($p.ExitCode -ne 0) { Fail "installing over the install failed with $($p.ExitCode)" }
+    $state = Svc-State
+    if ($state -ne "Running") { Fail "the service is '$state' after installing over the install, not running again" }
+    else { Write-Host "  after installing over it: $state" }
+    $p = Start-Process -Wait -PassThru (Join-Path $nsisDir "uninstall.exe") -ArgumentList "/S", "_?=$nsisDir"
+    if (-not (Svc)) { Fail "the uninstall a newer setup runs deleted the service" } else { Write-Host "  after the uninstall an upgrade runs: still there" }
+    $p = Start-Process -Wait -PassThru $nsis -ArgumentList "/S", "/D=$nsisDir"
+    if ($p.ExitCode -ne 0) { Fail "reinstalling failed with $($p.ExitCode)" }
+    $p = Start-Process -Wait -PassThru (Join-Path $nsisDir "uninstall.exe") -ArgumentList "/S"
+    Wait-Gone (Join-Path $nsisDir "zapper.exe")
+    if (Svc) { Fail "the NSIS uninstall left the service $task ($((Svc).State))" } else { Write-Host "  service gone" }
+    if (Task) { Fail "the NSIS uninstall left a task $task" }
+    if (Get-Process zapper-server -ErrorAction SilentlyContinue) { Fail "zapper-server still runs after the uninstall" }
+    if (Remembered-Folder) { Fail "the NSIS uninstall left its folder in the registry" }
+
     Step "MSI: installed, then uninstalled with the recording service"
     $log = Join-Path $work "msi-install.log"
     $p = Start-Process -Wait -PassThru msiexec.exe -ArgumentList "/i", "`"$msi`"", "/qn", "/L*v", "`"$log`""
@@ -331,6 +376,20 @@ if ($Install) {
             Fail "the MSI uninstall left the task $task"
             Select-String -Path $log -Pattern "ZapperRemoveServiceTasks" | ForEach-Object { Write-Host "  $($_.Line)" }
         } else { Write-Host "  task gone" }
+
+        Step "MSI: the boot-time Windows service goes with a removal"
+        $log = Join-Path $work "msi-install-2.log"
+        $p = Start-Process -Wait -PassThru msiexec.exe -ArgumentList "/i", "`"$msi`"", "/qn", "/L*v", "`"$log`""
+        if ($p.ExitCode -ne 0) { Fail "msiexec /i failed with $($p.ExitCode)" }
+        Install-Boot $at
+        $log = Join-Path $work "msi-remove-2.log"
+        $p = Start-Process -Wait -PassThru msiexec.exe -ArgumentList "/x", "`"$msi`"", "/qn", "/L*v", "`"$log`""
+        if ($p.ExitCode -ne 0) { Fail "msiexec /x failed with $($p.ExitCode)" }
+        if (Svc) {
+            Fail "the MSI uninstall left the service $task"
+            Select-String -Path $log -Pattern "ZapperRemoveServiceTasks" | ForEach-Object { Write-Host "  $($_.Line)" }
+        } else { Write-Host "  service gone" }
+        if (Test-Path (Join-Path $at "zapper-server.exe")) { Fail "the MSI uninstall left zapper-server.exe behind" }
     }
     Remove-Item Env:ZAPPER_HOME -ErrorAction SilentlyContinue
 }
@@ -340,4 +399,4 @@ if ($failures.Count -gt 0) {
     Write-Host "FAIL: $($failures.Count) problem(s)"
     exit 1
 }
-Write-Host "PASS: both installers carry zapper and zapper-server, their DLLs, the notices and the install-kind marker, and need nothing Windows lacks$(if ($Install) { '; the recording service outlives upgrades and goes with an uninstall' })"
+Write-Host "PASS: both installers carry zapper and zapper-server, their DLLs, the notices and the install-kind marker, and need nothing Windows lacks$(if ($Install) { '; the recording service, task or boot-time service, outlives upgrades and goes with an uninstall' })"

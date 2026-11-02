@@ -140,9 +140,51 @@ user, `zapper-server-<user>`, through Task Scheduler's COM interface: at that
 user's sign-in, run `zapper-server.exe` from beside `zapper.exe`, unelevated,
 with no stored password, with no time limit and on battery too
 (`recording::service`, `task_xml`). Install also starts it, and Remove stops
-and deletes it. It runs while the user is signed in. Not offered: recording
-with nobody signed in (the task would need the account's password), and
-waking the computer to record (a task per recording, with a wake timer).
+and deletes it. It runs while the user is signed in. Not offered: waking the
+computer to record (a task per recording, with a wake timer).
+
+**Start at boot (Windows service)**, the switch beside Install, runs it as a
+real Windows service of the same name instead, started when the computer
+starts whether or not anyone signs in (`recording::service::winsvc`). One or
+the other, never both: switching stops the running one cleanly before the
+other starts, and either way Remove removes whichever is there.
+
+- **Its account.** Its own virtual account, `NT SERVICE\zapper-server-<user>`:
+  no password, no rights but what it is given. Not LocalSystem, because the
+  service may answer on the network, and a flaw in it should not be one in
+  the most powerful account on the computer; not the user's own account,
+  which a service could only use with their password stored in the Service
+  Control Manager.
+- **Its files: the user's.** The service's `%APPDATA%` is the virtual
+  account's, so the user's folders are on its command line:
+  `zapper-server.exe --service zapper-server-<user> --config-dir … --data-dir
+  … --cache-dir … --recordings-dir …` (or the folders under `ZAPPER_HOME`
+  when the app runs on one). It is granted Modify on those and on the
+  recordings folder in its settings, and Read & Execute on the folder
+  `zapper-server.exe` is in when that is in the user's profile, with
+  `icacls`, inherited by what is in them. The user keeps their access, and
+  what the service writes inherits it, so the app finds the token in its
+  config folder as before; the token and loopback rules are unchanged. A
+  recordings folder chosen later is granted by the app, as the user (they
+  own it). A network share or mapped drive is out of a service's reach.
+- **One UAC prompt.** Creating a service needs an administrator: the app
+  runs `zapper-server.exe --install-boot-service …` elevated, with everything
+  it does decided beforehand on its command line rather than in a file. It
+  creates the service (automatic start; restarted ten seconds after a crash,
+  three times a day; a minute's pre-shutdown notice to finish what it
+  records), grants the folders, and sets the service's security descriptor so
+  that the user who installed it (by SID) may start, stop, query and delete
+  it, but not reconfigure it. From then on the app, the updater and the
+  uninstaller manage it as that user with no prompt. A standard user's
+  administrator can approve it: the plan names the user's folders and SID,
+  not the administrator's.
+- **Its log** is the same `zapper-server.log` in the user's data folder.
+- **Network access** with the service: Windows Firewall asks about a
+  program that listens only when a signed-in user's program does, so for
+  other devices to reach the service, allow `zapper-server.exe` in for
+  private networks (Windows Security → Firewall → Allow an app, or
+  `netsh advfirewall firewall add rule name="zapper-server" dir=in
+  action=allow program="<path>\zapper-server.exe" profile=private`).
 
 A running `zapper-server.exe` cannot be replaced, so whatever replaces it
 stops it first, cleanly (what it is recording is finished into playable files
@@ -151,13 +193,15 @@ and carries on in a new part when it runs again; docs/recording.md,
 
 - zapper's updater asks the service first; if it is recording, the update
   dialog offers to install when the recording finishes, or now. It then
-  stops the task, starts the installer, and zapper starts the task again
-  when it reopens.
+  stops the task or the service, starts the installer, and zapper starts it
+  again when it reopens (the setup and the MSI start the service themselves
+  once installed).
 - The setup (`packaging/windows/installer-hooks.nsh`) asks the installed
   `zapper-server.exe` whether it is recording (`--busy`); run by hand, it
   then asks whether to stop it, and cancels if not; silent, it does not ask.
-  It stops it (`--stop-for-setup`), and once installed starts the task
-  again.
+  It stops it (`--stop-for-setup`, which for the boot-time service also
+  stops it through the Service Control Manager and waits for its process to
+  exit), and once installed starts the task, or the service, again.
 - The MSI (`packaging/windows/service-cleanup.wxs`) runs
   `zapper-server.exe --stop-for-setup` as the installing user before any
   file changes, with `--ask` in full UI. An EXE custom action cannot cancel
@@ -168,7 +212,9 @@ and carries on in a new part when it runs again; docs/recording.md,
 Uninstalling removes the service:
 
 - the setup's uninstaller, on an uninstall, stops this user's service as
-  above and deletes its task and `zapper-server.log`. Tauri's template also
+  above, runs `zapper-server.exe --remove-service` (which deletes the
+  boot-time service and takes back its folder permissions, or the task), and
+  deletes `zapper-server.log`. Tauri's template also
   runs the uninstaller when a newer setup replaces this one ("uninstall
   before installing"), in place from the install folder, while an
   uninstall from Settings → Apps runs a copy from a temporary folder: that,
@@ -176,14 +222,19 @@ Uninstalling removes the service:
   through an upgrade;
 - the MSI, on a full removal only (not the removal half of an upgrade),
   runs an action as SYSTEM, which sees every user's tasks, that stops and
-  deletes every `zapper-server-*` task whose author is zapper.
+  deletes every `zapper-server-*` task whose author is zapper, and every
+  `zapper-server-*` service running the MSI's own `zapper-server.exe`. After
+  installing files (an install, a repair, an upgrade) another starts those
+  services again.
 
 Recordings, the service's settings and its list of recordings stay.
 
 `scripts/check-windows.ps1 -Install` checks this on the release runner: a
-task made by `zapper-server --install-service` survives installing the setup
-over itself and the in-place uninstall an upgrade runs, and goes with a real
-uninstall of the setup and with the MSI's removal.
+task made by `zapper-server --install-service`, and then a boot-time service
+made by `zapper-server --install-service --boot` (automatic, as its virtual
+account, running), each survive installing the setup over itself (the
+service started again) and the in-place uninstall an upgrade runs, and go
+with a real uninstall of the setup and with the MSI's removal.
 
 `service_check` installs it, checks it answers, and removes it, on a scratch
 home, with no window:

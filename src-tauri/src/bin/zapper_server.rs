@@ -7,14 +7,19 @@
 //!
 //! ```text
 //! zapper-server [--port N] [--no-sync] [--home DIR]
-//! zapper-server --install-service | --remove-service [--home DIR]
+//! zapper-server --install-service [--boot] | --remove-service [--home DIR]
 //! zapper-server --busy | --stop-for-setup [--ask] [--home DIR]
 //! zapper-server --import-account FILE | --set-password | --network on|off [--home DIR]
 //! ```
 //!
 //! `--install-service` and `--remove-service` do what Settings › Recording's
 //! Install and Remove do (recording::service), for a computer without the
-//! app's window, or a script. `--busy` and `--stop-for-setup` are the
+//! app's window, or a script; `--boot`, on Windows, installs the Windows
+//! service that starts at boot rather than the sign-in task, asking for an
+//! administrator's permission (recording::service::winsvc). That service
+//! runs this program as `--service NAME`, with the person's folders named
+//! by `--config-dir`, `--data-dir`, `--cache-dir` and `--recordings-dir`,
+//! and the permission prompt runs it as `--install-boot-service …`. `--busy` and `--stop-for-setup` are the
 //! installers' (packaging/windows/): whether the service on this computer is
 //! recording, and stopping it cleanly before files are replaced, asking
 //! first with `--ask` when it is.
@@ -44,7 +49,7 @@
 //! started from a terminal, to that terminal's console as well.
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -69,14 +74,33 @@ impl StatusSink for LogSink {
 struct Args {
     port: Option<u16>,
     sync: bool,
+    /// Run as the Windows service of this name (`--service`).
+    #[cfg_attr(not(windows), allow(dead_code))]
+    service: Option<String>,
+}
+
+/// A folder argument, into the environment variable that names it
+/// (crate::paths), before anything has read a path or any thread exists.
+fn folder_arg(it: &mut impl Iterator<Item = String>, arg: &str, var: &str) -> Result<()> {
+    let v = it.next().with_context(|| format!("{arg} needs a folder"))?;
+    std::env::set_var(var, v);
+    Ok(())
 }
 
 fn args() -> Result<Option<Args>> {
+    use zapper_lib::recording::service::winsvc;
+    // The elevated half of `--install-service --boot`: everything after it
+    // is its own (winsvc::Plan).
+    if std::env::args().nth(1).as_deref() == Some(winsvc::INSTALL_ARG) {
+        std::process::exit(winsvc::scm::run_elevated(std::env::args_os().skip(2)));
+    }
     let mut a = Args {
         port: None,
         sync: true,
+        service: None,
     };
     let mut service: Option<bool> = None;
+    let mut boot = false;
     let mut setup: Option<Setup> = None;
     let mut admin: Option<Admin> = None;
     let mut ask = false;
@@ -90,6 +114,17 @@ fn args() -> Result<Option<Args>> {
             "--no-sync" => a.sync = false,
             "--install-service" => service = Some(true),
             "--remove-service" => service = Some(false),
+            "--boot" => boot = true,
+            "--service" => {
+                a.service = Some(it.next().context("--service needs the service's name")?);
+                if !cfg!(windows) {
+                    anyhow::bail!("--service is for running as a Windows service");
+                }
+            }
+            "--config-dir" => folder_arg(&mut it, &arg, zapper_lib::paths::CONFIG_DIR_OVERRIDE)?,
+            "--data-dir" => folder_arg(&mut it, &arg, zapper_lib::paths::DATA_DIR_OVERRIDE)?,
+            "--cache-dir" => folder_arg(&mut it, &arg, zapper_lib::paths::CACHE_DIR_OVERRIDE)?,
+            "--recordings-dir" => folder_arg(&mut it, &arg, config::RECORDINGS_DIR_OVERRIDE)?,
             "--busy" => setup = Some(Setup::Busy),
             "--stop-for-setup" => setup = Some(Setup::Stop),
             "--ask" => ask = true,
@@ -126,12 +161,13 @@ fn args() -> Result<Option<Args>> {
                 println!(
                     "zapper-server {}: zapper's recording service\n\n\
                      Usage: zapper-server [--port N] [--no-sync] [--home DIR]\n       \
-                     zapper-server --install-service | --remove-service [--home DIR]\n       \
+                     zapper-server --install-service [--boot] | --remove-service [--home DIR]\n       \
                      zapper-server --import-account FILE | --set-password | --network on|off [--home DIR]\n\n  \
                      --port N            listen on port N (default: server.json's, else {})\n  \
                      --no-sync           do not keep the catalogue current from here\n  \
                      --home DIR          keep settings, catalogue and recordings' data in DIR\n  \
                      --install-service   run this zapper-server for you from now on, and now\n  \
+                     --boot              with --install-service, on Windows: a Windows service started at boot\n  \
                      --remove-service    stop it and undo that (recordings are kept)\n  \
                      --busy              say whether the running service is recording (exit 3 if so)\n  \
                      --stop-for-setup    stop it cleanly for an installer; with --ask, ask first if it records\n  \
@@ -151,7 +187,7 @@ fn args() -> Result<Option<Args>> {
         }
     }
     if let Some(install) = service {
-        manage_service(install)?;
+        manage_service(install, boot)?;
         return Ok(None);
     }
     if let Some(what) = setup {
@@ -362,9 +398,21 @@ fn for_setup(what: Setup, ask: bool) -> Result<i32> {
         .enable_all()
         .build()?;
     rt.block_on(async {
-        let Ok(c) = Client::local() else { return Ok(0) };
+        let stop_boot = || {
+            if let Setup::Stop = what {
+                // The boot-time Windows service, gone from the API, is
+                // waited for until it has exited; one that did not answer,
+                // stopped through the Service Control Manager.
+                zapper_lib::recording::service::stop_boot_service();
+            }
+        };
+        let Ok(c) = Client::local() else {
+            stop_boot();
+            return Ok(0);
+        };
         let Ok(st) = c.status().await else {
             println!("not running");
+            stop_boot();
             return Ok(0);
         };
         let until = st.idle_at.or(st.active.iter().map(|a| a.until).max());
@@ -390,6 +438,7 @@ fn for_setup(what: Setup, ask: bool) -> Result<i32> {
         // Gone once it no longer answers: it closes its listeners last.
         for _ in 0..240 {
             if c.version().await.is_err() {
+                stop_boot();
                 println!("\nstopped");
                 return Ok(0);
             }
@@ -433,14 +482,17 @@ fn confirm(line: &str) -> bool {
 /// `--install-service` / `--remove-service`: the systemd user unit, the
 /// Windows sign-in task or the macOS LaunchAgent, with this executable, as
 /// Settings › Recording would set it up.
-fn manage_service(install: bool) -> Result<()> {
+fn manage_service(install: bool, boot: bool) -> Result<()> {
     use zapper_lib::recording::service;
     if install {
         if std::env::var_os("ZAPPER_SERVER_BIN").is_none() {
             // This one, wherever it is, rather than a search.
             std::env::set_var("ZAPPER_SERVER_BIN", std::env::current_exe()?);
         }
-        service::install(false)?;
+        if boot && !cfg!(windows) {
+            anyhow::bail!("--boot is Windows' (elsewhere, see Settings > Recording)");
+        }
+        service::install(boot)?;
     } else {
         service::remove()?;
     }
@@ -471,7 +523,28 @@ fn main() -> Result<()> {
     let console = console::attach();
     let Some(args) = args()? else { return Ok(()) };
     zapper_lib::logfile::init("zapper-server", console);
+    #[cfg(windows)]
+    if let Some(name) = args.service.clone() {
+        return as_service::run(name, args);
+    }
+    let (exit, exe) = serve(args, &|_| {})?;
+    match (exit, exe) {
+        (Exit::Restart, Some(exe)) => restart(&exe),
+        _ => Ok(()),
+    }
+}
 
+/// Where the service is in its life, for whoever runs it to hear: a Windows
+/// service reports it to the Service Control Manager (`as_service`).
+#[cfg_attr(not(windows), allow(dead_code))]
+enum Phase {
+    Running,
+    Stopping,
+}
+
+/// Runs the service until it should stop or restart, and says which, with
+/// the program it would restart.
+fn serve(args: Args, phase: &(dyn Fn(Phase) + Sync)) -> Result<(Exit, Option<PathBuf>)> {
     let cfg_path = config::config_path();
     let mut cfg = config::load_from(&cfg_path);
     if let Some(p) = args.port {
@@ -500,9 +573,11 @@ fn main() -> Result<()> {
         // On 127.0.0.1, and on the network too when Settings says so; a
         // change there replaces the listeners while this keeps running.
         server.listen().await?;
+        phase(Phase::Running);
         let exe = std::env::current_exe().ok();
         let at_start = exe.as_deref().and_then(lifecycle::file_id);
         let exit = supervise(&server, exe.as_deref(), at_start).await;
+        phase(Phase::Stopping);
         // What is recording closes its part and finishes it into a playable
         // file, resumed in a new part by the next start while it is on.
         server.stop_captures(Duration::from_secs(120)).await;
@@ -511,9 +586,112 @@ fn main() -> Result<()> {
     });
     let (exit, exe) = exit?;
     rt.shutdown_timeout(Duration::from_secs(5));
-    match (exit, exe) {
-        (Exit::Restart, Some(exe)) => restart(&exe),
-        _ => Ok(()),
+    Ok((exit, exe))
+}
+
+/// Asked to stop by the Service Control Manager (`as_service`): taken as
+/// Ctrl+C is.
+#[cfg(windows)]
+static STOP: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+/// Running as the boot-time Windows service (recording::service::winsvc):
+/// the Service Control Manager starts the program with `--service NAME`,
+/// and this reports to it while [`serve`] runs.
+///
+/// Stop and the pre-shutdown notice are Ctrl+C: what is recording is
+/// finished into playable files first, with a wait hint long enough for it.
+/// A restart (asked through the API) is an exit with an error, which the
+/// service's recovery settings turn into a start ten seconds later: the
+/// Service Control Manager is what starts it, not this process.
+#[cfg(windows)]
+mod as_service {
+    use std::ffi::OsString;
+    use std::sync::Mutex;
+    use std::time::Duration;
+
+    use anyhow::Result;
+    use windows_service::service::{
+        ServiceControl, ServiceControlAccept, ServiceExitCode, ServiceState, ServiceStatus,
+        ServiceType,
+    };
+    use windows_service::service_control_handler::{self, ServiceControlHandlerResult};
+
+    use super::{serve, Args, Exit, Phase, STOP};
+
+    /// What `main` hands the service's own thread, which the dispatcher
+    /// starts.
+    static GIVEN: Mutex<Option<(String, Args)>> = Mutex::new(None);
+
+    windows_service::define_windows_service!(ffi_service_main, service_main);
+
+    pub fn run(name: String, args: Args) -> Result<()> {
+        *GIVEN.lock().unwrap_or_else(|e| e.into_inner()) = Some((name.clone(), args));
+        // Blocks until the service has stopped.
+        windows_service::service_dispatcher::start(&name, ffi_service_main)?;
+        Ok(())
+    }
+
+    fn status(state: ServiceState, accept: ServiceControlAccept, exit: ServiceExitCode, hint: u64) -> ServiceStatus {
+        ServiceStatus {
+            service_type: ServiceType::OWN_PROCESS,
+            current_state: state,
+            controls_accepted: accept,
+            exit_code: exit,
+            checkpoint: 0,
+            wait_hint: Duration::from_secs(hint),
+            process_id: None,
+        }
+    }
+
+    fn service_main(_: Vec<OsString>) {
+        let Some((name, args)) = GIVEN.lock().unwrap_or_else(|e| e.into_inner()).take() else {
+            return;
+        };
+        let handler = |control| match control {
+            ServiceControl::Stop | ServiceControl::Preshutdown => {
+                tracing::info!("the Service Control Manager asks it to stop");
+                STOP.notify_one();
+                ServiceControlHandlerResult::NoError
+            }
+            ServiceControl::Interrogate => ServiceControlHandlerResult::NoError,
+            _ => ServiceControlHandlerResult::NotImplemented,
+        };
+        let handle = match service_control_handler::register(&name, handler) {
+            Ok(h) => h,
+            Err(e) => {
+                tracing::error!("registering with the Service Control Manager: {e}");
+                return;
+            }
+        };
+        let none = ServiceControlAccept::empty();
+        let report = |s: ServiceStatus| {
+            if let Err(e) = handle.set_service_status(s) {
+                tracing::warn!("reporting to the Service Control Manager: {e}");
+            }
+        };
+        report(status(ServiceState::StartPending, none, ServiceExitCode::NO_ERROR, 30));
+        let result = serve(args, &|phase| match phase {
+            Phase::Running => report(status(
+                ServiceState::Running,
+                ServiceControlAccept::STOP | ServiceControlAccept::PRESHUTDOWN,
+                ServiceExitCode::NO_ERROR,
+                0,
+            )),
+            // Finishing captures takes up to two minutes.
+            Phase::Stopping => report(status(ServiceState::StopPending, none, ServiceExitCode::NO_ERROR, 150)),
+        });
+        let exit = match result {
+            Ok((Exit::Stop, _)) => ServiceExitCode::NO_ERROR,
+            Ok((Exit::Restart, _)) => {
+                tracing::info!("exiting for the Service Control Manager to start it again");
+                ServiceExitCode::ServiceSpecific(1)
+            }
+            Err(e) => {
+                tracing::error!("{e:#}");
+                ServiceExitCode::ServiceSpecific(2)
+            }
+        };
+        report(status(ServiceState::Stopped, none, exit, 0));
     }
 }
 
@@ -632,16 +810,25 @@ mod console {
 }
 
 async fn signalled() {
-    #[cfg(unix)]
-    {
-        use tokio::signal::unix::{signal, SignalKind};
-        if let Ok(mut term) = signal(SignalKind::terminate()) {
-            tokio::select! {
-                _ = term.recv() => {}
-                _ = tokio::signal::ctrl_c() => {}
-            }
-            return;
-        }
+    // The Service Control Manager's Stop, or Ctrl+C.
+    #[cfg(windows)]
+    tokio::select! {
+        _ = STOP.notified() => {}
+        _ = tokio::signal::ctrl_c() => {}
     }
-    let _ = tokio::signal::ctrl_c().await;
+    #[cfg(not(windows))]
+    {
+        #[cfg(unix)]
+        {
+            use tokio::signal::unix::{signal, SignalKind};
+            if let Ok(mut term) = signal(SignalKind::terminate()) {
+                tokio::select! {
+                    _ = term.recv() => {}
+                    _ = tokio::signal::ctrl_c() => {}
+                }
+                return;
+            }
+        }
+        let _ = tokio::signal::ctrl_c().await;
+    }
 }

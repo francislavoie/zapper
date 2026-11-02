@@ -972,7 +972,8 @@ async function openStream(
 const RECORDING_OFF =
   typeof location !== "undefined" &&
   new URLSearchParams(location.search).get("recording") === "off";
-/** `?service=windows`: the service as Windows installs it, a sign-in task. */
+/** `?service=windows`: the service as Windows installs it, a sign-in task
+ *  (or, switched to, the service that starts at boot). */
 const SERVICE_WINDOWS =
   typeof location !== "undefined" &&
   new URLSearchParams(location.search).get("service") === "windows";
@@ -996,7 +997,8 @@ let mockService: ServiceStatusDto = SERVICE_WINDOWS
       installed: true,
       state: "running",
       linger: false,
-      canLinger: false,
+      canLinger: true,
+      bootService: true,
       binary: "C:\\Users\\viewer\\AppData\\Local\\zapper\\zapper-server.exe",
       version: "0.1.0",
       address: "http://127.0.0.1:8796",
@@ -1009,11 +1011,22 @@ let mockService: ServiceStatusDto = SERVICE_WINDOWS
       state: "active",
       linger: false,
       canLinger: true,
+      bootService: false,
       binary: "/usr/bin/zapper-server",
       version: "0.1.0",
       address: "http://127.0.0.1:8796",
       versionMismatch: false,
     };
+
+/** What Windows calls the service, task or boot-time service. */
+function mockWindowsKind(boot: boolean): Partial<ServiceStatusDto> {
+  if (!mockService.bootService) return {};
+  return {
+    kind: boot
+      ? "a Windows service that starts it when the computer starts"
+      : "a scheduled task that starts it when you sign in",
+  };
+}
 
 function mockRecording(
   ch: ChannelDto,
@@ -1413,6 +1426,7 @@ const mockRecordingApi = {
       installed: true,
       state: SERVICE_WINDOWS ? "running" : "active",
       linger: mockService.canLinger && linger,
+      ...mockWindowsKind(linger),
       version: "0.1.0",
     };
     return { ...mockService };
@@ -1423,7 +1437,7 @@ const mockRecordingApi = {
     return { ...mockService };
   },
   setRecordingLinger: async (on: boolean): Promise<ServiceStatusDto> => {
-    mockService = { ...mockService, linger: on };
+    mockService = { ...mockService, linger: on, ...mockWindowsKind(on) };
     return { ...mockService };
   },
   openRecordingFolder: async (id: number) => {
