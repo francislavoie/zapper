@@ -8,7 +8,13 @@ import { cancelRecording, deleteRecording } from "../actions";
 import { backend, capabilities } from "../backend";
 import { useClock } from "../hooks/useClock";
 import { errorMessage } from "../logic/async";
-import { groupRecordings, recordingStatus, recordingWhen } from "../logic/recordings";
+import {
+  conflictLosesProgramme,
+  conflictText,
+  groupRecordings,
+  recordingStatus,
+  recordingWhen,
+} from "../logic/recordings";
 import { useApp, useDispatch } from "../store";
 import type { RecordingDto } from "../types";
 import { RecDot } from "./RecDot";
@@ -91,6 +97,15 @@ function RecordingRow({ rec, now }: { rec: RecordingDto; now: number }) {
             {recordingStatus(rec, now)}
           </span>
         </div>
+        {rec.conflicts?.length ? (
+          <ul className="rec-conflicts">
+            {rec.conflicts.map((c, i) => (
+              <li key={i} className={`rec-conflict ${conflictLosesProgramme(c) ? "bad" : ""}`}>
+                {conflictText(c)}
+              </li>
+            ))}
+          </ul>
+        ) : null}
         {rec.notes.length > 0 ? (
           <button className="link rec-notes-toggle" onClick={() => setNotes(!notes)}>
             {notes ? "Hide notes" : `${rec.notes.length} ${rec.notes.length === 1 ? "note" : "notes"}`}

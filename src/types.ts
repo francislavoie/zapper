@@ -616,6 +616,26 @@ export interface RecordingDto {
   folder: string;
   /** While recording: why it is not capturing right now. */
   waiting?: string;
+  /** What it would lose to recordings on other channels when the account
+   *  has too few connections for them all; absent when nothing. */
+  conflicts?: ConflictDto[];
+}
+
+/** What a recording loses to another one on another channel. */
+export type ConflictKind = "cutEnd" | "lateStart" | "lostStart" | "missed";
+
+export interface ConflictDto {
+  /** The recording that loses, and the one it loses to. */
+  title: string;
+  with: string;
+  kind: ConflictKind;
+  /** How much it loses; 0 for `missed`. */
+  secs: number;
+  /** How many streams the account allows. */
+  streams: number;
+  /** In a preview: the loss is another recording's, not the one asked
+   *  about. */
+  other?: boolean;
 }
 
 export interface ScheduleRequest {
@@ -646,6 +666,9 @@ export interface RecordingSettingsDto {
   padBefore: number;
   padAfter: number;
   clockTrack: boolean;
+  /** Name the file being recorded so other programs (a media server) see
+   *  it while it grows. */
+  showWhileRecording: boolean;
   /** The folder used when none is chosen; an empty `outputDir` sent back
    *  means this one. */
   defaultOutputDir: string;

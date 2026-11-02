@@ -5773,6 +5773,29 @@ textarea.field {
   color: var(--bad);
 }
 
+/* What a recording would lose to another on a full account: padding only
+   in the text's colour, part of a programme in red. */
+.rec-conflicts {
+  margin: 0.25rem 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.6875rem;
+}
+
+.rec-conflict,
+.menu-conflict {
+  color: var(--text);
+}
+
+.rec-conflict.bad,
+.menu-conflict.bad {
+  color: var(--bad);
+}
+
+.menu-conflict + .menu-conflict {
+  margin-top: 0.25rem;
+}
+
 .rec-notes-toggle {
   margin-top: 0.25rem;
   font-size: 0.6875rem;

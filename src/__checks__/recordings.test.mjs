@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import {
   bytes,
   canRecord,
+  conflictLosesProgramme,
+  conflictText,
   groupRecordings,
   markKey,
   marks,
@@ -103,4 +105,24 @@ test("sizes and padding", () => {
   assert.equal(padMinutes(300), 5);
   assert.equal(padSeconds(2), 120);
   assert.equal(padSeconds(-3), 0);
+});
+
+test("a conflict says what is lost, and to which recording", () => {
+  const c = (over) => ({ title: "Film", with: "Match", kind: "cutEnd", secs: 240, streams: 1, ...over });
+  assert.equal(conflictText(c()), "Overlaps “Match” on another channel: the last 4m will be cut");
+  assert.equal(conflictText(c({ kind: "lateStart", secs: 60 })), "Overlaps “Match” on another channel: starts 1m late");
+  assert.equal(
+    conflictText(c({ kind: "lostStart", secs: 1800 })),
+    "Overlaps “Match” on another channel and the account allows 1 stream: the first 30m will be missed",
+  );
+  assert.equal(
+    conflictText(c({ kind: "missed", secs: 0, streams: 2 })),
+    "Overlaps “Match” on another channel and the account allows 2 streams: it can’t be recorded",
+  );
+  // In a preview, about the recording already scheduled that would lose.
+  assert.equal(conflictText(c({ other: true })), "Overlaps “Film” on another channel: its last 4m will be cut");
+  assert.ok(conflictLosesProgramme(c({ kind: "missed" })));
+  assert.ok(conflictLosesProgramme(c({ kind: "lostStart" })));
+  assert.ok(!conflictLosesProgramme(c({ kind: "cutEnd" })));
+  assert.ok(!conflictLosesProgramme(c({ kind: "lateStart" })));
 });

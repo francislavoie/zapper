@@ -10,6 +10,22 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
 
 ## [Unreleased]
 
+### Added
+
+- Recordings of the same channel share one connection: back-to-back programmes on one channel
+  are both recorded whole, padding included, even on an account of one stream (the second one
+  used to lose its first minutes waiting for the first to let go). On another channel, when the
+  account is full, the next programme's start takes the connection from the last one's padding
+  after — never from a programme still on, nor from someone watching — and the recording that
+  ended early says so in its notes. A recording waiting for a connection now takes it the moment
+  one frees up.
+- Conflicts are shown before recording: a programme's Record menu, and each row in Recordings,
+  say when overlapping recordings on other channels need more streams than the account allows,
+  and what will be lost ("Overlaps “The Film” on another channel: the last 5m will be cut").
+- Settings → Recording → *Show recordings to other programs while they record* (off by default):
+  the file being recorded is named `… (recording).ts` rather than hidden, so a media server such
+  as Jellyfin can play it as it grows; the `.mkv` replaces it when the recording ends.
+
 ## [0.2.0] - 2026-11-01
 
 ### Added

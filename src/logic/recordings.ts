@@ -9,6 +9,7 @@
 
 import type {
   ChannelDto,
+  ConflictDto,
   Naming,
   ProgrammeDto,
   RecordingDto,
@@ -97,6 +98,42 @@ export function recordingStatus(r: RecordingDto, now: number): string {
   }
 }
 
+/** What a conflict means, in a few words: on the recording that loses
+ *  (its row in Recordings, or the programme about to be recorded), or, for
+ *  a preview's `other` one, about the recording that would lose. */
+export function conflictText(c: ConflictDto): string {
+  const streams = `the account allows ${c.streams} ${c.streams === 1 ? "stream" : "streams"}`;
+  const d = duration(c.secs);
+  if (c.other) {
+    const lead = `Overlaps “${c.title}” on another channel`;
+    switch (c.kind) {
+      case "cutEnd":
+        return `${lead}: its last ${d} will be cut`;
+      case "lateStart":
+        return `${lead}: it will start ${d} late`;
+      case "lostStart":
+        return `${lead} and ${streams}: its first ${d} will be missed`;
+      case "missed":
+        return `${lead} and ${streams}: it can’t be recorded`;
+    }
+  }
+  const lead = `Overlaps “${c.with}” on another channel`;
+  switch (c.kind) {
+    case "cutEnd":
+      return `${lead}: the last ${d} will be cut`;
+    case "lateStart":
+      return `${lead}: starts ${d} late`;
+    case "lostStart":
+      return `${lead} and ${streams}: the first ${d} will be missed`;
+    case "missed":
+      return `${lead} and ${streams}: it can’t be recorded`;
+  }
+}
+
+/** Whether a conflict costs part of a programme, not only padding. */
+export const conflictLosesProgramme = (c: ConflictDto) =>
+  c.kind === "lostStart" || c.kind === "missed";
+
 function capitalise(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
@@ -122,6 +159,7 @@ export const RECORDING_DEFAULTS = {
   padBefore: 60,
   padAfter: 300,
   clockTrack: true,
+  showWhileRecording: false,
 } as const;
 
 /** Minutes from the seconds the service keeps padding in, and back. */

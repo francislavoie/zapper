@@ -34,6 +34,7 @@ import type {
   NetworkDto,
   NetworkSettingsDto,
   RecordingDto,
+  ConflictDto,
   RecordingSettingsDto,
   RecordingStatusDto,
   ScheduleRequest,
@@ -979,6 +980,7 @@ const mockRecordingSettings: RecordingSettingsDto = {
   padBefore: 60,
   padAfter: 300,
   clockTrack: true,
+  showWhileRecording: false,
   defaultOutputDir: "/home/viewer/Videos/zapper",
 };
 let mockService: ServiceStatusDto = SERVICE_WINDOWS
@@ -1065,7 +1067,18 @@ function seedRecordings(): RecordingDto[] {
   }
   if (b) {
     const later = schedule(b, now + 3600, now + 8 * 3600)[1];
-    if (later) out.push(mockRecording(b, later, "scheduled"));
+    if (later) {
+      // On an account of one stream, as the mock's is: what the service
+      // would say of a programme following another channel's.
+      const before = out.find((r) => r.state === "scheduled");
+      out.push(
+        mockRecording(b, later, "scheduled", {
+          conflicts: before
+            ? [{ title: later.title, with: before.title, kind: "lateStart", secs: 60, streams: 1 }]
+            : undefined,
+        }),
+      );
+    }
   }
   if (c) {
     const yesterday = { start: now - 86_400, stop: now - 86_400 + 3600, title: "The Late Film", description: null };
@@ -1165,6 +1178,34 @@ const mockRecordingApi = {
     );
     list.push(rec);
     return rec;
+  },
+  // The service plays the schedule through its rules (src-tauri/src/
+  // recording/sharing.rs); this is a rough likeness on one stream: two
+  // channels whose windows overlap clash, the earlier one keeping its
+  // programme and the later one losing what overlaps it.
+  previewRecording: async (req: ScheduleRequest): Promise<ConflictDto[]> => {
+    await delay(40);
+    const s = mockRecordingSettings;
+    const asked = { title: req.title, start: req.start, stop: req.stop, padBefore: s.padBefore, padAfter: s.padAfter };
+    const out: ConflictDto[] = [];
+    for (const r of recordingsOrRefuse()) {
+      if ((r.state !== "scheduled" && r.state !== "recording") || r.streamId === req.streamId) continue;
+      if (r.stop + r.padAfter <= asked.start - asked.padBefore || asked.stop + asked.padAfter <= r.start - r.padBefore)
+        continue;
+      const [first, next] = r.start <= asked.start ? [r, asked] : [asked, r];
+      const nextFrom = next.start - next.padBefore;
+      const other = (x: typeof r | typeof asked) => x !== asked;
+      if (first.stop <= next.start) {
+        out.push({ title: first.title, with: next.title, kind: "cutEnd", secs: first.stop + first.padAfter - Math.max(nextFrom, first.stop), streams: 1, other: other(first) });
+        if (first.stop > nextFrom)
+          out.push({ title: next.title, with: first.title, kind: "lateStart", secs: first.stop - nextFrom, streams: 1, other: other(next) });
+      } else if (next.stop <= first.stop) {
+        out.push({ title: next.title, with: first.title, kind: "missed", secs: 0, streams: 1, other: other(next) });
+      } else {
+        out.push({ title: next.title, with: first.title, kind: "lostStart", secs: first.stop - next.start, streams: 1, other: other(next) });
+      }
+    }
+    return out;
   },
   cancelRecording: async (id: number) => {
     await delay(40);
