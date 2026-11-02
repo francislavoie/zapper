@@ -7,10 +7,11 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Result};
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 
 use super::backup::{BackupsDto, SetBackupRequest};
 use super::api::{
-    ConflictDto, ErrorDto, NetworkDto, NetworkSettingsDto, PasswordRequest, RecordingDto,
+    ConflictDto, ErrorDto, NetworkDto, NetworkSettingsDto, PartDto, PasswordRequest, RecordingDto,
     RecordingSettingsDto, ScheduleRequest, ShutdownRequest, StatusDto, VersionDto,
 };
 
@@ -22,6 +23,53 @@ pub struct Client {
 
 /// Why a request got no answer, in words for the interface.
 pub const NOT_RUNNING: &str = "The recording service is not running.";
+
+/// What the app's player asks of `POST /api/watch`.
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlayerWatch {
+    pub stream_id: i64,
+    /// Connect even though the account looks full: the player has just let
+    /// its own connection go, which a provider may still be counting.
+    pub anyway: bool,
+    /// Only a connection the service already has.
+    pub only_shared: bool,
+    /// The player's place it leaves for this one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replaces: Option<String>,
+    /// Always set: the stream as it comes, for mpv.
+    pub player: bool,
+}
+
+/// A place on the service's connection.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Watching {
+    pub viewer: String,
+    /// `/api/stream/{viewer}`.
+    pub stream: String,
+    /// It joined a connection the service already had.
+    #[serde(default)]
+    pub shared: bool,
+}
+
+/// Why a place was not given.
+#[derive(Debug, Clone)]
+pub struct WatchRefused {
+    /// The HTTP status, 0 when nothing answered.
+    pub status: u16,
+    /// The service's reason (`recording`, `inUse`, `feed`, `notOpen`, ...).
+    pub reason: String,
+    pub error: String,
+    /// The provider refused the connection for the account's limit.
+    pub limit: bool,
+}
+
+impl std::fmt::Display for WatchRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.error)
+    }
+}
 
 impl Client {
     /// The service on this machine, as its config file describes it.
@@ -191,6 +239,90 @@ impl Client {
     /// Asks the service to refresh the catalogue now (`POST /api/sync`).
     pub async fn sync_now(&self) -> Result<serde_json::Value> {
         self.send(self.http.post(self.url("/api/sync"))).await
+    }
+
+    /// A place for the app's player on the service's connection to a
+    /// channel (`POST /api/watch`, `recording::watch`).
+    pub async fn watch(&self, req: &PlayerWatch) -> std::result::Result<Watching, WatchRefused> {
+        let mut r = self.http.post(self.url("/api/watch")).json(req);
+        if let Some(t) = &self.token {
+            r = r.bearer_auth(t);
+        }
+        let resp = r.send().await.map_err(|e| WatchRefused {
+            status: 0,
+            reason: "unreachable".into(),
+            error: if e.is_connect() || e.is_timeout() {
+                NOT_RUNNING.into()
+            } else {
+                format!("the recording service did not answer: {e}")
+            },
+            limit: false,
+        })?;
+        let status = resp.status();
+        if status.is_success() {
+            return resp.json().await.map_err(|e| WatchRefused {
+                status: status.as_u16(),
+                reason: "unreadable".into(),
+                error: format!("the recording service's answer was unreadable: {e}"),
+                limit: false,
+            });
+        }
+        let body: serde_json::Value = resp.json().await.unwrap_or_default();
+        Err(WatchRefused {
+            status: status.as_u16(),
+            reason: body["reason"].as_str().unwrap_or_default().to_string(),
+            error: body["error"]
+                .as_str()
+                .map_or_else(|| status.to_string(), str::to_string),
+            limit: body["ending"]["limit"].as_bool().unwrap_or(false),
+        })
+    }
+
+    /// Lets go of the player's place at once, rather than when nobody has
+    /// read it for a while: its connection, when nobody else is on it, is
+    /// then free for whatever the player opens next.
+    pub async fn stop_watching(&self, viewer: &str) -> Result<()> {
+        if viewer.is_empty() || !viewer.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(anyhow!("no such viewer"));
+        }
+        let mut r = self
+            .http
+            .delete(self.url(&format!("/api/watch/{viewer}")))
+            .timeout(Duration::from_secs(3));
+        if let Some(t) = &self.token {
+            r = r.bearer_auth(t);
+        }
+        r.send().await?;
+        Ok(())
+    }
+
+    /// Where the player reads a place's stream, and the header that lets it
+    /// (`http-header-fields`, so the token is never part of an address that
+    /// is logged).
+    pub fn stream(&self, w: &Watching) -> (String, Option<String>) {
+        (
+            self.url(&w.stream),
+            self.token.as_ref().map(|t| format!("Authorization: Bearer {t}")),
+        )
+    }
+
+    /// Hands over what the player had buffered of the programme as recording
+    /// `id`'s first part: the MPEG-TS file at `path`, whose first packet
+    /// arrived at `first_ms`.
+    pub async fn prelude(&self, id: i64, path: &std::path::Path, first_ms: i64) -> Result<PartDto> {
+        let file = tokio::fs::File::open(path).await?;
+        let len = file.metadata().await?.len();
+        self.send(
+            self.http
+                .put(self.url(&format!("/api/recordings/{id}/prelude?firstMs={first_ms}")))
+                .header(reqwest::header::CONTENT_TYPE, "video/mp2t")
+                .header(reqwest::header::CONTENT_LENGTH, len)
+                // Written to disk and read through once over loopback: a
+                // large buffer takes seconds, not the usual answer's moment.
+                .timeout(Duration::from_secs(300))
+                .body(reqwest::Body::from(file)),
+        )
+        .await
     }
 
     pub async fn revoke_device(&self, id: &str) -> Result<NetworkDto> {

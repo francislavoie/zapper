@@ -30,6 +30,7 @@ pub mod client;
 pub mod clock;
 pub mod config;
 pub mod fallback;
+pub mod handover;
 pub mod lifecycle;
 pub mod naming;
 pub mod schedule;

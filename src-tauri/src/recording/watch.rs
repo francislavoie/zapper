@@ -37,6 +37,14 @@
 //! asking again costs no connection. Audio the browser lacks is encoded to
 //! AAC on the way ([`livemux`]); the video never is.
 //!
+//! **The app's player** watches through here too, with the app's token and
+//! `player` set, so its stream is passed on as it comes, every track in it,
+//! and nothing is refused for its codecs (`super::handover` says when): when it
+//! tunes to a channel the service is recording (`onlyShared`: a place on a
+//! connection the service has, never a new one), and when Record is pressed
+//! on the channel it plays on an account with no connection to spare, after
+//! it has let its own connection go.
+//!
 //! **Limits.** A device may hold [`PER_DEVICE`] viewers and start
 //! [`STARTS_PER_MINUTE`] a minute; the service holds [`MAX_VIEWERS`] in
 //! all. A viewer nobody reads from for [`IDLE`] is let go.
@@ -431,6 +439,15 @@ struct WatchRequest {
     can: CanDto,
     #[serde(default)]
     audio: Option<usize>,
+    /// The app's own player, which plays whatever the channel carries: the
+    /// stream is passed on as it comes, every track in it, and nothing is
+    /// refused for its codecs. The app's alone.
+    #[serde(default)]
+    player: bool,
+    /// Only a connection the service already has (a recording's): never a
+    /// new one. The app's player tuning to a channel being recorded.
+    #[serde(default)]
+    only_shared: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -737,6 +754,13 @@ async fn start(
         );
     };
     let device = device_of(&caller);
+    if req.player && caller != Caller::App {
+        return plain(
+            StatusCode::FORBIDDEN,
+            "channel",
+            "Only the app on this computer plays the stream as it comes.",
+        );
+    }
     if let Some(rider) = req
         .replaces
         .as_deref()
@@ -761,7 +785,7 @@ async fn start(
     start_reaper(&s);
     let can = Can::from(req.can);
     let encoder = livemux::can_encode_aac();
-    if let Some(info) = s.viewers.known(req.stream_id) {
+    if let Some(info) = s.viewers.known(req.stream_id).filter(|_| !req.player) {
         if let Plan::Refuse(why) = tsprobe::plan(&info, can, None, encoder) {
             return plain(StatusCode::UNPROCESSABLE_ENTITY, "notPlayable", why);
         }
@@ -769,7 +793,21 @@ async fn start(
 
     let rider = s.viewers.rider_id();
     let me = Rider::viewer(rider);
-    let (mut sub, shared) = match place(&s, req.stream_id, me, req.anyway, &device).await {
+    let placed = if req.only_shared {
+        s.hubs
+            .join(&[req.stream_id], me)
+            .map(|(_, sub)| (sub, true))
+            .ok_or_else(|| {
+                Box::new(plain(
+                    StatusCode::CONFLICT,
+                    "notOpen",
+                    "The service has no connection to this channel.",
+                ))
+            })
+    } else {
+        place(&s, req.stream_id, me, req.anyway, &device).await
+    };
+    let (mut sub, shared) = match placed {
         Ok(p) => p,
         Err(r) => return *r,
     };
@@ -796,8 +834,9 @@ async fn start(
         }
         None => StreamInfo::default(),
     };
-    // Nothing readable in the tables: passed on as it comes.
-    let (how, audio, silent) = if info == StreamInfo::default() {
+    // Nothing readable in the tables, or the app's player, which plays
+    // anything: passed on as it comes.
+    let (how, audio, silent) = if req.player || info == StreamInfo::default() {
         (How::Pass, None, None)
     } else {
         match tsprobe::plan(&info, can, req.audio, encoder) {
