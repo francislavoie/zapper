@@ -1,6 +1,6 @@
 # Release: `just release <version>` commits the version bump and tags it v<version>; pushing the
-# tag builds the Linux packages (.deb, .rpm and the Arch package) and the Windows installers (the
-# NSIS setup and the MSI), checks them, and uploads them with SHA256SUMS to a *draft* GitHub
+# tag builds the Linux packages (.deb, .rpm and the Arch package), the static zapper-server for
+# Linux and the Windows installers (the NSIS setup and the MSI), checks them, and uploads them with SHA256SUMS to a *draft* GitHub
 # release for review. Nothing is published until someone presses Publish.
 #
 # - a pushed v* tag builds that tag and drafts its release;
@@ -204,6 +204,7 @@ jobs:
       - name: Check the Arch package
         run: just check-arch-pkg
 
+
       # The names are an API: installed copies find their update by them
       # (src-tauri/src/updates/release.rs, docs/releasing.md).
       - name: Collect the packages and SHA256SUMS
@@ -228,6 +229,89 @@ jobs:
           retention-days: 3
           compression-level: 0
           overwrite: true # a re-run replaces the earlier attempt's artifact
+
+  # zapper-server for Linux as one static file, zapper-server-<version>-linux-x86_64, beside the
+  # other jobs: built for x86_64-unknown-linux-musl in a pinned Rust image on Alpine, with a
+  # minimal static LGPL FFmpeg (scripts/build-ffmpeg-static.sh, cached on what it is made from)
+  # and its licence notices built in (scripts/build-server-static.sh). Then
+  # scripts/check-server-binary.sh: statically linked, run in bare debian:stable-slim and alpine
+  # containers and from scratch, its sample Dockerfile, and the fixture streams recorded through
+  # it by recording_check, built for the same target. The version check is the Windows job's.
+  server:
+    name: Build and check the static zapper-server
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          persist-credentials: false
+
+      - name: Version
+        id: version
+        env:
+          TAG: ${{ needs.plan.outputs.tag }}
+        run: |
+          conf=$(jq -er .version src-tauri/tauri.conf.json)
+          v=$conf
+          if [ -n "$TAG" ]; then
+            v=${TAG#v}
+            [ "$v" = "$conf" ] || { echo "::error::The tag $TAG doesn't match tauri.conf.json's version $conf"; exit 1; }
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      # The Rust notices it carries, from Linux's crate graph (the musl build's is the same
+      # crates), and the interface it serves, with its own notices.
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        with:
+          toolchain: stable
+      - uses: taiki-e/install-action@183e4297cca2404691e9380e1307288dced5c82a # v2.87.25
+        with:
+          tool: cargo-about@${{ env.CARGO_ABOUT_VERSION }}
+      - name: License notices
+        run: scripts/licenses.sh
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - name: Build the interface
+        run: npm run build
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            src-tauri/target/static/ffmpeg
+            src-tauri/target/static/sources
+          key: server-ffmpeg-${{ hashFiles('packaging/libmpv/sources.txt', 'scripts/build-ffmpeg-static.sh') }}
+
+      - name: Build the static zapper-server
+        run: CARGO_BUILD_JOBS=$(nproc) scripts/build-server-static.sh out --with-checks
+
+      - name: Check it
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: scripts/check-server-binary.sh "out/zapper-server-${VERSION}-linux-x86_64" out/checks
+
+      - name: SHA256SUMS
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          rm -rf out/checks
+          [ -f "out/zapper-server-${VERSION}-linux-x86_64" ] || { echo "::error::Missing the binary"; exit 1; }
+          (cd out && sha256sum -- zapper-server-* > SHA256SUMS && cat SHA256SUMS && ls -l)
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: zapper-${{ steps.version.outputs.version }}-server
+          path: out/
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0
+          overwrite: true
 
   # The NSIS setup (per-user) and the MSI (per-machine), from one build, beside the Linux job
   # rather than after it: the version check is repeated here, so neither waits on the other.
@@ -435,13 +519,13 @@ jobs:
 
   release:
     name: Draft the GitHub release
-    needs: [plan, linux, windows, macos]
+    needs: [plan, linux, server, windows, macos]
     # The Linux packages and the Windows installers are the release. macOS joins it when it ran
     # and passed; skipped (the normal case) it's simply absent, but a failure or a cancel holds
     # the release back rather than drafting it without it by surprise.
     if: >-
       ${{ always() && needs.plan.outputs.tag != '' && needs.linux.result == 'success'
-      && needs.windows.result == 'success'
+      && needs.windows.result == 'success' && needs.server.result == 'success'
       && needs.macos.result != 'failure' && needs.macos.result != 'cancelled' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -485,6 +569,7 @@ jobs:
             dist/*.deb
             dist/*.rpm
             dist/*.pkg.tar.zst
+            dist/zapper-server-*-linux-x86_64
             dist/*.exe
             dist/*.msi
             dist/*.dmg
@@ -500,7 +585,7 @@ jobs:
           PRERELEASE: ${{ needs.linux.outputs.prerelease }}
         run: |
           shopt -s nullglob
-          assets=(dist/*.deb dist/*.rpm dist/*.pkg.tar.zst dist/*.exe dist/*.msi dist/*.dmg dist/SHA256SUMS)
+          assets=(dist/*.deb dist/*.rpm dist/*.pkg.tar.zst dist/zapper-server-*-linux-x86_64 dist/*.exe dist/*.msi dist/*.dmg dist/SHA256SUMS)
           if draft=$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null); then
             if [ "$draft" != true ]; then
               echo "::error::The release $TAG is already published; not replacing its assets."

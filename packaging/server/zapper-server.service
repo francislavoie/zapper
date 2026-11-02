@@ -1,0 +1,59 @@
+# A sample systemd unit for the static zapper-server for Linux (packaging/server/README.md, "As
+# a systemd service"): run at boot as the `zapper` system user, with its settings, catalogue and
+# recordings in /var/lib/zapper, which systemd makes for it (StateDirectory).
+#
+#   sudo install -m 0755 zapper-server-<version>-linux-x86_64 /usr/local/bin/zapper-server
+#   sudo useradd --system --home-dir /var/lib/zapper --shell /usr/sbin/nologin zapper
+#   sudo cp zapper-server.service /etc/systemd/system/ && sudo systemctl daemon-reload
+#   sudo systemctl enable --now zapper-server
+#
+# It may write /var/lib/zapper and nothing else. To record into another folder, give the
+# zapper user write access to it, add it with `systemctl edit zapper-server`:
+#
+#   [Service]
+#   ReadWritePaths=/srv/recordings
+#
+# and choose it in Settings > Recording.
+
+[Unit]
+Description=zapper recording service
+Documentation=https://github.com/francislavoie/zapper/blob/main/docs/recording.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=zapper
+Group=zapper
+Environment=ZAPPER_HOME=/var/lib/zapper
+ExecStart=/usr/local/bin/zapper-server
+# A crash is restarted, and the recording it was making carries on in a new part; a clean stop
+# stays stopped.
+Restart=on-failure
+RestartSec=10
+# SIGTERM finishes what it is recording into playable files before it exits.
+TimeoutStopSec=150
+StateDirectory=zapper
+StateDirectoryMode=0750
+UMask=0027
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+# AF_NETLINK: listing this computer's addresses for the network settings.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+
+[Install]
+WantedBy=multi-user.target

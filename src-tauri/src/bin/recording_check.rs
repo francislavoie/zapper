@@ -583,11 +583,14 @@ async fn interrupted(port: u16, stream_id: i64) -> Result<(), String> {
         })
         .await
         .map_err(|e| e.to_string())?;
-    // Some seconds of it on disk.
+    // Some seconds of it on disk: five seconds since it started, and some bytes. Bytes alone
+    // vary with how the fixture was encoded, and could stand for less than the three seconds
+    // checked below.
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         let st = client.status().await.map_err(|e| e.to_string())?;
-        if st.active.iter().any(|a| a.id == rec.id && a.bytes > 2_000_000) {
+        let long_enough = zapper_lib::recording::now() >= start + 5;
+        if long_enough && st.active.iter().any(|a| a.id == rec.id && a.bytes > 2_000_000) {
             if st.idle || st.idle_at.is_none_or(|t| t < start + 30) {
                 return Err(format!("recording, but the status says idle {} until {:?}", st.idle, st.idle_at));
             }

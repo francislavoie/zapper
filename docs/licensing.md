@@ -32,6 +32,8 @@ window), so there are no engine notices to carry.
 - The Windows installers put them in `licenses\` beside `zapper.exe`, as `.txt`
   (`packaging/windows/installers.conf.json`).
 - On macOS they're in `zapper.app/Contents/Resources/licenses/` (`packaging/macos/dmg.conf.json`).
+- The static `zapper-server` for Linux, one file with nothing beside it, carries them inside:
+  `zapper-server --licenses` prints them ([The static zapper-server](#the-static-zapper-server)).
 - In the app, the UI build copies them all into `dist/licenses/` with an `index.json` listing
   them, which the About pane reads (`src/components/Licenses.tsx`, a lazy chunk; the labels and
   order are `src/logic/licenses.ts`). Under `vite dev`, or a build made before the notices
@@ -228,6 +230,35 @@ until the manifest names a published build.
    packaging/libmpv/manifest.json` from its `SHA256SUMS`). The next build fetches it.
 
 A published libmpv release must stay: the packages built from it point at it for their source.
+
+## The static zapper-server
+
+`zapper-server-<version>-linux-x86_64` (docs/recording.md, "Without the app") is linked
+statically, so what is in it travels in it:
+
+- **FFmpeg** (LGPL 2.1 or later): libavformat, libavcodec, libswresample and libavutil, built by
+  `scripts/build-ffmpeg-static.sh` from the same FFmpeg tarball as zapper's libmpv
+  (`packaging/libmpv/sources.txt`, checked against its SHA-256), configured with nothing GPL or
+  nonfree (the script fails unless `configure` says "LGPL version 2.1 or later") and only what the
+  service uses.
+- **musl**, the C library (MIT): its `COPYRIGHT`, from the musl 1.2.5 source, is
+  `packaging/licenses/MUSL-COPYRIGHT.txt`.
+- The Rust crates and the interface's npm packages, as everywhere.
+
+The notices go in at build time (`ZAPPER_SERVER_NOTICES`, `build.rs`): zapper's `LICENSE`,
+FFmpeg's notice (what was built, the exact `configure` line, where the source is, how to relink)
+followed by FFmpeg's `COPYING.LGPLv2.1`, musl's `COPYRIGHT`, `THIRD-PARTY-NOTICES-rust.txt` and
+`THIRD-PARTY-NOTICES-ui.txt`. `zapper-server --licenses` prints them; a release build for musl
+refuses to build without them, and `scripts/check-server-binary.sh` checks they are there.
+
+Linking the LGPL's libraries statically is allowed when whoever has the binary can relink it
+with a modified version of them (LGPL 2.1, section 6). zapper's whole source, including the
+scripts that build this binary, is public under the MIT license, so anyone can: build their
+FFmpeg as static libraries (`scripts/build-ffmpeg-static.sh` shows how), name its folder in
+`ZAPPER_FFMPEG_STATIC`, and build zapper-server for `x86_64-unknown-linux-musl` as
+`scripts/build-server-static.sh` does. The FFmpeg source it was built from is published as for
+libmpv: the exact tarball is in the libmpv release `packaging/libmpv/manifest.json` names (the
+same file, the same SHA-256), and FFmpeg's notice in the binary says so.
 
 ## Documentation images
 
