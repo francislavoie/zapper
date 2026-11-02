@@ -44,6 +44,9 @@ pub struct ServerConfig {
     pub clock_track: bool,
     pub naming: Naming,
     pub naming_pattern: String,
+    /// Name the file being recorded so other programs see it (see
+    /// `naming::capture_file`); hidden otherwise.
+    pub show_while_recording: bool,
 }
 
 impl Default for ServerConfig {
@@ -57,6 +60,7 @@ impl Default for ServerConfig {
             clock_track: true,
             naming: Naming::default(),
             naming_pattern: String::new(),
+            show_while_recording: false,
         }
     }
 }
@@ -100,6 +104,7 @@ impl ServerConfig {
             clock_track: self.clock_track,
             naming: self.naming,
             naming_pattern: self.naming_pattern.clone(),
+            show_while_recording: self.show_while_recording,
             default_output_dir: default_output_dir().to_string_lossy().into_owned(),
         }
     }
@@ -131,6 +136,7 @@ impl ServerConfig {
         self.clock_track = s.clock_track;
         self.naming = s.naming;
         self.naming_pattern = pattern.to_string();
+        self.show_while_recording = s.show_while_recording;
         Ok(())
     }
 

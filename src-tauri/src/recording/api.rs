@@ -97,6 +97,44 @@ pub struct RecordingDto {
     /// "waiting for a free connection".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub waiting: Option<String>,
+    /// What it would lose to other recordings on an account with too few
+    /// connections for them all (`sharing::conflicts`), while that is still
+    /// ahead. Empty when nothing is, or the account's limit is unknown.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conflicts: Vec<ConflictDto>,
+}
+
+/// What a recording loses to another one ([`super::sharing::Loss`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ConflictKind {
+    /// Its padding after ends `secs` early: the other one needs the
+    /// connection.
+    CutEnd,
+    /// It starts `secs` late, into its padding before only.
+    LateStart,
+    /// It starts `secs` into its programme.
+    LostStart,
+    /// It cannot be recorded at all.
+    Missed,
+}
+
+/// A conflict between two recordings on another channel each.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConflictDto {
+    /// The recording that loses, and the one it loses to.
+    pub title: String,
+    pub with: String,
+    pub kind: ConflictKind,
+    /// How much it loses; 0 for `missed`.
+    pub secs: i64,
+    /// How many streams the account allows.
+    pub streams: u32,
+    /// In a preview, the loss is another recording's, not the one asked
+    /// about.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub other: bool,
 }
 
 /// `POST /api/recordings`.
@@ -147,6 +185,12 @@ pub struct RecordingSettingsDto {
     /// Add the wall-clock subtitle track to each file. It is never marked as
     /// a default track, so players leave it off until it is chosen.
     pub clock_track: bool,
+    /// Name the file being recorded so other programs (a media server) see
+    /// it and can play it while it grows: `<name> (recording).ts` instead
+    /// of a hidden `.<name> - part1.ts`. Off unless chosen; an older client
+    /// leaves it off.
+    #[serde(default)]
+    pub show_while_recording: bool,
     /// The folder used when none is chosen, so a client can offer to go back
     /// to it. Ignored when settings are written.
     #[serde(default)]

@@ -1,20 +1,20 @@
 //! Capturing a recording: the stream's bytes, copied to disk as they come,
 //! then each part remuxed to Matroska.
 //!
-//! The stream is fetched the way mpv fetches it when the app plays the
-//! channel — the same URL, the same User-Agent and Referer rules — and the
-//! bytes go to the part file untouched: nothing is decoded or re-encoded.
-//! Beside each part a small log records when its bytes arrived (see
-//! [`super::clock`]), which is what the clock track is drawn from.
+//! The bytes come from the feed's [`super::hub`]: the service's one
+//! connection to that feed, shared with any other recording of it at the
+//! same time. They go to the part file untouched: nothing is decoded or
+//! re-encoded. Beside each part a small log records when its bytes arrived
+//! (see [`super::clock`]), which is what the clock track is drawn from.
 //!
-//! Which feed to connect to, and when, is [`super::fallback`]'s decision;
-//! whether the account has a connection to spare is asked of the service's
-//! [`super::budget`] before every connection.
+//! Which feed to ride, and when, is [`super::fallback`]'s decision. A hub
+//! already open for one of the recording's feeds is ridden at no cost;
+//! opening one asks the service's [`super::budget`] first, and on a full
+//! account follows [`super::sharing`]'s rules.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use tokio::io::AsyncWriteExt;
@@ -23,11 +23,13 @@ use tokio::sync::watch;
 use super::api::{PartDto, RecordingState};
 use super::budget::{jitter, wait_for_slot, Slots};
 use super::clock::{self, Arrival};
-use super::fallback::{Failure, Fallback, STALL_SECS};
+use super::fallback::{Failure, Fallback};
+use super::hub::{Subscription, SETTLE_LOOK_SECS};
 use super::naming;
 use super::server::Server;
+use super::sharing::{self, Full, Rider};
 use super::{now, now_ms, remux, store};
-use crate::source::{Playable, Source};
+use crate::source::Source;
 
 /// The arrival log beside a part: `<part>.clock`.
 pub fn log_path(part: &Path) -> PathBuf {
@@ -48,22 +50,42 @@ struct OpenPart {
 }
 
 impl OpenPart {
-    async fn create(folder: &Path, base: &str, index: usize, stream_id: i64) -> Result<Self> {
+    /// A new part file, under a name nothing else has: two recordings of
+    /// the same airing (on two channels) have the same name, and must never
+    /// write into one file.
+    async fn create(
+        folder: &Path,
+        base: &str,
+        index: usize,
+        stream_id: i64,
+        visible: bool,
+    ) -> Result<Self> {
         tokio::fs::create_dir_all(folder)
             .await
             .with_context(|| format!("creating {}", folder.display()))?;
-        let path = folder.join(naming::capture_file(base, index));
-        // Appending: a part resumed after a restart continues its file.
-        let file = tokio::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .await
-            .with_context(|| format!("creating {}", path.display()))?;
-        let bytes = file.metadata().await.map(|m| m.len()).unwrap_or(0);
+        let name = naming::capture_file(base, index, visible);
+        let mut n = 1;
+        let (path, file) = loop {
+            let path = folder.join(if n == 1 {
+                name.clone()
+            } else {
+                naming::numbered(&name, n)
+            });
+            match tokio::fs::OpenOptions::new()
+                .create_new(true)
+                .append(true)
+                .open(&path)
+                .await
+            {
+                Ok(f) => break (path, f),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => n += 1,
+                Err(e) => return Err(e).with_context(|| format!("creating {}", path.display())),
+            }
+        };
         let log = tokio::fs::OpenOptions::new()
             .create(true)
-            .append(true)
+            .write(true)
+            .truncate(true)
             .open(log_path(&path))
             .await?;
         Ok(Self {
@@ -71,7 +93,7 @@ impl OpenPart {
             path,
             file,
             log,
-            bytes,
+            bytes: 0,
             started: now(),
             last_logged_ms: 0,
         })
@@ -114,120 +136,89 @@ impl OpenPart {
     }
 }
 
-/// Counts an open stream for as long as it lives.
-struct StreamGuard<'a>(&'a Server);
+/// Whether a connection of its own may be opened now.
+enum Room {
+    Go,
+    /// Not now; look again at `at`. `note`: the first wait worth a note.
+    Wait {
+        at: i64,
+        why: String,
+        note: bool,
+    },
+}
 
-impl<'a> StreamGuard<'a> {
-    fn new(s: &'a Server) -> Self {
-        s.streams_open.fetch_add(1, Ordering::SeqCst);
-        Self(s)
+/// Asks the budget, and on a full account applies the sharing rules for
+/// `me`, recording `title`. `waits` counts the waits in a row, for the
+/// back-off.
+async fn room(server: &Arc<Server>, me: Rider, title: &str, waits: &mut u32) -> Room {
+    let own = server.hubs.open_count();
+    let Slots::Full { active, max } = server.budget.check(own).await else {
+        return Room::Go;
+    };
+    let why = format!("waiting for a free connection ({active} of {max} in use)");
+    let t = now();
+    // A connection is being closed for a recording, or the provider counts
+    // more than the service holds and one of the service's closed moments
+    // ago (providers are slow to let go): look again shortly rather than
+    // back off, or close another for the same need. A count the service
+    // keeps itself (a playlist's setting) is never behind.
+    if server.hubs.closing() || (active > own as i64 && server.hubs.released_lately()) {
+        return Room::Wait {
+            at: t + SETTLE_LOOK_SECS,
+            why,
+            note: false,
+        };
+    }
+    let own = server.hubs.conns();
+    match sharing::when_full(t, me.stop, &own) {
+        Full::Cut(i) => {
+            server.end_padding(own[i].feed, title, t);
+            Room::Wait {
+                at: t + SETTLE_LOOK_SECS,
+                why,
+                note: false,
+            }
+        }
+        Full::Wait { until } => {
+            *waits += 1;
+            let mut at = t + wait_for_slot(*waits, jitter());
+            if let Some(u) = until {
+                at = at.min(u);
+            }
+            Room::Wait {
+                at,
+                why,
+                note: *waits == 1,
+            }
+        }
     }
 }
 
-impl Drop for StreamGuard<'_> {
-    fn drop(&mut self) {
-        self.0.streams_open.fetch_sub(1, Ordering::SeqCst);
-    }
-}
-
-/// Whether the start of a body is an MPEG transport stream: a sync byte, and
-/// another one packet later. A provider refusing politely sends a line of
-/// text with a success status instead.
-pub fn looks_like_ts(head: &[u8]) -> bool {
-    (0..188.min(head.len()))
-        .any(|i| head[i] == 0x47 && head.get(i + 188).is_none_or(|&b| b == 0x47))
-}
-
-/// A refusal's status and words, as a [`Failure`].
-fn refusal(status: u16, body: &str) -> Failure {
-    let mut clues = crate::ipc::ending::Clues::default();
-    clues.observe(&format!(
-        "HTTP error {status} {}",
-        body.lines().next().unwrap_or("")
-    ));
-    Failure::Refused {
-        status,
-        limit: clues.limit,
-    }
-}
-
-/// Opens the stream. A refusal is read for its words (a provider says "max
-/// connections" in the body as often as in the status line).
-async fn connect(p: &Playable) -> Result<reqwest::Response, Failure> {
-    let http = crate::m3u::fetch::http_client(p.user_agent.as_deref())
-        .map_err(|_| Failure::Unreachable)?;
-    let mut req = http.get(&p.url);
-    if let Some(r) = &p.referrer {
-        req = req.header(reqwest::header::REFERER, r);
-    }
-    let resp = req.send().await.map_err(|_| Failure::Unreachable)?;
-    let status = resp.status();
-    if status.is_success() {
-        return Ok(resp);
-    }
-    let body = tokio::time::timeout(Duration::from_secs(3), resp.text())
-        .await
-        .ok()
-        .and_then(Result::ok)
-        .unwrap_or_default();
-    let body: String = body.chars().take(512).collect();
-    Err(refusal(status.as_u16(), &body))
-}
-
-/// How a connection ended: a failure and how long it delivered, or `None`
-/// when the recording is over (its end came, or it was stopped).
-async fn pump(
+/// What the recording gets from its hub until its window ends, it is
+/// stopped (both `None`), or the feed fails: how, and for how long the feed
+/// had delivered.
+async fn receive(
     server: &Server,
     id: i64,
-    resp: &mut reqwest::Response,
+    sub: &mut Subscription,
     part: &mut OpenPart,
     until: i64,
     stop: &mut watch::Receiver<bool>,
 ) -> Result<Option<(Failure, i64)>> {
-    let connected = Instant::now();
-    let mut first: Option<Instant> = None;
-    let mut head: Vec<u8> = Vec::new();
-    let mut checked = false;
-    let delivered = |first: Option<Instant>| first.map_or(0, |f| f.elapsed().as_secs() as i64);
     loop {
         let left = until - now();
         if left <= 0 || *stop.borrow() {
             return Ok(None);
         }
-        let deadline = Duration::from_secs(STALL_SECS as u64).min(Duration::from_secs(left as u64));
-        let chunk = tokio::select! {
-            r = tokio::time::timeout(deadline, resp.chunk()) => r,
+        let data = tokio::select! {
+            d = sub.recv() => d,
+            _ = tokio::time::sleep(Duration::from_secs(left as u64)) => continue,
             _ = stop.changed() => return Ok(None),
         };
-        let chunk = match chunk {
-            Err(_) if now() >= until => return Ok(None),
-            Err(_) => return Ok(Some((Failure::Stalled, delivered(first)))),
-            Ok(Err(_)) => return Ok(Some((Failure::Unreachable, delivered(first)))),
-            Ok(Ok(None)) => {
-                if !checked && !looks_like_ts(&head) {
-                    return Ok(Some((Failure::NotVideo, 0)));
-                }
-                if !checked {
-                    part.write(&head).await?;
-                }
-                return Ok(Some((Failure::Ended, delivered(first))));
-            }
-            Ok(Ok(Some(c))) => c,
+        let Some(data) = data else {
+            return Ok(Some(sub.ended().unwrap_or((Failure::Ended, 0))));
         };
-        if !checked {
-            head.extend_from_slice(&chunk);
-            if head.len() < 376 && connected.elapsed() < Duration::from_secs(STALL_SECS as u64) {
-                continue;
-            }
-            if !looks_like_ts(&head) {
-                return Ok(Some((Failure::NotVideo, 0)));
-            }
-            checked = true;
-            first = Some(Instant::now());
-            part.write(&std::mem::take(&mut head)).await?;
-        } else {
-            part.write(&chunk).await?;
-        }
+        part.write(&data).await?;
         let bytes = part.bytes;
         server.update_live(id, |l| l.bytes = bytes);
     }
@@ -247,6 +238,11 @@ async fn run_inner(server: &Arc<Server>, id: i64, stop: &mut watch::Receiver<boo
     let info = server.db(|c| store::capture_info(c, id))?;
     server.db(|c| store::set_state(c, id, RecordingState::Recording, None))?;
     let until = rec.stop + rec.pad_after;
+    let me = Rider {
+        id,
+        stop: rec.stop,
+        until,
+    };
     let folder = PathBuf::from(&rec.folder);
     let mut feeds = vec![rec.stream_id];
     if let Some(b) = rec.backup_stream_id.filter(|&b| b != rec.stream_id) {
@@ -257,60 +253,78 @@ async fn run_inner(server: &Arc<Server>, id: i64, stop: &mut watch::Receiver<boo
     let mut open: Option<OpenPart> = None;
     let mut next_at = now();
     let mut slot_waits: u32 = 0;
+    let mut waiting_for_room = false;
     let mut last_failure: Option<Failure> = None;
+    let mut lost_noted = false;
+    let mut changes = server.hubs.watch();
 
     loop {
         if now() >= until || *stop.borrow() {
             break;
         }
-        // Wait for the next attempt, the end, or a stop.
+        // Wait for the next attempt, the end, or a stop. A hub opening on
+        // one of its feeds, or one closing while it waits for room, is worth
+        // looking at at once.
         let wait = (next_at.min(until) - now()).max(0) as u64;
         if wait > 0 {
             tokio::select! {
                 _ = tokio::time::sleep(Duration::from_secs(wait)) => {}
                 _ = stop.changed() => break,
-            }
-            continue;
-        }
-
-        // Never take a connection the account does not have to spare.
-        if let Slots::Full { active, max } = server.budget.check(server.open_streams()).await {
-            slot_waits += 1;
-            let why = format!("waiting for a free connection ({active} of {max} in use)");
-            if slot_waits == 1 {
-                server.note(id, &why);
-            }
-            server.update_live(id, |l| l.waiting = Some(why));
-            next_at = now() + wait_for_slot(slot_waits, jitter());
-            continue;
-        }
-        slot_waits = 0;
-        server.update_live(id, |l| l.waiting = None);
-
-        let stream_id = feeds[fallback.current()];
-        let playable = match Source::load().and_then(|s| s.live(stream_id)) {
-            Ok(p) => p,
-            Err(e) => {
-                server.note(id, &format!("cannot play channel {stream_id}: {e:#}"));
-                let next = fallback.failed(now(), Failure::Unreachable, 0);
-                next_at = next.at;
-                continue;
-            }
-        };
-        let guard = StreamGuard::new(server);
-        let mut resp = match connect(&playable).await {
-            Ok(r) => r,
-            Err(f) => {
-                drop(guard);
-                last_failure = Some(f);
-                let next = fallback.failed(now(), f, 0);
-                if let Some(n) = next.note {
-                    server.note(id, &n);
+                r = changes.changed() => {
+                    if r.is_ok()
+                        && (waiting_for_room || feeds.iter().any(|&f| server.hubs.has(f)))
+                    {
+                        next_at = now();
+                    }
                 }
-                next_at = next.at;
-                continue;
+            }
+            continue;
+        }
+
+        // Ride a connection already open for one of its feeds, the current
+        // one first: that costs the account nothing.
+        let current = fallback.current();
+        let order: Vec<i64> = std::iter::once(feeds[current])
+            .chain(feeds.iter().copied().filter(|&f| f != feeds[current]))
+            .collect();
+        let mut sub = match server.hubs.join(&order, me) {
+            Some((i, sub)) => {
+                if let Some(at) = feeds.iter().position(|&f| f == order[i]) {
+                    fallback.ride(at);
+                }
+                sub
+            }
+            None => {
+                // A connection of its own: never one the account does not
+                // have to spare.
+                if let Room::Wait { at, why, note } =
+                    room(server, me, &rec.title, &mut slot_waits).await
+                {
+                    if note {
+                        server.note(id, &why);
+                    }
+                    server.update_live(id, |l| l.waiting = Some(why));
+                    waiting_for_room = true;
+                    next_at = at;
+                    continue;
+                }
+                let stream_id = feeds[fallback.current()];
+                let playable = match Source::load().and_then(|s| s.live(stream_id)) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        server.note(id, &format!("cannot play channel {stream_id}: {e:#}"));
+                        let next = fallback.failed(now(), Failure::Unreachable, 0);
+                        next_at = next.at;
+                        continue;
+                    }
+                };
+                server.hubs.open(stream_id, playable, me)
             }
         };
+        slot_waits = 0;
+        waiting_for_room = false;
+        server.update_live(id, |l| l.waiting = None);
+        let stream_id = sub.feed();
 
         // A new feed starts a new part; the same feed again continues its
         // part (the remuxer joins the timeline across the reconnect).
@@ -319,7 +333,8 @@ async fn run_inner(server: &Arc<Server>, id: i64, stop: &mut watch::Receiver<boo
                 close(server, id, &mut parts, p)?;
             }
             let index = parts.len() + 1;
-            let p = OpenPart::create(&folder, &info.base, index, stream_id).await?;
+            let visible = server.config().show_while_recording;
+            let p = OpenPart::create(&folder, &info.base, index, stream_id, visible).await?;
             parts.push(p.dto(None));
             server.db(|c| store::set_parts(c, id, &parts))?;
             server.update_live(id, |l| {
@@ -337,9 +352,19 @@ async fn run_inner(server: &Arc<Server>, id: i64, stop: &mut watch::Receiver<boo
         })
         .await;
 
-        let ended = pump(server, id, &mut resp, part, until, stop).await?;
-        drop(resp);
-        drop(guard);
+        let ended = receive(server, id, &mut sub, part, until, stop).await?;
+        let lost = sub.lost();
+        drop(sub);
+        if lost > 0 && !lost_noted {
+            lost_noted = true;
+            server.note(
+                id,
+                &format!(
+                    "{} kB of the stream were dropped: writing to the disk did not keep up",
+                    lost / 1000
+                ),
+            );
+        }
         let Some((failure, delivered)) = ended else {
             break;
         };
@@ -457,10 +482,9 @@ fn remux_parts(server: &Server, id: i64, more: bool) -> Result<Vec<PartDto>> {
     let total = keep.len() + usize::from(more);
     for (i, mut part) in keep.into_iter().enumerate() {
         let src = PathBuf::from(&part.path);
-        if src.extension().is_some_and(|e| e != "ts")
-            || !src
-                .file_name()
-                .is_some_and(|n| n.to_string_lossy().starts_with('.'))
+        if !src
+            .file_name()
+            .is_some_and(|n| naming::is_capture_file(&n.to_string_lossy(), &info.base))
         {
             // Finished already (by an earlier run).
             done.push(part);
@@ -525,37 +549,4 @@ fn make_mkv(ts: &Path, log: &Path, out: &Path, clock_track: bool) -> Result<()> 
         return remux::remux(ts, out, None);
     }
     remux::remux(ts, out, Some((&clock::ass_header(), &cues)))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_transport_stream_is_told_from_a_line_of_text() {
-        let mut ts = vec![0u8; 400];
-        ts[3] = 0x47;
-        ts[3 + 188] = 0x47;
-        assert!(looks_like_ts(&ts));
-        assert!(!looks_like_ts(b"Max connections reached\n"));
-        assert!(!looks_like_ts(&[0u8; 400]));
-    }
-
-    #[test]
-    fn a_refusal_that_speaks_of_a_limit_is_one() {
-        assert_eq!(
-            refusal(403, "Max Connections Reached"),
-            Failure::Refused {
-                status: 403,
-                limit: true
-            }
-        );
-        assert_eq!(
-            refusal(403, "Forbidden"),
-            Failure::Refused {
-                status: 403,
-                limit: false
-            }
-        );
-    }
 }

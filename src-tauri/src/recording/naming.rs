@@ -431,10 +431,61 @@ pub fn file(base: &str, part: usize, parts: usize, ext: &str) -> String {
     }
 }
 
-/// The capture file a part is written to while recording: hidden, so a
-/// library scan does not pick up a file that is still growing.
-pub fn capture_file(base: &str, part: usize) -> String {
-    format!(".{base} - part{part}.ts")
+/// What a capture file says to show that it is still being recorded, when
+/// other programs are to see it.
+pub const RECORDING_MARK: &str = " (recording)";
+
+/// The capture file a part is written to while recording.
+///
+/// Hidden by default (`.<base> - part1.ts`), so a library scan does not
+/// pick up a file that is still growing. With `visible`, for a media server
+/// to play while it records: `<base> (recording).ts` for the first part,
+/// `<base> - part2 (recording).ts` after. Either way it can never be taken
+/// for a finished file ([`is_capture_file`]).
+pub fn capture_file(base: &str, part: usize, visible: bool) -> String {
+    match (visible, part) {
+        (false, _) => format!(".{base} - part{part}.ts"),
+        (true, 1) => format!("{base}{RECORDING_MARK}.ts"),
+        (true, _) => format!("{base} - part{part}{RECORDING_MARK}.ts"),
+    }
+}
+
+/// Whether `name` is one of the capture files of a recording named `base`
+/// (as [`capture_file`] names them, with or without a [`numbered`] suffix)
+/// rather than a finished file: the `.mkv`, or a `.ts` kept because it could
+/// not be remuxed, which is named like the `.mkv` and never carries the
+/// mark.
+pub fn is_capture_file(name: &str, base: &str) -> bool {
+    let Some(stem) = name.strip_suffix(".ts") else {
+        return false;
+    };
+    let stem = strip_number(stem);
+    let part = |rest: &str| {
+        rest.strip_prefix(" - part")
+            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+    };
+    if let Some(rest) = stem.strip_prefix('.').and_then(|s| s.strip_prefix(base)) {
+        return part(rest);
+    }
+    stem.strip_prefix(base)
+        .and_then(|rest| rest.strip_suffix(RECORDING_MARK))
+        .is_some_and(|rest| rest.is_empty() || part(rest))
+}
+
+/// `stem` without a trailing ` (n)`.
+fn strip_number(stem: &str) -> &str {
+    stem.strip_suffix(')')
+        .and_then(|s| s.rsplit_once(" ("))
+        .filter(|(_, n)| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+        .map_or(stem, |(s, _)| s)
+}
+
+/// `name` with ` (n)` before its extension.
+pub fn numbered(name: &str, n: u32) -> String {
+    match name.rsplit_once('.') {
+        Some((stem, ext)) => format!("{stem} ({n}).{ext}"),
+        None => format!("{name} ({n})"),
+    }
 }
 
 /// `name`, or `name (2)`, `name (3)`... before the extension: the first that
@@ -444,12 +495,8 @@ pub fn unique(name: &str, exists: impl Fn(&str) -> bool) -> String {
     if !exists(name) {
         return name.to_string();
     }
-    let (stem, ext) = match name.rsplit_once('.') {
-        Some((s, e)) => (s, format!(".{e}")),
-        None => (name, String::new()),
-    };
     (2..)
-        .map(|n| format!("{stem} ({n}){ext}"))
+        .map(|n| numbered(name, n))
         .find(|candidate| !exists(candidate))
         .expect("an unbounded range finds a free name")
 }
@@ -798,7 +845,43 @@ mod tests {
             file("X - 2026-11-03 20.00", 2, 2, "mkv"),
             "X - 2026-11-03 20.00 - part2.mkv"
         );
-        assert_eq!(capture_file("X", 3), ".X - part3.ts");
+        assert_eq!(capture_file("X", 3, false), ".X - part3.ts");
+        assert_eq!(capture_file("X", 1, true), "X (recording).ts");
+        assert_eq!(capture_file("X", 2, true), "X - part2 (recording).ts");
+    }
+
+    #[test]
+    fn a_capture_file_is_never_taken_for_a_finished_one() {
+        let base = "Harbour Lights - 2026-11-03 20.00";
+        for part in 1..=3 {
+            for visible in [false, true] {
+                let name = capture_file(base, part, visible);
+                assert!(is_capture_file(&name, base), "{name}");
+                assert!(is_capture_file(&numbered(&name, 2), base), "{name} (2)");
+                assert!(!is_capture_file(&name, "Harbour Lights"), "another base");
+            }
+        }
+        // What a recording finishes into, the .ts kept when a remux fails
+        // included, whatever the parts and numbers.
+        for done in [
+            format!("{base}.mkv"),
+            format!("{base}.ts"),
+            format!("{base} (2).ts"),
+            format!("{base} - part2.ts"),
+            format!("{base} - part2 (3).ts"),
+            format!(".{base}.mkv.partial"),
+        ] {
+            assert!(!is_capture_file(&done, base), "{done}");
+        }
+        // A title that looks like the mark, or a number, changes nothing.
+        for base in ["Odd (recording)", "Odd (3)", "Odd (recording) (2)"] {
+            assert!(is_capture_file(&capture_file(base, 1, true), base));
+            assert!(!is_capture_file(&format!("{base}.ts"), base), "{base}");
+            assert!(!is_capture_file(
+                &unique(&format!("{base}.ts"), |n| n == format!("{base}.ts")),
+                base
+            ));
+        }
     }
 
     #[test]

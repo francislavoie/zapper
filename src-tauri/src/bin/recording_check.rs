@@ -29,6 +29,19 @@
 //! `recording`; started again, it carries on in `… - part2.mkv` and
 //! finishes Done.
 //!
+//! Then sharing (recording::sharing, recording::hub), on two more channels
+//! with a fixture server each, on the playlist's one stream:
+//!
+//! - two overlapping recordings of one channel, with *Show recordings to
+//!   other programs while they record* on: the fixture server sees exactly
+//!   one stream request; while they record, their files are the visible
+//!   `… (recording).ts`, never hidden ones; each finishes Done as one
+//!   playable `.mkv` with no `.ts` left, and both clocks cover the overlap;
+//! - a recording in its padding after on one channel when another
+//!   channel's programme starts: its padding gives way at once (a note says
+//!   it ended early, and for which), and the other starts within seconds of
+//!   its start rather than after a back-off.
+//!
 //! Needs python3, ffprobe and ffmpeg (`ZAPPER_PYTHON3`, `ZAPPER_FFPROBE` and
 //! `ZAPPER_FFMPEG` name them when `PATH` does not; see `harness::tool`), and
 //! the fixtures (tools/make_fixtures.sh, or a folder named by `ZAPPER_FIXTURES`).
@@ -83,8 +96,11 @@ async fn check(seconds: i64) -> Result<(), String> {
     let (main_fx, backup_fx) = (pick("motion1080p.ts")?, pick("sport720p60.ts")?);
 
     let (p_main, p_backup, p_api) = (free_port()?, free_port()?, free_port()?);
+    let (p_two, p_three) = (free_port()?, free_port()?);
     let main = Fixture::start(p_main, &["--end-after", "10", "--after-end", "503"])?;
     let backup = Fixture::start(p_backup, &[])?;
+    let two = Fixture::start(p_two, &[])?;
+    let three = Fixture::start(p_three, &[])?;
 
     // The account: a playlist on disk naming the two local feeds.
     let playlist = home.join("fixture.m3u");
@@ -95,7 +111,11 @@ async fn check(seconds: i64) -> Result<(), String> {
              #EXTINF:-1 tvg-id=\"fixture.one\" group-title=\"Fixtures\",Fixture One\n\
              http://127.0.0.1:{p_main}/{main_fx}\n\
              #EXTINF:-1 tvg-id=\"fixture.one\" group-title=\"Fixtures\",Fixture One Backup\n\
-             http://127.0.0.1:{p_backup}/{backup_fx}\n"
+             http://127.0.0.1:{p_backup}/{backup_fx}\n\
+             #EXTINF:-1 tvg-id=\"fixture.two\" group-title=\"Fixtures\",Fixture Two\n\
+             http://127.0.0.1:{p_two}/{backup_fx}\n\
+             #EXTINF:-1 tvg-id=\"fixture.three\" group-title=\"Fixtures\",Fixture Three\n\
+             http://127.0.0.1:{p_three}/{main_fx}\n"
         ),
     )
     .map_err(|e| e.to_string())?;
@@ -228,7 +248,7 @@ async fn check(seconds: i64) -> Result<(), String> {
     let mut last_end: Option<i64> = None;
     for (i, part) in done.parts.iter().enumerate() {
         let probe = ffprobe(&part.path)?;
-        let wall = clock_cues(&part.path)?;
+        let wall = clock_cues(&part.path, 0)?;
         println!(
             "part{}: {} — {:.1} s, {} clock cues, {} to {}",
             i + 1,
@@ -301,7 +321,242 @@ async fn check(seconds: i64) -> Result<(), String> {
         ));
     }
     drop(service);
-    interrupted(p_api, ids.1).await
+    interrupted(p_api, ids.1).await?;
+    let (id_two, id_three) = wait_for(Duration::from_secs(5), || {
+        Some((channel_id("Fixture Two")?, channel_id("Fixture Three")?))
+    })
+    .ok_or("the playlist's other channels are missing")?;
+    shared(p_api, id_two, &two).await?;
+    padding_gives_way(p_api, id_two, id_three, &two, &three).await
+}
+
+/// A service on the scratch home, and a client for it.
+async fn service_and_client(port: u16) -> Result<(Service, Client), String> {
+    let service = Service::start(port)?;
+    let token = wait_for(Duration::from_secs(20), zapper_lib::recording::config::read_token)
+        .ok_or("no token")?;
+    let client = Client::new(&format!("http://127.0.0.1:{port}"), Some(token))
+        .map_err(|e| e.to_string())?;
+    wait_until(Duration::from_secs(20), || async { client.version().await.is_ok() }).await?;
+    Ok((service, client))
+}
+
+fn request(stream_id: i64, title: &str, start: i64, stop: i64) -> ScheduleRequest {
+    ScheduleRequest {
+        stream_id,
+        backup_stream_id: Some(stream_id),
+        channel_name: None,
+        title: title.into(),
+        episode_title: None,
+        season: None,
+        episode: None,
+        start,
+        stop,
+        pad_before: Some(0),
+        pad_after: Some(0),
+    }
+}
+
+/// Waits for every one of `ids` to finish; them, in the same order.
+async fn finished(client: &Client, ids: &[i64], limit: Duration) -> Result<Vec<RecordingDto>, String> {
+    let deadline = Instant::now() + limit;
+    loop {
+        if Instant::now() > deadline {
+            return Err(format!("recordings {ids:?} did not finish in time"));
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        let list = client.list().await.map_err(|e| e.to_string())?;
+        let got: Vec<RecordingDto> = ids
+            .iter()
+            .filter_map(|id| list.iter().find(|r| r.id == *id).cloned())
+            .collect();
+        if got.len() == ids.len()
+            && got
+                .iter()
+                .all(|r| matches!(r.state, RecordingState::Done | RecordingState::Failed))
+        {
+            return Ok(got);
+        }
+    }
+}
+
+/// Two overlapping recordings of one channel ride one connection.
+async fn shared(port: u16, stream_id: i64, fixture: &Fixture) -> Result<(), String> {
+    let (_service, client) = service_and_client(port).await?;
+    let mut settings = client.settings().await.map_err(|e| e.to_string())?;
+    settings.show_while_recording = true;
+    client.set_settings(&settings).await.map_err(|e| e.to_string())?;
+    let before = fixture.requests();
+
+    let start = zapper_lib::recording::now();
+    let a = client
+        .schedule(&request(stream_id, "Fixture: First", start, start + 20))
+        .await
+        .map_err(|e| e.to_string())?;
+    let b = client
+        .schedule(&request(stream_id, "Fixture: Second", start + 10, start + 30))
+        .await
+        .map_err(|e| e.to_string())?;
+    if !a.conflicts.is_empty() || !b.conflicts.is_empty() {
+        return Err(format!(
+            "the same channel is no conflict: {:?} {:?}",
+            a.conflicts, b.conflicts
+        ));
+    }
+
+    // While both record, their files are there for other programs to see.
+    let deadline = Instant::now() + Duration::from_secs(40);
+    loop {
+        if Instant::now() > deadline {
+            return Err("the two recordings were never on at once".into());
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let list = client.list().await.map_err(|e| e.to_string())?;
+        let on: Vec<&RecordingDto> = list
+            .iter()
+            .filter(|r| (r.id == a.id || r.id == b.id) && r.state == RecordingState::Recording)
+            // A part's size is kept when it closes; the file has it now.
+            .filter(|r| {
+                r.parts
+                    .iter()
+                    .any(|p| std::fs::metadata(&p.path).is_ok_and(|m| m.len() > 0))
+            })
+            .collect();
+        if on.len() < 2 {
+            continue;
+        }
+        for r in on {
+            let name = file_name(&r.parts[0].path);
+            if !name.ends_with(" (recording).ts") || name.starts_with('.') {
+                return Err(format!("not visible while recording: {name}"));
+            }
+            for e in std::fs::read_dir(&r.folder).map_err(|e| e.to_string())?.flatten() {
+                let n = e.file_name().to_string_lossy().into_owned();
+                if n.starts_with('.') && n.ends_with(".ts") {
+                    return Err(format!("a hidden capture file beside it: {n}"));
+                }
+            }
+        }
+        break;
+    }
+
+    let done = finished(&client, &[a.id, b.id], Duration::from_secs(90)).await?;
+    let requests = fixture.requests() - before;
+    println!("shared: {requests} stream request(s) for two recordings");
+    if requests != 1 {
+        return Err(format!("expected one stream request for both, saw {requests}"));
+    }
+    let mut spans = Vec::new();
+    for r in &done {
+        if r.state != RecordingState::Done || r.parts.len() != 1 {
+            return Err(format!("{}: {:?} in {:?}", r.title, r.state, r.parts));
+        }
+        let path = &r.parts[0].path;
+        if !path.ends_with(".mkv") || file_name(path).contains("(recording)") {
+            return Err(format!("{}: finished as {path}", r.title));
+        }
+        let leftovers: Vec<String> = std::fs::read_dir(&r.folder)
+            .map_err(|e| e.to_string())?
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".ts") || n.ends_with(".clock"))
+            .collect();
+        if !leftovers.is_empty() {
+            return Err(format!("{}: left behind {leftovers:?}", r.title));
+        }
+        let probe = ffprobe(path)?;
+        let wall = clock_cues(path, 1)?;
+        println!(
+            "{}: {} — {:.1} s, clock {} to {}",
+            r.title,
+            probe.streams.join(", "),
+            probe.duration,
+            hms(wall[0]),
+            hms(*wall.last().unwrap())
+        );
+        if probe.duration < 12.0 || !probe.streams.iter().any(|s| s.starts_with("video:h264")) {
+            return Err(format!("{} is not playable: {:?}, {:.1} s", r.title, probe.streams, probe.duration));
+        }
+        spans.push((wall[0], *wall.last().unwrap()));
+    }
+    // Both hold the ten seconds they share.
+    let ((a0, a1), (b0, b1)) = (spans[0], spans[1]);
+    if !(b0 >= a0 + 5 && a1 >= b0 + 5 && b1 >= a1 + 5) {
+        return Err(format!(
+            "the files do not both hold the overlap: {}–{} and {}–{}",
+            hms(a0),
+            hms(a1),
+            hms(b0),
+            hms(b1)
+        ));
+    }
+    settings.show_while_recording = false;
+    client.set_settings(&settings).await.map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// A recording's padding after gives way to another channel's start on an
+/// account of one stream.
+async fn padding_gives_way(
+    port: u16,
+    first: i64,
+    second: i64,
+    fx_first: &Fixture,
+    fx_second: &Fixture,
+) -> Result<(), String> {
+    let (_service, client) = service_and_client(port).await?;
+    let start = zapper_lib::recording::now();
+    let mut c = request(first, "Fixture: Third", start, start + 10);
+    c.pad_after = Some(60);
+    let c = client.schedule(&c).await.map_err(|e| e.to_string())?;
+    let d = client
+        .schedule(&request(second, "Fixture: Fourth", start + 20, start + 35))
+        .await
+        .map_err(|e| e.to_string())?;
+    let warned = client
+        .list()
+        .await
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .find(|r| r.id == c.id)
+        .map(|r| r.conflicts)
+        .unwrap_or_default();
+    println!("conflicts foreseen for {}: {warned:?}", c.title);
+    let (before_first, before_second) = (fx_first.requests(), fx_second.requests());
+    let done = finished(&client, &[c.id, d.id], Duration::from_secs(150)).await?;
+    let (c, d) = (&done[0], &done[1]);
+    for n in &c.notes {
+        println!("  {}: {n}", c.title);
+    }
+    for n in &d.notes {
+        println!("  {}: {n}", d.title);
+    }
+    if c.state != RecordingState::Done || d.state != RecordingState::Done {
+        return Err(format!("expected both Done: {:?} {:?}", c.state, d.state));
+    }
+    if !c.notes.iter().any(|n| n.contains("early for “Fixture: Fourth”")) {
+        return Err("no note that the padding gave way".into());
+    }
+    let late = d.parts[0].started - d.start;
+    println!("the next programme started {late} s after its start");
+    if late > 6 {
+        return Err(format!("the next programme waited {late} s for the connection"));
+    }
+    if c.parts[0].ended.is_none_or(|e| e > d.start + 6) {
+        return Err(format!("the padding did not give way: {:?}", c.parts[0]));
+    }
+    let (r1, r2) = (fx_first.requests() - before_first, fx_second.requests() - before_second);
+    if r1 != 1 || r2 != 1 {
+        return Err(format!("expected one stream request per channel, saw {r1} and {r2}"));
+    }
+    Ok(())
+}
+
+fn file_name(path: &str) -> String {
+    Path::new(path)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default()
 }
 
 /// A recording stopped part way by the service stopping, then resumed.
@@ -453,6 +708,21 @@ async fn wait_until<F: std::future::Future<Output = bool>>(
     Ok(())
 }
 
+/// A fixture channel's id, once the service's sync has written it.
+fn channel_id(name: &str) -> Option<i64> {
+    let c = rusqlite::Connection::open_with_flags(
+        zapper_lib::catalog::db::db_path(),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .ok()?;
+    c.query_row(
+        "SELECT stream_id FROM channels WHERE name = ?1 AND deleted_at IS NULL",
+        [name],
+        |r| r.get(0),
+    )
+    .ok()
+}
+
 /// The two fixture channels' ids, once the service's sync has written them.
 fn channel_ids() -> Option<(i64, i64)> {
     let path = zapper_lib::catalog::db::db_path();
@@ -526,8 +796,11 @@ fn ffprobe(path: &str) -> Result<Probe, String> {
     Ok(Probe { streams, duration })
 }
 
-/// The clock track's cues as seconds of the day, in order.
-fn clock_cues(path: &str) -> Result<Vec<i64>, String> {
+/// The clock track's cues as seconds of the day, in order. `slack`: how far
+/// one cue may step back. A file that runs through the 20-second fixture's
+/// loop (where its timestamps start over) may show a second twice there; a
+/// provider's stream has no such loop, so the first check allows none.
+fn clock_cues(path: &str, slack: i64) -> Result<Vec<i64>, String> {
     let out = Command::new(zapper_lib::harness::tool("ffmpeg"))
         .args([
             "-v", "error", "-nostdin", "-i", path, "-map", "0:s:0", "-c", "copy", "-f", "ass", "-",
@@ -547,7 +820,7 @@ fn clock_cues(path: &str) -> Result<Vec<i64>, String> {
     if cues.is_empty() {
         return Err(format!("no clock cues in {path}"));
     }
-    if cues.windows(2).any(|w| w[1] < w[0] && w[0] - w[1] < 43_000) {
+    if cues.windows(2).any(|w| w[0] - w[1] > slack && w[0] - w[1] < 43_000) {
         return Err(format!("the clock in {path} runs backwards"));
     }
     Ok(cues)

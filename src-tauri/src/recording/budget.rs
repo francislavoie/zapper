@@ -57,6 +57,13 @@ impl Slots {
 /// service is holding open right now, not counting the one about to open.
 pub trait Budget: Send + Sync {
     fn check(&self, own_active: usize) -> Pin<Box<dyn Future<Output = Slots> + Send + '_>>;
+
+    /// How many streams the account allows, where that is known: what
+    /// conflicts between scheduled recordings are judged against
+    /// (`sharing::conflicts`). Unknown by default.
+    fn max(&self) -> Pin<Box<dyn Future<Output = Option<u32>> + Send + '_>> {
+        Box::pin(async { None })
+    }
 }
 
 /// The decision itself, apart from how the numbers were learnt: the
@@ -104,6 +111,17 @@ impl Budget for SourceBudget {
             // the service runs.
             let declared = crate::catalog::settings::load_or_default().simultaneous_streams;
             decide(connections::look(&source, declared).await.limit(), own_active)
+        })
+    }
+
+    fn max(&self) -> Pin<Box<dyn Future<Output = Option<u32>> + Send + '_>> {
+        Box::pin(async move {
+            let source = Source::load().ok()?;
+            if matches!(source, Source::Tvheadend(_)) {
+                return None;
+            }
+            let declared = crate::catalog::settings::load_or_default().simultaneous_streams;
+            connections::look_cached(&source, declared).await.max
         })
     }
 }

@@ -42,6 +42,7 @@ gui = [
 # file against libavformat (see build.rs). Not in the app's build.
 server = [
     "dep:axum",
+    "dep:bytes",
     "dep:cc",
     "dep:getrandom",
     "dep:libc",
@@ -171,6 +172,9 @@ libmpv2-sys = { version = "4", optional = true }
 # The updater's check of a downloaded package against the release's
 # SHA256SUMS. Already in the tree through Tauri; named here so it is ours.
 sha2 = "0.10"
+# The chunks a shared connection hands to each recording on it
+# (`recording::hub`). Already in the tree under reqwest and hyper.
+bytes = { version = "1", optional = true }
 # The recording service's API token. Already in the tree under rustls.
 getrandom = { version = "0.3", optional = true }
 # zapper-server's HTTP API (MIT), on the hyper and tower the HTTP client

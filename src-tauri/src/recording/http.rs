@@ -169,20 +169,33 @@ async fn status(State(s): State<Shared>) -> impl IntoResponse {
 }
 
 async fn list(State(s): State<Shared>) -> Result<impl IntoResponse, ApiError> {
-    s.list().map(Json).map_err(bad)
+    let mut list = s.list().map_err(bad)?;
+    s.add_conflicts(&mut list, s.account_max().await);
+    Ok(Json(list))
 }
 
 async fn one(State(s): State<Shared>, Path(id): Path<i64>) -> Result<impl IntoResponse, ApiError> {
-    s.get(id).map(Json).map_err(bad)
+    let mut r = s.get(id).map_err(bad)?;
+    s.add_conflicts(std::slice::from_mut(&mut r), s.account_max().await);
+    Ok(Json(r))
 }
 
 async fn schedule(
     State(s): State<Shared>,
     Json(req): Json<ScheduleRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    s.schedule(req)
-        .map(|r| (StatusCode::CREATED, Json(r)))
-        .map_err(bad)
+    let mut r = s.schedule(req).map_err(bad)?;
+    s.add_conflicts(std::slice::from_mut(&mut r), s.account_max().await);
+    Ok((StatusCode::CREATED, Json(r)))
+}
+
+/// The conflicts a recording would bring, before it is scheduled.
+async fn preview(
+    State(s): State<Shared>,
+    Json(req): Json<ScheduleRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let max = s.account_max().await;
+    s.preview(&req, max).map(Json).map_err(bad)
 }
 
 async fn cancel(State(s): State<Shared>, Path(id): Path<i64>) -> Result<Response, ApiError> {
@@ -363,6 +376,7 @@ pub fn router(server: Shared) -> Router {
     let authed = Router::new()
         .route("/api/status", get(status))
         .route("/api/recordings", get(list).post(schedule))
+        .route("/api/recordings/preview", post(preview))
         .route("/api/recordings/{id}", get(one).delete(delete))
         .route("/api/recordings/{id}/cancel", post(cancel))
         .route("/api/settings", get(settings).put(set_settings))
@@ -1316,6 +1330,93 @@ mod tests {
         .await;
         assert_eq!(st, StatusCode::OK);
         assert_eq!(body["cancelled"], true);
+    }
+
+    /// An account of one stream, which nothing else uses.
+    struct OneStream;
+    impl Budget for OneStream {
+        fn check(
+            &self,
+            _own: usize,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Slots> + Send + '_>> {
+            Box::pin(async { Slots::Free })
+        }
+        fn max(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<u32>> + Send + '_>> {
+            Box::pin(async { Some(1) })
+        }
+    }
+
+    #[tokio::test]
+    async fn conflicts_on_another_channel_are_shown_before_and_after_scheduling() {
+        let d = std::env::temp_dir().join(format!("zapper-http-{}-conflicts", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let cfg = ServerConfig::default();
+        let path = d.join("server.json");
+        config::save_to(&path, &cfg).unwrap();
+        let s = Server::new(store::open_in_memory().unwrap(), cfg, path, APP.into(), Box::new(OneStream));
+        // Padding of 1 min before and 5 after, the defaults.
+        let eight = now() + 3 * 3600;
+        let body = |stream: i64, title: &str, start: i64, stop: i64| {
+            Some(serde_json::json!({
+                "streamId": stream, "title": title, "start": start, "stop": stop,
+                "channelName": format!("Channel {stream}"), "backupStreamId": stream
+            }))
+        };
+        let post = |uri: &str, b| req_body("POST", uri, HOME, false, Some(APP), b);
+        let (st, _) = call(&s, post("/api/recordings", body(7, "Film", eight, eight + 3600))).await;
+        assert_eq!(st, StatusCode::CREATED);
+
+        // The next programme on the same channel shares the connection: no
+        // conflict.
+        let (st, c) = call(
+            &s,
+            post("/api/recordings/preview", body(7, "Talk", eight + 3600, eight + 7200)),
+        )
+        .await;
+        assert_eq!((st, c), (StatusCode::OK, serde_json::json!([])));
+
+        // On another channel it would take the film's padding after, and
+        // lose its own padding before.
+        let (_, c) = call(
+            &s,
+            post("/api/recordings/preview", body(8, "Match", eight + 3600, eight + 7200)),
+        )
+        .await;
+        let kinds: Vec<(&str, &str, &str, i64)> = c
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| {
+                (
+                    c["title"].as_str().unwrap(),
+                    c["kind"].as_str().unwrap(),
+                    c["with"].as_str().unwrap(),
+                    c["secs"].as_i64().unwrap(),
+                )
+            })
+            .collect();
+        assert!(kinds.contains(&("Film", "cutEnd", "Match", 300)), "{c}");
+        assert!(kinds.contains(&("Match", "lateStart", "Film", 60)), "{c}");
+        assert!(c.as_array().unwrap().iter().all(|c| c["streams"] == 1));
+
+        // Scheduled, the list says the same on each row.
+        let (st, m) = call(&s, post("/api/recordings", body(8, "Match", eight + 3600, eight + 7200))).await;
+        assert_eq!(st, StatusCode::CREATED);
+        assert_eq!(m["conflicts"][0]["kind"], "lateStart");
+        let (_, list) = call(&s, req("GET", "/api/recordings", HOME, false, Some(APP))).await;
+        let film = list.as_array().unwrap().iter().find(|r| r["title"] == "Film").unwrap();
+        assert_eq!(film["conflicts"][0]["kind"], "cutEnd");
+        assert_eq!(film["conflicts"][0]["with"], "Match");
+
+        // Inside the film altogether: it cannot be recorded.
+        let (_, c) = call(
+            &s,
+            post("/api/recordings/preview", body(9, "Short", eight + 600, eight + 1200)),
+        )
+        .await;
+        assert_eq!(c[0]["title"], "Short");
+        assert_eq!(c[0]["kind"], "missed");
     }
 
     #[tokio::test]

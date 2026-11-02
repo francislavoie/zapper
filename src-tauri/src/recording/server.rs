@@ -3,9 +3,9 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 use rusqlite::{Connection, OptionalExtension};
@@ -13,14 +13,16 @@ use tokio::sync::{watch, Notify};
 
 use super::access::Access;
 use super::api::{
-    ActiveDto, NetworkDto, NetworkSettingsDto, RecordingDto, RecordingSettingsDto, RecordingState,
-    ScheduleRequest, ShutdownRequest, StatusDto, API_VERSION,
+    ActiveDto, ConflictDto, ConflictKind, NetworkDto, NetworkSettingsDto, RecordingDto,
+    RecordingSettingsDto, RecordingState, ScheduleRequest, ShutdownRequest, StatusDto, API_VERSION,
 };
 use super::budget::Budget;
 use super::config::{self, NetworkConfig, ServerConfig};
+use super::hub::Hubs;
 use super::listen::{self, Listening};
 use super::naming::{self, Programme};
-use super::schedule::{busy, plan, sleep_for, Busy};
+use super::schedule::{busy, plan, sleep_for, window, Busy};
+use super::sharing::{self, Loss, Planned};
 use super::{capture, http, lifecycle, now, store, tls};
 use crate::localtime::Civil;
 
@@ -42,10 +44,13 @@ pub struct Server {
     config_path: PathBuf,
     pub token: String,
     live: Mutex<HashMap<i64, Live>>,
-    /// Streams this service holds open right now.
-    pub streams_open: AtomicUsize,
+    /// The service's connections to the provider, one per feed, shared by
+    /// the recordings on that feed.
+    pub hubs: Arc<Hubs>,
     wake: Notify,
     pub budget: Box<dyn Budget>,
+    /// How many streams the account allows, and when that was asked.
+    account_max: Mutex<Option<(Instant, Option<u32>)>>,
     /// The sign-in password, the devices signed in, failed sign-ins.
     pub access: Access,
     /// The listeners, while the API is served; one change of network
@@ -82,9 +87,10 @@ impl Server {
             config_path,
             token,
             live: Mutex::new(HashMap::new()),
-            streams_open: AtomicUsize::new(0),
+            hubs: Hubs::new(),
             wake: Notify::new(),
             budget,
+            account_max: Mutex::new(None),
             listening: tokio::sync::Mutex::new(None),
             listen_error: Mutex::new(None),
             shutdown: Mutex::new(None),
@@ -432,8 +438,120 @@ impl Server {
         }
     }
 
+    /// Connections to the provider this service holds open right now.
     pub fn open_streams(&self) -> usize {
-        self.streams_open.load(Ordering::SeqCst)
+        self.hubs.open_count()
+    }
+
+    /// Ends the recordings on the connection to `feed` when, at `now`, they
+    /// are all past their programme's end: `title` needs the connection
+    /// (sharing, rule 3). Each one keeps what it recorded and says why it
+    /// ended early.
+    pub fn end_padding(&self, feed: i64, title: &str, now: i64) {
+        let Some(riders) = self.hubs.doom(feed, now) else {
+            return;
+        };
+        for r in riders {
+            self.note(
+                r.id,
+                &format!(
+                    "ended {} early for “{title}” on another channel: its padding after gave way to that programme's start, as the account had no other connection to spare",
+                    minutes(r.until - now)
+                ),
+            );
+            self.live(|m| {
+                if let Some(l) = m.get(&r.id) {
+                    let _ = l.stop.send(true);
+                }
+            });
+        }
+    }
+
+    // ------------------------------------------------------------ conflicts
+
+    /// How many streams the account allows, asked at most every ten
+    /// minutes: it is the provider's setting, and rarely changes.
+    pub async fn account_max(&self) -> Option<u32> {
+        const FRESH: Duration = Duration::from_secs(10 * 60);
+        if let Some((at, max)) = *self.account_max.lock().unwrap_or_else(|e| e.into_inner()) {
+            if at.elapsed() < FRESH {
+                return max;
+            }
+        }
+        let max = self.budget.max().await;
+        *self.account_max.lock().unwrap_or_else(|e| e.into_inner()) = Some((Instant::now(), max));
+        max
+    }
+
+    /// The recordings that may still need a connection, as the sharing
+    /// rules plan them, and their titles.
+    fn planned(&self, t: i64) -> Result<(Vec<Planned>, HashMap<i64, String>)> {
+        let mut plans = Vec::new();
+        let mut titles = HashMap::new();
+        for r in self.db(store::list)? {
+            let (from, until) = window(r.start, r.stop, r.pad_before, r.pad_after);
+            if !matches!(r.state, RecordingState::Scheduled | RecordingState::Recording) || until <= t {
+                continue;
+            }
+            plans.push(Planned {
+                id: r.id,
+                feed: r.stream_id,
+                from,
+                start: r.start,
+                stop: r.stop,
+                until,
+            });
+            titles.insert(r.id, r.title);
+        }
+        Ok((plans, titles))
+    }
+
+    /// Fills in each recording's conflicts with the others, on an account
+    /// of `max` streams (none when unknown).
+    pub fn add_conflicts(&self, recs: &mut [RecordingDto], max: Option<u32>) {
+        let Some(max) = max else { return };
+        let t = now();
+        let Ok((plans, titles)) = self.planned(t) else {
+            return;
+        };
+        for c in sharing::conflicts(&plans, max as usize, t) {
+            if let Some(r) = recs.iter_mut().find(|r| r.id == c.id) {
+                r.conflicts.push(conflict_dto(&c, &titles, max, false));
+            }
+        }
+    }
+
+    /// The conflicts recording `req` would bring, its own and those it
+    /// would cause, on an account of `max` streams.
+    pub fn preview(&self, req: &ScheduleRequest, max: Option<u32>) -> Result<Vec<ConflictDto>> {
+        let Some(max) = max else {
+            return Ok(Vec::new());
+        };
+        let t = now();
+        let (mut plans, mut titles) = self.planned(t)?;
+        if self.db(|c| store::find(c, req.stream_id, req.start))?.is_some() {
+            return Ok(Vec::new());
+        }
+        // Ids start at 1 in the store: 0 is the one asked about.
+        const NEW: i64 = 0;
+        let cfg = self.config();
+        let pad_before = req.pad_before.unwrap_or(cfg.pad_before).clamp(0, 6 * 3600);
+        let pad_after = req.pad_after.unwrap_or(cfg.pad_after).clamp(0, 6 * 3600);
+        let (from, until) = window(req.start, req.stop, pad_before, pad_after);
+        plans.push(Planned {
+            id: NEW,
+            feed: req.stream_id,
+            from,
+            start: req.start,
+            stop: req.stop,
+            until,
+        });
+        titles.insert(NEW, req.title.clone());
+        Ok(sharing::conflicts(&plans, max as usize, t)
+            .iter()
+            .filter(|c| c.id == NEW || c.with == NEW)
+            .map(|c| conflict_dto(c, &titles, max, c.id != NEW))
+            .collect())
     }
 
     // ------------------------------------------------------------ listening
@@ -639,6 +757,38 @@ impl Server {
             bail!("no such device");
         }
         Ok(self.network())
+    }
+}
+
+fn conflict_dto(
+    c: &sharing::Conflict,
+    titles: &HashMap<i64, String>,
+    max: u32,
+    other: bool,
+) -> ConflictDto {
+    let title = |id: i64| titles.get(&id).cloned().unwrap_or_default();
+    let (kind, secs) = match c.loss {
+        Loss::CutEnd { secs } => (ConflictKind::CutEnd, secs),
+        Loss::LateStart { secs } => (ConflictKind::LateStart, secs),
+        Loss::LostStart { secs } => (ConflictKind::LostStart, secs),
+        Loss::Missed => (ConflictKind::Missed, 0),
+    };
+    ConflictDto {
+        title: title(c.id),
+        with: title(c.with),
+        kind,
+        secs,
+        streams: max,
+        other,
+    }
+}
+
+/// "3 min", "40 s": how early a recording ended.
+fn minutes(secs: i64) -> String {
+    if secs < 60 {
+        format!("{} s", secs.max(0))
+    } else {
+        format!("{} min", (secs + 59) / 60)
     }
 }
 

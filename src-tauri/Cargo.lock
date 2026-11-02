@@ -5463,6 +5463,7 @@ dependencies = [
  "argon2",
  "axum",
  "block2",
+ "bytes",
  "cairo-rs",
  "cc",
  "dbus",
