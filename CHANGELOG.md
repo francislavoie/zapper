@@ -42,6 +42,7 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
 
 ### Fixed
 
+- In a browser, zapper's tab and bookmarks show its icon, and so does a phone's home screen.
 - Stopping a recording no longer leaves its red dot up until the next look a while later: it
   turns grey at once ("Saving…") while the recording is saved into its file, and the list is
   followed every two seconds while anything records or saves. An update or a restart of the
