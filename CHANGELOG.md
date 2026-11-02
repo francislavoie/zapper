@@ -40,6 +40,8 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
 - `zapper-server --import-account`, `--set-password` and `--network on|off` set up a service with
   no app beside it: the provider account from an `account.json`, the password other devices sign
   in with (read from standard input, never the command line), and network access.
+- macOS: Settings → Recording → Install (and `zapper-server --install-service`) installs the
+  recording service as a LaunchAgent, which starts it when you log in and again after a crash.
 
 ### Changed
 

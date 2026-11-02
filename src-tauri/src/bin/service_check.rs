@@ -9,8 +9,9 @@
 //! On a scratch `ZAPPER_HOME` (never the account on this machine), which the
 //! installed service is handed as well, on a free port. It installs a real
 //! service for this user for the few seconds the check takes: on Windows the
-//! sign-in task, on Linux the systemd user unit, under their usual names, so
-//! it refuses to run while one is already installed rather than replace it.
+//! sign-in task, on macOS the LaunchAgent, on Linux the systemd user unit,
+//! under their usual names, so it refuses to run while one is already
+//! installed rather than replace it.
 //! The `zapper-server` it installs is the one beside this executable.
 
 use std::path::PathBuf;

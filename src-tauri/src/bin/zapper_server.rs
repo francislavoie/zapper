@@ -430,9 +430,9 @@ fn confirm(line: &str) -> bool {
     }
 }
 
-/// `--install-service` / `--remove-service`: the systemd user unit or the
-/// Windows sign-in task, with this executable, as Settings › Recording
-/// would set it up.
+/// `--install-service` / `--remove-service`: the systemd user unit, the
+/// Windows sign-in task or the macOS LaunchAgent, with this executable, as
+/// Settings › Recording would set it up.
 fn manage_service(install: bool) -> Result<()> {
     use zapper_lib::recording::service;
     if install {
@@ -620,11 +620,14 @@ mod console {
     }
 }
 
-/// Elsewhere a program always has its terminal's, or the journal's.
+/// Elsewhere a program always has its terminal's, or the journal's; the
+/// macOS LaunchAgent says not to copy the log there
+/// (`ZAPPER_LOG_STDERR=0`), since launchd keeps that file without rotating
+/// it (recording::service::launchd).
 #[cfg(not(windows))]
 mod console {
     pub fn attach() -> bool {
-        true
+        std::env::var_os("ZAPPER_LOG_STDERR").is_none_or(|v| v != "0")
     }
 }
 
