@@ -121,6 +121,15 @@ impl Fallback {
         self.current
     }
 
+    /// Rides a connection the service already has open on `feed` (another
+    /// recording's): it is the current feed from now on. Nothing failed, so
+    /// it is not a switch and the flap guard does not count it.
+    pub fn ride(&mut self, feed: usize) {
+        if feed < self.feeds {
+            self.current = feed;
+        }
+    }
+
     /// The connection to the current feed ended at `now` after delivering
     /// data for `delivered_secs` (0: none at all).
     pub fn failed(&mut self, now: i64, why: Failure, delivered_secs: i64) -> Next {
@@ -365,6 +374,19 @@ mod tests {
         // and the backup's old failures are forgotten.
         let n = f.failed(700, Failure::Ended, 5);
         assert_eq!((n.feed, n.at), (1, 700));
+    }
+
+    #[test]
+    fn riding_another_recordings_connection_is_not_a_switch() {
+        let mut f = Fallback::new(2);
+        f.ride(1);
+        assert_eq!(f.current(), 1);
+        // Three real switches are still allowed before the flap guard.
+        assert_eq!(f.failed(0, Failure::Ended, 20).feed, 0);
+        assert_eq!(f.failed(10, REFUSED, 0).feed, 1);
+        assert_eq!(f.failed(20, REFUSED, 0).feed, 0);
+        f.ride(5);
+        assert_eq!(f.current(), 0, "no such feed: nothing changes");
     }
 
     #[test]

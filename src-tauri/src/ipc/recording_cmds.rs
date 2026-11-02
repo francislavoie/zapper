@@ -4,7 +4,8 @@
 //! (`recording::service`) runs `systemctl`, on a blocking thread.
 
 use crate::recording::api::{
-    NetworkDto, NetworkSettingsDto, RecordingDto, RecordingSettingsDto, ScheduleRequest, StatusDto,
+    ConflictDto, NetworkDto, NetworkSettingsDto, RecordingDto, RecordingSettingsDto,
+    ScheduleRequest, StatusDto,
 };
 use crate::recording::client::Client;
 use crate::recording::service::{self, ServiceStatusDto};
@@ -25,6 +26,13 @@ pub async fn recordings() -> Result<Vec<RecordingDto>, String> {
 #[tauri::command]
 pub async fn record_programme(request: ScheduleRequest) -> Result<RecordingDto, String> {
     client()?.schedule(&request).await.map_err(words)
+}
+
+/// The conflicts recording a programme would bring. A service too old to
+/// say has none to tell.
+#[tauri::command]
+pub async fn preview_recording(request: ScheduleRequest) -> Result<Vec<ConflictDto>, String> {
+    Ok(client()?.preview(&request).await.unwrap_or_default())
 }
 
 #[tauri::command]

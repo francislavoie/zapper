@@ -141,6 +141,7 @@ fn from_row(r: &Row<'_>) -> rusqlite::Result<RecordingDto> {
         error: r.get(15)?,
         folder: r.get(16)?,
         waiting: None,
+        conflicts: Vec::new(),
     })
 }
 

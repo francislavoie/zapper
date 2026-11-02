@@ -9,8 +9,8 @@ use anyhow::{anyhow, Result};
 use serde::de::DeserializeOwned;
 
 use super::api::{
-    ErrorDto, NetworkDto, NetworkSettingsDto, PasswordRequest, RecordingDto, RecordingSettingsDto,
-    ScheduleRequest, ShutdownRequest, StatusDto, VersionDto,
+    ConflictDto, ErrorDto, NetworkDto, NetworkSettingsDto, PasswordRequest, RecordingDto,
+    RecordingSettingsDto, ScheduleRequest, ShutdownRequest, StatusDto, VersionDto,
 };
 
 pub struct Client {
@@ -101,6 +101,16 @@ impl Client {
     pub async fn schedule(&self, req: &ScheduleRequest) -> Result<RecordingDto> {
         self.send(self.http.post(self.url("/api/recordings")).json(req))
             .await
+    }
+
+    /// The conflicts recording `req` would bring, before it is scheduled.
+    pub async fn preview(&self, req: &ScheduleRequest) -> Result<Vec<ConflictDto>> {
+        self.send(
+            self.http
+                .post(self.url("/api/recordings/preview"))
+                .json(req),
+        )
+        .await
     }
 
     /// Cancels a scheduled recording, or stops one being captured (keeping

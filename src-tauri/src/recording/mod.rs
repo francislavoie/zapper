@@ -3,7 +3,8 @@
 //!
 //! The pure parts are in every build and unit-tested on their own:
 //! [`naming`] (file names from a pattern), [`budget`] (whether the
-//! account has a connection to spare), [`fallback`] (when to switch
+//! account has a connection to spare), [`sharing`] (how recordings share
+//! the account's connections, and the conflicts that follow), [`fallback`] (when to switch
 //! between a channel's main and backup feeds), [`schedule`] (what to start,
 //! stop or give up on at a given moment), [`clock`] (the wall-clock subtitle
 //! track), [`lifecycle`] (when the service stops or restarts itself).
@@ -12,7 +13,7 @@
 //! [`service`] installs the service as a systemd user unit.
 //!
 //! The service itself — the store of recordings, the capture loop, the
-//! remuxer, the HTTP server with its listeners ([`listen`]), who may use it
+//! connections it shares between recordings ([`hub`]), the remuxer, the HTTP server with its listeners ([`listen`]), who may use it
 //! ([`access`]), the provider account a signed-in browser may change
 //! ([`account`]), its HTTPS certificate ([`tls`]), and the web interface it
 //! serves ([`web`]) with the catalogue API that interface reads ([`browse`])
@@ -27,6 +28,7 @@ pub mod fallback;
 pub mod lifecycle;
 pub mod naming;
 pub mod schedule;
+pub mod sharing;
 pub mod service;
 pub mod store;
 
@@ -40,6 +42,8 @@ pub mod browse;
 pub mod capture;
 #[cfg(feature = "server")]
 pub mod http;
+#[cfg(feature = "server")]
+pub mod hub;
 #[cfg(feature = "server")]
 pub mod listen;
 #[cfg(feature = "server")]
