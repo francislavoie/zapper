@@ -232,7 +232,7 @@ pub fn search(
     // `now < max(start, stop)`.
     let sql = format!(
         "WITH placed AS (
-             SELECT e.start, e.stop, e.title, e.description, ch.stream_id AS sid,
+             SELECT e.start, e.stop, e.title, e.description, e.season, e.episode, ch.stream_id AS sid,
                     CASE WHEN e.start > ?2 THEN 1 WHEN e.stop > ?2 THEN 0 ELSE 2 END AS tier,
                     ROW_NUMBER() OVER (
                         PARTITION BY e.rowid
@@ -251,7 +251,7 @@ pub fn search(
                         AND (ch.archive_days IS NULL
                              OR e.start >= ?2 - ch.archive_days * 86400)))
          )
-         SELECT {CHANNEL_COLUMNS}, p.start, p.stop, p.title, p.description, p.tier
+         SELECT {CHANNEL_COLUMNS}, p.start, p.stop, p.title, p.description, p.tier, p.season, p.episode
          FROM placed p
          JOIN channels ch ON ch.stream_id = p.sid
          {QUALITY_JOIN}
@@ -272,6 +272,8 @@ pub fn search(
                 stop: row.get(at + 1)?,
                 title: row.get(at + 2)?,
                 description: row.get(at + 3)?,
+                season: row.get(at + 5)?,
+                episode: row.get(at + 6)?,
             };
             let airing = match row.get::<_, i64>(at + 4)? {
                 0 => AiringDto::Live,

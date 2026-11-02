@@ -11,6 +11,8 @@ use quick_xml::{Reader, XmlVersion};
 use rusqlite::{params, Connection};
 use std::io::BufRead;
 
+use super::episode::Candidates;
+
 // quick-xml 0.42 hands back `&str` for names and attribute keys, and it emits
 // `&amp;`-style references as their own `GeneralRef` events rather than
 // unescaping them into the surrounding text. Text is therefore accumulated
@@ -64,6 +66,16 @@ pub enum ChannelNames {
     Collect { replace: bool },
 }
 
+/// How a guide's programme is written into the mirror, by every guide
+/// (XMLTV here, SiliconDust's in `hdhomerun::guide`): a programme seen again
+/// replaces what was known of it, its numbers included, so a correction in
+/// the guide is a correction here.
+pub const UPSERT: &str = "INSERT INTO epg (channel_ref, start, stop, title, description, season, episode)
+     VALUES (?1,?2,?3,?4,?5,?6,?7)
+     ON CONFLICT(channel_ref, start) DO UPDATE SET
+       stop=excluded.stop, title=excluded.title, description=excluded.description,
+       season=excluded.season, episode=excluded.episode";
+
 pub fn parse_xmltv<R: BufRead>(src: R, conn: &Connection) -> Result<usize> {
     parse_xmltv_into(src, conn, ChannelNames::Ignore)
 }
@@ -92,17 +104,15 @@ pub fn parse_xmltv_into<R: BufRead>(
     };
     // The `<channel id>` whose display names are being read, if any.
     let mut in_channel: Option<String> = None;
-    let mut stmt = tx.prepare(
-        "INSERT INTO epg (channel_ref, start, stop, title, description)
-         VALUES (?1,?2,?3,?4,?5)
-         ON CONFLICT(channel_ref, start) DO UPDATE SET
-           stop=excluded.stop, title=excluded.title, description=excluded.description",
-    )?;
+    let mut stmt = tx.prepare(UPSERT)?;
 
     let mut buf = Vec::new();
     let mut count = 0usize;
     let (mut chan, mut start, mut stop) = (String::new(), 0i64, 0i64);
     let (mut title, mut desc) = (String::new(), None::<String>);
+    let mut episode = Candidates::default();
+    // The `system` of the `<episode-num>` being read.
+    let mut episode_system: Option<String> = None;
     let mut field: Option<&'static str> = None;
     let mut acc = String::new();
     let mut in_programme = false;
@@ -125,6 +135,7 @@ pub fn parse_xmltv_into<R: BufRead>(
                 in_programme = true;
                 title.clear();
                 desc = None;
+                episode = Candidates::default();
                 for a in e.attributes().flatten() {
                     let v = a.normalized_value(XML)?.into_owned();
                     match a.key.as_ref() {
@@ -139,6 +150,15 @@ pub fn parse_xmltv_into<R: BufRead>(
                 field = match e.name().as_ref() {
                     "title" => Some("title"),
                     "desc" => Some("desc"),
+                    "episode-num" => {
+                        episode_system = e
+                            .attributes()
+                            .flatten()
+                            .find(|a| a.key.as_ref() == "system")
+                            .map(|a| a.normalized_value(XML).map(|v| v.into_owned()))
+                            .transpose()?;
+                        Some("episode-num")
+                    }
                     _ => None,
                 };
                 acc.clear();
@@ -156,7 +176,16 @@ pub fn parse_xmltv_into<R: BufRead>(
             Event::End(e) => match e.name().as_ref() {
                 "programme" => {
                     if !chan.is_empty() && start > 0 {
-                        stmt.execute(params![chan, start, stop, title, desc])?;
+                        let ep = episode.result();
+                        stmt.execute(params![
+                            chan,
+                            start,
+                            stop,
+                            title,
+                            desc,
+                            ep.and_then(|e| e.season),
+                            ep.map(|e| e.episode)
+                        ])?;
                         count += 1;
                     }
                     in_programme = false;
@@ -164,6 +193,11 @@ pub fn parse_xmltv_into<R: BufRead>(
                 }
                 "title" if field == Some("title") => {
                     title = acc.trim().to_owned();
+                    acc.clear();
+                    field = None;
+                }
+                "episode-num" if field == Some("episode-num") => {
+                    episode.add(episode_system.as_deref(), &acc);
                     acc.clear();
                     field = None;
                 }
@@ -388,6 +422,54 @@ mod tests {
         let replace = ChannelNames::Collect { replace: true };
         parse_xmltv_into(WITH_CHANNELS.as_bytes(), &c, replace).unwrap();
         assert!(!names(&c).iter().any(|(id, _)| id == "old"));
+    }
+
+    #[test]
+    fn episode_numbers_are_kept_when_they_are_clean() {
+        let xml = r#"<tv>
+  <programme start="20260908010000 +0000" stop="20260908020000 +0000" channel="a">
+    <title>Harbour Lights</title>
+    <episode-num system="dd_progid">EP01234567.0012</episode-num>
+    <episode-num system="xmltv_ns">1.3/10.</episode-num>
+    <episode-num system="onscreen">S02E04</episode-num>
+  </programme>
+  <programme start="20260908020000 +0000" stop="20260908030000 +0000" channel="a">
+    <title>Quayside</title><episode-num>3x05</episode-num>
+  </programme>
+  <programme start="20260908030000 +0000" stop="20260908040000 +0000" channel="a">
+    <title>The Evening News</title><episode-num system="onscreen">Tuesday</episode-num>
+  </programme>
+  <programme start="20260908040000 +0000" stop="20260908050000 +0000" channel="a">
+    <title>Annual</title><episode-num system="xmltv_ns">2025.4.</episode-num>
+  </programme>
+</tv>"#;
+        let c = open_in_memory().unwrap();
+        parse_xmltv(xml.as_bytes(), &c).unwrap();
+        let got: Vec<(String, Option<u32>, Option<u32>)> = c
+            .prepare("SELECT title, season, episode FROM epg ORDER BY start")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("Harbour Lights".to_owned(), Some(2), Some(4)),
+                ("Quayside".to_owned(), Some(3), Some(5)),
+                ("The Evening News".to_owned(), None, None),
+                ("Annual".to_owned(), None, None),
+            ]
+        );
+
+        // A later guide without the numbers takes them away again.
+        let plain = r#"<tv><programme start="20260908010000 +0000" stop="20260908020000 +0000" channel="a">
+            <title>Harbour Lights</title></programme></tv>"#;
+        parse_xmltv(plain.as_bytes(), &c).unwrap();
+        let e: Option<u32> = c
+            .query_row("SELECT episode FROM epg WHERE title = 'Harbour Lights'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(e, None);
     }
 
     #[test]

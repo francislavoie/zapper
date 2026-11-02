@@ -10,6 +10,12 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
 
 ## [Unreleased]
 
+### Added
+
+- Recordings of a series are named by season and episode (`Show - S02E05 - …`) when the guide
+  numbers its episodes, as XMLTV guides (Xtream servers', Tvheadend's, a playlist's) and
+  SiliconDust's guide for HDHomeRun often do. The programme menu shows the number too.
+
 ## [0.2.1] - 2026-11-01
 
 ### Added

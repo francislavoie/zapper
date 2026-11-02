@@ -5,6 +5,7 @@ import {
   canRecord,
   conflictLosesProgramme,
   conflictText,
+  episodeLabel,
   groupRecordings,
   markKey,
   marks,
@@ -59,6 +60,32 @@ test("a schedule request names the channel and the programme", () => {
     start: 10,
     stop: 20,
   });
+});
+
+test("the guide's season and episode go along when it has them", () => {
+  const ch = { streamId: 9, name: "ONE HD", cleanName: "One HD" };
+  const p = { start: 10, stop: 20, title: "Harbour Lights", description: null };
+  assert.deepEqual(scheduleRequest(ch, { ...p, season: 2, episode: 4 }), {
+    streamId: 9,
+    channelName: "One HD",
+    title: "Harbour Lights",
+    start: 10,
+    stop: 20,
+    season: 2,
+    episode: 4,
+  });
+  const e = scheduleRequest(ch, { ...p, episode: 12 });
+  assert.equal(e.episode, 12);
+  assert.ok(!("season" in e));
+  // A season alone names nothing.
+  assert.ok(!("season" in scheduleRequest(ch, { ...p, season: 3 })));
+});
+
+test("episode labels read as recordings are named", () => {
+  assert.equal(episodeLabel({ season: 2, episode: 4 }), "S02E04");
+  assert.equal(episodeLabel({ season: null, episode: 12 }), "E12");
+  assert.equal(episodeLabel({ season: 3 }), "");
+  assert.equal(episodeLabel({}), "");
 });
 
 test("the list groups by state, soonest coming up and newest recorded first", () => {

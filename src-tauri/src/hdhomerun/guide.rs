@@ -54,9 +54,17 @@ pub struct GuideProgramme {
     pub episode_title: Option<String>,
     #[serde(rename = "Synopsis", default)]
     pub synopsis: Option<String>,
+    /// `S03E05`, when the listing knows it.
+    #[serde(rename = "EpisodeNumber", default)]
+    pub episode_number: Option<String>,
 }
 
 impl GuideProgramme {
+    /// The season and episode, read as an XMLTV onscreen number would be.
+    pub fn episode(&self) -> Option<crate::catalog::episode::Episode> {
+        crate::catalog::episode::from_onscreen(self.episode_number.as_deref()?)
+    }
+
     /// The episode's own title and the synopsis, as one description: the
     /// mirror has one text field beside the title, and "Saturday Morning —
     /// Local news & weather." reads better than either half alone.
@@ -135,12 +143,7 @@ pub fn land(conn: &rusqlite::Connection, channels: &[GuideChannel]) -> Result<us
     let mut n = 0;
     {
         // The XMLTV parser's statement: the same table, the same upsert.
-        let mut stmt = tx.prepare_cached(
-            "INSERT INTO epg (channel_ref, start, stop, title, description)
-             VALUES (?1,?2,?3,?4,?5)
-             ON CONFLICT(channel_ref, start) DO UPDATE SET
-               stop=excluded.stop, title=excluded.title, description=excluded.description",
-        )?;
+        let mut stmt = tx.prepare_cached(crate::catalog::epg::UPSERT)?;
         for c in channels {
             let number = super::text(&c.guide_number);
             if number.is_empty() {
@@ -156,7 +159,9 @@ pub fn land(conn: &rusqlite::Connection, channels: &[GuideChannel]) -> Result<us
                     p.start,
                     p.end,
                     p.title.trim(),
-                    p.description()
+                    p.description(),
+                    p.episode().and_then(|e| e.season),
+                    p.episode().map(|e| e.episode)
                 ])?;
                 n += 1;
             }
@@ -208,6 +213,9 @@ mod tests {
             Some("Saturday Morning — Local news & weather.")
         );
         assert_eq!(g[0].guide[1].description(), None);
+        let ep = g[0].guide[1].episode().unwrap();
+        assert_eq!((ep.season, ep.episode), (Some(3), 5));
+        assert_eq!(g[0].guide[0].episode(), None);
         assert_eq!(latest_end(&g), Some(1_761_987_600));
     }
 

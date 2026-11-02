@@ -140,8 +140,17 @@ CREATE TABLE IF NOT EXISTS channel_quality (
 DROP TABLE IF EXISTS quality;
 "#;
 
-fn add_missing_columns(conn: &Connection) -> Result<()> {
-    for (table, column, decl) in ADDED_COLUMNS {
+/// Migration step `epg_episode`: a programme's season and episode, one-based,
+/// from the guide's `<episode-num>` (see [`crate::catalog::episode`]) or
+/// SiliconDust's `EpisodeNumber`. NULL when the guide does not say, or says
+/// it in a way that cannot be trusted; recordings then go by date.
+const EPG_EPISODE_COLUMNS: &[(&str, &str, &str)] = &[
+    ("epg", "season", "INTEGER"),
+    ("epg", "episode", "INTEGER"),
+];
+
+fn add_missing_columns(conn: &Connection, columns: &[(&str, &str, &str)]) -> Result<()> {
+    for (table, column, decl) in columns {
         let present: bool = conn
             .query_row(
                 "SELECT COUNT(*) > 0 FROM pragma_table_info(?1) WHERE name = ?2",
@@ -160,9 +169,10 @@ fn add_missing_columns(conn: &Connection) -> Result<()> {
 
 pub fn migrate(conn: &Connection) -> Result<()> {
     conn.execute_batch(SCHEMA).context("applying schema")?;
-    add_missing_columns(conn)?;
+    add_missing_columns(conn, ADDED_COLUMNS)?;
     conn.execute_batch(CHANNEL_QUALITY)
         .context("migrating channel_quality")?;
+    add_missing_columns(conn, EPG_EPISODE_COLUMNS).context("migrating epg_episode")?;
     crate::catalog::guide_search::install(conn)
 }
 
@@ -281,6 +291,26 @@ mod tests {
             .map(Result::unwrap)
             .collect();
         assert_eq!(names, ["channel_quality"]);
+    }
+
+    #[test]
+    fn a_guide_from_before_episode_numbers_gains_them() {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(
+            "CREATE TABLE epg (channel_ref TEXT NOT NULL, start INTEGER NOT NULL,
+                stop INTEGER NOT NULL, title TEXT NOT NULL, description TEXT,
+                PRIMARY KEY (channel_ref, start));
+             INSERT INTO epg VALUES ('a', 1, 2, 'Kept', NULL);",
+        )
+        .unwrap();
+        migrate(&c).unwrap();
+        migrate(&c).unwrap();
+        let (title, season, episode): (String, Option<i64>, Option<i64>) = c
+            .query_row("SELECT title, season, episode FROM epg", [], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })
+            .unwrap();
+        assert_eq!((title.as_str(), season, episode), ("Kept", None, None));
     }
 
     #[test]

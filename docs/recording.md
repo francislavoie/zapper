@@ -40,6 +40,13 @@ By default, laid out the way Jellyfin, Plex and Emby read a TV library:
 <folder>/<Show>/<Show> - 2026-11-03 20.00 (2).mkv             when the name was taken
 ```
 
+The season and episode come from the guide: an XMLTV guide's `<episode-num>` (an Xtream
+server's guide and Tvheadend's are XMLTV too), read in the `xmltv_ns` form (`1.4.` is S02E05,
+zero-based) or as printed (`S02E05`, `2x05`, `Season 2 Episode 5`, `E05`), and SiliconDust's
+`EpisodeNumber` for an HDHomeRun. A number that is not clean — two episodes (`S02E05-06`), a
+year where the season should be (`2025.4.`), two that disagree — is left out, and the file is
+named by date as it would be without one.
+
 **File names** in Settings → Recording chooses another layout, with a preview of the paths two
 example programmes would get:
 
@@ -535,8 +542,6 @@ streams}`, what recording `title` loses to `with` on another channel when the ac
 - Installing the service on macOS (a LaunchAgent); waking the computer from suspend to record
   (on Windows, a task per recording with a wake timer); recording on Windows while nobody is
   signed in.
-- Series rules ("record every episode"), and choosing the backup feed by hand.
-- Season and episode from the guide: the catalogue does not keep XMLTV's episode numbers yet, so
-  files are named by date unless a client passes them.
+- Series rules ("record every episode").
 - Joining parts whose codecs match into one file.
 - A headless package without the GUI's dependencies.

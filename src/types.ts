@@ -46,6 +46,10 @@ export interface ProgrammeDto {
   stop: number;
   title: string;
   description: string | null;
+  /** One-based, when the guide gives a clean episode number; absent
+   *  otherwise. */
+  season?: number | null;
+  episode?: number | null;
 }
 
 export interface ChannelDto {

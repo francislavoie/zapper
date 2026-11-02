@@ -11,6 +11,7 @@ import { errorMessage } from "../logic/async";
 import {
   conflictLosesProgramme,
   conflictText,
+  episodeLabel,
   groupRecordings,
   recordingStatus,
   recordingWhen,
@@ -71,10 +72,8 @@ function RecordingRow({ rec, now }: { rec: RecordingDto; now: number }) {
   const dispatch = useDispatch();
   const [confirming, setConfirming] = useState(false);
   const [notes, setNotes] = useState(false);
-  const episode =
-    rec.season != null && rec.episode != null
-      ? ` S${String(rec.season).padStart(2, "0")}E${String(rec.episode).padStart(2, "0")}`
-      : "";
+  const label = episodeLabel(rec);
+  const episode = label ? ` ${label}` : "";
   const openFolder = () =>
     backend
       .openRecordingFolder(rec.id)
