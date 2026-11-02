@@ -54,9 +54,12 @@ test("player-only actions are hidden when nothing is playing", () => {
   assert.ok(idle.includes("sync"));
   assert.ok(idle.includes("settings"));
 
-  const live = availableActions(true, { hasPrevious: true, sleeping: true, programme: true }).map(
-    (a) => a.id,
-  );
+  const live = availableActions(true, {
+    hasPrevious: true,
+    sleeping: true,
+    programme: true,
+    recordable: true,
+  }).map((a) => a.id);
   assert.ok(live.includes("compressor"));
   // Every action but signing out, which only a browser has to do.
   assert.equal(live.length, ACTIONS.length - 1);
@@ -150,6 +153,15 @@ test("every sleep length is its own palette entry, findable by typing it", () =>
 test("the sleep actions need something playing", () => {
   const idle = availableActions(false, { sleeping: true, programme: true }).map((a) => a.id);
   assert.ok(idle.every((id) => !id.startsWith("sleep")));
+});
+
+test("record is offered with something playing whose programme can be recorded", () => {
+  const ids = (playing, c) => availableActions(playing, c).map((a) => a.id);
+  assert.ok(!ids(true, {}).includes("record"));
+  assert.ok(ids(true, { recordable: true }).includes("record"));
+  assert.ok(!ids(false, { recordable: true }).includes("record"));
+  const record = ACTIONS.find((a) => a.id === "record");
+  assert.equal(record.hint, "R");
 });
 
 test("'end of this programme' needs the guide to know the end, and 'off' needs a timer", () => {

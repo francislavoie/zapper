@@ -9,7 +9,8 @@
 //
 // The choices sit in submenus, each row saying what is chosen now, so the
 // menu stays a short list over a picture it should not hide. Below them are
-// the three views of the picture, with their keys.
+// the three views of the picture, with their keys. Above them, Record: the
+// programme on now (components/PlayerRecord.tsx).
 //
 // The same menu narrowed to one submenu (`only`) is what the transport bar's
 // audio button and sleep moon open: the same choices, from a control.
@@ -28,6 +29,8 @@ import {
 import { run, useApp, useDispatch, type VideoMenu as VideoMenuState } from "../store";
 import type { PlayerOptionsDto } from "../types";
 import { ContextMenu } from "./ContextMenu";
+import { usePlayerRecord } from "../hooks/usePlayerRecord";
+import { PlayerRecordItems } from "./PlayerRecord";
 import { useSleepLeft } from "../hooks/useSleep";
 import { SleepItems, SleepSubMenu } from "./SleepMenu";
 import { CheckItem, RadioItem, SubMenu } from "./SubMenu";
@@ -44,6 +47,7 @@ export function VideoMenu({ menu, onClose }: VideoMenuProps) {
   const sleepLeft = useSleepLeft();
   const { options, player } = state;
   const playing = player.state !== "stopped";
+  const record = usePlayerRecord();
 
   /** Every choice closes the menu: it has been answered. The new state comes
    *  back from the command and is applied at once, rather than a heartbeat
@@ -92,6 +96,13 @@ export function VideoMenu({ menu, onClose }: VideoMenuProps) {
       onClose={onClose}
       takeFocus={menu.keyboard}
     >
+      {record ? (
+        <>
+          <PlayerRecordItems record={record} onClose={onClose} />
+          <div className="ctx-sep" role="separator" />
+        </>
+      ) : null}
+
       {hasAudioChoice(options) ? (
         <SubMenu label="Audio track" value={selectedLabel(options.audio) ?? undefined}>
           <AudioItems options={options} choose={choose} />

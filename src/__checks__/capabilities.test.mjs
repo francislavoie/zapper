@@ -50,7 +50,7 @@ test("a browser keeps the guide, recordings, the account, refreshing and watchin
 });
 
 test("the menu and the palette offer only what can be done here", () => {
-  const everything = { hasPrevious: true, sleeping: true, programme: true };
+  const everything = { hasPrevious: true, sleeping: true, programme: true, recordable: true };
   const desktop = ids(availableActions(true, { ...everything, capabilities: DESKTOP }));
   assert.ok(desktop.includes("quit") && desktop.includes("updates") && desktop.includes("pause"));
   assert.ok(!desktop.includes("signOut"), "nothing to sign out of in the app");
@@ -77,6 +77,7 @@ test("the menu and the palette offer only what can be done here", () => {
     "stop",
     "live",
     "sleep30",
+    "record",
   ]) {
     assert.ok(browser.includes(kept), kept);
   }

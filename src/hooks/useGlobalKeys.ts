@@ -9,11 +9,12 @@
 
 import { useEffect } from "react";
 import { backend, capabilities } from "../backend";
-import { playPrevious, runAction } from "../actions";
+import { playPrevious, recordFromPlayer, runAction } from "../actions";
 import { focusSearch, typingInto } from "../focus";
 import { exitFullscreen, toggleFullscreen } from "../fullscreen";
 import { fullscreenNow, refreshFullscreen } from "./useFullscreen";
 import { blocksPlainKey, shortcutModifier } from "../logic/keys";
+import { playerRecord } from "../logic/recordings";
 import { IS_MAC } from "../platform";
 import { run } from "../store";
 import type { State } from "../store";
@@ -178,6 +179,18 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
         return;
       }
 
+      // Record what is on: the programme the guide says is on now, on the
+      // channel playing. Already recorded, it says so rather than stopping
+      // it (the menus' Stop recording does that).
+      if ((e.key === "r" || e.key === "R") && !e.altKey) {
+        e.preventDefault();
+        void recordFromPlayer(
+          dispatch,
+          playerRecord(state.recordings, state.nowChannel, state.nowProgramme, Math.floor(Date.now() / 1000)),
+        );
+        return;
+      }
+
       switch (e.key) {
         case " ":
           e.preventDefault();
@@ -220,5 +233,8 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
     state.videoMenu,
     state.statsOpen,
     state.previousChannel,
+    state.recordings,
+    state.nowChannel,
+    state.nowProgramme,
   ]);
 }

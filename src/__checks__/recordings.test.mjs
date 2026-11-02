@@ -17,6 +17,8 @@ import {
   marks,
   padMinutes,
   padSeconds,
+  playerRecord,
+  programmeOnNow,
   POLL_BUSY_MS,
   POLL_IDLE_MS,
   POLL_OPEN_MS,
@@ -166,6 +168,49 @@ test("the title bar's indicator counts what records and lists each", () => {
 test("anything not over can be recorded", () => {
   assert.ok(canRecord({ stop: NOON + 1 }, NOON));
   assert.ok(!canRecord({ stop: NOON }, NOON));
+});
+
+test("the player records the programme on now, while it plays live", () => {
+  const news = { title: "News", start: NOON - 600, stop: NOON + 1200 };
+  assert.equal(programmeOnNow(news, null, NOON), news);
+  // Up to its very end, unlike the sleep timer's.
+  assert.equal(programmeOnNow(news, null, NOON + 1199), news);
+  assert.equal(programmeOnNow(news, null, NOON + 1200), null);
+  assert.equal(programmeOnNow({ ...news, start: NOON + 60 }, null, NOON), null);
+  assert.equal(programmeOnNow(null, null, NOON), null);
+  // A catch-up programme already aired: what the guide says is on now is
+  // not what plays.
+  const aired = { title: "Earlier", start: NOON - 7200, stop: NOON - 3600 };
+  assert.equal(programmeOnNow(news, aired, NOON), null);
+  // The channel opened for the programme on now is live.
+  assert.equal(programmeOnNow(news, news, NOON), news);
+});
+
+test("Record from the player offers the programme, or its recording", () => {
+  const ch = { streamId: 7, name: "ONE", cleanName: "One" };
+  const p = { title: "News", start: NOON, stop: NOON + 1800 };
+  assert.deepEqual(playerRecord([], ch, p, NOON + 60), { kind: "record", channel: ch, programme: p });
+  // Nothing to offer without the service, a programme, or a channel.
+  assert.equal(playerRecord(null, ch, p, NOON + 60), null);
+  assert.equal(playerRecord([], ch, null, NOON + 60), null);
+  assert.equal(playerRecord([], null, p, NOON + 60), null);
+  assert.equal(playerRecord([], { ...ch, isSeparator: true }, p, NOON + 60), null);
+  assert.equal(playerRecord([], ch, p, NOON + 1800), null);
+  // Already scheduled, recording or being saved: that recording.
+  for (const [state, kind] of [
+    ["scheduled", "scheduled"],
+    ["recording", "recording"],
+    ["finishing", "saving"],
+  ]) {
+    const r = rec({ state });
+    const got = playerRecord([r], ch, p, NOON + 60);
+    assert.equal(got.kind, kind, state);
+    assert.equal(got.rec, r);
+  }
+  // A finished recording of it, or one of another programme, is no reason
+  // not to record.
+  assert.equal(playerRecord([rec({ state: "done" })], ch, p, NOON + 60).kind, "record");
+  assert.equal(playerRecord([rec({ state: "recording", start: NOON - 3600 })], ch, p, NOON + 60).kind, "record");
 });
 
 test("a schedule request names the channel and the programme", () => {

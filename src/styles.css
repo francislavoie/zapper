@@ -780,6 +780,36 @@ select option {
   color: var(--dimmer);
 }
 
+/* Record from the player, under the channel's name: the button, or what
+   is being recorded and Stop. */
+.watch-rec {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.75rem;
+}
+
+.watch-rec .ctl {
+  display: inline-flex;
+  align-items: center;
+}
+
+.watch-rec-state {
+  display: inline-flex;
+  align-items: center;
+  color: var(--dim);
+}
+
+/* A menu row that says something rather than does it. */
+.tb-menu-item.ctx-status {
+  cursor: default;
+  color: var(--dim);
+}
+
+.tb-menu-item.ctx-status:hover {
+  background: none;
+}
+
 .watch-state {
   margin: 0;
   font-size: 0.75rem;

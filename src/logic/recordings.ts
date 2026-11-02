@@ -43,6 +43,46 @@ export function canRecord(p: Pick<ProgrammeDto, "stop">, now: number): boolean {
   return p.stop > now;
 }
 
+/** The programme on now on the channel the player shows, for Record from
+ *  the player: on by the guide, and the stream live (`watching`, the
+ *  programme the player was opened for, has not ended: a catch-up of
+ *  something already aired is not what is on). */
+export function programmeOnNow(
+  onNow: ProgrammeDto | null,
+  watching: ProgrammeDto | null,
+  now: number,
+): ProgrammeDto | null {
+  if (!onNow) return null;
+  if (watching && watching.stop <= now) return null;
+  if (onNow.start > now || onNow.stop <= now) return null;
+  return onNow;
+}
+
+/** What Record from the player (its menu, the now-playing panel, R) offers
+ *  for what it shows: to record the programme on now; or, when it is
+ *  already scheduled or recording, that recording (to stop or cancel); or,
+ *  while it is being saved, that. `null` when there is nothing to offer:
+ *  no service answering (`recs` null), no programme known, or a separator. */
+export type PlayerRecord =
+  | { kind: "record"; channel: ChannelDto; programme: ProgrammeDto }
+  | { kind: "recording" | "scheduled" | "saving"; channel: ChannelDto; rec: RecordingDto };
+
+export function playerRecord(
+  recs: readonly RecordingDto[] | null,
+  channel: ChannelDto | null,
+  programme: ProgrammeDto | null,
+  now: number,
+): PlayerRecord | null {
+  if (!recs || !channel || channel.isSeparator || !programme) return null;
+  const rec = marks(recs).get(markKey(channel.streamId, programme.start));
+  if (rec) {
+    const kind = rec.state === "recording" ? "recording" : rec.state === "finishing" ? "saving" : "scheduled";
+    return { kind, channel, rec };
+  }
+  if (!canRecord(programme, now)) return null;
+  return { kind: "record", channel, programme };
+}
+
 /** "S02E04", "E12" (no season known), or "" — as recordings are named. */
 export function episodeLabel(p: { season?: number | null; episode?: number | null }): string {
   if (p.episode == null) return "";

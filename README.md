@@ -127,6 +127,10 @@ Download the package for your system from the
   when overlaps on other channels need more streams than the account has. Jellyfin can play a
   recording while it records, through a `.strm` file pointing at the service. On Linux and
   Windows; see [docs/recording.md](docs/recording.md).
+- **Record what you're watching:** press R, or Record in the picture's menu. On an account of one
+  stream the player moves onto the recording service's connection, so the picture and the
+  recording share it, and what the player had already buffered of the programme becomes the
+  recording's first part.
 - **In a browser:** with network access turned on, the recording service serves zapper's own
   interface to other devices on your network, behind a password: browse the channels and the
   guide, search, schedule or cancel recordings, and watch live TV from a phone or another
