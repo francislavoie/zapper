@@ -259,7 +259,7 @@ warns on their first run (README.md); signing needs a certificate and a signing 
 the release after the first one that carries them.
 
 macOS (Apple Silicon) builds, packages and plays on the CI runners (`.github/workflows/macos.yml`,
-on every pull request; docs/macos.md), but has not been tried on a real Mac or released. What is
+weekly and on pull requests that touch macOS; docs/macos.md), but has not been tried on a real Mac or released. What is
 in place:
 
 - the updater already knows the `.dmg` install (asset name, the bundle swap), and its tests

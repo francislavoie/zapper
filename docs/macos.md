@@ -71,7 +71,12 @@ runners', has run it).
 
 ## What CI checks
 
-On every pull request, `macos.yml`:
+`macos.yml` runs on the Mac runners every Monday and on Run workflow for main, and on a pull
+request only when it can change what macOS gets: a change to the macOS code (`surface/`,
+`chrome.rs`, `paths.rs`, any Rust file with `target_os = "macos"`), `packaging/macos/`, the
+libmpv build, Cargo or Tauri config, or the workflow itself; or when the pull request carries the
+`macos` label. A pull request builds the `.app` and `.dmg` only when macOS packaging or the libmpv
+build changes. A small Linux job, *macOS needed?*, decides in seconds. When it runs, it:
 
 - builds the LGPL libmpv for macos-arm64 with `scripts/build-libmpv.sh`, cached until the script
   or `packaging/libmpv/sources.txt` changes;

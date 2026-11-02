@@ -2,14 +2,24 @@
 # macos-arm64 is built here by scripts/build-libmpv.sh (the libmpv workflow publishes it only on
 # a manual run) and cached on what it is made from, so only a change to the script or to
 # packaging/libmpv/sources.txt builds it again. Against it: Rust's unit tests and clippy, the
-# frontend's build and node checks, and zapper-server.
+# frontend's build and node checks, and zapper-server; then zapper.app and the .dmg.
 #
-# Runs on pull requests and by hand. Actions are
-# pinned by commit, as in release.yml.
+# The runners are slow, so a pull request runs this only when it can change what macOS gets
+# (`changes` below decides, on a Linux runner, in seconds): a file in MACOS_PATHS, a Rust file
+# with macOS-only code (`target_os = "macos"`), or the `macos` label on the pull request. The
+# .app and .dmg are built on a pull request only when macOS packaging changes. Every Monday and on
+# Run workflow, main gets all of it, so nothing that breaks macOS goes unnoticed for long.
+#
+# The tests job is named "macOS tests", not "Tests, lint and build": that name is the required
+# check, and it belongs to ci.yml's Linux job alone. Actions are pinned by commit, as in
+# release.yml.
 name: macOS
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
+  schedule:
+    - cron: "17 6 * * 1"
   workflow_dispatch:
 
 permissions: {}
@@ -23,8 +33,75 @@ env:
   PLATFORM: macos-arm64
 
 jobs:
+  # Whether this pull request needs the macOS runners at all, and the .app build.
+  changes:
+    name: macOS needed?
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      tests: ${{ steps.decide.outputs.tests }}
+      app: ${{ steps.decide.outputs.app }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: github.event_name == 'pull_request'
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Decide
+        id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          LABELLED: ${{ contains(github.event.pull_request.labels.*.name, 'macos') }}
+          # What macOS gets that Linux CI doesn't exercise. A file here runs the tests; one
+          # under APP_PATHS also builds the .app and .dmg.
+          MACOS_PATHS: >-
+            ^\.github/workflows/macos\.yml$
+            ^src-tauri/src/surface/
+            ^src-tauri/src/chrome\.rs$
+            ^src-tauri/src/paths\.rs$
+            ^src-tauri/src/bin/surface_check\.rs$
+            ^src-tauri/build\.rs$
+            ^src-tauri/Cargo\.(toml|lock)$
+            ^src-tauri/tauri(\.macos)?\.conf\.json$
+            ^packaging/macos/
+            ^packaging/libmpv/
+            ^scripts/(build|fetch)-libmpv\.sh$
+            ^scripts/check-macos-app\.sh$
+          APP_PATHS: >-
+            ^\.github/workflows/macos\.yml$
+            ^src-tauri/tauri(\.macos)?\.conf\.json$
+            ^packaging/macos/
+            ^packaging/libmpv/
+            ^scripts/(build|fetch)-libmpv\.sh$
+            ^scripts/check-macos-app\.sh$
+        run: |
+          if [ "$EVENT" != pull_request ] || [ "$LABELLED" = true ]; then
+            echo "tests=true" >> "$GITHUB_OUTPUT"; echo "app=true" >> "$GITHUB_OUTPUT"
+            echo "Not a pull request, or labelled macos: everything."; exit 0
+          fi
+          changed=$(git diff --name-only "$BASE...$HEAD")
+          matches() { local re; for re in $1; do grep -Eq -- "$re" <<<"$changed" && return 0; done; return 1; }
+          tests=false; app=false
+          if matches "$MACOS_PATHS"; then tests=true; fi
+          if matches "$APP_PATHS"; then app=true; fi
+          # Rust with macOS-only code in it, wherever it lives.
+          while IFS= read -r f; do
+            case "$f" in
+              *.rs) if [ -f "$f" ] && grep -q 'target_os = "macos"' "$f"; then tests=true; fi ;;
+            esac
+          done <<<"$changed"
+          echo "tests=$tests" >> "$GITHUB_OUTPUT"; echo "app=$app" >> "$GITHUB_OUTPUT"
+          echo "macOS tests: $tests; .app and .dmg: $app"
+
   libmpv:
     name: libmpv (macos-arm64)
+    needs: changes
+    if: needs.changes.outputs.tests == 'true' || needs.changes.outputs.app == 'true'
     runs-on: macos-15
     timeout-minutes: 120
     permissions:
@@ -79,8 +156,9 @@ jobs:
           key: ${{ steps.key.outputs.key }}
 
   check:
-    name: Tests, lint and build
-    needs: libmpv
+    name: macOS tests
+    needs: [changes, libmpv]
+    if: needs.changes.outputs.tests == 'true'
     runs-on: macos-15
     timeout-minutes: 60
     permissions:
@@ -145,7 +223,8 @@ jobs:
   # Then scripts/check-macos-app.sh on the bundle. The .dmg is kept as an artifact.
   app:
     name: zapper.app and the .dmg
-    needs: libmpv
+    needs: [changes, libmpv]
+    if: needs.changes.outputs.app == 'true'
     runs-on: macos-15
     timeout-minutes: 60
     permissions:
