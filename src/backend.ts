@@ -44,7 +44,15 @@ import type {
   SyncStatusDto,
   UpdateStatusDto,
 } from "./types";
-import { onNothing, onWebSyncStatus, signOut as webSignOut, webBackend } from "./web";
+import {
+  onNothing,
+  onWebPlayerOptions,
+  onWebPlayerState,
+  onWebSyncStatus,
+  signOut as webSignOut,
+  webBackend,
+} from "./web";
+import { playableHere } from "./webPlayer";
 
 export const inTauri =
   typeof (globalThis as Record<string, unknown>).__TAURI_INTERNALS__ !== "undefined";
@@ -65,8 +73,10 @@ export const backendKind: BackendKind = inTauri
  *  must never appear in the real app: a painted stand-in for the video plane. */
 export const isMock = backendKind === "mock";
 
-/** What the interface can do here. */
-export const capabilities: Capabilities = backendKind === "web" ? BROWSER : DESKTOP;
+/** What the interface can do here. A browser without Media Source
+ *  Extensions (an iPhone before iOS 17.1) cannot play. */
+export const capabilities: Capabilities =
+  backendKind === "web" ? { ...BROWSER, playback: playableHere } : DESKTOP;
 
 /** Whether a password typed here crosses the network unencrypted: a browser
  *  reaching the recording service over plain HTTP from another computer.
@@ -98,10 +108,10 @@ export const subscribeSync = (f: (s: SyncStatusDto) => void): Promise<Unsub> =>
   pick(onSyncStatus, onWebSyncStatus, onMockSyncStatus)(f);
 
 export const subscribePlayer = (f: (s: PlayerStateDto) => void): Promise<Unsub> =>
-  pick(onPlayerState, onNothing, onMockPlayerState)(f);
+  pick(onPlayerState, onWebPlayerState, onMockPlayerState)(f);
 
 export const subscribePlayerOptions = (f: (s: PlayerOptionsDto) => void): Promise<Unsub> =>
-  pick(onPlayerOptions, onNothing, onMockPlayerOptions)(f);
+  pick(onPlayerOptions, onWebPlayerOptions, onMockPlayerOptions)(f);
 
 export const subscribeUpdate = (f: (s: UpdateStatusDto) => void): Promise<Unsub> =>
   pick(onUpdate, onNothing, onMockUpdate)(f);

@@ -170,7 +170,7 @@ export function SettingsModal() {
                 <AccountPane />
                 {/* How many streams the account allows is about playing
                     here, which a browser does not do. */}
-                {capabilities.playback ? <ConnectionsPane s={s} /> : null}
+                {capabilities.mpv ? <ConnectionsPane s={s} /> : null}
               </>
             ) : null}
             {section === "Playback" ? <PlaybackPage s={s} /> : null}

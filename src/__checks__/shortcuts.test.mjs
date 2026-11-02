@@ -66,21 +66,36 @@ test("rows read cleanly: something to press and something it does", () => {
   }
 });
 
-test("a browser lists no player keys, and the app lists them all", async () => {
+test("a browser lists the player's keys but not mpv's or the window's, and the app lists them all", async () => {
   const { shortcutGroups } = await import("../logic/shortcuts.ts");
   const { BROWSER, DESKTOP } = await import("../logic/capabilities.ts");
   const count = (groups) => groups.reduce((n, g) => n + g.items.length, 0);
   assert.equal(count(shortcutGroups(DESKTOP)), count(SHORTCUT_GROUPS));
   const browser = shortcutGroups(BROWSER);
   const titles = browser.map((g) => g.title);
-  assert.ok(!titles.includes("While watching"), titles.join(", "));
+  assert.ok(titles.includes("While watching"), titles.join(", "));
   assert.ok(titles.includes("In the guide"));
   const does = browser.flatMap((g) => g.items.map((it) => it.does)).join("\n");
-  for (const gone of ["Quit zapper", "Stats for nerds", "Previous channel", "volume", "the picture"]) {
+  for (const gone of ["Quit zapper", "Stats for nerds"]) {
     assert.ok(!does.includes(gone), gone);
   }
-  for (const kept of ["Command palette", "Search channels", "An hour earlier or later"]) {
+  for (const kept of [
+    "Command palette",
+    "Search channels",
+    "An hour earlier or later",
+    "Previous channel",
+    "volume",
+    "Play or pause",
+  ]) {
     assert.ok(does.includes(kept), kept);
   }
   assert.ok(browser.every((g) => g.items.length > 0));
+
+  // A browser that can't play (no Media Source Extensions) lists none of them.
+  const cannot = shortcutGroups({ ...BROWSER, playback: false });
+  assert.ok(!cannot.map((g) => g.title).includes("While watching"));
+  const cannotDo = cannot.flatMap((g) => g.items.map((it) => it.does)).join("\n");
+  for (const gone of ["Previous channel", "volume", "the picture"]) {
+    assert.ok(!cannotDo.includes(gone), gone);
+  }
 });

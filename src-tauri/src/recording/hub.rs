@@ -16,15 +16,15 @@
 //! from the first sync byte the provider sent, so whoever joins part way
 //! starts on a packet boundary. That is all a subscriber needs to make a
 //! playable file of what it gets, and all a browser watching the channel
-//! will need too: such a viewer would be one more subscriber, a rider whose
-//! programme never ends (`sharing::Rider::viewer`), so the rules never close
-//! its connection for a recording.
+//! needs too: a viewer (`super::watch`) is one more subscriber, a rider
+//! whose programme never ends (`sharing::Rider::viewer`), so the rules never
+//! close its connection for a recording.
 //!
 //! A subscriber that falls behind (a disk that stalls) does not hold the
 //! others up: past a queue of [`QUEUE`] chunks, what it misses is counted
 //! ([`Subscription::lost`]) and dropped.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -59,8 +59,8 @@ pub struct Hubs {
     /// Bumped whenever a hub opens or closes: whoever waits for a
     /// connection, or for a feed to ride, looks again.
     changes: watch::Sender<u64>,
-    /// When a connection last closed.
-    released: Mutex<Option<Instant>>,
+    /// When connections closed, the last [`SETTLE_SECS`]' worth.
+    released: Mutex<VecDeque<Instant>>,
 }
 
 struct Hub {
@@ -137,7 +137,7 @@ impl Default for Hubs {
             map: Mutex::new(HashMap::new()),
             open: AtomicUsize::new(0),
             changes: watch::channel(0).0,
-            released: Mutex::new(None),
+            released: Mutex::new(VecDeque::new()),
         }
     }
 }
@@ -189,10 +189,18 @@ impl Hubs {
     /// Whether one of the service's connections closed within
     /// [`SETTLE_SECS`]: a provider's count may still include it.
     pub fn released_lately(&self) -> bool {
-        self.released
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .is_some_and(|t| t.elapsed() < Duration::from_secs(SETTLE_SECS))
+        self.released_recently() > 0
+    }
+
+    /// How many of the service's connections closed within
+    /// [`SETTLE_SECS`]: how many a provider's count may still include.
+    pub fn released_recently(&self) -> usize {
+        let mut r = self.released.lock().unwrap_or_else(|e| e.into_inner());
+        let settle = Duration::from_secs(SETTLE_SECS);
+        while r.front().is_some_and(|t| t.elapsed() >= settle) {
+            r.pop_front();
+        }
+        r.len()
     }
 
     /// Rides a hub already open for one of `feeds`, tried in order: the
@@ -258,7 +266,10 @@ impl Hubs {
     async fn run(self: Arc<Self>, hub: Arc<Hub>, playable: Playable) {
         let end = self.pump(&hub, &playable).await;
         self.open.fetch_sub(1, Ordering::SeqCst);
-        *self.released.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
+        self.released
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push_back(Instant::now());
         let subs = {
             let mut map = self.lock();
             if map.get(&hub.feed).is_some_and(|h| Arc::ptr_eq(h, &hub)) {

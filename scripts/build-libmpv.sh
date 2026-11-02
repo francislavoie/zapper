@@ -405,7 +405,9 @@ unpack ffmpeg
 # HLS, MP4, Matroska, AVI; H.264, HEVC, MPEG-2, AV1, AAC, AC-3/E-AC-3, MP2/MP3, Opus, DTS; DVB
 # and CEA-608 subtitles). DVB teletext needs libzvbi, part of which is GPL-2.0-only, so it is
 # not here. Protocols, parsers, bitstream filters and filters are left at FFmpeg's full set,
-# which here means its LGPL set.
+# which here means its LGPL set. Encoders: PNG and MJPEG for mpv's screenshots, and FFmpeg's own
+# AAC encoder (LGPL), which zapper-server uses to turn sound a browser can't play (AC-3, MP2)
+# into AAC while a browser watches (src-tauri/src/recording/livemux.c).
 decoders=(
   h264 hevc mpeg1video mpeg2video mpeg4 msmpeg4v1 msmpeg4v2 msmpeg4v3 h263 flv vc1 wmv1 wmv2 wmv3
   vp8 vp9 av1 libdav1d mjpeg png rawvideo wrapped_avframe
@@ -424,7 +426,7 @@ ffmpeg_args=(
   --disable-static --enable-shared
   --disable-programs --disable-doc --disable-debug --disable-autodetect
   --enable-libdav1d
-  --disable-encoders --enable-encoder=png,mjpeg
+  --disable-encoders --enable-encoder=png,mjpeg,aac
   --disable-muxers --enable-muxer=spdif,mpegts,matroska,mp4,mov
   --disable-decoders --enable-decoder="$(IFS=,; echo "${decoders[*]}")"
   --disable-demuxers --enable-demuxer="$(IFS=,; echo "${demuxers[*]}")"
@@ -454,6 +456,8 @@ for f in speechnorm alimiter; do
   grep -q "^#define CONFIG_$(echo $f | tr a-z A-Z)_FILTER 1" "$build/ffmpeg/config_components.h" ||
     die "FFmpeg is configured without the $f filter, which the compressor needs"
 done
+grep -q "^#define CONFIG_AAC_ENCODER 1" "$build/ffmpeg/config_components.h" ||
+  die "FFmpeg is configured without its AAC encoder, which zapper-server's browser streams need"
 make -C "$build/ffmpeg" -j "$jobs" >/dev/null
 make -C "$build/ffmpeg" install >/dev/null
 

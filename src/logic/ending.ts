@@ -51,6 +51,10 @@ export function endedMessage(
   const e = p.ending;
   const code = e?.status != null ? `HTTP ${e.status}` : null;
   if (!e) {
+    // An error that brings its own headline (a browser's refusals,
+    // logic/webPlayback.ts): its first line, and the rest as the detail.
+    const [head, ...rest] = (p.error ?? "").split("\n");
+    if (rest.length > 0) return { title: head, detail: rest.join(" "), code: null };
     // Failed without an account of why: the open could not be sent, or a
     // source explained it in its own words (an HDHomeRun's busy tuners),
     // which are better than any guess here.

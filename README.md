@@ -128,8 +128,10 @@ Download the package for your system from the
   see [docs/recording.md](docs/recording.md).
 - **In a browser:** with network access turned on, the recording service serves zapper's own
   interface to other devices on your network, behind a password: browse the channels and the
-  guide, search, and schedule or cancel recordings from a phone or another computer. Watching in
-  the browser isn't there yet.
+  guide, search, schedule or cancel recordings, and watch live TV from a phone or another
+  computer. The service streams the channel itself (the provider's address never reaches the
+  browser), shares the connection with a recording of the same channel, and converts sound a
+  browser can't play to AAC.
 
 ## Performance
 

@@ -113,5 +113,5 @@ export function browserSettings(s: SettingsDto): BrowserSettings {
 
 /** What a feature this page cannot offer says, when something asks anyway. */
 export const NOT_HERE = "Not available in the browser.";
-export const NO_PLAYBACK =
-  "Watching in the browser isn’t available yet: open the channel in the zapper app, or record it.";
+/** What choosing a channel says in a browser that can't play live TV. */
+export { UNSUPPORTED as NO_PLAYBACK } from "./webPlayback.ts";

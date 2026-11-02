@@ -127,7 +127,7 @@ export const ACTIONS: PaletteAction[] = [
     group: "player",
   },
   // A view, not a player control: it opens with nothing playing too.
-  { id: "stats", label: "Stats for nerds", hint: "S", group: "view", needsCapability: "playback" },
+  { id: "stats", label: "Stats for nerds", hint: "S", group: "view", needsCapability: "mpv" },
   // Each length its own entry, so typing "sleep 30" is one Enter away. The
   // hamburger folds the group into one row with a submenu.
   ...([15, 30, 45, 60, 90] as const).map(

@@ -149,6 +149,11 @@ HLS, MP4, Matroska, AVI; H.264, HEVC, MPEG-2, AV1, AAC, AC-3/E-AC-3, MP2/MP3, Op
 DVD, PGS and CEA-608 subtitles) and FFmpeg's whole LGPL filter set, the compressor's
 `speechnorm` and `alimiter` included (FFmpeg's configure marks its GPL-only filters as needing
 `gpl`; neither is one, both sources are LGPL-2.1-or-later, and the build fails without them).
+The encoders are PNG and MJPEG (mpv's screenshots) and FFmpeg's own AAC encoder (LGPL, not the
+non-free libfdk-aac), with which zapper-server turns sound a browser can't play into AAC while a
+browser watches (docs/recording.md, "Watching in the browser"); the build fails without it. A
+bundle from before it was added (`libmpv-0.41.0-ffmpeg-8.1.3-r1`) has none, and zapper-server
+then plays such channels in a browser without their sound.
 
 What it leaves out, because it is GPL:
 

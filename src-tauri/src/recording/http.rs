@@ -33,7 +33,7 @@ use super::api::{
 use super::backup::SetBackupRequest;
 use super::now;
 use super::server::Server;
-use super::{account, browse, web};
+use super::{account, browse, watch, web};
 
 type Shared = Arc<Server>;
 
@@ -409,6 +409,7 @@ pub fn router(server: Shared) -> Router {
         .route("/api/logout", post(logout))
         .merge(browse::routes())
         .merge(account::routes())
+        .merge(watch::routes())
         .route_layer(middleware::from_fn_with_state(server.clone(), auth));
     let app = Router::new()
         .route("/api/network", get(network).put(set_network))
@@ -433,6 +434,7 @@ pub fn router(server: Shared) -> Router {
 #[cfg(test)]
 mod tests {
     use std::net::SocketAddr;
+    use std::time::Duration;
 
     use axum::body::Body;
     use tower::ServiceExt;
@@ -2216,5 +2218,334 @@ mod tests {
             assert!(!body.to_string().contains("typed-secret-36"), "{body}");
             assert!(!crate::catalog::credentials::account_path().exists());
         });
+    }
+
+    // ------------------------------------------------------------ watching
+
+    /// An account whose connections are all in use, as Xtream counts them.
+    struct Full;
+    impl Budget for Full {
+        fn check(
+            &self,
+            _own: usize,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Slots> + Send + '_>> {
+            Box::pin(async { Slots::Full { active: 1, max: 1 } })
+        }
+    }
+
+    fn server_with(name: &str, budget: Box<dyn Budget>) -> Shared {
+        let d = std::env::temp_dir().join(format!("zapper-http-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let cfg = ServerConfig::default();
+        let path = d.join("server.json");
+        config::save_to(&path, &cfg).unwrap();
+        Server::new(store::open_in_memory().unwrap(), cfg, path, APP.into(), budget)
+    }
+
+    /// A live feed on 127.0.0.1 that repeats its tables (H.264 and AAC on
+    /// `/h264.ts`, MPEG-2 and MP2 on `/mpeg2.ts`) and padding for as long as
+    /// the client stays. Counts the connections it took.
+    async fn feed_server() -> (String, Arc<std::sync::atomic::AtomicUsize>) {
+        use crate::recording::tsprobe::tests::{pat, pmt};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", l.local_addr().unwrap());
+        let count = Arc::new(AtomicUsize::new(0));
+        let c = Arc::clone(&count);
+        tokio::spawn(async move {
+            while let Ok((mut sock, _)) = l.accept().await {
+                c.fetch_add(1, Ordering::SeqCst);
+                tokio::spawn(async move {
+                    let mut req = [0u8; 2048];
+                    let n = sock.read(&mut req).await.unwrap_or(0);
+                    let mpeg2 = String::from_utf8_lossy(&req[..n]).contains("/mpeg2.ts");
+                    let tables = if mpeg2 {
+                        pmt(0x100, &[(0x02, 0x101, vec![]), (0x04, 0x102, vec![])])
+                    } else {
+                        pmt(0x100, &[(0x1b, 0x101, vec![]), (0x0f, 0x102, vec![])])
+                    };
+                    let head =
+                        "HTTP/1.1 200 OK\r\nContent-Type: video/mp2t\r\nConnection: close\r\n\r\n";
+                    if sock.write_all(head.as_bytes()).await.is_err() {
+                        return;
+                    }
+                    let mut null = vec![0xffu8; 188];
+                    null[..4].copy_from_slice(&[0x47, 0x1f, 0xff, 0x10]);
+                    loop {
+                        let mut tick = pat(0x100);
+                        tick.extend_from_slice(&tables);
+                        for _ in 0..40 {
+                            tick.extend_from_slice(&null);
+                        }
+                        if sock.write_all(&tick).await.is_err() {
+                            return;
+                        }
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    }
+                });
+            }
+        });
+        (base, count)
+    }
+
+    /// Channel 66 is MPEG-2; every other one H.264.
+    fn feeds_from(s: &Shared, base: &str) {
+        let base = base.to_string();
+        s.set_playables(Arc::new(move |id| {
+            let path = if id == 66 { "mpeg2.ts" } else { "h264.ts" };
+            Ok(crate::source::Playable::plain(format!("{base}/{path}")))
+        }));
+    }
+
+    fn watch_body(stream_id: i64, anyway: bool) -> Option<serde_json::Value> {
+        Some(serde_json::json!({"streamId": stream_id, "anyway": anyway}))
+    }
+
+    /// The first `n` bytes of a live answer, without waiting for its end.
+    async fn read_some(s: &Shared, r: Request, n: usize) -> (StatusCode, Vec<u8>) {
+        use futures_core::Stream;
+        let resp = router(s.clone()).oneshot(r).await.unwrap();
+        let status = resp.status();
+        let mut body = resp.into_body().into_data_stream();
+        let mut got = Vec::new();
+        while got.len() < n {
+            let next = tokio::time::timeout(
+                Duration::from_secs(10),
+                std::future::poll_fn(|cx| std::pin::Pin::new(&mut body).poll_next(cx)),
+            )
+            .await
+            .expect("stream data in time");
+            match next {
+                Some(Ok(b)) => got.extend_from_slice(&b),
+                _ => break,
+            }
+        }
+        (status, got)
+    }
+
+    async fn until(what: &str, mut f: impl FnMut() -> bool) {
+        let t = std::time::Instant::now();
+        while !f() {
+            assert!(t.elapsed() < Duration::from_secs(10), "{what}");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    fn viewer_id(body: &serde_json::Value) -> String {
+        body["viewer"].as_str().unwrap().to_string()
+    }
+
+    #[tokio::test]
+    async fn watching_needs_a_sign_in_and_a_stream_is_its_owners_alone() {
+        let s = server("watch-auth");
+        enable(&s, true).await;
+        let (base, _) = feed_server().await;
+        feeds_from(&s, &base);
+        let (st, _) = call(&s, from_page("POST", "/api/watch", None, watch_body(5, false))).await;
+        assert_eq!(st, StatusCode::UNAUTHORIZED);
+        let (st, _) = call(&s, from_page("GET", "/api/stream/abc", None, None)).await;
+        assert_eq!(st, StatusCode::UNAUTHORIZED);
+
+        // Starting one changes something: the page's header is wanted.
+        let cookie = browser_login(&s).await;
+        let mut r = from_page("POST", "/api/watch", Some(&cookie), watch_body(5, false));
+        r.headers_mut().remove("x-zapper");
+        assert_eq!(call(&s, r).await.0, StatusCode::FORBIDDEN);
+
+        let (st, body) =
+            call(&s, from_page("POST", "/api/watch", Some(&cookie), watch_body(5, false))).await;
+        assert_eq!(st, StatusCode::OK, "{body}");
+        let stream = body["stream"].as_str().unwrap().to_string();
+        assert!(!body.to_string().contains("127.0.0.1"), "no provider address: {body}");
+        assert_eq!(body["video"], "H.264");
+        assert_eq!(body["audio"][0]["codec"], "aac");
+        assert_eq!(body["converting"], false);
+
+        // Another device (the app's token) does not get this one's stream.
+        let (st, _) = call(&s, req("GET", &stream, HOME, false, Some(APP))).await;
+        assert_eq!(st, StatusCode::NOT_FOUND);
+        // Nor does a page on another site make the browser fetch it.
+        let mut r = from_page("GET", &stream, Some(&cookie), None);
+        r.headers_mut()
+            .insert("sec-fetch-site", HeaderValue::from_static("cross-site"));
+        assert_eq!(call(&s, r).await.0, StatusCode::FORBIDDEN);
+
+        // Its own page reads it: a transport stream, from a sync byte.
+        let (st, bytes) =
+            read_some(&s, from_page("GET", &stream, Some(&cookie), None), 188 * 50).await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(bytes[0], 0x47);
+        assert_eq!(bytes[188], 0x47);
+    }
+
+    #[tokio::test]
+    async fn a_viewer_rides_a_recordings_connection_and_costs_no_other() {
+        let s = server_with("watch-share", Box::new(Full));
+        enable(&s, true).await;
+        let (base, connections) = feed_server().await;
+        feeds_from(&s, &base);
+        // A recording of channel 7 has the account's only connection.
+        let rec = s.hubs.open(
+            7,
+            crate::source::Playable::plain(format!("{base}/h264.ts")),
+            crate::recording::sharing::Rider {
+                id: 1,
+                stop: now() + 3600,
+                until: now() + 3900,
+            },
+        );
+        let cookie = browser_login(&s).await;
+
+        // Watching what is recorded joins its connection.
+        let (st, body) =
+            call(&s, from_page("POST", "/api/watch", Some(&cookie), watch_body(7, false))).await;
+        assert_eq!(st, StatusCode::OK, "{body}");
+        assert_eq!(body["shared"], true);
+        let stream = body["stream"].as_str().unwrap().to_string();
+        let (st, bytes) =
+            read_some(&s, from_page("GET", &stream, Some(&cookie), None), 188 * 20).await;
+        assert_eq!(st, StatusCode::OK);
+        assert!(bytes.len() >= 188 * 20);
+        assert_eq!(s.hubs.open_count(), 1);
+        assert_eq!(s.hubs.conns()[0].riders.len(), 2, "the recording and the viewer");
+        assert_eq!(
+            connections.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "one upstream connection for both"
+        );
+
+        // Another channel: the account is full and a recording holds it, so
+        // even "anyway" is refused, and the channel that could be watched
+        // instead is named.
+        for anyway in [false, true] {
+            let (st, body) =
+                call(&s, from_page("POST", "/api/watch", Some(&cookie), watch_body(9, anyway))).await;
+            assert_eq!(st, StatusCode::CONFLICT, "{body}");
+            assert_eq!(body["reason"], "recording");
+            assert_eq!(body["anyway"], false);
+            assert_eq!(body["watchInstead"], serde_json::json!([7]));
+        }
+        assert_eq!(connections.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        // The viewer leaves: the recording carries on alone.
+        let id = viewer_id(&body);
+        let (st, _) =
+            call(&s, from_page("DELETE", &format!("/api/watch/{id}"), Some(&cookie), None)).await;
+        assert_eq!(st, StatusCode::NO_CONTENT);
+        until("the viewer leaves", || s.hubs.conns()[0].riders.len() == 1).await;
+        assert_eq!(s.hubs.open_count(), 1);
+        drop(rec);
+        until("the connection closes", || s.hubs.open_count() == 0).await;
+    }
+
+    #[tokio::test]
+    async fn a_viewer_alone_opens_a_connection_the_rules_never_close() {
+        let s = server("watch-own");
+        enable(&s, true).await;
+        let (base, connections) = feed_server().await;
+        feeds_from(&s, &base);
+        let cookie = browser_login(&s).await;
+        let (st, body) =
+            call(&s, from_page("POST", "/api/watch", Some(&cookie), watch_body(5, false))).await;
+        assert_eq!(st, StatusCode::OK, "{body}");
+        assert_eq!(body["shared"], false);
+        assert_eq!(s.hubs.open_count(), 1);
+        let rider = s.hubs.conns()[0].riders[0];
+        assert_eq!(rider.stop, i64::MAX, "a viewer, whose programme never ends");
+        assert!(
+            s.hubs.doom(5, now() + 365 * 86400).is_none(),
+            "the padding rules never close a viewer's connection"
+        );
+        let id = viewer_id(&body);
+        call(&s, from_page("DELETE", &format!("/api/watch/{id}"), Some(&cookie), None)).await;
+        until("the connection closes", || s.hubs.open_count() == 0).await;
+        assert_eq!(connections.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn another_device_on_a_full_account_is_said_and_anyway_is_offered() {
+        let s = server_with("watch-full", Box::new(Full));
+        enable(&s, true).await;
+        let (base, connections) = feed_server().await;
+        feeds_from(&s, &base);
+        let cookie = browser_login(&s).await;
+        let (st, body) =
+            call(&s, from_page("POST", "/api/watch", Some(&cookie), watch_body(5, false))).await;
+        assert_eq!(st, StatusCode::CONFLICT, "{body}");
+        assert_eq!(body["reason"], "inUse");
+        assert_eq!(body["anyway"], true);
+        assert_eq!(body["slots"]["max"], 1);
+        assert_eq!(
+            connections.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "nothing was opened"
+        );
+        // Pressed: it connects, as the app's player would.
+        let (st, body) =
+            call(&s, from_page("POST", "/api/watch", Some(&cookie), watch_body(5, true))).await;
+        assert_eq!(st, StatusCode::OK, "{body}");
+
+        // Another device is told a browser watches, and may take it over.
+        let other = || {
+            let mut r = req_body("POST", "/api/watch", HOME, false, Some(APP), watch_body(8, false));
+            r.headers_mut()
+                .insert(header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
+            r
+        };
+        let (st, body) = call(&s, other()).await;
+        assert_eq!(st, StatusCode::CONFLICT, "{body}");
+        assert_eq!(body["reason"], "viewers");
+        assert_eq!(body["anyway"], true);
+
+        // The same browser (a reloaded page) is not asked: its newer viewer
+        // takes the connection from its older one.
+        let (st, body) =
+            call(&s, from_page("POST", "/api/watch", Some(&cookie), watch_body(6, false))).await;
+        assert_eq!(st, StatusCode::OK, "{body}");
+        until("one connection again", || s.hubs.open_count() == 1).await;
+        assert_eq!(s.hubs.conns()[0].feed, 6);
+    }
+
+    #[tokio::test]
+    async fn mpeg2_video_is_refused_from_the_stream_and_remembered() {
+        let s = server("watch-mpeg2");
+        enable(&s, true).await;
+        let (base, connections) = feed_server().await;
+        feeds_from(&s, &base);
+        let cookie = browser_login(&s).await;
+        let (st, body) =
+            call(&s, from_page("POST", "/api/watch", Some(&cookie), watch_body(66, false))).await;
+        assert_eq!(st, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+        assert_eq!(body["reason"], "notPlayable");
+        assert!(body["error"].as_str().unwrap().contains("MPEG-2"), "{body}");
+        until("the connection closes", || s.hubs.open_count() == 0).await;
+        // Known now: refused again without connecting.
+        let (st, _) =
+            call(&s, from_page("POST", "/api/watch", Some(&cookie), watch_body(66, false))).await;
+        assert_eq!(st, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(connections.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn a_device_may_hold_only_so_many_viewers() {
+        let s = server("watch-limit");
+        enable(&s, true).await;
+        let (base, _) = feed_server().await;
+        feeds_from(&s, &base);
+        let cookie = browser_login(&s).await;
+        for ch in 0..crate::recording::watch::PER_DEVICE as i64 {
+            let (st, body) = call(
+                &s,
+                from_page("POST", "/api/watch", Some(&cookie), watch_body(ch + 1, false)),
+            )
+            .await;
+            assert_eq!(st, StatusCode::OK, "{body}");
+        }
+        let (st, body) =
+            call(&s, from_page("POST", "/api/watch", Some(&cookie), watch_body(99, false))).await;
+        assert_eq!(st, StatusCode::TOO_MANY_REQUESTS, "{body}");
+        assert_eq!(body["reason"], "limit");
     }
 }

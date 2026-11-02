@@ -23,6 +23,16 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
   "Recording" (or "Recording 2"), with each recording in its tooltip — channel, programme, how
   long so far and until when, and whether it waits for a connection, is on its backup channel
   or has a conflict ahead. A click opens Recordings. In the app and in a browser.
+- Watch live TV in the browser. A browser signed in to the recording service plays channels in the
+  page, with the picture band, the player, pause and rewind (through the last couple of minutes),
+  volume, the compressor, fullscreen and audio tracks. The service streams the channel itself, so
+  the provider's address never reaches the browser; watching a channel that is being recorded
+  shares the recording's connection; sound a browser can't play (MP2, AC-3) is converted to AAC,
+  and a channel whose video it can't play (MPEG-2) says so instead of showing a black picture.
+- On a full account the browser says why it can't play: a recording's connection is never taken,
+  and "Watch here anyway" is offered only where no recording is at stake. A browser is never cut
+  off for a recording either: from two minutes before a recording on another channel needs its
+  connection, the page says so and offers to switch to that channel, which shares one connection.
 
 ### Changed
 
