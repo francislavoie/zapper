@@ -10,6 +10,8 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-01
+
 ### Added
 
 - Recordings of the same channel share one connection: back-to-back programmes on one channel
