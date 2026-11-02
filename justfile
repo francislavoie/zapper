@@ -107,6 +107,22 @@ package-arch:
 check-arch-pkg:
     scripts/check-arch-pkg.sh src-tauri/target/release/bundle/arch/zapper-*-x86_64.pkg.tar.zst
 
+# zapper-server for Linux as one static file (docs/recording.md, "Without the app"):
+# src-tauri/target/release/bundle/server/zapper-server-<version>-linux-x86_64, built for musl
+# with a minimal static LGPL FFmpeg and its licence notices built in, in a pinned Rust image on
+# Alpine (needs Docker or Podman, the interface built and the Rust notices). See
+# scripts/build-server-static.sh.
+package-server:
+    npm run build
+    scripts/licenses.sh --if-changed
+    scripts/build-server-static.sh src-tauri/target/release/bundle/server --with-checks
+
+# Checks it: statically linked, run in bare debian:stable-slim and alpine containers and from
+# scratch, its sample Dockerfile, and the fixture streams recorded through it (needs Docker or
+# Podman and the network). See scripts/check-server-binary.sh.
+check-server-binary:
+    scripts/check-server-binary.sh src-tauri/target/release/bundle/server/zapper-server-*-linux-x86_64 src-tauri/target/release/bundle/server/checks
+
 # On Windows (builds; not yet tested on screen or released): the NSIS installer and the MSI,
 # with the install-kind markers the updater reads and the license notices in licenses\ beside
 # zapper.exe (packaging/windows/). The notices come from scripts/licenses.sh run by Git for

@@ -9,6 +9,7 @@
 //! zapper-server [--port N] [--no-sync] [--home DIR]
 //! zapper-server --install-service | --remove-service [--home DIR]
 //! zapper-server --busy | --stop-for-setup [--ask] [--home DIR]
+//! zapper-server --import-account FILE | --set-password | --network on|off [--home DIR]
 //! ```
 //!
 //! `--install-service` and `--remove-service` do what Settings › Recording's
@@ -17,6 +18,14 @@
 //! installers' (packaging/windows/): whether the service on this computer is
 //! recording, and stopping it cleanly before files are replaced, asking
 //! first with `--ask` when it is.
+//!
+//! `--import-account`, `--set-password` and `--network` set up a service
+//! that has no app beside it (a headless box, a container): the provider
+//! account from an `account.json`, the password other devices sign in with
+//! (read from standard input, never the command line, where other users
+//! would see it in the process list), and whether it listens on the network.
+//! Through the running service's API when it answers, so it takes them at
+//! once; on its files otherwise, for its next start.
 //!
 //! It stops or restarts itself without spoiling a recording
 //! (recording::lifecycle): asked through the API, now or once idle; on
@@ -69,6 +78,7 @@ fn args() -> Result<Option<Args>> {
     };
     let mut service: Option<bool> = None;
     let mut setup: Option<Setup> = None;
+    let mut admin: Option<Admin> = None;
     let mut ask = false;
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -83,6 +93,21 @@ fn args() -> Result<Option<Args>> {
             "--busy" => setup = Some(Setup::Busy),
             "--stop-for-setup" => setup = Some(Setup::Stop),
             "--ask" => ask = true,
+            "--set-password" => admin = Some(Admin::Password),
+            "--import-account" => {
+                let v = it
+                    .next()
+                    .context("--import-account needs a file (- for standard input)")?;
+                admin = Some(Admin::Account(v));
+            }
+            "--network" => {
+                let on = match it.next().as_deref() {
+                    Some("on") => true,
+                    Some("off") => false,
+                    _ => anyhow::bail!("--network needs on or off"),
+                };
+                admin = Some(Admin::Network(on));
+            }
             "--home" => {
                 let v = it.next().context("--home needs a folder")?;
                 // Before anything has read a path, and before any thread
@@ -93,18 +118,27 @@ fn args() -> Result<Option<Args>> {
                 println!("zapper-server {}", env!("CARGO_PKG_VERSION"));
                 return Ok(None);
             }
+            "--licenses" => {
+                print_licenses();
+                return Ok(None);
+            }
             "--help" | "-h" => {
                 println!(
                     "zapper-server {}: zapper's recording service\n\n\
                      Usage: zapper-server [--port N] [--no-sync] [--home DIR]\n       \
-                     zapper-server --install-service | --remove-service [--home DIR]\n\n  \
+                     zapper-server --install-service | --remove-service [--home DIR]\n       \
+                     zapper-server --import-account FILE | --set-password | --network on|off [--home DIR]\n\n  \
                      --port N            listen on port N (default: server.json's, else {})\n  \
                      --no-sync           do not keep the catalogue current from here\n  \
                      --home DIR          keep settings, catalogue and recordings' data in DIR\n  \
                      --install-service   run this zapper-server for you from now on, and now\n  \
                      --remove-service    stop it and undo that (recordings are kept)\n  \
                      --busy              say whether the running service is recording (exit 3 if so)\n  \
-                     --stop-for-setup    stop it cleanly for an installer; with --ask, ask first if it records\n\n\
+                     --stop-for-setup    stop it cleanly for an installer; with --ask, ask first if it records\n  \
+                     --import-account F  use the provider account in F, an account.json (- reads standard input)\n  \
+                     --set-password      set the password other devices sign in with, read from standard input\n  \
+                     --network on|off    let other devices on the network reach it (needs the password)\n  \
+                     --licenses          print the licenses of zapper-server and what is built into it\n\n\
                      Settings: {}\nAPI token: {}",
                     env!("CARGO_PKG_VERSION"),
                     config::DEFAULT_PORT,
@@ -124,7 +158,193 @@ fn args() -> Result<Option<Args>> {
         let code = for_setup(what, ask)?;
         std::process::exit(code);
     }
+    if let Some(what) = admin {
+        administer(what)?;
+        return Ok(None);
+    }
     Ok(Some(a))
+}
+
+/// The licence notices compiled in (build.rs, `notices`): the static
+/// zapper-server for Linux carries them, being one file with nothing beside
+/// it. A build without them says where its package put them.
+fn print_licenses() {
+    const NOTICES: &str = include_str!(concat!(env!("OUT_DIR"), "/notices.txt"));
+    if NOTICES.is_empty() {
+        println!(
+            "zapper-server {} is under the MIT license. This build carries no copy of the notices: \
+             zapper's packages install them (/usr/share/doc/zapper on Debian and Arch, \
+             /usr/share/licenses/zapper on Fedora, licenses\\ beside zapper-server.exe on Windows), \
+             and docs/licensing.md in zapper's source describes them.",
+            env!("CARGO_PKG_VERSION")
+        );
+    } else {
+        // Into a pager or `head`, which may stop reading: not an error.
+        use std::io::Write;
+        let _ = std::io::stdout().lock().write_all(NOTICES.as_bytes());
+    }
+}
+
+/// Setting up a service with no app beside it.
+enum Admin {
+    /// The provider account, from this file, or `-` for standard input.
+    Account(String),
+    /// The sign-in password for other devices, from standard input.
+    Password,
+    /// Network access on or off.
+    Network(bool),
+}
+
+/// `--import-account`, `--set-password`, `--network`: through the running
+/// service's API when it answers (it takes the change at once, and a new
+/// password signs every device out as Settings does), else on its files.
+fn administer(what: Admin) -> Result<()> {
+    use zapper_lib::catalog::credentials;
+    use zapper_lib::recording::access::{self, Access};
+    use zapper_lib::recording::api::NetworkSettingsDto;
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    rt.block_on(async {
+        // Running, and this home's: it takes this home's token. Something
+        // else on the port (another user's service) is not written around.
+        let running = match Client::local() {
+            Ok(c) if c.version().await.is_ok() => {
+                c.status().await.with_context(|| {
+                    format!(
+                        "a recording service answers on port {}, but not with this home's settings",
+                        config::load().port
+                    )
+                })?;
+                Some(c)
+            }
+            _ => None,
+        };
+        let dir = zapper_lib::paths::config_dir();
+        match what {
+            Admin::Account(from) => {
+                let text = if from == "-" {
+                    let mut s = String::new();
+                    std::io::Read::read_to_string(&mut std::io::stdin(), &mut s)?;
+                    s
+                } else {
+                    std::fs::read_to_string(&from).with_context(|| format!("reading {from}"))?
+                };
+                // Never the parser's words, which may quote what it read: a
+                // password.
+                let value: serde_json::Value = serde_json::from_str(&text)
+                    .map_err(|_| anyhow::anyhow!("{from} is not an account file (JSON)"))?;
+                let account = credentials::parse_portable(value)?;
+                credentials::save_portable(&account)?;
+                println!(
+                    "account: {}, {}; saved in {}",
+                    account.kind().label(),
+                    account.describe(),
+                    credentials::account_path().display()
+                );
+                if let Some(c) = running {
+                    c.sync_now().await?;
+                    println!("the service is refreshing the catalogue from it");
+                }
+            }
+            Admin::Password => {
+                let pw = read_password()?;
+                if let Some(why) = access::password_problem(&pw) {
+                    anyhow::bail!(why);
+                }
+                match running {
+                    Some(c) => drop(c.set_password(&pw).await?),
+                    None => Access::load(&dir).set_password(&pw).await?,
+                }
+                println!("password set; any device signed in before must sign in again");
+            }
+            Admin::Network(on) => match running {
+                Some(c) => {
+                    let now = c.network().await?;
+                    let n = c
+                        .set_network(&NetworkSettingsDto {
+                            enabled: on,
+                            port: now.port,
+                            https: now.https,
+                        })
+                        .await?;
+                    println!("network access {}", if on { "on" } else { "off" });
+                    if on {
+                        for a in &n.addresses {
+                            println!("  {a}");
+                        }
+                    }
+                }
+                None => {
+                    if on && !Access::load(&dir).password_set() {
+                        anyhow::bail!("set a sign-in password first (--set-password)");
+                    }
+                    let path = config::config_path();
+                    let mut cfg = config::load_from(&path);
+                    cfg.network.enabled = on;
+                    config::save_to(&path, &cfg)?;
+                    println!(
+                        "network access {} from the service's next start ({})",
+                        if on { "on" } else { "off" },
+                        path.display()
+                    );
+                }
+            },
+        }
+        Ok(())
+    })
+}
+
+/// The password from standard input: typed twice without echo at a
+/// terminal, else its first line (a pipe, a file, a secret mounted into a
+/// container).
+fn read_password() -> Result<String> {
+    use std::io::{BufRead, IsTerminal};
+    let stdin = std::io::stdin();
+    if !stdin.is_terminal() {
+        let mut line = String::new();
+        stdin.lock().read_line(&mut line)?;
+        return Ok(line.trim_end_matches(['\r', '\n']).to_string());
+    }
+    let first = prompt_hidden("Password for other devices: ")?;
+    let again = prompt_hidden("Again: ")?;
+    if first != again {
+        anyhow::bail!("the two passwords differ");
+    }
+    Ok(first)
+}
+
+/// One line from the terminal, not shown as it is typed (Unix; elsewhere
+/// it is shown, said so first).
+fn prompt_hidden(prompt: &str) -> Result<String> {
+    use std::io::{BufRead, Write};
+    eprint!("{prompt}");
+    std::io::stderr().flush()?;
+    #[cfg(unix)]
+    let restore = {
+        // SAFETY: tcgetattr and tcsetattr on standard input, with a termios
+        // they fill in themselves.
+        let mut t: libc::termios = unsafe { std::mem::zeroed() };
+        if unsafe { libc::tcgetattr(0, &mut t) } == 0 {
+            let old = t;
+            t.c_lflag &= !libc::ECHO;
+            unsafe { libc::tcsetattr(0, libc::TCSANOW, &t) };
+            Some(old)
+        } else {
+            None
+        }
+    };
+    #[cfg(not(unix))]
+    eprint!("(shown as typed) ");
+    let mut line = String::new();
+    let read = std::io::stdin().lock().read_line(&mut line);
+    #[cfg(unix)]
+    if let Some(old) = restore {
+        unsafe { libc::tcsetattr(0, libc::TCSANOW, &old) };
+        eprintln!();
+    }
+    read?;
+    Ok(line.trim_end_matches(['\r', '\n']).to_string())
 }
 
 #[derive(Clone, Copy)]

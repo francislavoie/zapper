@@ -33,6 +33,13 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
   and "Watch here anyway" is offered only where no recording is at stake. A browser is never cut
   off for a recording either: from two minutes before a recording on another channel needs its
   connection, the page says so and offers to switch to that channel, which shares one connection.
+- Linux: `zapper-server-<version>-linux-x86_64`, the recording service alone for a computer without
+  a desktop (a home server, a NAS, a container), as one static file that runs on any x86-64
+  Linux, with FFmpeg built in. `zapper-server --licenses` prints the licenses of what is in it;
+  packaging/server/ has how to run it, a sample systemd unit and a sample Dockerfile.
+- `zapper-server --import-account`, `--set-password` and `--network on|off` set up a service with
+  no app beside it: the provider account from an `account.json`, the password other devices sign
+  in with (read from standard input, never the command line), and network access.
 
 ### Changed
 

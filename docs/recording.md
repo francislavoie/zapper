@@ -460,6 +460,7 @@ honour the interval set in Settings → Guide.
 zapper-server [--port N] [--no-sync] [--home DIR]
 zapper-server --install-service | --remove-service [--home DIR]
 zapper-server --busy | --stop-for-setup [--ask] [--home DIR]
+zapper-server --import-account FILE | --set-password | --network on|off [--home DIR]
 ```
 
 - `--port N`: listen on port `N` for this run (default: the port in `server.json`, else 8796).
@@ -472,6 +473,15 @@ zapper-server --busy | --stop-for-setup [--ask] [--home DIR]
   21:05" if it is, 0 otherwise. `--stop-for-setup`: stops it cleanly now and waits for it to go;
   with `--ask`, asks first (a message box on Windows) when it is recording, and exits 2 if not.
   The Windows installers use both.
+- `--import-account FILE`: makes the provider account in `FILE` (an `account.json` copied from
+  zapper's config directory on another computer; `-` reads standard input) the one in use, as
+  Settings → Account's Save would. `--set-password`: sets the password other devices sign in
+  with, read from standard input (twice, without echo, at a terminal; else its first line), never
+  from the command line, where other users could read it. `--network on|off`: whether other
+  devices may reach it, which needs that password. For a service with no app beside it
+  ([Without the app](#without-the-app)); each goes through the running service's API when it
+  answers with this home's token, so it applies at once (a new password signs every device
+  out), and otherwise writes the files it reads when it starts.
 
 Its files, in zapper's config and data directories (`~/.config/zapper`, `~/.local/share/zapper`
 on Linux; `ZAPPER_HOME` moves both):
@@ -513,6 +523,48 @@ uses the development files pkg-config finds, and a release build refuses unless
 The packages ship it: `/usr/bin/zapper-server` in the `.deb`, `.rpm` and Arch package, with
 FFmpeg's libraries in `/usr/lib/zapper/`, and `zapper-server.exe` beside `zapper.exe` in the
 Windows installers. `just package` and `just package-windows` build it first.
+
+### Without the app
+
+Each release also carries `zapper-server-<version>-linux-x86_64`, the service alone for Linux
+without a desktop (a home server, a NAS, a container), as one static file: built for
+`x86_64-unknown-linux-musl`, with FFmpeg linked in, it loads nothing at run time, so it runs on
+any x86-64 Linux, glibc or musl, and in a container with nothing else in it. It takes two things
+from the system when there is one: the certificate authorities, to reach a provider over HTTPS
+(the system's own, in `/etc/ssl`, so that they follow its updates; without any it starts but
+cannot reach a provider), and the time zone (`/etc/localtime`, or `TZ` with `tzdata`).
+`zapper-server --licenses` prints the notices of everything built into it.
+
+[packaging/server/](../packaging/server/) has its README (running it, `ZAPPER_HOME`, the port,
+the first-time setup with `--import-account`, `--set-password` and `--network on`), a sample
+systemd system unit (a `zapper` system user, everything in `/var/lib/zapper` and write access
+there alone) and a sample `Dockerfile` (distroless's static base and the binary, run as a
+non-root user, not published anywhere).
+
+How it is made (`just package-server`, `scripts/build-server-static.sh`), in a pinned Rust image
+on Alpine, whose C library is musl:
+
+- `scripts/build-ffmpeg-static.sh` builds FFmpeg's libavformat, libavcodec, libswresample and
+  libavutil as static libraries from the tarball `packaging/libmpv/sources.txt` pins, LGPL, with
+  only what the service uses: MPEG-TS in and out and Matroska out, from files and its own I/O
+  (no network protocols), the parsers and bitstream filters those need, the decoders of the
+  audio a browser cannot play (AC-3, E-AC-3, MP1/2/3) with FFmpeg's own AAC encoder and
+  libswresample to turn it into AAC, and nothing found on the build machine: no hardware
+  acceleration, no programs, no documentation;
+- `build.rs` links them statically when the target is musl (`ZAPPER_FFMPEG_STATIC` names them),
+  while the desktop builds keep the shared bundle, and compiles in the notices
+  `ZAPPER_SERVER_NOTICES` names: zapper's license, FFmpeg's notice with the LGPL's text, musl's
+  `COPYRIGHT`, and the Rust crates' and the interface's notices.
+
+`just check-server-binary` (`scripts/check-server-binary.sh`) checks it: `file` and `ldd` call it
+statically linked; in bare `debian:stable-slim` and `alpine` containers it says its version and
+licenses, starts on a scratch home, answers `GET /api/version` and serves the web interface,
+takes the setup commands and stops cleanly on SIGTERM; it runs `FROM scratch`; the sample
+Dockerfile's image runs it as its README says; and `recording_check`, built for the same target,
+records the fixture streams through it, each remuxed into a Matroska file ffprobe reads. Its
+build runs the browser feed's tests (`recording::livemux`: an AC-3 fixture transcoded to AAC)
+against the same static FFmpeg first. The release workflow builds and checks it in a job of its
+own.
 
 ### Checking it
 
@@ -649,4 +701,3 @@ streams}`, what recording `title` loses to `with` on another channel when the ac
   signed in.
 - Series rules ("record every episode").
 - Joining parts whose codecs match into one file.
-- A headless package without the GUI's dependencies.

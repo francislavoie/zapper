@@ -11,6 +11,7 @@ fn main() {
     {
         remuxer(bundle.as_deref());
         web_assets();
+        notices();
     }
     let _ = bundle;
     // Windows (MSVC) only; tauri-build does the same for the app.
@@ -100,6 +101,11 @@ fn bundle() -> Option<PathBuf> {
     println!("cargo:rerun-if-env-changed=ZAPPER_SYSTEM_LIBMPV");
     let os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
+    // The static zapper-server for Linux links its own FFmpeg (`static_ffmpeg`), never the
+    // shared bundle, which is glibc's.
+    if musl() {
+        return None;
+    }
     let (platform, linkable, beside) = match (os.as_str(), arch.as_str()) {
         ("linux", "x86_64") => ("linux-x86_64", "libmpv.so", "lib/zapper"),
         // tools/fetch-libmpv.ps1 makes the import libraries MSVC links with.
@@ -200,6 +206,10 @@ fn remuxer(bundle: Option<&Path>) {
     println!("cargo:rerun-if-env-changed=PKG_CONFIG_PATH");
     let mut build = cc::Build::new();
     build.files(srcs).warnings(true).flag_if_supported("-std=c11");
+    if musl() {
+        static_ffmpeg(&mut build);
+        return;
+    }
     let libs = ["avformat", "avcodec", "swresample", "avutil"];
     match bundle {
         Some(dir) => {
@@ -223,6 +233,66 @@ fn remuxer(bundle: Option<&Path>) {
             build.compile("zapper_remux");
         }
     }
+}
+
+/// Building for musl: the static zapper-server for Linux, one file with nothing to load.
+fn musl() -> bool {
+    std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("musl")
+}
+
+/// The static zapper-server's FFmpeg: the static libraries `scripts/build-ffmpeg-static.sh` made
+/// (only what the service uses, LGPL, docs/licensing.md), in the folder `ZAPPER_FFMPEG_STATIC`
+/// names (`include/`, `lib/`), linked into the binary. Its notices go in with them (`notices`).
+#[cfg(feature = "server")]
+fn static_ffmpeg(build: &mut cc::Build) {
+    println!("cargo:rerun-if-env-changed=ZAPPER_FFMPEG_STATIC");
+    let dir = PathBuf::from(std::env::var_os("ZAPPER_FFMPEG_STATIC").unwrap_or_else(|| {
+        panic!("a musl zapper-server links a static FFmpeg: run scripts/build-ffmpeg-static.sh and name its folder in ZAPPER_FFMPEG_STATIC (scripts/build-server-static.sh does both)")
+    }));
+    let lib = dir.join("lib");
+    for a in ["libavformat.a", "libavcodec.a", "libswresample.a", "libavutil.a"] {
+        let p = lib.join(a);
+        assert!(p.is_file(), "{} is missing", p.display());
+        println!("cargo:rerun-if-changed={}", p.display());
+    }
+    build.include(dir.join("include"));
+    build.compile("zapper_remux");
+    println!("cargo:rustc-link-search=native={}", lib.display());
+    // After the remuxer's archive, and in the order they need each other.
+    for l in ["avformat", "avcodec", "swresample", "avutil"] {
+        println!("cargo:rustc-link-lib=static={l}");
+    }
+}
+
+/// The licence notices `zapper-server --licenses` prints: every `.txt` in the folder
+/// `ZAPPER_SERVER_NOTICES` names, in name order, compiled in, for a binary that travels without
+/// the files the packages install beside it (the static one). Without it, `--licenses` says where
+/// the packages keep them; a release build for musl refuses.
+#[cfg(feature = "server")]
+fn notices() {
+    println!("cargo:rerun-if-env-changed=ZAPPER_SERVER_NOTICES");
+    let mut text = String::new();
+    if let Some(dir) = std::env::var_os("ZAPPER_SERVER_NOTICES").map(PathBuf::from) {
+        let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
+            .unwrap_or_else(|e| panic!("ZAPPER_SERVER_NOTICES: {}: {e}", dir.display()))
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| x == "txt"))
+            .collect();
+        files.sort();
+        for f in files {
+            println!("cargo:rerun-if-changed={}", f.display());
+            let body = std::fs::read_to_string(&f)
+                .unwrap_or_else(|e| panic!("{}: {e}", f.display()));
+            assert!(!body.trim().is_empty(), "{} is empty", f.display());
+            let name = f.file_name().unwrap_or_default().to_string_lossy().into_owned();
+            text.push_str(&format!("{}\n{name}\n{}\n\n{}\n\n", "=".repeat(78), "=".repeat(78), body.trim_end()));
+        }
+    } else if musl() && std::env::var("PROFILE").as_deref() == Ok("release") {
+        panic!("a release zapper-server for musl carries its licence notices: name their folder in ZAPPER_SERVER_NOTICES (scripts/build-server-static.sh does)");
+    }
+    let out = PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR")).join("notices.txt");
+    std::fs::write(&out, text).expect("writing notices.txt");
 }
 
 fn copy_if_stale(src: &Path, dst: &Path) {

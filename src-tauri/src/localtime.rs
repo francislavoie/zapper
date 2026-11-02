@@ -55,17 +55,17 @@ pub fn civil_from_days(days: i64) -> (i64, u32, u32) {
 
 /// Seconds east of UTC at `unix`, from the C library.
 ///
-/// std has no local time and the dependency set is pinned, so `localtime_r`
-/// is resolved out of the already-loaded libc - the same trick the Linux
-/// surface uses for `setlocale`. Only the offset is taken; the calendar
+/// std has no local time, so this is the C library's `localtime_r`, which
+/// every Unix has: declared here and linked like any libc function rather
+/// than looked up at run time, which the static zapper-server for Linux
+/// (musl, no `dlopen`) cannot do. Only the offset is taken; the calendar
 /// arithmetic stays in Rust where it can be tested.
 #[cfg(unix)]
 pub fn utc_offset(unix: i64) -> i64 {
-    use libloading::os::unix::Library;
     use std::ffi::{c_char, c_int, c_long};
 
-    /// glibc's `struct tm`: nine ints, then `tm_gmtoff` and `tm_zone`. The
-    /// BSDs, macOS among them, lay it out the same way.
+    /// glibc's `struct tm`: nine ints, then `tm_gmtoff` and `tm_zone`. musl
+    /// and the BSDs, macOS among them, lay it out the same way.
     #[repr(C)]
     struct Tm {
         sec: c_int,
@@ -81,12 +81,9 @@ pub fn utc_offset(unix: i64) -> i64 {
         zone: *const c_char,
     }
 
-    type LocaltimeR = unsafe extern "C" fn(*const i64, *mut Tm) -> *mut Tm;
-    let this = Library::this();
-    let Ok(localtime_r) = (unsafe { this.get::<LocaltimeR>(b"localtime_r\0") }) else {
-        tracing::warn!("localtime_r did not resolve; local times will read as UTC");
-        return 0;
-    };
+    extern "C" {
+        fn localtime_r(t: *const i64, tm: *mut Tm) -> *mut Tm;
+    }
     let mut tm: Tm = unsafe { std::mem::zeroed() };
     let t = unix;
     if unsafe { localtime_r(&t, &mut tm) }.is_null() {

@@ -39,6 +39,11 @@ impl Client {
             .timeout(Duration::from_secs(15))
             // Loopback: no proxy may stand between the app and the service.
             .no_proxy()
+            // Plain HTTP to 127.0.0.1, so no certificate authorities: the
+            // system's would be loaded otherwise, and a computer without any
+            // (a bare container) could not build this client at all, nor
+            // set up or stop its own service.
+            .tls_certs_only(std::iter::empty())
             .build()?;
         Ok(Self {
             base: base.trim_end_matches('/').to_string(),
@@ -181,6 +186,11 @@ impl Client {
         };
         self.send(self.http.put(self.url("/api/network/password")).json(&body))
             .await
+    }
+
+    /// Asks the service to refresh the catalogue now (`POST /api/sync`).
+    pub async fn sync_now(&self) -> Result<serde_json::Value> {
+        self.send(self.http.post(self.url("/api/sync"))).await
     }
 
     pub async fn revoke_device(&self, id: &str) -> Result<NetworkDto> {

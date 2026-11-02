@@ -233,8 +233,9 @@ glib = { version = "0.18", optional = true }
 webkit2gtk = { version = "2.0", optional = true }
 cairo-rs = { version = "0.18", features = ["png"], optional = true }
 
-# Symbols out of the already-loaded C library: `setlocale` on Linux, and
-# `localtime_r` for the catch-up clock on every Unix.
+# Symbols out of the already-loaded C library and OpenGL: `setlocale` and libGL for
+# the Linux surface, OpenGL for the macOS one. (`localtime_r` is linked directly:
+# the static zapper-server cannot load anything at run time.)
 [target.'cfg(unix)'.dependencies]
 libloading = "0.8"
 # `statvfs`, for the free space the recording service reports. Already in
@@ -280,8 +281,9 @@ objc2-core-video = { version = "0.3", default-features = false, features = ["std
 dispatch2 = "0.3"
 
 # The MPRIS round trip in `media_keys`'s ignored test, which talks to the
-# registration as a desktop would. Already in the tree under tao.
-[target.'cfg(target_os = "linux")'.dev-dependencies]
+# registration as a desktop would. Already in the tree under tao. Not for musl:
+# the static zapper-server's tests run there, with no libdbus to link.
+[target.'cfg(all(target_os = "linux", target_env = "gnu"))'.dev-dependencies]
 dbus = "0.9"
 
 [profile.dev]

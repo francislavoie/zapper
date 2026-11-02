@@ -2,7 +2,8 @@
 
 A release is a tag. `just release <version>` prepares the release commit and tag locally;
 pushing the tag starts [.github/workflows/release.yml](../.github/workflows/release.yml), which
-builds the `.deb`, the `.rpm` and the Arch package and the two Windows installers, checks them,
+builds the `.deb`, the `.rpm` and the Arch package, the headless `zapper-server` archive and the
+two Windows installers, checks them,
 and uploads them with `SHA256SUMS` to a **draft** GitHub release. You review the draft and publish it. Nothing is
 published automatically.
 
@@ -91,8 +92,8 @@ Until this is done, `just release` refuses to run, and the updater in any build 
    has no section for the version.
 
 4. **Review the draft** under Releases. It's titled "zapper 0.2.0", has the changelog section as
-   its notes, and carries the `.deb`, the `.rpm`, the Arch package, the NSIS setup, the MSI and
-   `SHA256SUMS`. A version with a pre-release part (`-rc.1`) is marked pre-release. Edit the
+   its notes, and carries the `.deb`, the `.rpm`, the Arch package, the `zapper-server` archive,
+   the NSIS setup, the MSI and `SHA256SUMS`. A version with a pre-release part (`-rc.1`) is marked pre-release. Edit the
    notes if needed, and install the packages from the draft to try them
    (`sudo apt install ./zapper_0.2.0_amd64.deb`,
    `sudo pacman -U ./zapper-0.2.0-1-x86_64.pkg.tar.zst`, `zapper_0.2.0_x64-setup.exe`).
@@ -157,6 +158,7 @@ release: a package `SHA256SUMS` doesn't list is never installed.
 | Windows NSIS (per-user setup) | `zapper_<version>_x64-setup.exe` |
 | Windows MSI (per-machine) | `zapper_<version>_x64_en-US.msi` (the full version in the name; the MSI's own version is `X.Y.Z`, below) |
 | macOS (not released yet) | `zapper_<version>_aarch64.dmg` (an Intel Mac would look for `_x64.dmg`) |
+| none (the recording service alone, for Linux without the app) | `zapper-server-<version>-linux-x86_64`: one static executable (no installed copy updates from it; packaging/server/README.md says how to replace it) |
 | all | `SHA256SUMS` (`sha256sum` output listing each package) |
 
 The tag stays `v<version>`, and the release's body (the CHANGELOG section) is what the update
@@ -218,9 +220,19 @@ that starts with a letter before the release (`0.2.0rc.1` < `0.2.0`) but one tha
    `just package` with `ZAPPER_RELEASE_VERSION` set: the frontend build, the release binary, the
    `.deb` and `.rpm`, `fix-deb.sh` and `check-deb.sh`, then the Arch package from the `.deb`
    (`package-arch.sh`, its file times the release commit's). `just check-arch-pkg` then installs
-   that in an `archlinux:latest` container and checks it. Writes `SHA256SUMS` and keeps
-   everything as a workflow artifact for 3 days.
-3. **Windows** (`windows-latest`, read-only, beside the Linux job): checks the tag against
+   that in an `archlinux:latest` container and checks it. Writes `SHA256SUMS` and keeps everything as a workflow
+   artifact for 3 days.
+3. **Server** (`ubuntu-24.04`, read-only, beside the others): the static zapper-server for
+   Linux, `zapper-server-<version>-linux-x86_64` (docs/recording.md, "Without the app"). Writes
+   the Rust notices and builds the interface, then `scripts/build-server-static.sh --with-checks`
+   in a pinned Rust image on Alpine: the minimal static FFmpeg (`build-ffmpeg-static.sh`,
+   cached on `sources.txt` and the script), then zapper-server for musl with it and its notices
+   built in, the browser feed's tests against that FFmpeg (an AC-3 fixture transcoded to AAC),
+   and `recording_check` for the same target. `scripts/check-server-binary.sh` then
+   checks it is static, runs it in bare `debian:stable-slim` and `alpine` containers and from
+   scratch, builds and runs the sample `Dockerfile`, and records the fixture streams through it.
+   Writes `SHA256SUMS` and keeps it as a workflow artifact for 3 days.
+4. **Windows** (`windows-latest`, read-only, beside the Linux job): checks the tag against
    `tauri.conf.json`'s version, fetches libmpv (`tools/fetch-libmpv.ps1`), writes the Rust
    license notices, builds `zapper-server.exe`, then `npx tauri build` with
    `packaging/windows/installers.conf.json`: the NSIS setup and the MSI. A pre-release's MSI is
@@ -230,8 +242,8 @@ that starts with a letter before the release (`0.2.0rc.1` < `0.2.0`) but one tha
    installs and uninstalls the setup on the runner, and fails on a missing file or marker, an
    import from outside the installer and Windows, or a GPL library. Writes `SHA256SUMS` and keeps
    both as a workflow artifact for 3 days. The release waits for it.
-4. **macOS:** skipped (below).
-5. **Release** (`contents: write`): verifies each job's checksums and merges them into one
+5. **macOS:** skipped (below).
+6. **Release** (`contents: write`): verifies each job's checksums and merges them into one
    `SHA256SUMS`, attests the packages' build provenance (public repositories, or
    `ZAPPER_ATTEST`), and creates the draft release, or updates it on a re-run.
 

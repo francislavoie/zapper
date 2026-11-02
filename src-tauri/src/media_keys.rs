@@ -301,7 +301,7 @@ mod platform {
         /// ZAPPER_MPRIS_TEST=1 dbus-run-session -- \
         ///     cargo test --lib media_keys -- --ignored
         /// ```
-        #[cfg(target_os = "linux")]
+        #[cfg(all(target_os = "linux", target_env = "gnu"))]
         #[test]
         #[ignore = "needs a private session bus: see the doc comment"]
         fn a_desktop_reads_the_session_and_presses_the_buttons() {
