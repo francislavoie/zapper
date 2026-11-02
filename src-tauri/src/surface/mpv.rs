@@ -211,6 +211,37 @@ pub fn handle() -> Option<&'static Mpv> {
     MPV.get().copied()
 }
 
+/// What the demuxer cache holds, in the stream's own time: from the oldest
+/// moment that can be read back to the newest packet. `None` before a stream
+/// has data.
+pub fn cache_span(mpv: &Mpv) -> Option<(f64, f64)> {
+    let raw = mpv.get_property::<String>("demuxer-cache-state").ok()?;
+    let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let start = v
+        .get("seekable-ranges")
+        .and_then(|r| r.as_array())
+        .and_then(|r| r.first())
+        .and_then(|r| r.get("start"))
+        .and_then(|x| x.as_f64())?;
+    let end = v.get("cache-end").and_then(|x| x.as_f64())?;
+    (end > start).then_some((start, end))
+}
+
+/// Writes what the cache holds from `start` to `end` (the stream's time, as
+/// [`cache_span`] gives it) to `path`, as MPEG-TS: mpv's `dump-cache`, the
+/// packets copied as they are. Blocks until the file is written, so never on
+/// the main thread; playback carries on meanwhile.
+pub fn dump_cache(mpv: &Mpv, start: f64, end: f64, path: &std::path::Path) -> Result<()> {
+    let path = path
+        .to_str()
+        .ok_or_else(|| anyhow!("a path mpv cannot be given"))?;
+    mpv.command(
+        "dump-cache",
+        &[&format!("{start:.3}"), &format!("{end:.3}"), path],
+    )
+    .context("dump-cache")
+}
+
 /// Opens the URL held back by [`Player::load`], now that the surface can show
 /// it. Called by the platform once its video output can succeed.
 pub fn load_pending() {
