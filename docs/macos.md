@@ -73,7 +73,8 @@ runners', has run it).
 
 `macos.yml` runs on the Mac runners every Monday and on Run workflow for main, and on a pull
 request only when it can change what macOS gets: a change to the macOS code (`surface/`,
-`chrome.rs`, `paths.rs`, any Rust file with `target_os = "macos"`), `packaging/macos/`, the
+`chrome.rs`, `paths.rs`, the recording service's installer and `zapper_server.rs`, any Rust file
+with `target_os = "macos"`), `packaging/macos/`, the
 libmpv build, Cargo or Tauri config, or the workflow itself; or when the pull request carries the
 `macos` label. A pull request builds the `.app` and `.dmg` only when macOS packaging or the libmpv
 build changes. A small Linux job, *macOS needed?*, decides in seconds. When it runs, it:
@@ -82,6 +83,11 @@ build changes. A small Linux job, *macOS needed?*, decides in seconds. When it r
   or `packaging/libmpv/sources.txt` changes;
 - runs Rust's unit tests and clippy (the harnesses too), builds zapper-server and the interface,
   and runs the interface's checks;
+- installs the built zapper-server as a LaunchAgent (`zapper-server --install-service`, what
+  Settings → Recording → Install does), on a scratch home and port, checks the plist with `plutil
+  -lint`, that `launchctl print` says it runs and that it answers (`--busy` says idle), then
+  removes it (`--remove-service`) and checks that launchd has let it go and that it stopped
+  cleanly;
 - builds `zapper.app` and the `.dmg`, and checks the bundle with `scripts/check-macos-app.sh`:
   every binary links only macOS's own libraries and the bundled dylibs, nothing in it is GPL, the
   notices and install marker are there, and the signature verifies. The `.dmg` is kept as an
@@ -121,4 +127,6 @@ the record (the job summary says how each went) and in the bundled app's screens
 - **Media keys.** The desktop media controls (MPRIS, Windows' SMTC) have no macOS counterpart
   yet.
 - **HDR.** The layer is SDR; HDR video is tone-mapped by mpv.
-- **zapper-server** builds on macOS but is not in the bundle and has not been run there.
+- **zapper-server** builds on macOS and runs as a LaunchAgent in CI, but is not in the bundle
+  yet: Settings → Recording → Install finds one on `PATH` (or named by `ZAPPER_SERVER_BIN`), and
+  `zapper-server --install-service` installs itself.

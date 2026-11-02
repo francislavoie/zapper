@@ -17,7 +17,13 @@ schedules recordings from the guide and shows them; the service does the recordi
      it isn't offered. Having no window, it logs to `%LOCALAPPDATA%\zapper\zapper-server.log`.
      Updating zapper stops it to replace it, and zapper starts it again when it reopens.
      Uninstalling zapper removes the task too ([Stopping and updating](#stopping-and-updating)).
-   - **macOS:** not yet; run `zapper-server` yourself.
+   - **macOS:** a LaunchAgent, `~/Library/LaunchAgents/dev.lavoie.zapper.server.plist`, loaded
+     into your login session (`launchctl bootstrap`), which starts it when you log in and again
+     after a crash, but not after a clean stop. It records while you are logged in. It logs to
+     `~/Library/Application Support/zapper/zapper-server.log`, and what launchd catches on its
+     standard error to `zapper-server.launchd.log` beside it. The app does not carry
+     `zapper-server` on macOS yet: Install uses one on `PATH`, and `zapper-server
+     --install-service` installs itself.
 2. **Right-click a programme** in the guide, or in the programme search results, and choose
    **Record**. A red dot marks it; it pulses while recording, and turns grey while a recording
    that has ended is saved into its file. Right-click again to cancel, or to stop a recording
@@ -696,7 +702,7 @@ streams}`, what recording `title` loses to `with` on another channel when the ac
 
 - In the browser: rewinding further than the browser holds (a buffer kept by the service), the
   provider's archive, subtitles, and MPEG-2 video (it would need re-encoding).
-- Installing the service on macOS (a LaunchAgent); waking the computer from suspend to record
+- Waking the computer from suspend to record
   (on Windows, a task per recording with a wake timer); recording on Windows while nobody is
   signed in.
 - Series rules ("record every episode").

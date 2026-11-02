@@ -65,6 +65,8 @@ jobs:
             ^src-tauri/src/chrome\.rs$
             ^src-tauri/src/paths\.rs$
             ^src-tauri/src/bin/surface_check\.rs$
+            ^src-tauri/src/recording/service(\.rs$|/)
+            ^src-tauri/src/bin/zapper_server\.rs$
             ^src-tauri/build\.rs$
             ^src-tauri/Cargo\.(toml|lock)$
             ^src-tauri/tauri(\.macos)?\.conf\.json$
@@ -214,6 +216,46 @@ jobs:
       - name: zapper-server
         working-directory: src-tauri
         run: cargo build --release --no-default-features --features server --bin zapper-server
+
+      # Settings > Recording's Install on a Mac, through the built zapper-server's own
+      # --install-service (the same code): the LaunchAgent in ~/Library/LaunchAgents, loaded by
+      # launchd, running, answering on a scratch home it is handed and its port, then removed
+      # (recording::service::launchd).
+      - name: LaunchAgent
+        run: |
+          set -euo pipefail
+          bin=$PWD/src-tauri/target/release/zapper-server
+          label=dev.lavoie.zapper.server
+          plist=$HOME/Library/LaunchAgents/$label.plist
+          export ZAPPER_HOME=$RUNNER_TEMP/zapper-home
+          mkdir -p "$ZAPPER_HOME/config"
+          echo '{"port": 18796}' > "$ZAPPER_HOME/config/server.json"
+          [ ! -e "$plist" ] || { echo "::error::$plist exists already"; exit 1; }
+          "$bin" --install-service
+          cat "$plist"
+          plutil -lint "$plist"
+          # The login session's domain, or the background one where there is none.
+          uid=$(id -u)
+          domain=gui/$uid
+          launchctl print "$domain" > /dev/null 2>&1 || domain=user/$uid
+          launchctl print "$domain/$label" | head -40
+          state=
+          for _ in $(seq 1 100); do
+            state=$("$bin" --busy 2>/dev/null || true)
+            [ "$state" = idle ] && break
+            sleep 0.2
+          done
+          [ "$state" = idle ] || { echo "::error::--busy says '$state', not idle"; tail -50 "$ZAPPER_HOME/data/"*.log || true; exit 1; }
+          launchctl print "$domain/$label" | grep -q 'state = running' || { echo "::error::launchd does not say it runs"; exit 1; }
+          grep -q "recording service API on http://127.0.0.1:18796" "$ZAPPER_HOME/data/zapper-server.log"
+          echo "running under launchd ($domain), idle on 18796"
+          "$bin" --remove-service
+          [ ! -e "$plist" ] || { echo "::error::$plist left behind"; exit 1; }
+          ! launchctl print "$domain/$label" > /dev/null 2>&1 || { echo "::error::launchd still has $label"; exit 1; }
+          for _ in $(seq 1 50); do nc -z 127.0.0.1 18796 || break; sleep 0.2; done
+          ! nc -z 127.0.0.1 18796 || { echo "::error::something still answers on 18796"; exit 1; }
+          grep -q "stopping (signalled)" "$ZAPPER_HOME/data/zapper-server.log" || { echo "::error::it was not stopped cleanly"; tail -20 "$ZAPPER_HOME/data/zapper-server.log"; exit 1; }
+          echo "removed, and it stopped cleanly"
 
       - name: Frontend checks
         run: node --test src/__checks__/*.test.mjs

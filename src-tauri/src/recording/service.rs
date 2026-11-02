@@ -19,8 +19,8 @@
 //! logged out" switch there. Nor does it wake the computer to record: that
 //! would be one more task per recording, with a wake timer.
 //!
-//! macOS (a LaunchAgent) is not done yet; it reports so rather than
-//! pretending.
+//! macOS: a LaunchAgent, loaded into this user's login session with
+//! `launchctl`, that starts it at login and after a crash ([`launchd`]).
 //!
 //! Nothing here runs unless a person clicks: installing a service is theirs
 //! to decide.
@@ -30,6 +30,8 @@ use std::process::Command;
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
+
+pub mod launchd;
 
 pub const UNIT_NAME: &str = "zapper-server.service";
 
@@ -152,7 +154,7 @@ pub fn find_binary() -> Option<PathBuf> {
     })
 }
 
-fn run(cmd: &str, args: &[&str]) -> Result<String> {
+pub(crate) fn run(cmd: &str, args: &[&str]) -> Result<String> {
     let out = Command::new(cmd)
         .args(args)
         .output()
@@ -173,13 +175,10 @@ fn run(cmd: &str, args: &[&str]) -> Result<String> {
 }
 
 fn unsupported() -> Option<String> {
-    if cfg!(any(target_os = "linux", windows)) {
+    if cfg!(any(target_os = "linux", target_os = "macos", windows)) {
         None
     } else {
-        Some(
-            "Not yet on macOS: run zapper-server yourself for now (a LaunchAgent is planned)."
-                .into(),
-        )
+        Some("Not on this system: run zapper-server yourself.".into())
     }
 }
 
@@ -209,6 +208,12 @@ pub fn status() -> ServiceStatusDto {
         }
         return s;
     }
+    if cfg!(target_os = "macos") {
+        s.kind = Some("a LaunchAgent that starts it when you log in".into());
+        s.state = launchd::state();
+        s.installed = s.state.is_some();
+        return s;
+    }
     s.kind = Some("a systemd user service".into());
     s.can_linger = true;
     s.installed = unit_path().is_some_and(|p| p.is_file());
@@ -235,8 +240,9 @@ fn linger() -> bool {
 }
 
 /// Writes the unit and starts it; with `linger`, keeps it running after
-/// logging out. On Windows, registers the task and starts it; `linger` is
-/// not offered there and is ignored.
+/// logging out. On Windows, registers the task and starts it; on macOS,
+/// loads the agent, which starts it. `linger` is not offered there and is
+/// ignored.
 pub fn install(linger: bool) -> Result<()> {
     if let Some(why) = unsupported() {
         bail!(why);
@@ -253,6 +259,9 @@ pub fn install(linger: bool) -> Result<()> {
         return scheduler::install(&task_name(&user), |account| {
             task_xml(&exe, account, home.as_deref())
         });
+    }
+    if cfg!(target_os = "macos") {
+        return launchd::install(&exe, home.as_deref());
     }
     let path = unit_path().ok_or_else(|| anyhow!("no home directory to install the service in"))?;
     if let Some(dir) = path.parent() {
@@ -271,7 +280,7 @@ pub fn install(linger: bool) -> Result<()> {
 /// Turns lingering on or off for this user. Nothing to do where it is not
 /// offered.
 pub fn set_linger(on: bool) -> Result<()> {
-    if unsupported().is_some() || cfg!(windows) {
+    if unsupported().is_some() || !cfg!(target_os = "linux") {
         return Ok(());
     }
     if on == self::linger() {
@@ -303,6 +312,9 @@ pub fn remove() -> Result<()> {
             return Ok(());
         };
         return scheduler::remove(&task_name(&user));
+    }
+    if cfg!(target_os = "macos") {
+        return launchd::remove();
     }
     let Some(path) = unit_path() else {
         return Ok(());
@@ -458,7 +470,7 @@ pub fn task_xml(exe: &Path, user: &str, home: Option<&Path>) -> String {
     )
 }
 
-fn xml_escape(s: &str) -> String {
+pub(crate) fn xml_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")

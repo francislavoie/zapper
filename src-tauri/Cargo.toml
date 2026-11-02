@@ -84,7 +84,8 @@ path = "src/bin/recording_check.rs"
 required-features = ["harness", "server"]
 
 # Installs the recording service as Settings > Recording does (the sign-in
-# task on Windows, the systemd user unit on Linux), on a scratch home, checks
+# task on Windows, the LaunchAgent on macOS, the systemd user unit on Linux),
+# on a scratch home, checks
 # that it answers, and removes it.
 [[bin]]
 name = "service_check"
