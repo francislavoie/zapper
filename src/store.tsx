@@ -163,6 +163,10 @@ export interface State {
    *  may end with it — see `programmeForSleep`. Kept by the SleepTimer
    *  component, which watches the clock so nothing else has to. */
   sleepProgramme: ProgrammeDto | null;
+  /** What the guide says is on the playing channel now, while it plays
+   *  live — see `programmeOnNow`: what Record from the player records. Kept
+   *  by the SleepTimer component beside `sleepProgramme`. */
+  nowProgramme: ProgrammeDto | null;
   /** The diagnostics panel. Off by default and polled only while open. */
   statsOpen: boolean;
   /** Which view fullscreen was entered from, so leaving it goes back there
@@ -348,6 +352,7 @@ export const initialState: State = {
   options: { audio: [], subtitles: [], aspect: "auto", deinterlace: "auto" },
   sleep: null,
   sleepProgramme: null,
+  nowProgramme: null,
   statsOpen: false,
   fullscreenFrom: null,
   query: "",
@@ -416,6 +421,7 @@ export type Action =
    *  in milliseconds, passed in so the reducer stays pure. */
   | { type: "sleep"; request: SleepRequest | null; at: number }
   | { type: "sleepProgramme"; programme: ProgrammeDto | null }
+  | { type: "nowProgramme"; programme: ProgrammeDto | null }
   | { type: "stats"; open: boolean }
   | { type: "fullscreenFrom"; mode: Mode | null }
   | { type: "stacked"; on: boolean }
@@ -522,6 +528,10 @@ export function reducer(state: State, action: Action): State {
       return state.sleepProgramme === action.programme
         ? state
         : { ...state, sleepProgramme: action.programme };
+    case "nowProgramme":
+      return state.nowProgramme === action.programme
+        ? state
+        : { ...state, nowProgramme: action.programme };
     case "stats":
       // Opening it closes the menu it was chosen from; nothing wants both.
       return { ...state, statsOpen: action.open, videoMenu: null };

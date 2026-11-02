@@ -340,6 +340,7 @@ function Menu({ onChoose }: { onChoose: (a: PaletteAction) => void }) {
     hasPrevious: true,
     sleeping: true,
     programme: true,
+    recordable: true,
     capabilities,
   }).length;
   let seen = 0;

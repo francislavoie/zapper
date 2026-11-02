@@ -38,6 +38,7 @@ export const ACTION_IDS = [
   "sleepProgramme",
   "sleepOff",
   "sync",
+  "record",
   "recordings",
   "settings",
   "updates",
@@ -57,9 +58,9 @@ export interface PaletteAction {
   needsPlayer?: boolean;
   /** Hidden until there is a previous channel to go back to. */
   needsPrevious?: boolean;
-  /** Hidden unless the condition holds: a sleep timer is set, or the guide
-   *  knows when the programme on now ends. */
-  needs?: "sleeping" | "programme";
+  /** Hidden unless the condition holds: a sleep timer is set, the guide
+   *  knows when the programme on now ends, or it can be recorded. */
+  needs?: "sleeping" | "programme" | "recordable";
   /** Hidden where the interface cannot do it (logic/capabilities.ts). */
   needsCapability?: Capability;
   /** A sleep timer action: what it sets, or `null` for off. */
@@ -74,6 +75,9 @@ export interface ActionConditions {
   hasPrevious?: boolean;
   sleeping?: boolean;
   programme?: boolean;
+  /** The programme on now can be recorded (logic/recordings.ts
+   *  `playerRecord`). */
+  recordable?: boolean;
   /** The app's window when not given. */
   capabilities?: Capabilities;
 }
@@ -165,6 +169,15 @@ export const ACTIONS: PaletteAction[] = [
     group: "data",
     needsCapability: "resync",
   },
+  // The programme on the channel playing, from the player: R.
+  {
+    id: "record",
+    label: "Record this programme",
+    hint: "R",
+    needsPlayer: true,
+    needs: "recordable",
+    group: "player",
+  },
   // What the recording service has scheduled and recorded. "record" and
   // "dvr" are what people type looking for it.
   { id: "recordings", label: "Recordings", hint: "record · dvr", group: "data" },
@@ -221,8 +234,7 @@ export function availableActions(
       allows(caps, a.needsCapability) &&
       (!a.needsPlayer || (playing && caps.playback)) &&
       (!a.needsPrevious || conditions.hasPrevious === true) &&
-      (a.needs === undefined ||
-        (a.needs === "sleeping" ? conditions.sleeping === true : conditions.programme === true)),
+      (a.needs === undefined || conditions[a.needs] === true),
   );
 }
 

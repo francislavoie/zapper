@@ -55,6 +55,21 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
   it finishes. For a Jellyfin on another computer it needs network access on; the address in the
   files can be set by hand. See "Watching a recording in Jellyfin while it records" in
   docs/recording.md for what Jellyfin shows and doesn't.
+- Record what you're watching, from the player: **R**, *Record* in the picture's right-click
+  menu, or the *Record* button beside the picture (in the app and in a browser). Once it records,
+  the same places say *Recording* and offer *Stop*.
+- Recording what you watch works on an account of one connection. When the recording service
+  runs on this computer, the player moves onto the service's connection to the channel and the
+  recording shares it, instead of the recording waiting until you stop watching; the picture
+  pauses for a moment and keeps its volume and tracks. A recording that starts later on the
+  channel you're watching does the same. Without the service on this computer, Record says it
+  can't rather than leaving the recording waiting.
+- The part of the programme you've already watched is kept: what the player has buffered of it,
+  from the programme's start or as far back as the buffer reaches, becomes the recording's first
+  part, with a clock track reading when it aired. (Jellyfin following a recording through its
+  `.strm` sees what the service receives; the buffer is in the finished file.)
+- Tuning to a channel the recording service is recording shares its connection instead of
+  opening a second one, so watching what records costs nothing on an account of one stream.
 
 ### Changed
 

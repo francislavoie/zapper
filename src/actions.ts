@@ -19,7 +19,13 @@ import type {
   ProgrammeHitDto,
   RecordingDto,
 } from "./types";
-import { conflictLosesProgramme, conflictText, recordingWhen, scheduleRequest } from "./logic/recordings";
+import {
+  conflictLosesProgramme,
+  conflictText,
+  recordingWhen,
+  scheduleRequest,
+  type PlayerRecord,
+} from "./logic/recordings";
 import { NO_PLAYBACK } from "./logic/web";
 
 export interface PlayOptions {
@@ -109,6 +115,9 @@ export interface ActionContext {
   dispatch: Dispatch<Action>;
   player: PlayerStateDto;
   previous: ChannelDto | null;
+  /** What Record from the player would do (logic/recordings.ts
+   *  `playerRecord`), where Record can be chosen. */
+  record?: PlayerRecord | null;
 }
 
 /** One behaviour per action id. `Record<ActionId, …>` makes the compiler
@@ -142,6 +151,7 @@ const HANDLERS: Record<ActionId, (ctx: ActionContext) => void> = {
   sleepProgramme: ({ dispatch }) => setSleep(dispatch, "programme"),
   sleepOff: ({ dispatch }) => setSleep(dispatch, null),
   sync: ({ dispatch }) => void run(dispatch, "sync", backend.syncNow()),
+  record: ({ dispatch, record }) => void recordFromPlayer(dispatch, record ?? null),
   recordings: ({ dispatch }) => dispatch({ type: "recordingsDialog", open: true }),
   settings: ({ dispatch }) => dispatch({ type: "settings", open: true }),
   updates: ({ dispatch }) => {
@@ -324,6 +334,33 @@ export async function recordProgramme(
     dispatch({ type: "toast", text: `Record: ${errorMessage(e)}` });
   }
   await afterRecordingAction(dispatch);
+}
+
+/** Record from the player: the programme on now on the channel it shows.
+ *  On the desktop, the app keeps what the player has already received of
+ *  it, and on an account with no connection to spare moves the player onto
+ *  the recording service's connection, which the recording shares
+ *  (docs/recording.md, "Recording what you watch"). Already being recorded,
+ *  it says so rather than stopping it: a stray key must not end a
+ *  recording, which the menus' Stop recording does. */
+export async function recordFromPlayer(
+  dispatch: Dispatch<Action>,
+  r: PlayerRecord | null,
+): Promise<void> {
+  if (!r) {
+    dispatch({
+      type: "toast",
+      kind: "info",
+      text: "Nothing to record: the guide says nothing about what is on, or the recording service is not running",
+    });
+    return;
+  }
+  if (r.kind === "record") {
+    await recordProgramme(dispatch, r.channel, r.programme);
+    return;
+  }
+  const what = r.kind === "recording" ? "Recording" : r.kind === "saving" ? "Saving" : "Will record";
+  dispatch({ type: "toast", kind: "info", text: `${what} “${r.rec.title}”` });
 }
 
 /** Cancels a scheduled recording, or stops one being recorded (which keeps

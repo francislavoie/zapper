@@ -22,6 +22,7 @@ import { airingTag, airingWhen } from "../logic/programmes";
 import { IS_MAC } from "../platform";
 import { categoryNames, categoryOf } from "../logic/searchGroups";
 import { useApp, useDispatch } from "../store";
+import { usePlayerRecord } from "../hooks/usePlayerRecord";
 
 /** Enough to pick from without the programmes, which follow the channels,
  *  sitting a long scroll down. The list's own search shows more of both. */
@@ -43,6 +44,7 @@ export function CommandPalette() {
   );
 
   const playing = state.player.state !== "stopped";
+  const record = usePlayerRecord();
   const items = paletteItems(
     filterActions(
       availableActions(playing, {
@@ -50,6 +52,7 @@ export function CommandPalette() {
         hasPrevious: state.previousChannel !== null,
         sleeping: state.sleep !== null,
         programme: state.sleepProgramme !== null,
+        recordable: record?.kind === "record",
       }),
       query,
     ),
@@ -95,11 +98,13 @@ export function CommandPalette() {
         dispatch,
         player: state.player,
         previous: state.previousChannel,
+        record,
       });
     },
     [
       close,
       dispatch,
+      record,
       state.player,
       state.previousChannel,
       state.categoryId,

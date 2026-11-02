@@ -31,7 +31,9 @@ schedules recordings from the guide and shows them; the service does the recordi
 2. **Right-click a programme** in the guide, or in the programme search results, and choose
    **Record**. A red dot marks it; it pulses while recording, and turns grey while a recording
    that has ended is saved into its file. Right-click again to cancel, or to stop a recording
-   early (what was recorded is kept).
+   early (what was recorded is kept). What is on the channel playing can be recorded from the
+   player too: **R**, the picture's right-click menu, or the panel beside the picture
+   ([Recording what you watch](#recording-what-you-watch)).
 3. **Recordings** (in the menu and the command palette) lists what is recording, scheduled,
    recorded and failed, with *Open folder*, *Cancel*/*Stop* and *Delete*, and the channel each
    one falls back to if its own fails ([backup feeds](#how-it-behaves)). While anything records,
@@ -405,6 +407,70 @@ Source Extensions (an iPhone or iPad before iOS 17.1) says it cannot play live T
 **Limits.** A device may hold three streams at once and start forty a minute; the service streams
 to sixteen browsers at most.
 
+### Recording what you watch
+
+**Record from the player.** Right-click the picture and choose **Record “…”**, use the **Record**
+button under the channel's name in the panel beside the picture, or press **R** (also in the
+command palette). It records the programme the guide says is on now on the channel playing,
+padding included. Once it records, the same places say **Recording** and offer **Stop** (R alone
+never stops a recording: it says it is already recording). In the app and in a browser.
+
+**One connection for the picture and the recording.** The app's player connects to the provider
+by itself, and the service never takes a viewer's connection ([rule 5](#sharing-connections)), so
+on an account with no connection to spare a recording of the channel you watch would wait until
+you stopped watching. When the service runs on this computer, Record on the channel playing live
+moves the player onto the service's connection instead (`recording::handover`):
+
+- The player lets its own connection go, the service connects to the channel as the player did
+  (asked as "Watch here anyway" is: the provider may still be counting the player's connection
+  for a moment, and a refusal then is asked again twice, four seconds apart), and the player
+  plays the service's stream (`POST /api/watch` with `player`, read from `127.0.0.1` with the
+  app's token sent as a header, never in the address). Then the recording is scheduled, and rides
+  that connection from its first moment: one connection for both. The picture stops for the
+  moment that takes; the volume and the audio and subtitle tracks chosen are kept, and the rewind
+  buffer starts again (what it held is kept, below).
+- It happens when the account has no connection beyond the player's (an Xtream account's count,
+  the playlist's "Simultaneous streams", an HDHomeRun's tuners; one that cannot be asked counts as
+  full), or when the service already records something on that channel (joining costs nothing).
+  On an account with a connection to spare nothing changes: the service connects for itself.
+- A recording that starts later, while you watch its channel, and waits for the connection the
+  player holds, moves the player the same way when the app next fetches the recordings (every
+  few seconds while anything records, every half minute otherwise).
+- When the service is not running, Record on a full account says "Can't record while you watch
+  on a 1-stream account unless the recording service runs on this computer" rather than leaving
+  the recording waiting.
+- Afterwards the player stays on the service's connection, alone on it once the recording ends:
+  it costs the account the same one connection. The next channel change decides afresh, and
+  catch-up programmes always play from the provider. Changing channel, stopping, or a catch-up
+  gives the service's place back at once, so the connection closes before the player opens
+  another.
+- Tuning to any channel the service is recording joins its connection the same way
+  (`onlyShared`: never a new one), so watching what records is free on an account of one stream.
+  The app learns what the service records from the list it fetches anyway, so tuning costs no
+  extra request otherwise. Should that connection end, the player rejoins it if the service
+  connected again, or else reconnects on its own as it would after any network failure.
+
+**What you have already watched is kept.** The player keeps the last minutes of the channel to
+rewind through (Settings → Playback, *Rewind buffer*). Recording the programme on now, the app
+writes out what that buffer holds of it, from the padded start or as far back as the buffer
+reaches (mpv's `dump-cache`, the packets as they are), and hands it to the service
+(`PUT /api/recordings/{id}/prelude`), which keeps it as the recording's first part: the file plays
+as `… - part1.mkv`, and what the service received follows as `… - part2.mkv` ([Files](#files)).
+Its clock track reads the time each moment was received, the same as a part the service captured:
+the service reads the part's timeline and places it from when its first packet arrived. A note on
+the recording says how much came from the player. Nothing is kept from a catch-up programme, and
+nothing when the recording already has what the buffer holds.
+
+The buffer arrives after the recording has begun, and goes in front of what the service has
+received. So it is kept out of what other programs follow while the recording records: it is
+always a hidden capture file, whatever *Show recordings to other programs while they record*
+says, and the `.strm`'s live stream ([Jellyfin](#watching-a-recording-in-jellyfin-while-it-records))
+leaves it out. Put in front of a stream already being read, it would move every byte the reader
+had been sent: a player resuming with `Range` would land somewhere else, and one reading on
+would be sent the start after the middle. So Jellyfin following a recording sees what the
+service received, and the buffer is in the finished `… - part1.mkv`. The recording lists it
+with `handedOver: true`.
+
 ## How it behaves
 
 **Connections.** Most providers allow few streams at once per account, often one, and end the
@@ -444,8 +510,11 @@ foresees the conflicts below):
    back-off.
 5. **A viewer's connection is never taken.** Only the service's own connections are closed; one
    the account counts for another device or the app's player is left alone, and the recording
-   waits for it as before. So is one a browser watches through the service, whose page is told
-   that the recording waits ([Watching in the browser](#watching-in-the-browser)). A recording
+   waits for it as before; when that player is the app's on this computer, watching the
+   recording's channel, the player moves onto the service's connection instead
+   ([Recording what you watch](#recording-what-you-watch)). So is one a browser watches through
+   the service, whose page is told that the recording waits
+   ([Watching in the browser](#watching-in-the-browser)). A recording
    past its own programme's end does not take another recording's padding for its own.
 
 For example, on an account of one stream: *The Film* 20:00–21:00 on one channel and *The Match*
@@ -674,6 +743,14 @@ Windows, `POST /api/shutdown` "now"), and checks that `… - part1.mkv` was left
 recording still *recording*, and that starting the service again carries on into
 `… - part2.mkv` and finishes it.
 
+`handover_check` (built with the app's features: `cargo build --features harness,server --bin
+zapper-server --bin handover_check`) records what a headless, silent mpv set up as the app's
+plays, on a playlist of one stream: it checks that Record moves the player onto the service's
+connection and the player plays from it, that what the service streams to the app is the bytes the
+recording writes, that the fixture server sees one connection from then on, that the player's
+buffer becomes `… - part1.mkv` with a clock reading when it was received and what the service
+received `… - part2.mkv`, and that the connection closes at once when the player lets go.
+
 `service_check` (same features) installs the service the way Settings → Recording does, on a
 scratch home it hands the service (`--home`), checks that it answers there, then removes it. It
 installs a real service for you for those few seconds, so it refuses when one is installed
@@ -720,6 +797,7 @@ Network access and devices:
 | `GET /api/devices` | the app | `[Device]`, most recently used first |
 | `DELETE /api/devices/{id}` | the app | signs that device out; returns the same as `GET /api/network` |
 | `POST /api/shutdown` | the app | body `{when: "idle" \| "now", restart?}`: stops (or with `restart` runs itself again) at the first idle moment, or now, finishing what it records into playable files. Answers first, with `GET /api/status` |
+| `PUT /api/recordings/{id}/prelude?firstMs=` | the app | body: MPEG-TS, what the player had buffered of the programme, whose first packet arrived at `firstMs` (Unix milliseconds) → `201 Part`: kept as a part in front of what was captured since ([Recording what you watch](#recording-what-you-watch)). `400` for anything not a transport stream the remuxer reads, `409` once the recording is being saved or is over |
 
 The catalogue, for the web interface (the app or a device); channels come as the app's own
 `ChannelDto`, with `logoUrl` pointing at `/api/logo/{streamId}` rather than at the provider:
@@ -746,7 +824,7 @@ Watching (the app or a device; a viewer is its device's alone, `404` to anyone e
 
 | Request | Answer |
 |---|---|
-| `POST /api/watch` | body `{streamId, anyway?, replaces?, audio?, can?: {hevc, ac3, eac3}}` (`can`: what the browser decodes beyond H.264 and AAC; `replaces`: the viewer this one follows, which is stopped first) → `{viewer, stream, video, audio: [{index, codec, lang, described, impaired}], audioIndex, converting, silent?, shared, notice?}`. Refused with `{error, reason, anyway, slots?, ending?, watchInstead}`: `409` `recording`, `viewers` or `inUse` (the account is full; `anyway` says whether "Watch here anyway" may be offered), `422` `notPlayable`, `429` `limit`, `502` `feed` (the channel did not start; `ending` as the app's player reports it), `404` `channel` |
+| `POST /api/watch` | body `{streamId, anyway?, replaces?, audio?, can?: {hevc, ac3, eac3}, player?, onlyShared?}` (`can`: what the browser decodes beyond H.264 and AAC; `replaces`: the viewer this one follows, which is stopped first; `player`: the app's own player, the app's alone, which is given the stream as it comes with every track and nothing refused for its codecs; `onlyShared`: only a connection the service already has, never a new one) → `{viewer, stream, video, audio: [{index, codec, lang, described, impaired}], audioIndex, converting, silent?, shared, notice?}`. Refused with `{error, reason, anyway, slots?, ending?, watchInstead}`: `409` `recording`, `viewers` or `inUse` (the account is full; `anyway` says whether "Watch here anyway" may be offered), `409` `notOpen` (`onlyShared`, and the service has no connection to the channel), `422` `notPlayable`, `429` `limit`, `502` `feed` (the channel did not start; `ending` as the app's player reports it), `404` `channel`, `403` for `player` from a device |
 | `GET /api/stream/{viewer}?audio=` | the stream, `video/mp2t`, for as long as it is read; `audio` switches to another track (from live). Refused when the browser says the request came from another site |
 | `GET /api/watch/{viewer}` | `{ended?, takenOver, notice?}`: why it stopped, and the recording it is in the way of (`{recordingId, title, channel, streamId, from, start, waiting}`) |
 | `DELETE /api/watch/{viewer}` | stops it at once (`204`) |
@@ -781,7 +859,9 @@ streams}`, what recording `title` loses to `with` on another channel when the ac
 `streams` — `kind` is `cutEnd` (its padding after ends `secs` early), `lateStart` (it starts
 `secs` into its padding before), `lostStart` (`secs` into its programme) or `missed`.
 `backupStreamId` omitted when scheduling means "find one"; the main feed's own id means "none".
-`backupName` is the backup's channel name, when the catalogue has it.
+`backupName` is the backup's channel name, when the catalogue has it. A part with
+`handedOver: true` is what the app's player had buffered ([Recording what you
+watch](#recording-what-you-watch)).
 
 ## Not yet
 

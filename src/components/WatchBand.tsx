@@ -42,6 +42,8 @@ import { run, useApp, useDispatch } from "../store";
 import { Fullscreen, ResizeHandle, Stop } from "./icons";
 import { MiniControls } from "./MiniControls";
 import { StreamEnded } from "./StreamEnded";
+import { usePlayerRecord } from "../hooks/usePlayerRecord";
+import { PlayerRecordLine } from "./PlayerRecord";
 import type { ChannelDto, ProgrammeDto } from "../types";
 
 export interface WatchBandProps {
@@ -325,6 +327,7 @@ function Playing({
   const badge = playerBadge(player);
   const ended = endedMessage(player);
   const starting = startingLine(player);
+  const record = usePlayerRecord();
 
   return (
     <>
@@ -358,6 +361,7 @@ function Playing({
             </span>
           ) : null}
         </div>
+        {record ? <PlayerRecordLine record={record} /> : null}
         {starting ? (
           <p className="watch-state">{starting}</p>
         ) : ended ? (

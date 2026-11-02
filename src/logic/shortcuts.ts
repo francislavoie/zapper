@@ -67,6 +67,7 @@ export const SHORTCUT_GROUPS: readonly ShortcutGroup[] = [
       { keys: [["←"], ["→"]], pair: true, does: "Back or forward 5 seconds" },
       { keys: [["L"]], does: "Jump to live" },
       { keys: [["T"]], does: "Theater: the picture fills the window" },
+      { keys: [["R"]], does: "Record the programme on now" },
     ],
   },
   {
@@ -102,7 +103,7 @@ export const SHORTCUT_GROUPS: readonly ShortcutGroup[] = [
       { keys: [["Right-click"]], does: "A category or favourite: its menu", mouse: true },
       {
         keys: [["Right-click"]],
-        does: "On the picture: tracks, aspect, sleep timer",
+        does: "On the picture: record, tracks, aspect, sleep timer",
         mouse: true,
         needs: "playback",
       },

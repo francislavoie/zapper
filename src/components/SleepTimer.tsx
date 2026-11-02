@@ -5,7 +5,8 @@
 //
 //  - keep the store told which programme a timer could end with, so the
 //    menus and the palette can offer "End of this programme" exactly when
-//    the guide knows when that is;
+//    the guide knows when that is, and which is on now, for Record from the
+//    player;
 //  - while a timer is set, run it: fade the app's volume over the last ten
 //    seconds, stop the stream, and put the volume back for next time.
 //
@@ -18,6 +19,7 @@ import { useEffect, useRef } from "react";
 import { backend } from "../backend";
 import { useClock } from "../hooks/useClock";
 import { useNowNext } from "../hooks/useNowNext";
+import { programmeOnNow } from "../logic/recordings";
 import { fadedVolume, programmeForSleep, sleepStep } from "../logic/sleep";
 import { run, useApp, useDispatch } from "../store";
 
@@ -39,6 +41,12 @@ export function SleepTimer() {
     // Keyed on what identifies a programme, not the object: the hook hands
     // back a fresh one on every render.
   }, [programme?.start, programme?.stop, programme?.title, dispatch]);
+  // And what Record from the player records: the same programme, up to its
+  // very end.
+  const onAir = player.state === "stopped" ? null : programmeOnNow(onNow, nowChannel?.nowPlaying ?? null, now);
+  useEffect(() => {
+    dispatch({ type: "nowProgramme", programme: onAir });
+  }, [onAir?.start, onAir?.stop, onAir?.title, dispatch]);
 
   // Read inside the interval, which outlives any one render.
   const volume = useRef(player.volume);
