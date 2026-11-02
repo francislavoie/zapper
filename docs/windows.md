@@ -30,6 +30,16 @@ licenses (LGPL, `-Dgpl=false`), and `zapper-server.exe --version` answering.
 With `-Install` it really installs the NSIS setup, silently, to see its hook
 write `nsis`, and uninstalls it; leave that off on a computer you use.
 
+The setup remembers its folder in the default value of
+`HKCU\Software\lavoie\zapper` (Tauri's template; the manufacturer is the
+identifier's second part), and Tauri's MSI looks there for its own folder
+before `Program Files`. So a real uninstall of the setup clears that value
+(`NSIS_HOOK_POSTUNINSTALL` in `packaging/windows/installer-hooks.nsh`; the
+in-place uninstall of an upgrade keeps it): otherwise an MSI installed
+afterwards would go into the setup's old per-user folder. `-Install` checks
+both, and that the MSI it installs after the setup lands in
+`Program Files\zapper`.
+
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-windows.ps1 -Dir out -Version 0.2.0
 ```

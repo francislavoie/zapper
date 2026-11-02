@@ -32,6 +32,15 @@
 ; Recordings, the service's settings and its list of recordings stay, like
 ; the rest of zapper's data.
 ;
+; A real uninstall also clears the install folder the setup remembers, the
+; default value of HKCU\Software\<manufacturer>\zapper (Tauri's template
+; writes it, and deletes it only when "delete the application data" is
+; ticked). Tauri's MSI reads its install folder from that same key, so left
+; behind it would make a later MSI install into this per-user folder, which
+; is gone, rather than Program Files. Only the default value goes: the MSI
+; keeps its own InstallDir there, and an upgrade's in-place uninstall keeps it
+; all.
+;
 ; Before any of that, a recording in progress is not cut off unannounced: the
 ; installed zapper-server.exe (the old one; its files are still in place) is
 ; asked whether this user's service is recording (--busy, exit 3 and "recording
@@ -90,5 +99,14 @@
     Pop $0
     Delete "$LOCALAPPDATA\zapper\zapper-server.log"
     Delete "$LOCALAPPDATA\zapper\zapper-server.old.log"
+  ${EndIf}
+!macroend
+
+!macro NSIS_HOOK_POSTUNINSTALL
+  ${If} $UpdateMode <> 1
+  ${AndIf} $EXEDIR != $INSTDIR
+    DeleteRegValue SHCTX "${MANUPRODUCTKEY}" ""
+    DeleteRegKey /ifempty SHCTX "${MANUPRODUCTKEY}"
+    DeleteRegKey /ifempty SHCTX "${MANUKEY}"
   ${EndIf}
 !macroend
