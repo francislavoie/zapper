@@ -29,6 +29,7 @@ use crate::ipc::types::{
     events, AspectMode, ChannelQualityDto, ConnectionsDto, DeinterlaceMode, LiveJumpDto,
     LiveStart, PlaybackState, PlayerOptionsDto, PlayerStateDto, ReconnectDto,
 };
+use crate::recording::client::{Client, PlayerWatch, Watching};
 use crate::surface::mpv::{self, Player, Probe, Signal};
 use crate::surface::VideoRect;
 use crate::source::{Playable, Source};
@@ -732,12 +733,37 @@ fn commit(app: &AppHandle, f: impl FnOnce(&mut Machine)) {
 }
 
 /// Whether the player has a stream open, as the connection budget counts.
+/// Through the recording service it holds none of its own: the service
+/// does, and counts it.
 fn holds_a_stream(m: &Machine) -> bool {
-    matches!(
-        m.dto.state,
-        PlaybackState::Opening | PlaybackState::Playing | PlaybackState::Paused
-    )
+    !THROUGH_SERVICE.load(Ordering::Acquire)
+        && matches!(
+            m.dto.state,
+            PlaybackState::Opening | PlaybackState::Playing | PlaybackState::Paused
+        )
 }
+
+// ---------------------------------------------------------------------------
+// Where the stream comes from
+// ---------------------------------------------------------------------------
+
+/// Where the player reads a channel from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Via {
+    /// The provider, on a connection of the player's own.
+    Direct,
+    /// The recording service on this computer: a place (`viewer`) on its
+    /// connection to the channel, which a recording rides too
+    /// (`recording::handover`). Read with the app's token, sent as a header
+    /// (`header`) so it is never part of an address mpv logs.
+    Service {
+        viewer: String,
+        header: Option<String>,
+    },
+}
+
+/// Whether the stream open now comes through the recording service.
+static THROUGH_SERVICE: AtomicBool = AtomicBool::new(false);
 
 // ---------------------------------------------------------------------------
 // Reconnecting
@@ -745,7 +771,7 @@ fn holds_a_stream(m: &Machine) -> bool {
 
 /// What was last opened, so that a reconnect can open it again. Kept here,
 /// in memory only: the URL carries the account.
-static LAST_OPEN: Mutex<Option<(i64, Playable, bool)>> = Mutex::new(None);
+static LAST_OPEN: Mutex<Option<(i64, Playable, bool, Via)>> = Mutex::new(None);
 
 /// Whether a reconnect decided under `token` is still wanted.
 fn still_wanted(token: u64) -> bool {
@@ -767,6 +793,51 @@ fn spawn_reconnect(app: &AppHandle, due: Due, token: u64, stream_id: i64) {
         if !still_wanted(token) {
             return;
         }
+        // Through the recording service: a place on its connection again,
+        // which costs the account nothing, while it still has one. Its old
+        // place may be gone (a viewer nobody reads is let go).
+        let through_service = LAST_OPEN
+            .lock()
+            .ok()
+            .and_then(|l| l.clone())
+            .filter(|(id, ..)| *id == stream_id)
+            .and_then(|(_, _, live, via)| match via {
+                Via::Service { .. } => Some(live),
+                Via::Direct => None,
+            });
+        if let Some(live) = through_service {
+            if let Some((target, via)) = through_service_target(stream_id).await {
+                if !still_wanted(token) {
+                    return;
+                }
+                let attempt = STATE
+                    .lock()
+                    .map(|m| m.reconnects + 1)
+                    .unwrap_or(1);
+                if let Err(e) = open_as(&app, stream_id, target, live, Some(attempt), via, None).await {
+                    tracing::warn!("reconnect could not be sent: {e}");
+                }
+                return;
+            }
+            // The service no longer has the channel: the player's own
+            // connection, if the account has one to spare (below).
+            match direct_target(stream_id) {
+                Ok(t) => {
+                    if let Ok(mut last) = LAST_OPEN.lock() {
+                        *last = Some((stream_id, t, live, Via::Direct));
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("reconnect: {e}");
+                    commit(&app, |m| {
+                        if m.reconnect_token == token {
+                            m.reconnect_abandoned();
+                        }
+                    });
+                    return;
+                }
+            }
+        }
         commit(&app, |m| {
             if let Some(r) = m.dto.reconnect.as_mut() {
                 r.checking = true;
@@ -786,9 +857,9 @@ fn spawn_reconnect(app: &AppHandle, due: Due, token: u64, stream_id: i64) {
             .lock()
             .ok()
             .and_then(|l| l.clone())
-            .filter(|(id, _, _)| *id == stream_id);
+            .filter(|(id, ..)| *id == stream_id);
         match (verdict, target) {
-            (Verdict::Go, Some((id, target, live))) => {
+            (Verdict::Go, Some((id, target, live, via))) => {
                 let attempt = {
                     let m = STATE.lock().expect("player state mutex poisoned");
                     if m.reconnect_token != token {
@@ -796,7 +867,7 @@ fn spawn_reconnect(app: &AppHandle, due: Due, token: u64, stream_id: i64) {
                     }
                     m.reconnects + 1
                 };
-                if let Err(e) = open_as(&app, id, target, live, Some(attempt)).await {
+                if let Err(e) = open_as(&app, id, target, live, Some(attempt), via, None).await {
                     tracing::warn!("reconnect could not be sent: {e}");
                 }
             }
@@ -1270,13 +1341,158 @@ pub fn source() -> Result<&'static Source, String> {
 
 #[tauri::command]
 pub async fn play(app: AppHandle, stream_id: i64) -> Result<(), String> {
-    let target = match fixture_url(stream_id) {
+    // A channel the recording service on this computer is recording: a
+    // place on its connection, which costs the account nothing, rather than
+    // a second connection to the same channel.
+    if crate::ipc::handover::captured(stream_id) {
+        if let Some((target, via)) = through_service_target(stream_id).await {
+            return open_as(&app, stream_id, target, true, None, via, None).await;
+        }
+    }
+    play_direct(&app, stream_id).await
+}
+
+/// The channel on the player's own connection to the provider.
+async fn play_direct(app: &AppHandle, stream_id: i64) -> Result<(), String> {
+    let target = direct_target(stream_id)?;
+    open(app, stream_id, target, true).await
+}
+
+/// Where the provider serves a live channel.
+fn direct_target(stream_id: i64) -> Result<Playable, String> {
+    Ok(match fixture_url(stream_id) {
         Some(u) => Playable::plain(u),
         None => source()?
             .live(stream_id)
             .map_err(|e| crate::catalog::sync_engine::scrub(&e.to_string()))?,
+    })
+}
+
+/// The player's current place on the recording service's connection, if
+/// it has one.
+fn current_viewer() -> Option<String> {
+    LAST_OPEN.lock().ok().and_then(|l| match l.as_ref() {
+        Some((_, _, _, Via::Service { viewer, .. })) => Some(viewer.clone()),
+        _ => None,
+    })
+}
+
+/// A place on a connection the recording service already has to the
+/// channel, or `None` when it has none (or does not answer). Never a new
+/// connection: that is the player's own to open.
+async fn through_service_target(stream_id: i64) -> Option<(Playable, Via)> {
+    let client = crate::recording::client::Client::local().ok()?;
+    let req = PlayerWatch {
+        stream_id,
+        only_shared: true,
+        replaces: current_viewer(),
+        player: true,
+        ..PlayerWatch::default()
     };
-    open(&app, stream_id, target, true).await
+    match client.watch(&req).await {
+        Ok(w) => Some(service_target(&client, &w)),
+        Err(r) => {
+            tracing::info!("not through the recording service: {}", r.error);
+            None
+        }
+    }
+}
+
+fn service_target(client: &Client, w: &Watching) -> (Playable, Via) {
+    let (url, header) = client.stream(w);
+    (
+        Playable::plain(url),
+        Via::Service {
+            viewer: w.viewer.clone(),
+            header,
+        },
+    )
+}
+
+/// What the player shows now, for Record (`ipc::handover`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NowPlaying {
+    pub stream_id: i64,
+    /// A live channel, not a catch-up programme.
+    pub live: bool,
+    /// Through the recording service's connection.
+    pub through_service: bool,
+}
+
+/// The channel open in the player, if one is.
+pub fn now_playing() -> Option<NowPlaying> {
+    let open = STATE.lock().ok().and_then(|m| {
+        matches!(
+            m.dto.state,
+            PlaybackState::Opening | PlaybackState::Playing | PlaybackState::Paused
+        )
+        .then_some(m.dto.stream_id)
+        .flatten()
+    })?;
+    let last = LAST_OPEN.lock().ok()?.clone()?;
+    (last.0 == open).then_some(NowPlaying {
+        stream_id: open,
+        live: last.2,
+        through_service: matches!(last.3, Via::Service { .. }),
+    })
+}
+
+/// Moves the player, which shows `stream_id` live on its own connection,
+/// onto the recording service's connection to it (`recording::handover`):
+/// its connection is let go first, so the service can have it on an account
+/// that allows one, then the service is asked for a place, connecting as
+/// the player would. The picture stops for the moment that takes; the
+/// volume and the tracks chosen are kept. Should the service not manage it,
+/// the player connects again by itself and says why.
+pub async fn move_to_service(app: &AppHandle, client: &Client, stream_id: i64) -> Result<(), String> {
+    let tracks = on_player(app, |p| {
+        Ok((
+            p.get_string("aid").unwrap_or_else(|| "auto".into()),
+            p.get_string("sid").unwrap_or_else(|| "auto".into()),
+        ))
+    })
+    .await
+    .ok();
+    commit(app, |m| {
+        m.opening(stream_id);
+        m.starting(live_start_mode());
+    });
+    on_player(app, |p| p.command("stop", &[]).map_err(|e| e.to_string())).await?;
+    let req = PlayerWatch {
+        stream_id,
+        anyway: true,
+        player: true,
+        ..PlayerWatch::default()
+    };
+    let mut tries = 0;
+    let answer = loop {
+        // The first-frame deadline is the open's, not this wait's.
+        commit(app, |m| m.opened_at = Some(Instant::now()));
+        match client.watch(&req).await {
+            Ok(w) => break Ok(w),
+            // A provider slow to stop counting the player's connection
+            // refuses the service's for a moment.
+            Err(r) if tries < 2 && (r.limit || r.reason == "feed" || r.reason == "inUse") => {
+                tries += 1;
+                tracing::info!("the recording service could not connect yet: {}", r.error);
+                tokio::time::sleep(connections::SECOND_LOOK).await;
+            }
+            Err(r) => break Err(r),
+        }
+    };
+    match answer {
+        Ok(w) => {
+            let (target, via) = service_target(client, &w);
+            open_as(app, stream_id, target, true, None, via, tracks).await
+        }
+        Err(r) => {
+            tracing::warn!("the player could not move onto the recording service: {}", r.error);
+            if let Err(e) = play_direct(app, stream_id).await {
+                tracing::warn!("and could not connect again by itself: {e}");
+            }
+            Err(r.error)
+        }
+    }
 }
 
 /// Replays a past programme on an archive-enabled channel.
@@ -1321,17 +1537,38 @@ pub async fn play_catchup(
 /// [`apply_http_headers`].
 static CUSTOM_HEADERS: AtomicBool = AtomicBool::new(false);
 
-/// Hands a stream's user agent and referrer to mpv before it is opened.
+/// Whether the last stream opened sent the recording service's token.
+static SERVICE_HEADER: AtomicBool = AtomicBool::new(false);
+
+/// Hands a stream's user agent and referrer to mpv before it is opened, and
+/// the recording service's token to a stream read from it.
 ///
 /// These are global options in mpv, read when a file opens, so they have to
 /// be put back for the next stream that does not set them — a playlist
-/// channel's referrer must not follow the viewer to the next channel. An
-/// Xtream channel never sets either, and while nothing has set them there is
-/// nothing to undo, so on an Xtream account this makes no mpv calls at all.
+/// channel's referrer must not follow the viewer to the next channel, nor
+/// the service's token to a provider. An Xtream channel never sets either,
+/// and while nothing has set them there is nothing to undo, so on an Xtream
+/// account this makes no mpv calls at all.
 ///
 /// Failures are logged rather than returned: a stream that wanted a header
 /// may still play without one, and refusing to try would be worse.
-fn apply_http_headers(p: &Player, target: &Playable) {
+fn apply_http_headers(p: &Player, target: &Playable, via: &Via) {
+    let token = match via {
+        Via::Service { header, .. } => header.as_deref(),
+        Via::Direct => None,
+    };
+    if token.is_some() || SERVICE_HEADER.load(Ordering::Acquire) {
+        // Cleared, then the one header appended whole: a list option set
+        // from a string would split it at any comma.
+        let mut r = p.command("change-list", &["http-header-fields", "clr", ""]);
+        if let Some(h) = token {
+            r = r.and_then(|()| p.command("change-list", &["http-header-fields", "append", h]));
+        }
+        if let Err(e) = r {
+            tracing::warn!("could not set the recording service's header: {e}");
+        }
+        SERVICE_HEADER.store(token.is_some(), Ordering::Release);
+    }
     let custom = target.user_agent.is_some() || target.referrer.is_some();
     if !custom && !CUSTOM_HEADERS.load(Ordering::Acquire) {
         return;
@@ -1364,20 +1601,44 @@ fn live_start_mode() -> LiveStart {
 
 /// Shared by live and catchup: state first, then the one connection.
 async fn open(app: &AppHandle, stream_id: i64, target: Playable, live: bool) -> Result<(), String> {
-    open_as(app, stream_id, target, live, None).await
+    open_as(app, stream_id, target, live, None, Via::Direct, None).await
 }
 
-/// [`open`], as automatic reconnect number `reconnect` when it is one.
+/// [`open`], as automatic reconnect number `reconnect` when it is one,
+/// from where `via` says, with the audio and subtitle tracks `tracks`
+/// (mpv's `aid` and `sid`) rather than mpv's own choice when given: the same
+/// channel, moved onto another connection.
 async fn open_as(
     app: &AppHandle,
     stream_id: i64,
     target: Playable,
     live: bool,
     reconnect: Option<u32>,
+    via: Via,
+    tracks: Option<(String, String)>,
 ) -> Result<(), String> {
-    if let Ok(mut last) = LAST_OPEN.lock() {
-        *last = Some((stream_id, target.clone(), live));
+    let left = LAST_OPEN.lock().ok().and_then(|mut last| {
+        let before = last.replace((stream_id, target.clone(), live, via.clone()));
+        match before {
+            Some((_, _, _, Via::Service { viewer, .. })) if !matches!(&via, Via::Service { viewer: v, .. } if *v == viewer) => {
+                Some(viewer)
+            }
+            _ => None,
+        }
+    });
+    // A place on the service's connection given up at once, before the
+    // provider is asked for anything: when nobody else is on it (the
+    // recording ended), the service closes it now rather than when its
+    // reader has been gone a while, and an account of one connection has it
+    // back for this one.
+    if let Some(viewer) = left {
+        if let Ok(c) = crate::recording::client::Client::local() {
+            if let Err(e) = c.stop_watching(&viewer).await {
+                tracing::info!("could not give the recording service's place back: {e:#}");
+            }
+        }
     }
+    THROUGH_SERVICE.store(matches!(via, Via::Service { .. }), Ordering::Release);
     ensure_ticker(app);
     // The scrollback previews describe a buffer that is about to be closed.
     // Keeping them would put the previous channel's picture under the cursor.
@@ -1408,8 +1669,17 @@ async fn open_as(
         }
     });
     let r = on_player(app, move |p| {
-        apply_http_headers(p, &target);
-        reset_track_choice(p);
+        apply_http_headers(p, &target, &via);
+        match &tracks {
+            Some((aid, sid)) => {
+                for (key, value) in [("aid", aid), ("sid", sid)] {
+                    if let Err(e) = p.set_property(key, value) {
+                        tracing::warn!("could not keep {key}: {e}");
+                    }
+                }
+            }
+            None => reset_track_choice(p),
+        }
         // `pause` is global in mpv and outlives the file, so it is set
         // before the open: paused, the stream opens, decodes its first frame
         // and shows it, and the demuxer keeps reading behind it. And put
@@ -1436,6 +1706,18 @@ pub async fn stop(app: AppHandle) -> Result<(), String> {
     crate::surface::trickplay::clear();
     let r = on_player(&app, |p| p.command("stop", &[]).map_err(|e| e.to_string())).await;
     commit(&app, |m| m.stopped());
+    // Its place on the recording service's connection, given back now.
+    if let Some(viewer) = current_viewer() {
+        if let Ok(mut last) = LAST_OPEN.lock() {
+            if let Some(l) = last.as_mut() {
+                l.3 = Via::Direct;
+            }
+        }
+        THROUGH_SERVICE.store(false, Ordering::Release);
+        if let Ok(c) = crate::recording::client::Client::local() {
+            let _ = c.stop_watching(&viewer).await;
+        }
+    }
     r
 }
 

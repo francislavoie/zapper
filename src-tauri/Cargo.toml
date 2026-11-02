@@ -83,6 +83,14 @@ name = "recording_check"
 path = "src/bin/recording_check.rs"
 required-features = ["harness", "server"]
 
+# Records what a headless mpv is watching on an account of one connection:
+# the player moves onto zapper-server's connection, and its buffer becomes
+# the recording's first part.
+[[bin]]
+name = "handover_check"
+path = "src/bin/handover_check.rs"
+required-features = ["harness", "gui"]
+
 # Installs the recording service as Settings > Recording does (the sign-in
 # task on Windows, the LaunchAgent on macOS, the systemd user unit on Linux),
 # on a scratch home, checks
