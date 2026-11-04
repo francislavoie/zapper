@@ -34,7 +34,7 @@ import {
 } from "react";
 import { playCatchupProgramme, playChannel } from "../actions";
 import { capabilities } from "../backend";
-import { useChannelPages } from "../hooks/useChannelPages";
+import { useLiveRows } from "../hooks/useLiveRows";
 import { useClock } from "../hooks/useClock";
 import { useEasedTime } from "../hooks/useEasedTime";
 import { useGuideRows } from "../hooks/useGuideRows";
@@ -66,12 +66,15 @@ import {
   type TimeWindow,
 } from "../logic/guide";
 import { centredScrollTop } from "../logic/programmes";
-import { OVERSCAN, computeWindow } from "../logic/virtual";
-import { ALL_CATEGORIES, useApp, useDispatch } from "../store";
+import { OVERSCAN, computeWindow, stickyIndex } from "../logic/virtual";
+import { guideSelection, selectionTitle } from "../logic/railItems";
+import { categoryLine, categoryNames } from "../logic/searchGroups";
+import { useApp, useDispatch } from "../store";
 import type { ChannelDto, ProgrammeDto, RecordingDto } from "../types";
 import { programmeMenuProps, type ProgrammeMenuOpener } from "../programmeMenu";
+import { Logo } from "./Logo";
 import { RecDot } from "./RecDot";
-import { RailExpand } from "./Rail";
+import { RailToggle } from "./Rail";
 import { ViewSwitch } from "./ViewSwitch";
 
 /** Anything narrower than this cannot hold a legible title. */
@@ -99,14 +102,14 @@ export function GuideGrid({ besideRail = false }: { besideRail?: boolean }) {
   // Where the guide is going: what the store's offset names.
   const target = useMemo(() => guideWindow(now, hours, offset), [now, hours, offset]);
 
-  const categoryId = state.categoryId === ALL_CATEGORIES ? null : state.categoryId;
-  const estimate =
-    state.categories.status === "ready"
-      ? categoryId === null
-        ? state.categories.data.reduce((n, c) => n + c.channelCount, 0)
-        : (state.categories.data.find((c) => c.id === categoryId)?.channelCount ?? 0)
-      : state.sync.channelsTotal;
-  const source = useChannelPages(categoryId, estimate, state.catalogueRev);
+  // The rail's selection, except that Recordings has no guide of its own:
+  // there the guide lists every channel.
+  const selection = guideSelection(state.categoryId);
+  const source = useLiveRows(selection);
+  const names = useMemo(
+    () => categoryNames(state.categories.status === "ready" ? state.categories.data : []),
+    [state.categories],
+  );
 
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const trackRef = useRef<HTMLDivElement | null>(null);
@@ -175,7 +178,7 @@ export function GuideGrid({ besideRail = false }: { besideRail?: boolean }) {
   useEffect(() => {
     bodyRef.current?.scrollTo({ top: 0 });
     setScrollTop(0);
-  }, [state.categoryId]);
+  }, [selection]);
 
   const { ensure } = source;
 
@@ -237,15 +240,17 @@ export function GuideGrid({ besideRail = false }: { besideRail?: boolean }) {
   );
   const recorded = useMemo(() => recordingMarks(state.recordings ?? []), [state.recordings]);
 
+  // The divider above each row, so a row can leave out a category line the
+  // divider already says.
+  const above = stickyIndex((i) => source.rowAt(i)?.isSeparator, rows.start);
+  let heading: string | null = (above !== null ? source.rowAt(above)?.categoryId : undefined) ?? null;
+
   const nowX = nowLineX(now, win, trackWidth);
   const marks = ticks(win);
   const day = dayLabel(win.from, now);
-  const categoryName =
-    categoryId === null
-      ? "All channels"
-      : state.categories.status === "ready"
-        ? (state.categories.data.find((c) => c.id === categoryId)?.name ?? "Guide")
-        : "Guide";
+  const title = selectionTitle(selection, state.categories.status === "ready" ? state.categories.data : []);
+  // Under each name, except where the list is one category's own.
+  const showCategory = source.kind === "all" || source.listed !== null;
 
   return (
     <div className="guide">
@@ -253,9 +258,9 @@ export function GuideGrid({ besideRail = false }: { besideRail?: boolean }) {
           on whatever room the sides leave — see .guide-head. */}
       <header className="guide-head">
         <div className="guide-head-start">
-          {besideRail && state.railCollapsed ? <RailExpand /> : null}
+          {besideRail ? <RailToggle /> : null}
           <div className="guide-head-title">
-            <h2 data-tip-overflow="">{categoryName}</h2>
+            <h2 data-tip-overflow="">{title}</h2>
             <span className="guide-window">
               {day ? `${day} ` : ""}
               {timeRange(win.from, win.to)} · {hours}h
@@ -346,10 +351,16 @@ export function GuideGrid({ besideRail = false }: { besideRail?: boolean }) {
 
           {visible.map((channel, i) => {
             const index = rows.start + i;
+            if (channel.isSeparator) heading = channel.categoryId;
             return (
               <GuideRow
                 key={channel.streamId}
                 channel={channel}
+                categoryName={
+                  showCategory && channel.categoryId
+                    ? categoryLine(heading, channel.categoryId, names.get(channel.categoryId) ?? null)
+                    : null
+                }
                 top={index * GUIDE_ROW_HEIGHT}
                 programmes={guide.programmesFor(channel.streamId)}
                 win={win}
@@ -512,6 +523,7 @@ function TimeScrollbar({
 
 function GuideRow({
   channel,
+  categoryName,
   top,
   programmes,
   win,
@@ -525,6 +537,8 @@ function GuideRow({
   recorded,
 }: {
   channel: ChannelDto;
+  /** Where the channel lives, under its name; null where the list is one category's. */
+  categoryName: string | null;
   top: number;
   programmes: ProgrammeDto[] | undefined;
   win: TimeWindow;
@@ -551,9 +565,16 @@ function GuideRow({
   return (
     <div className={`guide-row ${selected ? "sel" : ""} ${focused ? "focus" : ""}`} style={style}>
       <div className="guide-chan">
-        <span className="guide-num">{channel.numLabel ?? channel.num ?? ""}</span>
-        <span className="guide-name" data-tip-overflow={channel.name}>
-          {channel.cleanName}
+        <Logo url={channel.logoUrl} className="guide-logo" />
+        <span className="guide-title">
+          <span className="guide-name" data-tip-overflow={channel.name}>
+            <span className="guide-num">{channel.numLabel ?? channel.num ?? ""}</span> {channel.cleanName}
+          </span>
+          {categoryName ? (
+            <span className="guide-cat" data-tip-overflow="">
+              {categoryName}
+            </span>
+          ) : null}
         </span>
         {channel.hasArchive ? <span className="guide-arch" data-tip="Has catch-up">⏱</span> : null}
       </div>

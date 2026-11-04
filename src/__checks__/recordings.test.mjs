@@ -9,10 +9,11 @@ import {
   backupText,
   bytes,
   canRecord,
+  keepSelected,
+  recordingsRailCount,
   conflictLosesProgramme,
   conflictText,
   episodeLabel,
-  groupRecordings,
   markKey,
   marks,
   padMinutes,
@@ -23,6 +24,10 @@ import {
   POLL_IDLE_MS,
   POLL_OPEN_MS,
   pollDelay,
+  recordingSections,
+  recordingRowStatus,
+  visibleSelection,
+  recordingFacts,
   recordingStatus,
   recordingWhen,
   RECORDING_DEFAULTS,
@@ -53,6 +58,8 @@ test("the .strm address says who can reach it", () => {
 });
 
 const NOON = Math.floor(new Date(2026, 8, 8, 12, 0, 0).getTime() / 1000);
+
+const part = (b) => ({ path: "x", streamId: 7, bytes: b, started: 0, ended: null });
 
 const rec = (over) => ({
   id: 1,
@@ -86,8 +93,8 @@ test("a recording being saved keeps its mark, and is listed as saving", () => {
   assert.deepEqual([...marks(recs).keys()], [markKey(7, NOON)]);
   assert.equal(recordingStatus(recs[0], NOON), "Saving 2.0 GB…");
   assert.deepEqual(
-    groupRecordings([...recs, rec({ id: 2, state: "recording" }), rec({ id: 3, state: "done" })]).map((g) => g.label),
-    ["Recording", "Saving", "Recorded"],
+    recordingSections([...recs, rec({ id: 2, state: "recording" }), rec({ id: 3, state: "done" })], "all").map((s) => s.label),
+    ["Recording now", "Recorded"],
   );
 });
 
@@ -290,22 +297,36 @@ test("episode labels read as recordings are named", () => {
   assert.equal(episodeLabel({}), "");
 });
 
-test("the list groups by state, soonest coming up and newest recorded first", () => {
-  const g = groupRecordings([
-    rec({ id: 1, state: "done", start: NOON - 7200 }),
-    rec({ id: 2, state: "scheduled", start: NOON + 7200 }),
-    rec({ id: 3, state: "scheduled", start: NOON + 3600 }),
-    rec({ id: 4, state: "done", start: NOON - 3600 }),
-    rec({ id: 5, state: "recording" }),
-  ]);
-  assert.deepEqual(
-    g.map((x) => [x.label, x.items.map((r) => r.id)]),
-    [
-      ["Recording", [5]],
-      ["Scheduled", [3, 2]],
-      ["Recorded", [4, 1]],
-    ],
-  );
+test("one list: recording now, then scheduled soonest first, then recorded newest first", () => {
+  const all = [rec({ id: 1, state: "done", start: NOON - 7200 }), rec({ id: 2, state: "scheduled", start: NOON + 7200 }),
+    rec({ id: 3, state: "failed", start: NOON - 3600 }), rec({ id: 4, state: "scheduled", start: NOON + 3600 }),
+    rec({ id: 5, state: "finishing" }), rec({ id: 6, state: "recording", start: NOON - 60 })];
+  const s = recordingSections(all, "all");
+  assert.deepEqual(s.map((x) => x.label), ["Recording now", "Scheduled", "Recorded"]);
+  assert.deepEqual(s.map((x) => x.items.map((r) => r.id)), [[6, 5], [4, 2], [3, 1]]);
+  assert.deepEqual(recordingSections(all, "scheduled").map((x) => x.id), ["now", "scheduled"]);
+  assert.deepEqual(recordingSections(all, "recorded").map((x) => x.id), ["recorded"]);
+  assert.deepEqual(recordingSections([], "all"), []);
+});
+test("a row's status: conflicts first, then how soon, then its backup", () => {
+  const conflict = { kind: "cutEnd", secs: 240, with: "Match", streams: 1 };
+  assert.equal(recordingRowStatus(rec({ conflicts: [conflict] }), NOON - 86400).tone, "warn");
+  assert.equal(recordingRowStatus(rec({ start: NOON + 3660 + 60 }), NOON).text, "starts in 1h01m"); // padded start in 3660 s
+  assert.equal(recordingRowStatus(rec({ start: NOON + 13 * 3600, backupStreamId: 9, backupName: "One HD" }), NOON).text, "backup: One HD");
+  assert.equal(recordingRowStatus(rec({ start: NOON + 13 * 3600 }), NOON).text, "");
+});
+test("a row's status while recording, once recorded, and when it failed", () => {
+  const r = recordingRowStatus(rec({ state: "recording", start: NOON - 600, parts: [part(5e8)] }), NOON);
+  assert.match(r.text, /^recording · .+ left$/);
+  assert.ok(r.progress > 0 && r.progress < 1);
+  assert.deepEqual(recordingRowStatus(rec({ state: "done", parts: [part(1.4e9)] }), NOON), { text: "✓ 1 file · 1.4 GB", tone: "good", progress: null });
+  assert.equal(recordingRowStatus(rec({ state: "done", parts: [part(3e9), part(2.8e9)] }), NOON).text, "✓ 2 parts · 5.8 GB");
+  assert.deepEqual(recordingRowStatus(rec({ state: "failed", error: "no feed delivered" }), NOON), { text: "No feed delivered", tone: "bad", progress: null });
+});
+test("a filter that hides the selected recording unselects it", () => {
+  const s = recordingSections([rec({ id: 1, state: "done" }), rec({ id: 2 })], "recorded");
+  assert.equal(visibleSelection(s, 1), 1);
+  assert.equal(visibleSelection(s, 2), null);
 });
 
 test("rows say when and how it is going", () => {
@@ -317,7 +338,6 @@ test("rows say when and how it is going", () => {
   setTimeFormat("24h");
   assert.equal(recordingStatus(rec({ start: NOON + 3660 }), NOON), "starts in 1h");
   assert.equal(recordingStatus(rec({ start: NOON + 30 }), NOON), "starting");
-  const part = (b) => ({ path: "x", streamId: 7, bytes: b, started: 0, ended: null });
   assert.equal(recordingStatus(rec({ state: "recording", parts: [part(5e8)] }), NOON), "500 MB so far");
   assert.equal(
     recordingStatus(rec({ state: "recording", waiting: "waiting for a free connection (1 of 1 in use)" }), NOON),
@@ -354,4 +374,32 @@ test("a conflict says what is lost, and to which recording", () => {
   assert.ok(conflictLosesProgramme(c({ kind: "lostStart" })));
   assert.ok(!conflictLosesProgramme(c({ kind: "cutEnd" })));
   assert.ok(!conflictLosesProgramme(c({ kind: "lateStart" })));
+});
+
+test("the rail says how many record now and how many are coming", () => {
+  const s = (state) => ({ state });
+  assert.equal(recordingsRailCount([s("recording"), s("scheduled"), s("scheduled"), s("done")]), "1 now · 2 next");
+  assert.equal(recordingsRailCount([s("scheduled")]), "1 next");
+  assert.equal(recordingsRailCount([s("recording"), s("finishing")]), "1 now");
+  assert.equal(recordingsRailCount([s("done"), s("failed")]), "");
+  assert.equal(recordingsRailCount(null), "");
+});
+test("a selected recording that is gone is no longer selected", () => {
+  assert.equal(keepSelected([rec({ id: 3 })], 3), 3);
+  assert.equal(keepSelected([rec({ id: 3 })], 4), null);
+  assert.equal(keepSelected(null, 3), 3, "a service that does not answer leaves the choice");
+  assert.equal(keepSelected(null, null), null);
+  assert.equal(keepSelected([rec({ id: 3 })], null), null);
+});
+
+test("the band's line about padding and where the files go", () => {
+  assert.equal(recordingFacts(rec({})), "Padding 1 min before, 5 after · Folder /v/News");
+  assert.equal(recordingFacts(rec({ padBefore: 0, padAfter: 0 })), "No padding · Folder /v/News");
+  assert.equal(recordingFacts(rec({ padBefore: 0, padAfter: 120 })), "Padding 0 min before, 2 after · Folder /v/News");
+});
+
+test("a scheduled row counts down to the minute, and says starting under one", () => {
+  assert.equal(recordingRowStatus(rec({ start: NOON + 54 * 60 + 1 + 60, padBefore: 60 }), NOON).text, "starts in 54m");
+  assert.equal(recordingRowStatus(rec({ start: NOON + 20, padBefore: 0 }), NOON).text, "starting");
+  assert.equal(recordingStatus(rec({ start: NOON + 54 * 60 + 1 + 60 }), NOON), "starts in 54m");
 });

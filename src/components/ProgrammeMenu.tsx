@@ -125,7 +125,7 @@ export function ProgrammeMenu() {
       <button
         className="tb-menu-item"
         role="menuitem"
-        onClick={() => dispatch({ type: "recordingsDialog", open: true })}
+        onClick={() => dispatch({ type: "showRecordings" })}
       >
         <span className="tb-menu-label" data-tip-overflow="">
           Recordings…

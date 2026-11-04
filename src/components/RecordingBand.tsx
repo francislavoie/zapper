@@ -1,7 +1,7 @@
-// Recordings, from the menu or the palette: what the recording service has
-// scheduled, is recording, has recorded, and could not record. Minimal by
-// design — a list with the few things worth doing to each row; the files
-// themselves are for a media library (Jellyfin and the like) to play.
+// The band above the Recordings list: the selected recording, and what can be
+// done to it. Everything the old Recordings window offered per row is here:
+// stop or cancel it, open its folder, delete it, change its backup, read its
+// conflicts and notes.
 
 import { useEffect, useState } from "react";
 import { cancelRecording, deleteRecording, setRecordingBackup } from "../actions";
@@ -14,66 +14,20 @@ import {
   conflictLosesProgramme,
   conflictText,
   episodeLabel,
-  groupRecordings,
+  recordingFacts,
+  recordingRowStatus,
   recordingStatus,
   recordingWhen,
 } from "../logic/recordings";
+import { categoryNames } from "../logic/searchGroups";
 import { useApp, useDispatch } from "../store";
-import type { BackupsDto, RecordingDto } from "../types";
+import type { BackupsDto, ChannelDto, RecordingDto } from "../types";
 import { RecDot } from "./RecDot";
-
-export function RecordingsModal() {
-  const { recordings, recordingsError } = useApp();
-  const dispatch = useDispatch();
-  const now = useClock(5_000);
-  const close = () => dispatch({ type: "recordingsDialog", open: false });
-  const groups = recordings ? groupRecordings(recordings) : [];
-
-  return (
-    <div
-      className="modal-backdrop"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) close();
-      }}
-    >
-      <div className="about recordings" role="dialog" aria-label="Recordings">
-        <h2>Recordings</h2>
-        {recordings === null ? (
-          <p className="pane-note">
-            {recordingsError ?? "The recording service is not running."} Install or start it in
-            Settings › Recording.
-          </p>
-        ) : groups.length === 0 ? (
-          <p className="pane-note">
-            Nothing recorded or scheduled. Right-click a programme in the guide, or in the
-            programme search results, to record it.
-          </p>
-        ) : (
-          <div className="rec-list">
-            {groups.map((g) => (
-              <section key={g.state} className="rec-group">
-                <h4>{g.label}</h4>
-                {g.items.map((r) => (
-                  <RecordingRow key={r.id} rec={r} now={now} />
-                ))}
-              </section>
-            ))}
-          </div>
-        )}
-        <div className="about-actions">
-          <button className="ctl" onClick={close} autoFocus>
-            Close
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 /** The channel a recording falls back to when its own feed fails, and a
  *  small picker to change it: the service's candidates, best first, and
  *  "No backup". Any other channel can be chosen from the guide's menu. */
-function BackupLine({ rec }: { rec: RecordingDto }) {
+export function BackupLine({ rec }: { rec: RecordingDto }) {
   const dispatch = useDispatch();
   const [open, setOpen] = useState(false);
   const [list, setList] = useState<BackupsDto | null>(null);
@@ -160,36 +114,59 @@ function BackupLine({ rec }: { rec: RecordingDto }) {
   );
 }
 
-function RecordingRow({ rec, now }: { rec: RecordingDto; now: number }) {
+/** The selected recording: what it is, how it is going, and what can be done
+ *  with it. Keyed by the recording's id where it is used, so a half-made
+ *  choice (the delete confirmation, the open notes) does not follow the
+ *  selection to another recording. */
+export function RecordingBand({ rec, channel }: { rec: RecordingDto; channel: ChannelDto | null }) {
   const dispatch = useDispatch();
+  const { categories } = useApp();
+  const now = useClock(5_000);
   const [confirming, setConfirming] = useState(false);
   const [notes, setNotes] = useState(false);
   const label = episodeLabel(rec);
-  const episode = label ? ` ${label}` : "";
+  const category =
+    channel?.categoryId != null && categories.status === "ready"
+      ? categoryNames(categories.data).get(channel.categoryId)
+      : undefined;
+  const barred = rec.state === "recording" || rec.state === "finishing";
+  const active = barred || rec.state === "scheduled";
+  const status = recordingStatus(rec, now);
+  const statusText = rec.state === "recording" && !rec.waiting ? `recording · ${status}` : status;
   const openFolder = () =>
     backend
       .openRecordingFolder(rec.id)
       .catch((e: unknown) => dispatch({ type: "toast", text: `Open folder: ${errorMessage(e)}` }));
 
   return (
-    <div className={`rec-row ${rec.state}`}>
-      <div className="rec-main">
-        <div className="rec-title" data-tip-overflow="">
-          {rec.state === "recording" || rec.state === "scheduled" || rec.state === "finishing" ? (
-            <RecDot recording={rec} />
-          ) : null}
+    <>
+      <div className="watch-body">
+        <h2 className="watch-title-h" data-tip-overflow="">
+          {active ? <RecDot recording={rec} /> : null}
           {rec.title}
-          {episode}
+          {label ? ` ${label}` : ""}
+        </h2>
+        <p className="watch-cat" data-tip-overflow="">
+          {[rec.channelName, category].filter(Boolean).join(" · ")}
+        </p>
+        <div className="watch-sub">
+          <span className="watch-time">{recordingWhen(rec, now)}</span>
         </div>
-        <div className="rec-sub">
-          <span>{recordingWhen(rec, now)}</span>
-          <span className="rec-chan" data-tip-overflow="">
-            {rec.channelName}
-          </span>
-          <span className={`rec-status ${rec.state === "failed" || rec.waiting ? "bad" : ""}`}>
-            {recordingStatus(rec, now)}
-          </span>
-        </div>
+        {barred ? (
+          <div className="watch-prog-line">
+            <div className="watch-progress">
+              <span
+                style={{
+                  width: `${Math.round((rec.state === "recording" ? (recordingRowStatus(rec, now).progress ?? 0) : 1) * 100)}%`,
+                }}
+              />
+            </div>
+            <span className={`watch-left ${rec.waiting ? "bad" : ""}`}>{statusText}</span>
+          </div>
+        ) : (
+          <p className={`watch-state ${rec.state === "failed" ? "bad" : ""}`}>{status}</p>
+        )}
+        <p className="watch-facts">{recordingFacts(rec)}</p>
         {rec.state === "scheduled" || rec.state === "recording" ? <BackupLine rec={rec} /> : null}
         {rec.conflicts?.length ? (
           <ul className="rec-conflicts">
@@ -213,7 +190,7 @@ function RecordingRow({ rec, now }: { rec: RecordingDto; now: number }) {
           </ul>
         ) : null}
       </div>
-      <div className="rec-actions">
+      <div className="watch-actions">
         {rec.state === "scheduled" ? (
           <button className="ctl" onClick={() => void cancelRecording(dispatch, rec)}>
             Cancel
@@ -224,8 +201,7 @@ function RecordingRow({ rec, now }: { rec: RecordingDto; now: number }) {
             Stop
           </button>
         ) : null}
-        {capabilities.localService &&
-        (rec.state === "recording" || rec.state === "finishing" || rec.state === "done") ? (
+        {capabilities.localService && (barred || rec.state === "done") ? (
           <button className="ctl" onClick={() => void openFolder()}>
             Open folder
           </button>
@@ -247,6 +223,6 @@ function RecordingRow({ rec, now }: { rec: RecordingDto; now: number }) {
           )
         ) : null}
       </div>
-    </div>
+    </>
   );
 }

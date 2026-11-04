@@ -68,14 +68,20 @@ Download the package for your system from the
 ### Browsing
 
 - The channel list and guide are stored locally in SQLite and refreshed in the background.
+- One list for Live TV. The rail on the left has Favourites, Recently watched, Recordings and
+  All channels, then your pinned categories, then the rest. Each channel row shows the
+  programme on now and the one next; where channels from many categories mix (All channels,
+  Favourites, Recently watched) the row also names its category.
 - Channel search from the filter box, `/` or the command palette, with results grouped by
   category. `a|b` matches either term.
 - Programme search: finds airings in the guide that are on now, coming up, or still available on
   catch-up. Opening one tunes in, jumps the guide to it, or plays it from catch-up.
-- List and guide views (`G`). The guide scrolls through time with Shift+wheel, its scrollbar, or
+- List and guide views (`G`) for any rail item, Favourites and Recently watched included. The guide scrolls through time with Shift+wheel, its scrollbar, or
   an hour at a time with `←`/`→`; `Home` returns to now.
 - Categories can be pinned, hidden, and sorted by the provider's order, name or size.
-- Favourites tab.
+- Recently watched: the last 20 channels you watched for at least 30 seconds, newest first.
+- Recordings sits in the rail too, with its free disk space and, for the selected recording,
+  its actions beside the picture.
 - Each channel's last measured resolution, frame rate and codec is shown in the list; channels
   that failed to load are dimmed, with the reason.
 - The playing channel stays in a docked picture with its own controls while you browse.

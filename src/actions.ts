@@ -6,7 +6,8 @@ import { backend, capabilities, signOut } from "./backend";
 import { toggleFullscreen } from "./fullscreen";
 import { errorMessage, failed, loading, ready } from "./logic/async";
 import { anchorFor, catchupMinutes } from "./logic/guide";
-import { focusCategory, guideOffsetFor, hitAction, inGuideReach } from "./logic/programmes";
+import { focusTarget } from "./logic/railItems";
+import { guideOffsetFor, hitAction, inGuideReach } from "./logic/programmes";
 import type { ActionId } from "./logic/palette";
 import type { SleepRequest } from "./logic/sleep";
 import { refreshFullscreen } from "./hooks/useFullscreen";
@@ -14,6 +15,7 @@ import { windowControls } from "./window";
 import { ALL_CATEGORIES, run, type Action, type Mode } from "./store";
 import type {
   ChannelDto,
+  FavouriteDto,
   PlayerStateDto,
   ProgrammeDto,
   ProgrammeHitDto,
@@ -27,6 +29,7 @@ import {
   type PlayerRecord,
 } from "./logic/recordings";
 import { NO_PLAYBACK } from "./logic/web";
+import { FAVOURITE_LIMIT, RECENT_LIMIT } from "./logic/favourites";
 
 export interface PlayOptions {
   /** Take over the window as well as starting the stream. Off by default:
@@ -152,7 +155,7 @@ const HANDLERS: Record<ActionId, (ctx: ActionContext) => void> = {
   sleepOff: ({ dispatch }) => setSleep(dispatch, null),
   sync: ({ dispatch }) => void run(dispatch, "sync", backend.syncNow()),
   record: ({ dispatch, record }) => void recordFromPlayer(dispatch, record ?? null),
-  recordings: ({ dispatch }) => dispatch({ type: "recordingsDialog", open: true }),
+  recordings: ({ dispatch }) => dispatch({ type: "showRecordings" }),
   settings: ({ dispatch }) => dispatch({ type: "settings", open: true }),
   updates: ({ dispatch }) => {
     dispatch({ type: "updateDialog", open: true });
@@ -216,6 +219,8 @@ export interface HitContext {
   /** Where a catch-up that fails to open should leave the user. */
   mode: Mode;
   guideHours: number;
+  /** The stream ids of the favourites or recent list on screen, else null. */
+  listed: readonly number[] | null;
 }
 
 /** Chooses a programme search result: tunes to it if it is on, plays it from
@@ -239,20 +244,11 @@ export async function openProgrammeHit(
 
   const now = Math.floor(Date.now() / 1000);
   const anchor = anchorFor(now);
-  const categoryId = focusCategory(ctx.categoryId, hit.channel.categoryId, ALL_CATEGORIES);
-  // The row is looked up rather than paged to: the guide lists a category a
-  // screenful at a time and the channel may be thousands of rows down. Not
-  // finding it still opens the guide at the right time, which is most of
-  // the answer.
-  let index: number | null = null;
-  try {
-    index = await backend.channelIndex(
-      categoryId === ALL_CATEGORIES ? null : categoryId,
-      hit.channel.streamId,
-    );
-  } catch {
-    index = null;
-  }
+  const target = focusTarget(ctx.categoryId, hit.channel, ctx.listed);
+  const categoryId = target.categoryId;
+  // Not finding the row still opens the guide at the right time, which is
+  // most of the answer.
+  const index = target.lookUp ? await rowIn(categoryId, hit.channel.streamId) : target.index;
   dispatch({
     type: "guideFocus",
     categoryId,
@@ -268,6 +264,45 @@ export async function openProgrammeHit(
       text: `The guide shows two days ahead; ${hit.programme.title} is later than that`,
     });
   }
+}
+
+/** Where a channel's row is in a category, or null when that cannot be
+ *  found: the row is looked up rather than paged to, and not finding it
+ *  still lands on the right list. */
+async function rowIn(categoryId: string, streamId: number): Promise<number | null> {
+  try {
+    return await backend.channelIndex(categoryId === ALL_CATEGORIES ? null : categoryId, streamId);
+  } catch {
+    return null;
+  }
+}
+
+/** Shows the channel's own category in the list, with its row in the middle
+ *  and marked. */
+export async function showChannelCategory(dispatch: Dispatch<Action>, channel: ChannelDto): Promise<void> {
+  if (channel.categoryId === null) return;
+  const index = await rowIn(channel.categoryId, channel.streamId);
+  dispatch({ type: "focusChannel", categoryId: channel.categoryId, streamId: channel.streamId, index });
+}
+
+/** Opens the guide at now on the channel's row: in the favourites or recent
+ *  list when it is in the one on screen, otherwise in its category. */
+export async function showChannelInGuide(
+  dispatch: Dispatch<Action>,
+  channel: ChannelDto,
+  ctx: { categoryId: string; listed: readonly number[] | null },
+): Promise<void> {
+  const anchor = anchorFor(Math.floor(Date.now() / 1000));
+  const target = focusTarget(ctx.categoryId, channel, ctx.listed);
+  const index = target.lookUp ? await rowIn(target.categoryId, channel.streamId) : target.index;
+  dispatch({
+    type: "guideFocus",
+    categoryId: target.categoryId,
+    streamId: channel.streamId,
+    index,
+    offset: 0,
+    anchor,
+  });
 }
 
 /** Fetches the category list into the store.
@@ -288,6 +323,35 @@ export async function loadCategories(dispatch: Dispatch<Action>, quiet = false) 
   } catch (e) {
     dispatch({ type: "categories", value: failed(errorMessage(e)) });
   }
+}
+
+/** Fetches Favourites and Recently watched together. A list that is already
+ *  showing stays as it is while the fresh one loads: the answer is nearly
+ *  always the same list, slightly reordered, and a flash of "loading" would
+ *  swap a good answer for a worse one. */
+export async function loadWatchLists(dispatch: Dispatch<Action>): Promise<void> {
+  const one = async (
+    list: "favourites" | "recent",
+    fetch: () => Promise<FavouriteDto[]>,
+  ) => {
+    dispatch({ type: "watchList", list, value: loading() });
+    try {
+      dispatch({ type: "watchList", list, value: ready(await fetch()) });
+    } catch (e) {
+      dispatch({ type: "watchList", list, value: failed(errorMessage(e)) });
+    }
+  };
+  await Promise.all([
+    one("favourites", () => backend.favourites(FAVOURITE_LIMIT)),
+    one("recent", () => backend.recentlyWatched(RECENT_LIMIT)),
+  ]);
+}
+
+/** Drops a channel from what was watched, then reloads both lists. */
+export async function forgetChannel(dispatch: Dispatch<Action>, streamId: number): Promise<void> {
+  dispatch({ type: "favouriteMenu", menu: null });
+  const ok = await run(dispatch, "forget", backend.forgetActivity(streamId));
+  if (ok) await loadWatchLists(dispatch);
 }
 
 // ------------------------------------------------------------- recording

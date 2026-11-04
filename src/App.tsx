@@ -18,7 +18,7 @@ import {
   subscribeSync,
 } from "./backend";
 import { paintMockStill } from "./mock";
-import { loadCategories } from "./actions";
+import { loadCategories, loadWatchLists } from "./actions";
 import { errorMessage } from "./logic/async";
 import { useGlobalKeys } from "./hooks/useGlobalKeys";
 import { useMenuCommands } from "./hooks/useMenuCommands";
@@ -39,9 +39,10 @@ import { saveStacked } from "./stacked";
 import { saveCategoryHidden, saveCategoryPins, saveCategorySort } from "./categoryPrefs";
 import { AboutModal } from "./components/AboutModal";
 import { ProgrammeMenu } from "./components/ProgrammeMenu";
-import { RecordingsModal } from "./components/RecordingsModal";
+import { RecordingsView } from "./components/RecordingsView";
 import { RecordingsWatcher } from "./components/RecordingsWatcher";
 import { Rail } from "./components/Rail";
+import { railItemKind } from "./logic/railItems";
 import { ChannelList } from "./components/ChannelList";
 import { CommandPalette } from "./components/CommandPalette";
 import { GuideGrid } from "./components/GuideGrid";
@@ -78,6 +79,11 @@ export function App() {
   }, []);
   const browsing = state.mode === "browse";
   const guiding = state.mode === "guide";
+  // Recordings has no grid, so it only ever shows in the list view.
+  const recordingsShown = railItemKind(state.categoryId) === "recordings" && !guiding;
+  // The band is the playing channel, and the selected recording where
+  // Recordings shows: a browser has no picture but still has recordings.
+  const bandShown = capabilities.playback || recordingsShown;
 
   // The stacked layout is a preference, not a mode: it applies while watching,
   // and only when the window has the room. Too small a window falls back to
@@ -136,10 +142,9 @@ export function App() {
   useEffect(() => {
     saveSession({
       categoryId: state.categoryId,
-      railTab: state.railTab,
       railCollapsed: state.railCollapsed,
     });
-  }, [state.categoryId, state.railTab, state.railCollapsed]);
+  }, [state.categoryId, state.railCollapsed]);
 
   // Closing mid-scroll must still remember where you were; writes are
   // otherwise coalesced and the last one would be lost.
@@ -280,6 +285,13 @@ export function App() {
   useEffect(() => {
     if (categoriesStatus === "idle") void loadCategories(dispatch);
   }, [categoriesStatus, dispatch]);
+
+  // The rail's counts and the list both read the watch lists, so the app
+  // loads them, not a pane — the reason loadCategories lives here too. Watching
+  // something is the only thing that changes them, bar an imported backup.
+  useEffect(() => {
+    void loadWatchLists(dispatch);
+  }, [dispatch, state.player.streamId, state.activityVersion]);
 
   // And again whenever a sync has rewritten it. Loaded once and kept, the
   // list from before the sync stayed up until a restart — on a first run,
@@ -441,7 +453,7 @@ export function App() {
             view takes the whole width. */}
         <Activity mode={browsing || guiding ? "visible" : "hidden"}>
           <div
-            className={`browse ${state.railCollapsed ? "rail-collapsed" : ""} ${capabilities.playback ? "" : "no-band"}`}
+            className={`browse ${state.railCollapsed ? "rail-collapsed" : ""} ${bandShown ? "" : "no-band"}`}
             data-view={guiding ? "guide" : "list"}
           >
             {/* First in the DOM as well as on screen: the band owns the top of
@@ -450,12 +462,15 @@ export function App() {
                 the band is where the hole for the picture is. Where nothing
                 plays (a browser, for now) there is no picture to show, and
                 the list and the guide take its room. */}
-            {capabilities.playback ? <WatchBand videoRef={dockRef} /> : null}
+            {bandShown ? <WatchBand videoRef={dockRef} picture={capabilities.playback} /> : null}
             <Activity mode={state.railCollapsed ? "hidden" : "visible"}>
               <Rail />
             </Activity>
-            <Activity mode={guiding ? "hidden" : "visible"}>
+            <Activity mode={guiding || recordingsShown ? "hidden" : "visible"}>
               <ChannelList />
+            </Activity>
+            <Activity mode={recordingsShown ? "visible" : "hidden"}>
+              <RecordingsView />
             </Activity>
             <Activity mode={guiding ? "visible" : "hidden"}>
               <GuideGrid besideRail />
@@ -507,7 +522,6 @@ export function App() {
       </Boundary>
       <Boundary what="About">{state.aboutOpen ? <AboutModal /> : null}</Boundary>
       <Boundary what="Recordings">
-        {state.recordingsOpen ? <RecordingsModal /> : null}
         <ProgrammeMenu />
         <RecordingsWatcher />
       </Boundary>

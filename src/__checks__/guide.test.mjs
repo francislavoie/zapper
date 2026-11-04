@@ -17,6 +17,7 @@ import {
   anchorFor,
   catchupMinutes,
   chunksFor,
+  rowNowNext,
   clampHours,
   clampOffset,
   dayLabel,
@@ -225,7 +226,7 @@ test("the guide virtualizes on the same arithmetic as the channel list", () => {
   assert.ok(w.end - w.start < 50);
   const deep = computeWindow(500_000, 800, GUIDE_ROW_HEIGHT, total, 8);
   assert.equal(deep.offsetY, deep.start * GUIDE_ROW_HEIGHT);
-  assert.ok(deep.start > 14_000);
+  assert.ok(deep.start > 500_000 / GUIDE_ROW_HEIGHT - 50);
 });
 
 // ------------------------------------------------------- scrolling in time
@@ -515,4 +516,15 @@ test("a click beside the thumb pages that way", () => {
   assert.equal(pageDirection(10, thumb), -1);
   assert.equal(pageDirection(115, thumb), 0);
   assert.equal(pageDirection(200, thumb), 1);
+});
+
+test("a row's next comes from the guide; its now from the guide, else the channel's own", () => {
+  const p = (start, stop, title) => ({ start, stop, title, description: null });
+  const now = 1000;
+  const guide = [p(900, 1100, "A"), p(1100, 1200, "B")];
+  assert.deepEqual(rowNowNext({ nowPlaying: null }, guide, now), { now: guide[0], next: guide[1] });
+  const own = p(950, 1050, "Own");
+  assert.deepEqual(rowNowNext({ nowPlaying: own }, undefined, now), { now: own, next: null });
+  // A page fetched an hour ago may carry a programme that has since ended.
+  assert.deepEqual(rowNowNext({ nowPlaying: p(100, 200, "Old") }, [], now), { now: null, next: null });
 });

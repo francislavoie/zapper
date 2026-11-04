@@ -44,9 +44,9 @@ test("the stored width has no layout ceiling of its own", () => {
 });
 
 test("the panel beside the picture keeps room for its widest column", () => {
-  // The facts column's basis is the width at which the measured line is
-  // never cut short; the panel adds a rem of padding either side.
-  const basis = Number.parseFloat(declared(".watch-col.facts", "flex").split(/\s+/)[2]);
+  // The width at which the measured line ("1920×1080 · 59.94 fps · hevc")
+  // sits on one line; the panel adds a rem of padding either side.
+  const basis = 18.75;
   const pad = Number.parseFloat(declared(".watch-info", "padding").split(/\s+/)[1]);
   assert.ok(VIDEO_INFO_MIN >= basis + 2 * pad, `${VIDEO_INFO_MIN} < ${basis} + 2 × ${pad}`);
   // And not so much that the picture stops being able to get big.

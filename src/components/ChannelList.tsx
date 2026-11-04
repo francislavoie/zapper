@@ -6,26 +6,34 @@
 // checked there; this file is the wiring.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { playChannel } from "../actions";
+import { forgetChannel, playChannel } from "../actions";
 import { backend } from "../backend";
 import { registerZapList, type ZapList } from "../mediaKeys";
 import { registerSearchInput } from "../focus";
-import { useChannelPages, type RowSource } from "../hooks/useChannelPages";
+import type { RowSource } from "../hooks/useChannelPages";
+import { useClock } from "../hooks/useClock";
+import { useGuideRows } from "../hooks/useGuideRows";
+import { useLiveRows } from "../hooks/useLiveRows";
 import { useProgrammeSearch } from "../hooks/useProgrammeSearch";
 import { useSearch } from "../hooks/useSearch";
-import { OVERSCAN, ROW_HEIGHT, computeWindow, stickyIndex } from "../logic/virtual";
+import { HOUR, rowNowNext } from "../logic/guide";
+import { favouriteMeta } from "../logic/favourites";
+import { ALL_CATEGORIES, pagedCategory, railItemKind, selectionSubtitle, selectionTitle } from "../logic/railItems";
+import { centredScrollTop } from "../logic/programmes";
+import { LIST_ROW_HEIGHT, OVERSCAN, computeWindow, stickyIndex } from "../logic/virtual";
 import { loadSession, saveSession } from "../session";
-import { ALL_CATEGORIES, useApp, useDispatch } from "../store";
+import { useApp, useDispatch } from "../store";
 import type { Async } from "../logic/async";
 import type { SearchTab } from "../logic/programmes";
 import { SEARCH_PLACEHOLDER } from "../logic/searchQuery";
-import { categoryNames, groupByCategory } from "../logic/searchGroups";
+import { categoryLine, categoryNames, groupByCategory } from "../logic/searchGroups";
 import type { ChannelDto } from "../types";
 import { ChannelRow } from "./ChannelRow";
+import { FavouriteMenu } from "./FavouriteMenu";
 import { ViewSwitch } from "./ViewSwitch";
 import { ProgrammeResults } from "./ProgrammeResults";
 import { SearchField } from "./SearchField";
-import { RailExpand } from "./Rail";
+import { RailToggle } from "./Rail";
 
 /** The backend caps search at a sane number; 100 is plenty to scan. */
 const SEARCH_LIMIT = 100;
@@ -55,22 +63,19 @@ export function ChannelList() {
   const lastKey = useRef(`${state.categoryId}\u0000${state.query}`);
 
   const searching = state.query.trim() !== "";
-  const categoryId = state.categoryId === ALL_CATEGORIES ? null : state.categoryId;
-  const categoryName =
-    categoryId === null
-      ? "All channels"
-      : state.categories.status === "ready"
-        ? (state.categories.data.find((c) => c.id === categoryId)?.name ?? "Channels")
-        : "Channels";
+  const heading = selectionTitle(
+    state.categoryId,
+    state.categories.status === "ready" ? state.categories.data : [],
+  );
 
-  const estimate =
-    state.categories.status === "ready"
-      ? categoryId === null
-        ? state.categories.data.reduce((n, c) => n + c.channelCount, 0)
-        : (state.categories.data.find((c) => c.id === categoryId)?.channelCount ?? 0)
-      : state.sync.channelsTotal;
-
-  const paged = useChannelPages(categoryId, estimate, state.catalogueRev);
+  // Recordings are not channels, and the list is hidden behind them: it keeps
+  // the last channel selection, so the media keys still have something to
+  // step through.
+  const channelSelection = useRef(ALL_CATEGORIES);
+  if (railItemKind(state.categoryId) !== "recordings") channelSelection.current = state.categoryId;
+  const rowsId = railItemKind(state.categoryId) === "recordings" ? channelSelection.current : state.categoryId;
+  const live = useLiveRows(rowsId);
+  const paged = pagedCategory(rowsId);
   // `/` and Ctrl+P run through the same backend index; the difference is only
   // where the results are shown.
   const results = useSearch(state.query, SEARCH_LIMIT);
@@ -81,7 +86,7 @@ export function ChannelList() {
   // Under their categories, since a name alone does not say where a channel
   // is; see logic/searchGroups.
   const grouped = useMemo(() => asSource(results, names), [results, names]);
-  const source: RowSource = searching ? grouped : paged;
+  const source: RowSource = searching ? grouped : live;
   /** Channels, not rows: a search's headings are not results. */
   const channelCount =
     searching && results.status === "ready" ? results.data.length : source.total;
@@ -101,7 +106,12 @@ export function ChannelList() {
   zap.current = {
     rowAt: source.rowAt,
     total: source.total,
-    fetch: searching ? undefined : (start, count) => backend.channels(categoryId, start, count),
+    // Only a selection the backend pages can be fetched into: favourites and
+    // recent are whole lists already, and recordings are not channels.
+    fetch:
+      searching || paged === undefined
+        ? undefined
+        : (start, count) => backend.channels(paged, start, count),
   };
   useEffect(() => registerZapList(() => zap.current), []);
 
@@ -137,18 +147,42 @@ export function ChannelList() {
     const want = restoreTo.current;
     const el = viewportRef.current;
     if (want <= 0 || !el || height <= 0 || source.total <= 0) return;
-    const top = Math.min(want, Math.max(0, source.total * ROW_HEIGHT - height));
+    const top = Math.min(want, Math.max(0, source.total * LIST_ROW_HEIGHT - height));
     restoreTo.current = 0;
     el.scrollTo({ top });
     setScrollTop(top);
   }, [height, source.total]);
 
-  const win = computeWindow(scrollTop, height, ROW_HEIGHT, source.total, OVERSCAN);
+  const win = computeWindow(scrollTop, height, LIST_ROW_HEIGHT, source.total, OVERSCAN);
+
+  // Sent here to a channel by the band's "Show its category": scroll its row
+  // to the middle. After the reset above, which runs on the same category
+  // change. It waits for a measured height, and for the row to exist — a
+  // category's length is only a floor until its pages load, so a row past
+  // the estimate has its page asked for first. Applied once per request, so
+  // scrolling away afterwards is not fought.
+  const focus = state.guideFocus;
+  const appliedFocus = useRef<number | null>(null);
 
   const { ensure } = source;
   useEffect(() => {
     if (win.end > win.start) ensure(win.start, win.end);
   }, [ensure, win.start, win.end]);
+
+  useEffect(() => {
+    if (!focus || focus.index === null || appliedFocus.current === focus.seq) return;
+    const el = viewportRef.current;
+    if (!el || height <= 0) return;
+    if (source.total <= focus.index) {
+      ensure(focus.index, focus.index + 1);
+      return;
+    }
+    appliedFocus.current = focus.seq;
+    const top = centredScrollTop(focus.index, LIST_ROW_HEIGHT, height);
+    restoreTo.current = 0;
+    el.scrollTo({ top });
+    setScrollTop(top);
+  }, [focus, height, source.total, ensure]);
 
   // Read through a ref so both callbacks keep a stable identity. They are
   // handed to a memoised row, and a callback that changed whenever playback
@@ -179,7 +213,7 @@ export function ChannelList() {
     else dispatch({ type: "mode", mode: "watch" });
   }, [dispatch]);
 
-  const firstVisible = Math.floor(scrollTop / ROW_HEIGHT);
+  const firstVisible = Math.floor(scrollTop / LIST_ROW_HEIGHT);
   const stickyAt = stickyIndex((i) => source.rowAt(i)?.isSeparator, firstVisible);
   // Only pin a header once its own row has scrolled out of sight; otherwise
   // there would be two copies of it on screen.
@@ -192,25 +226,81 @@ export function ChannelList() {
       ? source.rowAt(stickyAt)
       : undefined;
 
+  // What is on, and next, for the rows in view only: the same guide data the
+  // grid reads, asked for the window around now and re-read each minute.
+  const minute = useClock(60_000);
+  const visibleIds: number[] = [];
+  for (let i = win.start; i < win.end; i++) {
+    const c = source.rowAt(i);
+    if (c && !c.isSeparator) visibleIds.push(c.streamId);
+  }
+  const guide = useGuideRows(
+    visibleIds,
+    { from: minute - HOUR, to: minute + 4 * HOUR },
+    state.sync.lastSynced,
+  );
+
+  // Where each channel lives, as the second line under its name. Left off
+  // where the list is already one category's, or grouped under headings.
+  const showCategory = !searching && (live.kind === "all" || live.listed !== null);
+
+  const listedEntries = live.kind === "favourites" ? state.favourites : live.kind === "recent" ? state.recent : null;
+  const entries = listedEntries && listedEntries.status === "ready" ? listedEntries.data : null;
+  // Read through a ref, like the playing state above, so the row callback
+  // keeps its identity while the lists reload underneath it.
+  const menuSource = useRef({ entries, minute });
+  menuSource.current = { entries, minute };
+  const onMenu = useCallback(
+    (c: ChannelDto, x: number, y: number) => {
+      const { entries: list, minute: at } = menuSource.current;
+      const entry = list?.find((f) => f.channel.streamId === c.streamId);
+      if (!entry) return;
+      dispatch({
+        type: "favouriteMenu",
+        menu: {
+          streamId: c.streamId,
+          name: c.cleanName,
+          meta: favouriteMeta(entry.watchSeconds, entry.lastWatched, at),
+          x,
+          y,
+        },
+      });
+    },
+    [dispatch],
+  );
+
+  // The divider each row sits under, carried down the window from the one
+  // above it, so a row can leave out a category line the divider already says.
+  const above = stickyIndex((i) => source.rowAt(i)?.isSeparator, win.start);
+  let divider: string | null = (above !== null ? source.rowAt(above)?.categoryId : undefined) ?? null;
   const rows = [];
   for (let i = win.start; i < win.end; i++) {
     const c = source.rowAt(i);
-    const top = i * ROW_HEIGHT;
+    if (c?.isSeparator) divider = c.categoryId;
+    const top = i * LIST_ROW_HEIGHT;
     if (!c) {
-      rows.push(<div className="row" key={`gap-${i}`} style={{ top, height: ROW_HEIGHT }} />);
+      rows.push(<div className="row" key={`gap-${i}`} style={{ top, height: LIST_ROW_HEIGHT }} />);
       continue;
     }
     // What playing it has since added to its record, over what the page
     // was fetched with. A new object only for the few rows that have news,
     // so the rest keep their memoised render.
     const news = state.qualityNews;
-    const shown = c.streamId in news ? { ...c, quality: news[c.streamId] } : c;
+    const quality = c.streamId in news ? news[c.streamId] : c.quality;
+    const nowNext = rowNowNext(c, guide.programmesFor(c.streamId), minute);
+    const shown = quality !== c.quality ? { ...c, quality } : c;
     rows.push(
       <ChannelRow
         key={c.streamId}
         channel={shown}
+        categoryName={showCategory && c.categoryId ? categoryLine(divider, c.categoryId, names.get(c.categoryId) ?? null) : null}
+        now={nowNext.now}
+        next={nowNext.next}
+        minute={minute}
+        onMenu={listedEntries ? onMenu : undefined}
         top={top}
         selected={state.player.streamId === c.streamId}
+        focused={focus?.streamId === c.streamId}
         pending={state.pendingStreamId === c.streamId}
         onPlay={onPlay}
         onOpenFull={onOpenFull}
@@ -221,17 +311,22 @@ export function ChannelList() {
 
   return (
     <main className="list-pane">
-      {/* Two rows, matching the rail's beside it row for row: a heading the
-          height of the rail's tabs, then the search box the height of the
-          rail's filter box, so the two inputs sit on one line. */}
-      <ListHead
-        heading={searching ? "Search results" : categoryName}
-        total={showingProgrammes ? programmeCount : channelCount}
-        more={showingProgrammes && programmes.hasMore}
-        loading={showingProgrammes ? programmes.result.status === "loading" : source.loading}
-        railCollapsed={state.railCollapsed}
-      />
-      <div className="pane-head">
+      {/* One heading row, level with the rail's filter row beside it. */}
+      <div className="list-head">
+        <RailToggle />
+        <span className="list-title" data-tip-overflow="">
+          {searching ? "Search results" : heading}
+        </span>
+        <ListCount
+          text={
+            showingProgrammes
+              ? `${programmeCount.toLocaleString()}${programmes.hasMore ? "+" : ""}`
+              : !searching && listedEntries
+                ? selectionSubtitle(rowsId, channelCount)
+                : `${channelCount.toLocaleString()}`
+          }
+          loading={showingProgrammes ? programmes.result.status === "loading" : source.loading}
+        />
         <SearchField
           className="list-search"
           inputRef={registerSearchInput}
@@ -240,6 +335,7 @@ export function ChannelList() {
           onChange={(text) => dispatch({ type: "query", text })}
           clearLabel="Clear search"
         />
+        <span className="spring" />
         {searching ? (
           <SearchKind
             tab={tab}
@@ -249,7 +345,20 @@ export function ChannelList() {
             moreProgrammes={programmes.hasMore}
           />
         ) : null}
+        {/* Beside the list's own title: the guide is the same channels as a
+            timeline, so the switch belongs to the list, not the window. */}
+        <ViewSwitch current="browse" />
       </div>
+
+      {showingProgrammes ? null : (
+        <div className="list-cols" aria-hidden>
+          <span>#</span>
+          <span />
+          <span>Channel</span>
+          <span>On now</span>
+          <span>Next</span>
+        </div>
+      )}
 
       {showingProgrammes ? <ProgrammeResults search={programmes} query={state.query} /> : null}
 
@@ -273,7 +382,7 @@ export function ChannelList() {
           // Quantised to the row grid, and this is the difference between a
           // list that scrolls and one that drags. Nothing rendered here
           // depends on where inside a row the viewport sits: the rows are
-          // absolutely positioned at index * ROW_HEIGHT, so only *which*
+          // absolutely positioned at index * LIST_ROW_HEIGHT, so only *which*
           // rows exist changes. Storing the raw offset re-rendered the whole
           // window on every scroll event — dozens a second, each one
           // reconciling forty-odd rows to produce identical output. Keeping
@@ -281,7 +390,7 @@ export function ChannelList() {
           // out of the render entirely, which is roughly one render per
           // twenty-six pixels instead of one per event.
           setScrollTop((prev) =>
-            Math.floor(top / ROW_HEIGHT) === Math.floor(prev / ROW_HEIGHT) ? prev : top,
+            Math.floor(top / LIST_ROW_HEIGHT) === Math.floor(prev / LIST_ROW_HEIGHT) ? prev : top,
           );
           // The remembered offset is the real one, not the quantised one.
           // A position inside a search result set means nothing next launch:
@@ -294,11 +403,17 @@ export function ChannelList() {
           {rows}
         </div>
         {sticky ? <div className="sticky-head">{sticky.cleanName}</div> : null}
-        {source.total === 0 && !source.loading && !source.error ? (
+        {source.total === 0 && !source.loading && !source.error && (searching || live.kind !== "recordings") ? (
           <div className="pane-note">
             {searching
               ? `Nothing matches “${state.query}”.`
-              : state.categories.status === "error"
+              : live.kind === "favourites"
+                ? // Not an error: this is what the first run looks like, and
+                  // there is nothing for anyone to do about it.
+                  "Nothing here yet. Favourites collect themselves from what you watch — a channel joins the list after about half a minute on it."
+                : live.kind === "recent"
+                  ? "Nothing here yet. Channels you watch for half a minute or more appear here, newest first."
+                  : state.categories.status === "error"
                 ? // Empty because there is nothing here, or because the
                   // catalogue could not be read? Different things.
                   `Channels unavailable — ${state.categories.message}`
@@ -306,41 +421,24 @@ export function ChannelList() {
           </div>
         ) : null}
       </div>
+      {state.favouriteMenu ? (
+        <FavouriteMenu
+          menu={state.favouriteMenu}
+          onForget={() => void forgetChannel(dispatch, state.favouriteMenu!.streamId)}
+          onClose={() => dispatch({ type: "favouriteMenu", menu: null })}
+        />
+      ) : null}
     </main>
   );
 }
 
-/** What the list is showing, and the way to the guide. */
-function ListHead({
-  heading,
-  total,
-  more = false,
-  loading,
-  railCollapsed,
-}: {
-  heading: string;
-  total: number;
-  /** There are more than `total`, not yet fetched. */
-  more?: boolean;
-  loading: boolean;
-  railCollapsed: boolean;
-}) {
+/** How much the list holds, and that more is on its way. */
+function ListCount({ text, loading }: { text: string; loading: boolean }) {
   return (
-    <div className="list-head">
-      {railCollapsed ? <RailExpand /> : null}
-      <span className="list-title" data-tip-overflow="">
-        {heading}
-      </span>
-      <span className="list-count">
-        {total.toLocaleString()}
-        {more ? "+" : ""}
-      </span>
+    <>
+      <span className="list-count">{text}</span>
       {loading ? <span className="list-count">loading…</span> : null}
-      <span className="spring" />
-      {/* Beside the list's own title: the guide is the same channels as a
-          timeline, so the switch belongs to the list, not the window. */}
-      <ViewSwitch current="browse" />
-    </div>
+    </>
   );
 }
 

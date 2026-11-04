@@ -15,6 +15,7 @@ import {
 import type {
   CategoryDto,
   ChannelDto,
+  FavouriteDto,
   ChannelQualityDto,
   LiveJumpDto,
   PlayerOptionsDto,
@@ -44,13 +45,11 @@ import { setHidden, setPinned, type CategorySort } from "./logic/categoryOrder";
 import { loadCategoryHidden, loadCategoryPins, loadCategorySort } from "./categoryPrefs";
 import type { ZapView } from "./logic/zap";
 import { startSleep, type SleepRequest, type SleepTimer } from "./logic/sleep";
+import type { Section } from "./logic/toolbar";
 
-export const ALL_CATEGORIES = "*all*";
-
-/** The two halves of the rail. Categories is what the app opens on;
- *  favourites is the list nobody edits — it is earned from what gets
- *  watched, so there is no "add to favourites" anywhere. */
-export type RailTab = "categories" | "favourites";
+import { ALL_CATEGORIES, RECORDINGS, modeSelection } from "./logic/railItems";
+import { keepSelected } from "./logic/recordings";
+export { ALL_CATEGORIES } from "./logic/railItems";
 
 /** An open context menu over one favourite, and where the pointer was.
  *
@@ -60,6 +59,8 @@ export type RailTab = "categories" | "favourites";
 export interface FavouriteMenu {
   streamId: number;
   name: string;
+  /** What it earned its place with, and when: favouriteMeta's line. */
+  meta: string;
   x: number;
   y: number;
 }
@@ -114,11 +115,9 @@ export type { Toast } from "./logic/toasts";
 export interface State {
   mode: Mode;
   categories: Async<CategoryDto[]>;
-  /** ALL_CATEGORIES for the pseudo-entry, else a CategoryDto.id. */
+  /** The selected rail item: ALL_CATEGORIES, FAVOURITES, RECENT, RECORDINGS or a CategoryDto.id. */
   categoryId: string;
   categoryFilter: string;
-  /** Which half of the rail is showing. */
-  railTab: RailTab;
   /** The rail folded away, in the list and the guide alike: one rail serves
    *  both, so one switch hides it from both. */
   railCollapsed: boolean;
@@ -187,6 +186,8 @@ export interface State {
    *  Escape has to unwind it in the same single-press order as everything
    *  else, and that ordering lives in one place. */
   menuOpen: boolean;
+  /** The title bar's tab: which part of the app is showing. */
+  section: Section;
   aboutOpen: boolean;
   /** The updater, as the backend last pushed it. Here rather than in the
    *  dialog because the toolbar's badge and the settings pane read it too. */
@@ -273,12 +274,17 @@ export interface State {
   recordings: RecordingDto[] | null;
   /** Why the last fetch failed, when it did. */
   recordingsError: string | null;
+  /** The recording the Recordings view has open, or none. */
+  selectedRecordingId: number | null;
+  /** What the Favourites and Recently watched lists hold. The app loads
+   *  them, not a pane, because the rail's counts and the list both read them. */
+  favourites: Async<FavouriteDto[]>;
+  recent: Async<FavouriteDto[]>;
   /** When (ms) something was last asked of the recording service: for a
    *  while after, its list is fetched often, to show what it did. */
   recordingsTouchedAt: number;
   /** The menu over a programme in the guide or the programme results. */
   programmeMenu: ProgrammeMenu | null;
-  recordingsOpen: boolean;
 }
 
 /** An open context menu over a programme: record it, or cancel its
@@ -335,7 +341,6 @@ export const initialState: State = {
   // remembered category after a round trip.
   categoryId: loadSession().categoryId ?? ALL_CATEGORIES,
   categoryFilter: "",
-  railTab: loadSession().railTab,
   railCollapsed: loadSession().railCollapsed,
   favouriteMenu: null,
   categoryMenu: null,
@@ -360,6 +365,7 @@ export const initialState: State = {
   settingsOpen: false,
   settingsPage: null,
   menuOpen: false,
+  section: "live",
   aboutOpen: false,
   update: initialUpdate,
   updateOpen: false,
@@ -387,9 +393,11 @@ export const initialState: State = {
   toasts: [],
   recordings: null,
   recordingsError: null,
+  selectedRecordingId: null,
+  favourites: idle(),
+  recent: idle(),
   recordingsTouchedAt: 0,
   programmeMenu: null,
-  recordingsOpen: false,
 };
 
 export type Action =
@@ -398,11 +406,16 @@ export type Action =
   /** Something was asked of the recording service (record, stop, …). */
   | { type: "recordingsTouched"; at: number }
   | { type: "programmeMenu"; menu: ProgrammeMenu | null }
-  | { type: "recordingsDialog"; open: boolean }
   | { type: "categories"; value: Async<CategoryDto[]> }
   | { type: "selectCategory"; id: string }
+  | { type: "watchList"; list: "favourites" | "recent"; value: Async<FavouriteDto[]> }
+  /** Show the Recordings list in browse. */
+  | { type: "showRecordings" }
+  | { type: "selectRecording"; id: number | null }
+  /** Point the list at `categoryId` and mark the channel there, without
+   *  leaving the view or opening the guide. */
+  | { type: "focusChannel"; categoryId: string; streamId: number; index: number | null }
   | { type: "categoryFilter"; text: string }
-  | { type: "railTab"; tab: RailTab }
   | { type: "railCollapsed"; collapsed: boolean }
   | { type: "favouriteMenu"; menu: FavouriteMenu | null }
   | { type: "categoryMenu"; menu: CategoryMenu | null }
@@ -430,6 +443,7 @@ export type Action =
   /** `page` opens Settings at that page; see `settingsPage`. */
   | { type: "settings"; open: boolean; page?: string }
   | { type: "menu"; open: boolean }
+  | { type: "section"; section: Section }
   | { type: "about"; open: boolean }
   | { type: "update"; value: UpdateStatusDto }
   | { type: "updateDialog"; open: boolean }
@@ -487,7 +501,40 @@ export function reducer(state: State, action: Action): State {
     case "selectCategory":
       // Choosing a category is also a way out of a search: the two are one
       // list, and leaving the query up would make the choice look ignored.
-      return { ...state, categoryId: action.id, query: "", guideFocus: null };
+      return {
+        ...state,
+        categoryId: action.id,
+        query: "",
+        guideFocus: null,
+        // Recordings have no grid: asking for them from the guide leaves it.
+        mode: action.id === RECORDINGS && state.mode === "guide" ? "browse" : state.mode,
+      };
+    case "watchList":
+      // A list already showing is not blanked by the fetch that refreshes it.
+      if (action.value.status === "loading" && state[action.list].status === "ready") return state;
+      return { ...state, [action.list]: action.value };
+    case "showRecordings":
+      return {
+        ...state,
+        categoryId: RECORDINGS,
+        query: "",
+        mode: "browse",
+        menuOpen: false,
+        programmeMenu: null,
+      };
+    case "selectRecording":
+      return { ...state, selectedRecordingId: action.id };
+    case "focusChannel":
+      return {
+        ...state,
+        categoryId: action.categoryId,
+        query: "",
+        guideFocus: {
+          streamId: action.streamId,
+          index: action.index,
+          seq: (state.guideFocus?.seq ?? 0) + 1,
+        },
+      };
     case "guideFocus":
       // The guide, at a time, on a channel's row. The query is kept: the
       // search this came from is still there to go back to.
@@ -535,16 +582,6 @@ export function reducer(state: State, action: Action): State {
     case "stats":
       // Opening it closes the menu it was chosen from; nothing wants both.
       return { ...state, statsOpen: action.open, videoMenu: null };
-    case "railTab":
-      // A menu belongs to the list it was opened over; changing the list
-      // leaves it pointing at a row that is no longer there.
-      return {
-        ...state,
-        railTab: action.tab,
-        favouriteMenu: null,
-        categoryMenu: null,
-        categoryOptions: null,
-      };
     case "railCollapsed":
       // The menus hang off rows that are about to stop being on screen.
       return state.railCollapsed === action.collapsed
@@ -618,15 +655,24 @@ export function reducer(state: State, action: Action): State {
       };
     case "menu":
       return { ...state, menuOpen: action.open };
+    case "section":
+      return {
+        ...state,
+        section: action.section,
+        menuOpen: false,
+        mode: state.mode === "watch" ? "browse" : state.mode,
+      };
     case "recordings":
-      return { ...state, recordings: action.list, recordingsError: action.error ?? null };
+      return {
+        ...state,
+        recordings: action.list,
+        recordingsError: action.error ?? null,
+        selectedRecordingId: keepSelected(action.list, state.selectedRecordingId),
+      };
     case "recordingsTouched":
       return { ...state, recordingsTouchedAt: action.at };
     case "programmeMenu":
       return { ...state, programmeMenu: action.menu };
-    case "recordingsDialog":
-      // Like About: chosen from the menu, which has done its job.
-      return { ...state, recordingsOpen: action.open, menuOpen: false, programmeMenu: null };
     case "about":
       // Opening a dialog from the menu closes the menu: leaving it hanging
       // over its own result is how you end up with two things to dismiss.
@@ -642,6 +688,7 @@ export function reducer(state: State, action: Action): State {
       return {
         ...state,
         mode: action.mode,
+        categoryId: modeSelection(state.categoryId, action.mode),
         menuOpen: false,
         favouriteMenu: null,
         categoryMenu: null,

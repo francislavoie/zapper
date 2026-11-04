@@ -138,6 +138,7 @@ export const api = {
     invoke<GuideRowDto[]>("guide_rows", { streamIds, from, to }),
 
   favourites: (limit: number) => invoke<FavouriteDto[]>("favourites", { limit }),
+  recentlyWatched: (limit: number) => invoke<FavouriteDto[]>("recently_watched", { limit }),
   forgetActivity: (streamId: number) =>
     invoke<void>("forget_activity", { streamId }),
 

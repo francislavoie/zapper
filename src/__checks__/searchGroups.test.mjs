@@ -9,6 +9,7 @@ import {
   NO_CATEGORY,
   categoryNames,
   categoryOf,
+  categoryLine,
   groupByCategory,
 } from "../logic/searchGroups.ts";
 
@@ -57,4 +58,16 @@ test("a channel in no category, or one not yet known, is filed under no category
 test("nothing found is nothing listed, and separators are never results", () => {
   assert.deepEqual(groupByCategory([], names), []);
   assert.deepEqual(shape(groupByCategory([ch(9, "news", { isSeparator: true })], names)), []);
+});
+
+test("a row leaves out its category under a divider of the same category", () => {
+  assert.equal(categoryLine("cat-1", "cat-1", "CA | ENTERTAINMENT"), null);
+});
+
+test("a row keeps its category under another category's divider, or none", () => {
+  // Same topic, different country: the ids differ, so the line stays.
+  assert.equal(categoryLine("ca-news", "uk-news", "UK | NEWS"), "UK | NEWS");
+  assert.equal(categoryLine(null, "cat-1", "CA | ENTERTAINMENT"), "CA | ENTERTAINMENT");
+  assert.equal(categoryLine(null, null, null), null);
+  assert.equal(categoryLine("cat-1", "cat-1", null), null);
 });

@@ -8,6 +8,8 @@ import {
   restingText,
   statusLine,
   NO_ACCOUNT_MESSAGE,
+  SECTION_LABEL,
+  titleTabs,
 } from "../logic/toolbar.ts";
 import { readFileSync } from "node:fs";
 import {
@@ -111,12 +113,9 @@ test("the resting line is never blank — it is the bar's whole content when idl
   assert.ok(fresh.text.startsWith("Synced "));
 });
 
-test("the resting detail names the catalogue size only once there is one", () => {
+test("at rest the status says only when it synced, not the catalogue's size", () => {
   assert.equal(statusLine(sync({ channelsTotal: 0 }), 0).detail, "");
-  assert.equal(
-    statusLine(sync({ channelsTotal: 60000 }), 0).detail,
-    `${(60000).toLocaleString()} channels`,
-  );
+  assert.equal(statusLine(sync({ channelsTotal: 60000 }), 0).detail, "");
 });
 
 // ---------------------------------------------------------- relative time
@@ -199,4 +198,10 @@ test("the toolbar is tall enough for its controls and their edge inset", () => {
   // 26px buttons, inset 6px from the window's resize edge at the top.
   assert.ok(TOOLBAR_HEIGHT >= 32, "a 26px control plus a 6px inset has to fit");
   assert.ok(TOOLBAR_HEIGHT <= 48, "a title bar this app drew should not be a header");
+});
+
+test("the title bar's tabs: Live TV always, Movies and Shows only with on-demand", () => {
+  assert.deepEqual(titleTabs({ onDemand: false }), ["live"]);
+  assert.deepEqual(titleTabs({ onDemand: true }), ["live", "movies", "shows"]);
+  assert.deepEqual(titleTabs({ onDemand: true }).map((s) => SECTION_LABEL[s]), ["Live TV", "Movies", "Shows"]);
 });

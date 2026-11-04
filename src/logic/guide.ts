@@ -3,7 +3,7 @@
 // Everything here is pure so the grid's geometry can be checked without a
 // browser — see src/__checks__/guide.test.mjs.
 
-import type { ProgrammeDto } from "../types";
+import type { ChannelDto, ProgrammeDto } from "../types";
 import type { WheelLike } from "./wheel";
 
 export const HOUR = 3600;
@@ -37,11 +37,24 @@ export function splitNowNext(
   return { now: live, next };
 }
 
+/** What a list row shows for a channel: the guide's answer when it has one,
+ *  else the channel's own current programme, but only while it is still on. A
+ *  page fetched an hour ago can carry one that has since ended. */
+export function rowNowNext(
+  channel: Pick<ChannelDto, "nowPlaying">,
+  programmes: readonly ProgrammeDto[] | undefined,
+  now: number,
+): NowNext {
+  if (programmes) return splitNowNext(programmes, now);
+  const own = channel.nowPlaying;
+  return { now: own && own.start <= now && now < own.stop ? own : null, next: null };
+}
+
 // ---------------------------------------------------------------- the grid
 
 /** Dense enough that a screen shows twenty-odd channels, tall enough that a
  *  programme title and its time both fit. */
-export const GUIDE_ROW_HEIGHT = 34;
+export const GUIDE_ROW_HEIGHT = 44;
 export const HALF_HOUR = 1800;
 export const MIN_GUIDE_HOURS = 1;
 export const MAX_GUIDE_HOURS = 6;
