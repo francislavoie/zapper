@@ -44,6 +44,7 @@ import { setHidden, setPinned, type CategorySort } from "./logic/categoryOrder";
 import { loadCategoryHidden, loadCategoryPins, loadCategorySort } from "./categoryPrefs";
 import type { ZapView } from "./logic/zap";
 import { startSleep, type SleepRequest, type SleepTimer } from "./logic/sleep";
+import type { Section } from "./logic/toolbar";
 
 export const ALL_CATEGORIES = "*all*";
 
@@ -187,6 +188,8 @@ export interface State {
    *  Escape has to unwind it in the same single-press order as everything
    *  else, and that ordering lives in one place. */
   menuOpen: boolean;
+  /** The title bar's tab: which part of the app is showing. */
+  section: Section;
   aboutOpen: boolean;
   /** The updater, as the backend last pushed it. Here rather than in the
    *  dialog because the toolbar's badge and the settings pane read it too. */
@@ -360,6 +363,7 @@ export const initialState: State = {
   settingsOpen: false,
   settingsPage: null,
   menuOpen: false,
+  section: "live",
   aboutOpen: false,
   update: initialUpdate,
   updateOpen: false,
@@ -430,6 +434,7 @@ export type Action =
   /** `page` opens Settings at that page; see `settingsPage`. */
   | { type: "settings"; open: boolean; page?: string }
   | { type: "menu"; open: boolean }
+  | { type: "section"; section: Section }
   | { type: "about"; open: boolean }
   | { type: "update"; value: UpdateStatusDto }
   | { type: "updateDialog"; open: boolean }
@@ -618,6 +623,13 @@ export function reducer(state: State, action: Action): State {
       };
     case "menu":
       return { ...state, menuOpen: action.open };
+    case "section":
+      return {
+        ...state,
+        section: action.section,
+        menuOpen: false,
+        mode: state.mode === "watch" ? "browse" : state.mode,
+      };
     case "recordings":
       return { ...state, recordings: action.list, recordingsError: action.error ?? null };
     case "recordingsTouched":

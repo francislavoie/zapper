@@ -5,6 +5,7 @@
 // data is. Both answers are pure functions of the status and the clock, so
 // both are checkable — see src/__checks__/toolbar.test.mjs.
 
+import type { Capabilities } from "./capabilities";
 import type { SyncPhase, SyncStatusDto } from "../types";
 
 /** The one number the layout hangs off: the toolbar's height in CSS pixels.
@@ -121,4 +122,19 @@ export function maximiseLabel(maximised: boolean): { label: string; glyph: strin
   return maximised
     ? { label: "Restore", glyph: "❐" }
     : { label: "Maximise", glyph: "▢" };
+}
+
+/** The app's top-level sections, as the title bar's tabs. */
+export type Section = "live" | "movies" | "shows";
+
+export const SECTION_LABEL: Record<Section, string> = {
+  live: "Live TV",
+  movies: "Movies",
+  shows: "Shows",
+};
+
+/** The tabs to draw: Live TV always, Movies and Shows only where the
+ *  provider's on-demand catalogue is there to fill them. */
+export function titleTabs(caps: Pick<Capabilities, "onDemand">): Section[] {
+  return caps.onDemand ? ["live", "movies", "shows"] : ["live"];
 }

@@ -95,6 +95,7 @@ test("ordinary chrome is not on the allowlist, by class or by ancestor", () => {
   // are things people drag across.
   const chrome = [
     "tb-status-text",
+    "tb-tab",
     "tb-menu-label",
     "tb-menu-hint",
     "rail-item",

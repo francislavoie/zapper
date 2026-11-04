@@ -12,17 +12,18 @@
 //
 //   left    the hamburger, which holds every action the command palette holds,
 //           because it is literally the palette's own list regrouped, and
-//           beside it the one line saying what the backend is doing — here
-//           rather than in a strip floating over the window's content;
+//           beside it the section tabs (Live TV, and Movies and Shows where
+//           the provider has them);
 //   centre  the app's name, centred on the window rather than on the space
-//           left over, so it does not drift as the status line grows;
-//   right   only when there is one, the badge for an update waiting, and the
-//           sign that something is recording; then Settings and the window
-//           buttons.
+//           left over, so it does not drift as the tabs or the status change;
+//   right   the one line saying what the backend is doing — here rather than
+//           in a strip floating over the window's content — then, only when
+//           there is one, the badge for an update waiting, and the sign that
+//           something is recording; then Settings and the window buttons.
 //
 // Everything that is not a button drags the window: the status line, and the
-// strip between it and the right-hand end, with the name drawn over that strip
-// without taking its clicks. The update badge is a button that still lets a
+// strip between the tabs and the right-hand end, with the name drawn over that
+// strip without taking its clicks. The update badge is a button that still lets a
 // drag through: press and move, and the window moves; press and release, and
 // it opens. It sits where people reach to grab a window, so it must not be a
 // dead spot there.
@@ -46,7 +47,7 @@ import {
   availableActions,
   type PaletteAction,
 } from "../logic/palette";
-import { maximiseLabel, statusLine } from "../logic/toolbar";
+import { SECTION_LABEL, maximiseLabel, statusLine, titleTabs } from "../logic/toolbar";
 import { badgeLabel, badgeShort, showsBadge } from "../logic/updates";
 import { chordLabel, hintLabel } from "../logic/keys";
 import { IS_MAC } from "../platform";
@@ -134,7 +135,7 @@ export function Toolbar() {
       {IS_MAC && capabilities.window ? <div className="tb-lights" onMouseDown={dragWindow} /> : null}
       <div className="tb-lead">
         {/* The outside-click boundary is the button and its menu, and nothing
-            else: clicking the status line beside them is outside. */}
+            else: clicking the tabs beside them is outside. */}
         <div className="tb-menu-anchor" ref={menuRef}>
           <button
             className={`tb-btn tb-burger ${state.menuOpen ? "on" : ""}`}
@@ -149,17 +150,22 @@ export function Toolbar() {
           {state.menuOpen ? <Menu onChoose={choose} /> : null}
         </div>
 
-        <Status
-          {...status}
-          onDrag={dragWindow}
-          onRetry={() =>
-            runAction("sync", { dispatch, player: state.player, previous: state.previousChannel })
-          }
-          onAccount={() => dispatch({ type: "settings", open: true, page: "Account" })}
-        />
+        <nav className="tb-tabs" role="tablist" aria-label="Sections">
+          {titleTabs(capabilities).map((s) => (
+            <button
+              key={s}
+              className={`tb-tab ${state.section === s ? "on" : ""}`}
+              role="tab"
+              aria-selected={state.section === s}
+              onClick={() => dispatch({ type: "section", section: s })}
+            >
+              {SECTION_LABEL[s]}
+            </button>
+          ))}
+        </nav>
       </div>
 
-      {/* Centred on the window, not on what is left between the status and the
+      {/* Centred on the window, not on what is left between the tabs and the
           buttons, so it holds still while the status line changes length. It
           takes no clicks: the drag strip is underneath it. */}
       {/* The mark is the launcher's own path, so the two cannot drift. It sits
@@ -175,6 +181,15 @@ export function Toolbar() {
       <div className="tb-drag" data-drag-region onMouseDown={dragWindow} />
 
       <div className="tb-tail">
+        <Status
+          {...status}
+          onDrag={dragWindow}
+          onRetry={() =>
+            runAction("sync", { dispatch, player: state.player, previous: state.previousChannel })
+          }
+          onAccount={() => dispatch({ type: "settings", open: true, page: "Account" })}
+        />
+
         {/* Only while there is an update to act on; otherwise nothing at
             all, so an up-to-date app has a title bar like any other. One
             word and an arrow; the sentence is in the tooltip. */}
@@ -298,7 +313,7 @@ function Status({
   return (
     <div className={`tb-status ${tone}`} role="status" aria-live="polite" onMouseDown={onDrag}>
       {spinning ? <span className="tb-spinner" aria-hidden /> : null}
-      <span className="tb-status-text">{text}</span>
+      <span className="tb-status-text" data-tip-overflow="">{text}</span>
       {detail ? <span className="tb-status-detail" data-tip-overflow="">
           {detail}
         </span> : null}
