@@ -410,6 +410,31 @@ Source Extensions (an iPhone or iPad before iOS 17.1) says it cannot play live T
 **Limits.** A device may hold three streams at once and start forty a minute; the service streams
 to sixteen browsers at most.
 
+**Movies.** A movie plays in the page on a connection of its own (nobody else is at the same place
+in a film), asked of the same count as a channel's, with the same "Watch here anyway", the same
+card for a recording that needs the connection, and the same limits: movies and channels count
+together. The account sees one connection per movie being watched. An MP4 whose details say H.264
+video, AAC or MP3 sound and no subtitles plays as it is: the browser's own player asks for the
+parts it needs, which the service fetches from the provider. Anything else is converted on the way
+(`recording::vodmux`): the service reads the file once when Play is pressed, to learn its length,
+its sound tracks and its subtitles, then remuxes it to MPEG-TS from wherever the page asks,
+starting at the keyframe at or just before that time. The video is never re-encoded (a film whose
+video no browser plays, such as MPEG-2, says so), and sound the browser cannot play is converted
+to AAC, as a channel's is. Seeking within what the page holds is instant; further on (or back), or
+choosing another sound track, the conversion starts again from that time, the provider's response
+for the one before closed before the next is asked for. Subtitles are shown for text tracks
+(SubRip, ASS, WebVTT, MP4 text), taken from that same read of the file, never a second connection;
+subtitles stored as pictures (DVD, Blu-ray, DVB) are listed but cannot be shown in a browser.
+The page reports how far the film got every ten seconds and when it is paused, so the place is kept
+and a film played past most of its length counts as watched, as in the app. Paused for a minute,
+the film lets its connection go (a recording may be waiting for one) and keeps its place; Play
+watches it again from there. While the page is open it asks after its film every few seconds, which
+keeps the film's place on the service even when the browser holds all it needs for now and reads
+nothing (a page that has asked within the last 90 seconds keeps it: a background tab may ask only
+once a minute); a closed page's goes within 90 seconds. A film that doesn't start within half a
+minute, or stands still for half a minute while playing, is opened again where it was, twice at
+most, before the page says it stopped.
+
 ### Recording what you watch
 
 **Record from the player.** Right-click the picture and choose **Record “…”**, use the **Record**
@@ -839,6 +864,9 @@ Watching (the app or a device; a viewer is its device's alone, `404` to anyone e
 | `GET /api/stream/{viewer}?audio=` | the stream, `video/mp2t`, for as long as it is read; `audio` switches to another track (from live). Refused when the browser says the request came from another site |
 | `GET /api/watch/{viewer}` | `{ended?, takenOver, notice?}`: why it stopped, and the recording it is in the way of (`{recordingId, title, channel, streamId, from, start, waiting}`) |
 | `DELETE /api/watch/{viewer}` | stops it at once (`204`) |
+| `POST /api/vod/watch` | body `{movieId, anyway?, replaces?, audio?, from?, can?}` (`replaces`: a channel's viewer or a movie's; `from`: seconds into the movie to start at, for the remuxer) → `{viewer, stream, mode, duration, audio, audioIndex, converting, notice?}`. A movie always has a connection of its own, asked of the same budget as a channel's and refused the same ways (`404` `movie` for one not in the catalogue). `mode` is `direct` for an MP4 whose details say H.264 and AAC or MP3 sound (the browser plays the file as it is), else `remux` |
+| `GET /api/vod/stream/{viewer}` | `direct`: the file, by the request's `Range` (passed on to the provider; `206` with `Content-Range`, or `200`), `Accept-Ranges: bytes`. A new request ends the one before, so the account sees one connection per viewer. `remux`: `501` for now |
+| `GET /api/vod/watch/{viewer}`, `DELETE /api/vod/watch/{viewer}` | as a channel's viewer's; asking keeps a viewer nobody reads from (its browser holds all it needs) for 90 seconds, where one nobody reads or asks after goes after 15 |
 
 "The app" is the `server-token` from a loopback address; a device's token is refused there
 (`403`). `Device` is `{id, name, userAgent, created, lastUsed?, address?}`; `fingerprint` is the

@@ -431,6 +431,7 @@ mod tests {
 
     #[test]
     fn a_playlist_movie_plays_from_its_stored_address() {
+        let _catalogue = db::movie_catalogue();
         seed_movie(
             9701,
             Some("http://example.test/a/film.mkv"),
@@ -449,6 +450,7 @@ mod tests {
 
     #[test]
     fn an_xtream_movie_plays_from_the_servers_address_in_its_container() {
+        let _catalogue = db::movie_catalogue();
         db::install_test_db();
         db::with_db(|c| {
             c.execute(

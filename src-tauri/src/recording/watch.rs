@@ -45,9 +45,14 @@
 //! on the channel it plays on an account with no connection to spare, after
 //! it has let its own connection go.
 //!
+//! **Movies** are watched through [`super::vodwatch`], on connections of
+//! their own that count among the service's ([`Server::own_conns`]): the
+//! budget, "anyway" and the limits below are the same for both.
+//!
 //! **Limits.** A device may hold [`PER_DEVICE`] viewers and start
 //! [`STARTS_PER_MINUTE`] a minute; the service holds [`MAX_VIEWERS`] in
-//! all. A viewer nobody reads from for [`IDLE`] is let go.
+//! all, channels and movies together. A viewer nobody reads from for
+//! [`IDLE`] is let go.
 
 use std::collections::{HashMap, VecDeque};
 use std::pin::Pin;
@@ -75,6 +80,7 @@ use super::schedule::window;
 use super::server::Server;
 use super::sharing::{Conn, Rider};
 use super::tsprobe::{self, Can, How, Plan, StreamInfo, Tables};
+use super::vodwatch::movie_of;
 use super::{livemux, now, store};
 
 /// Viewers one device may hold at once: a page, and a second tab or a
@@ -98,7 +104,7 @@ const INFO_FRESH: Duration = Duration::from_secs(6 * 3600);
 /// How far ahead a recording that needs the connection is mentioned.
 pub const WARN_AHEAD_SECS: i64 = 120;
 /// How long an ended viewer is kept, so its page can ask why.
-const KEEP_ENDED: Duration = Duration::from_secs(60);
+pub(super) const KEEP_ENDED: Duration = Duration::from_secs(60);
 
 // ------------------------------------------------------------- the rules
 
@@ -281,7 +287,7 @@ impl Viewers {
     }
 
     /// A rider id no recording has: recordings' are their row ids, from 1.
-    fn rider_id(&self) -> i64 {
+    pub(super) fn rider_id(&self) -> i64 {
         -1 - self.next_rider.fetch_add(1, Ordering::Relaxed)
     }
 
@@ -298,17 +304,24 @@ impl Viewers {
         m.insert(stream_id, (Instant::now(), info.clone()));
     }
 
-    /// Whether `device` may start another viewer now; counts the start.
-    fn admit(&self, device: &str) -> Result<(), &'static str> {
+    /// Whether `device` may start another viewer now, with `more_here` and
+    /// `more_in_all` movie viewers besides these (`super::vodwatch`): the
+    /// limits count both. Counts the start.
+    pub(super) fn admit(
+        &self,
+        device: &str,
+        more_here: usize,
+        more_in_all: usize,
+    ) -> Result<(), &'static str> {
         {
             let map = self.map();
             let live = map.values().filter(|v| v.ended.is_none());
-            if live.clone().filter(|v| v.device == device).count() >= PER_DEVICE {
+            if live.clone().filter(|v| v.device == device).count() + more_here >= PER_DEVICE {
                 return Err(
                     "This device is already watching as many channels as it may. Stop one first.",
                 );
             }
-            if live.count() >= MAX_VIEWERS {
+            if live.count() + more_in_all >= MAX_VIEWERS {
                 return Err("The service is already streaming to as many browsers as it may.");
             }
         }
@@ -387,14 +400,14 @@ impl Viewers {
 }
 
 /// Which device a caller is, for the limits and for whose viewer is whose.
-fn device_of(c: &Caller) -> String {
+pub(super) fn device_of(c: &Caller) -> String {
     match c {
         Caller::App => "app".into(),
         Caller::Device(id) => format!("device:{id}"),
     }
 }
 
-fn new_id() -> String {
+pub(super) fn new_id() -> String {
     let mut b = [0u8; 16];
     if getrandom::fill(&mut b).is_err() {
         // No randomness: the id still names the viewer, and only its own
@@ -409,7 +422,7 @@ fn new_id() -> String {
 
 #[derive(Debug, Default, Clone, Copy, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
-struct CanDto {
+pub(super) struct CanDto {
     hevc: bool,
     ac3: bool,
     eac3: bool,
@@ -480,7 +493,7 @@ struct WatchDto {
 
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
-struct NoticeDto {
+pub(super) struct NoticeDto {
     recording_id: i64,
     title: String,
     channel: String,
@@ -496,13 +509,13 @@ struct NoticeDto {
 /// (`ipc::ending`): the page shows the same words.
 #[derive(Debug, Serialize, Clone, Copy)]
 #[serde(rename_all = "camelCase")]
-struct EndingDto {
-    kind: &'static str,
-    status: Option<u16>,
-    limit: bool,
+pub(super) struct EndingDto {
+    pub(super) kind: &'static str,
+    pub(super) status: Option<u16>,
+    pub(super) limit: bool,
 }
 
-fn ending_of(f: Failure) -> EndingDto {
+pub(super) fn ending_of(f: Failure) -> EndingDto {
     let (kind, status, limit) = match f {
         Failure::Ended => ("dropped", None, false),
         Failure::Refused { status, limit } => ("refused", Some(status), f.is_limit() || limit),
@@ -518,30 +531,34 @@ fn ending_of(f: Failure) -> EndingDto {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct RefusalDto {
-    error: String,
+pub(super) struct RefusalDto {
+    pub(super) error: String,
     /// `recording`, `viewers`, `inUse`, `notPlayable`, `limit`, `feed`,
-    /// `channel`.
-    reason: &'static str,
+    /// `channel`, and for a movie `movie`.
+    pub(super) reason: &'static str,
     /// "Watch here anyway" may be offered.
-    anyway: bool,
-    slots: Option<SlotsDto>,
-    ending: Option<EndingDto>,
+    pub(super) anyway: bool,
+    pub(super) slots: Option<SlotsDto>,
+    pub(super) ending: Option<EndingDto>,
     /// Channels the service has open, watchable at no cost.
-    watch_instead: Vec<i64>,
+    pub(super) watch_instead: Vec<i64>,
 }
 
 #[derive(Debug, Serialize, Clone, Copy)]
-struct SlotsDto {
+pub(super) struct SlotsDto {
     active: i64,
     max: i64,
 }
 
-fn refused(status: StatusCode, r: RefusalDto) -> Response {
+pub(super) fn refused(status: StatusCode, r: RefusalDto) -> Response {
     (status, [(header::CACHE_CONTROL, "no-store")], Json(r)).into_response()
 }
 
-fn plain(status: StatusCode, reason: &'static str, error: impl Into<String>) -> Response {
+pub(super) fn plain(
+    status: StatusCode,
+    reason: &'static str,
+    error: impl Into<String>,
+) -> Response {
     refused(
         status,
         RefusalDto {
@@ -557,12 +574,12 @@ fn plain(status: StatusCode, reason: &'static str, error: impl Into<String>) -> 
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct StatusDto {
+pub(super) struct StatusDto {
     /// Why it stopped, once it has.
-    ended: Option<EndingDto>,
+    pub(super) ended: Option<EndingDto>,
     /// Another browser said "Watch here anyway".
-    taken_over: bool,
-    notice: Option<NoticeDto>,
+    pub(super) taken_over: bool,
+    pub(super) notice: Option<NoticeDto>,
 }
 
 // --------------------------------------------------------------- handlers
@@ -574,8 +591,15 @@ pub fn routes() -> Router<Arc<Server>> {
         .route("/api/stream/{id}", get(stream))
 }
 
-/// A channel's name, for a sentence.
+/// A channel's name, or a movie's for a movie viewer's feed, for a
+/// sentence.
 fn channel_name(stream_id: i64) -> String {
+    if let Some(movie) = movie_of(stream_id) {
+        return crate::catalog::reads::movies_by_ids(&[movie])
+            .ok()
+            .and_then(|v| v.into_iter().next())
+            .map_or_else(|| "a movie".to_string(), |m| format!("“{}”", m.clean_name));
+    }
     crate::catalog::reads::channels_by_ids(&[stream_id])
         .ok()
         .and_then(|v| v.into_iter().next())
@@ -585,6 +609,15 @@ fn channel_name(stream_id: i64) -> String {
 fn names(feeds: &[i64]) -> String {
     let n: Vec<String> = feeds.iter().map(|&f| channel_name(f)).collect();
     n.join(", ")
+}
+
+/// The feeds among `feeds` a viewer could join: channels, not movies.
+fn channels(feeds: &[i64]) -> Vec<i64> {
+    feeds
+        .iter()
+        .copied()
+        .filter(|&f| movie_of(f).is_none())
+        .collect()
 }
 
 fn refusal_response(s: &Server, r: Refusal) -> Response {
@@ -612,7 +645,7 @@ fn refusal_response(s: &Server, r: Refusal) -> Response {
                     anyway: false,
                     slots: None,
                     ending: None,
-                    watch_instead: feeds,
+                    watch_instead: channels(&feeds),
                 },
             )
         }
@@ -627,7 +660,7 @@ fn refusal_response(s: &Server, r: Refusal) -> Response {
                 anyway: true,
                 slots: None,
                 ending: None,
-                watch_instead: feeds,
+                watch_instead: channels(&feeds),
             },
         ),
         Refusal::InUse { active, max } => refused(
@@ -647,6 +680,81 @@ fn refusal_response(s: &Server, r: Refusal) -> Response {
     }
 }
 
+/// Whether a viewer may have a connection of its own: the budget asked with
+/// every connection the service holds, channels' and movies' alike
+/// ([`Server::own_conns`]). On "anyway" (or for this device's own other
+/// viewer) the viewers in the way are ended first, and their connection
+/// given a moment to close. `Err`: the answer to send instead.
+pub(super) async fn may_connect(
+    s: &Arc<Server>,
+    anyway: bool,
+    device: &str,
+) -> Result<(), Box<Response>> {
+    let slots = s.budget.check(s.open_streams()).await;
+    let conns = s.own_conns();
+    let released = s.hubs.released_recently() + s.vod.released_recently();
+    let mut decision = decide(slots, &conns, released, anyway);
+    // This browser's own other viewer (a page reloaded, a second tab) is
+    // not another device to ask about: the newer one has it, as the app's
+    // one player would. A movie's is named by its rider: another device
+    // may watch the same movie, and is never the one ended for this.
+    let mut my_movie = None;
+    if let Decision::Refuse(Refusal::Viewers { .. }) = decision {
+        if let Some(feed) = s.viewers.only_mine(&conns, device) {
+            decision = Decision::TakeOver(feed);
+        } else if let Some((feed, rider)) = s.vod.only_mine(&conns, device) {
+            my_movie = Some(rider);
+            decision = Decision::TakeOver(feed);
+        }
+    }
+    match decision {
+        Decision::Go => Ok(()),
+        Decision::TakeOver(feed) => {
+            // Two browsers may each watch the same movie, each on a
+            // connection of its own: one is ended, so wait for one fewer.
+            let on_it = |s: &Server| s.own_conns().iter().filter(|c| c.feed == feed).count();
+            let before = on_it(s);
+            match my_movie {
+                Some(rider) => s.vod.end_rider(rider),
+                None if movie_of(feed).is_some() => s.vod.end(feed),
+                None => s.viewers.take_over(feed),
+            }
+            // The connection closes once its viewers have let go; the
+            // provider is then given a moment, as for a recording.
+            let t = Instant::now();
+            while (s.hubs.closing() || on_it(s) >= before.max(1))
+                && t.elapsed() < Duration::from_secs(5)
+            {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            Ok(())
+        }
+        Decision::Refuse(r) => Err(Box::new(refusal_response(s, r))),
+    }
+}
+
+/// Stops `device`'s viewer `old`, a channel's or a movie's, and waits a
+/// moment for the connection it leaves to close (when nobody else is on
+/// it), so that the viewer replacing it may have it.
+pub(super) async fn let_go(s: &Arc<Server>, device: &str, old: &str) {
+    let Some(rider) = s
+        .viewers
+        .stop(device, old)
+        .or_else(|| s.vod.stop(device, old))
+    else {
+        return;
+    };
+    let t = Instant::now();
+    while (s.hubs.closing()
+        || s.own_conns()
+            .iter()
+            .any(|c| c.riders.is_empty() || c.riders.iter().any(|r| r.id == rider)))
+        && t.elapsed() < Duration::from_secs(3)
+    {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
 /// A connection for a viewer of `stream_id`: a place on one the service has,
 /// or a new one the budget allows. `Err`: the answer to send instead.
 async fn place(
@@ -659,32 +767,7 @@ async fn place(
     if let Some((_, sub)) = s.hubs.join(&[stream_id], me) {
         return Ok((sub, true));
     }
-    let slots = s.budget.check(s.hubs.open_count()).await;
-    let conns = s.hubs.conns();
-    let mut decision = decide(slots, &conns, s.hubs.released_recently(), anyway);
-    // This browser's own other viewer (a page reloaded, a second tab) is
-    // not another device to ask about: the newer one has it, as the app's
-    // one player would.
-    if let Decision::Refuse(Refusal::Viewers { .. }) = decision {
-        if let Some(feed) = s.viewers.only_mine(&conns, device) {
-            decision = Decision::TakeOver(feed);
-        }
-    }
-    match decision {
-        Decision::Go => {}
-        Decision::TakeOver(feed) => {
-            s.viewers.take_over(feed);
-            // The connection closes once its viewers have let go; the
-            // provider is then given a moment, as for a recording.
-            let t = Instant::now();
-            while (s.hubs.closing() || s.hubs.conns().iter().any(|c| c.feed == feed))
-                && t.elapsed() < Duration::from_secs(5)
-            {
-                tokio::time::sleep(Duration::from_millis(50)).await;
-            }
-        }
-        Decision::Refuse(r) => return Err(Box::new(refusal_response(s, r))),
-    }
+    may_connect(s, anyway, device).await?;
     let playable = match s.playable(stream_id) {
         Ok(p) => p,
         Err(e) => {
@@ -761,25 +844,15 @@ async fn start(
             "Only the app on this computer plays the stream as it comes.",
         );
     }
-    if let Some(rider) = req
-        .replaces
-        .as_deref()
-        .and_then(|old| s.viewers.stop(&device, old))
-    {
+    if let Some(old) = req.replaces.as_deref() {
         // Its reading lets go of its place in a moment; the connection it
         // leaves (when nobody else is on it) is then this one's to take.
-        let t = Instant::now();
-        while (s.hubs.closing()
-            || s.hubs
-                .conns()
-                .iter()
-                .any(|c| c.riders.is_empty() || c.riders.iter().any(|r| r.id == rider)))
-            && t.elapsed() < Duration::from_secs(3)
-        {
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
+        let_go(&s, &device, old).await;
     }
-    if let Err(why) = s.viewers.admit(&device) {
+    if let Err(why) = s
+        .viewers
+        .admit(&device, s.vod.count_for(&device), s.vod.len())
+    {
         return plain(StatusCode::TOO_MANY_REQUESTS, "limit", why);
     }
     start_reaper(&s);
@@ -899,9 +972,10 @@ fn start_reaper(s: &Arc<Server>) {
     });
 }
 
-/// What the page is told about the recording its viewer is in the way of.
-async fn notice_for(s: &Arc<Server>, feed: i64, rider: i64) -> Option<NoticeDto> {
-    let conns = s.hubs.conns();
+/// What the page is told about the recording its viewer (on a channel's
+/// feed or a movie's) is in the way of.
+pub(super) async fn notice_for(s: &Arc<Server>, feed: i64, rider: i64) -> Option<NoticeDto> {
+    let conns = s.own_conns();
     let mine = conns
         .iter()
         .find(|c| c.feed == feed && c.riders.iter().any(|r| r.id == rider))?;
@@ -935,7 +1009,7 @@ async fn notice_for(s: &Arc<Server>, feed: i64, rider: i64) -> Option<NoticeDto>
         .collect();
     let open: Vec<i64> = conns.iter().map(|c| c.feed).collect();
     let max = s.account_max().await;
-    let d = notice(t, mine, &open, &due, max, s.hubs.open_count())?;
+    let d = notice(t, mine, &open, &due, max, s.open_streams())?;
     let r = recs.iter().find(|r| r.id == d.id)?;
     Some(NoticeDto {
         recording_id: r.id,
@@ -1017,6 +1091,13 @@ impl futures_core::Stream for Chunks {
     }
 }
 
+/// A stream is only ever read by this origin's own page: a page elsewhere
+/// has no business making a browser fetch it, cookie or not.
+pub(super) fn from_another_site(h: &axum::http::HeaderMap) -> bool {
+    let site = h.get("sec-fetch-site").and_then(|v| v.to_str().ok());
+    site.is_some_and(|v| v != "same-origin" && v != "none")
+}
+
 /// How a reading ended.
 enum Finish {
     /// The browser left, or a newer reading took over: the place is kept
@@ -1035,13 +1116,7 @@ async fn stream(
     Query(q): Query<StreamQuery>,
     req: Request,
 ) -> Response {
-    // Only ever read by this origin's own page: a page elsewhere has no
-    // business making a browser fetch it, cookie or not.
-    let site = req
-        .headers()
-        .get("sec-fetch-site")
-        .and_then(|v| v.to_str().ok());
-    if site.is_some_and(|v| v != "same-origin" && v != "none") {
+    if from_another_site(req.headers()) {
         return plain(
             StatusCode::FORBIDDEN,
             "channel",

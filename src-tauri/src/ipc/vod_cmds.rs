@@ -75,8 +75,10 @@ mod tests {
     use super::*;
     use crate::catalog::db;
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn set_movie_marks_round_trips() {
+        let _catalogue = db::movie_catalogue();
         db::install_test_db();
         db::with_db(|c| {
             c.execute(

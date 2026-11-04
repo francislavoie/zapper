@@ -88,6 +88,15 @@ pub fn install_test_db() {
     });
 }
 
+/// Held for the whole of every test that lands or seeds movies: the test
+/// catalogue is one for the process, and a landing sets aside every movie
+/// it does not list, another test's included.
+#[cfg(test)]
+pub fn movie_catalogue() -> std::sync::MutexGuard<'static, ()> {
+    static MOVIE_CATALOGUE: Mutex<()> = Mutex::new(());
+    MOVIE_CATALOGUE.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

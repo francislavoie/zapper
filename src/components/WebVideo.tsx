@@ -8,14 +8,15 @@
 // Beside it, two things the service tells this page: a recording on another
 // channel that needs the connection being watched on (the account has no
 // other; a viewer is never cut off for it, so it waits — docs/recording.md),
-// with the two ways out, and a channel whose sound is left out.
+// with the two ways out, and a channel whose sound is left out. A movie
+// gives the connection up when paused for a while, so its note says so.
 
 import { useEffect, useSyncExternalStore, type MutableRefObject } from "react";
 import { backend } from "../backend";
 import { playChannel } from "../actions";
 import { hhmm } from "../logic/format";
 import { noticeText } from "../logic/webPlayback";
-import { run, useDispatch } from "../store";
+import { run, useApp, useDispatch } from "../store";
 import { attachVideo, noticeFeed, type WebNotice } from "../webPlayer";
 
 export interface WebVideoProps {
@@ -48,6 +49,7 @@ const current = (): WebNotice => noticeFeed.last;
 function WebNoticeCard() {
   const notice = useSyncExternalStore(subscribe, current);
   const dispatch = useDispatch();
+  const movie = useApp().player.onDemand !== null;
   const rec = notice.recording;
   if (!rec && !notice.silent) return null;
 
@@ -70,7 +72,9 @@ function WebNoticeCard() {
             </button>
           </div>
           <p className="web-notice-note">
-            Keep watching and it waits for you; close this page and it starts.
+            {movie
+              ? "Keep watching and it waits for you; pause for a minute or close this page and it starts."
+              : "Keep watching and it waits for you; close this page and it starts."}
           </p>
         </>
       ) : (
