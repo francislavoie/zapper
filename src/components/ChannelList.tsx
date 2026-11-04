@@ -252,15 +252,13 @@ export function ChannelList() {
     const news = state.qualityNews;
     const quality = c.streamId in news ? news[c.streamId] : c.quality;
     const nowNext = rowNowNext(c, guide.programmesFor(c.streamId), minute);
-    const shown =
-      quality !== c.quality || nowNext.now !== c.nowPlaying
-        ? { ...c, quality, nowPlaying: nowNext.now }
-        : c;
+    const shown = quality !== c.quality ? { ...c, quality } : c;
     rows.push(
       <ChannelRow
         key={c.streamId}
         channel={shown}
         categoryName={showCategory && c.categoryId ? (names.get(c.categoryId) ?? null) : null}
+        now={nowNext.now}
         next={nowNext.next}
         minute={minute}
         onMenu={listedEntries ? onMenu : undefined}

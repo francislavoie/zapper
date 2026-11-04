@@ -33,6 +33,9 @@ export interface ChannelRowProps {
   /** Where the channel lives, as the dim second line under its name. Null
    *  when the category is not known. */
   categoryName: string | null;
+  /** The programme on air: the guide's, else the channel's own while it lasts
+   *  (rowNowNext). Its own prop so the channel object stays the page's. */
+  now: ProgrammeDto | null;
   /** The programme after the one on, from the guide; null when it has none. */
   next: ProgrammeDto | null;
   /** The time in seconds, advanced once a minute. Progress is drawn from it,
@@ -50,6 +53,7 @@ export const ChannelRow = memo(function ChannelRow({
   onPlay,
   onOpenFull,
   categoryName,
+  now,
   next,
   minute,
   onMenu,
@@ -66,7 +70,6 @@ export const ChannelRow = memo(function ChannelRow({
   }
 
   const badge = qualityBadge(channel.quality);
-  const now = channel.nowPlaying;
   // Read at render, not on a clock: "3h ago" in a tooltip is close enough
   // until the row next renders, and a timer per row would be a strobe.
   const nowSec = Date.now() / 1000;
