@@ -14,7 +14,7 @@
 
 import { playChannel, playMovie } from "../actions";
 import { backend } from "../backend";
-import { endedActions, endedMessage, reconnectMessage, retryTarget } from "../logic/ending";
+import { endedActions, endedMessage, reconnectMessage, retryStart, retryTarget } from "../logic/ending";
 import { run, useApp, useDispatch } from "../store";
 
 export interface StreamEndedProps {
@@ -38,8 +38,8 @@ export function StreamEnded({ compact = false, onDismissed }: StreamEndedProps) 
     if (target === "movie") {
       // The title the store knows, so the band and the marks follow; else by id.
       const id = player.onDemand?.id ?? -1;
-      if (movies.playing?.movieId === id) void playMovie(dispatch, movies.playing);
-      else void run(dispatch, "retry", backend.playMovie(id, null));
+      if (movies.playing?.movieId === id) void playMovie(dispatch, movies.playing, retryStart(player));
+      else void run(dispatch, "retry", backend.playMovie(id, retryStart(player)));
       return;
     }
     const id = player.streamId;
