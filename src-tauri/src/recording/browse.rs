@@ -193,6 +193,13 @@ async fn favourites(Query(q): Query<LimitQuery>) -> Result<Response, Failed> {
     Ok(Json(top).into_response())
 }
 
+async fn recent(Query(q): Query<LimitQuery>) -> Result<Response, Failed> {
+    let limit = q.limit.min(PAGE_MAX);
+    let mut rows = read(move || reads::recently_watched(limit)).await?;
+    rows.iter_mut().for_each(|f| local_logo(&mut f.channel));
+    Ok(Json(rows).into_response())
+}
+
 async fn forget(Path(id): Path<i64>) -> Result<Response, Failed> {
     read(move || reads::forget_activity(id)).await?;
     Ok(Json(serde_json::json!({ "streamId": id, "forgotten": true })).into_response())
@@ -296,6 +303,7 @@ pub fn routes<S: Clone + Send + Sync + 'static>() -> Router<S> {
         .route("/api/guide", get(guide))
         .route("/api/guide/rows", get(guide_rows))
         .route("/api/favourites", get(favourites))
+        .route("/api/recent", get(recent))
         .route("/api/favourites/{id}", delete(forget))
         .route("/api/sync", get(sync_status).post(sync_now))
         .route("/api/logo/{id}", get(logo))
