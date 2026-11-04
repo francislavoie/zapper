@@ -340,6 +340,17 @@ impl Machine {
         self.following_live = self.dto.on_demand.is_none() && !(self.live && mode == LiveStart::Stay);
     }
 
+    /// The viewer asked for live: stay at the edge from now on. A movie
+    /// has none.
+    fn follow_live(&mut self) -> Result<(), String> {
+        if self.dto.on_demand.is_some() {
+            return Err("a movie has no live edge".into());
+        }
+        self.following_live = true;
+        self.last_live_nudge = None;
+        Ok(())
+    }
+
     /// First frame decoded. The only honest "it works" edge: `file-loaded`
     /// fires on a stream that connects and then stalls.
     fn playing(&mut self) {
@@ -487,7 +498,13 @@ impl Machine {
         }
         self.dto.at_live_edge = true;
         self.following_live = false;
-        if how == How::Eof && self.shown && !self.live {
+        // A movie is over only when it got to its end: an EOF anywhere else
+        // is the provider dropping the connection, which must keep the
+        // place to resume from and not mark it watched.
+        let at_end = self.dto.on_demand.is_none_or(|o| {
+            o.duration.is_some_and(|d| d - o.position <= MOVIE_END_SLACK_SECS)
+        });
+        if how == How::Eof && self.shown && !self.live && at_end {
             self.stopped();
             return;
         }
@@ -694,6 +711,10 @@ enum Opened {
     Channel(i64),
     Movie(i64),
 }
+
+/// How close to a movie's length its position has to be for an end of file
+/// to be its end rather than a dropped connection.
+const MOVIE_END_SLACK_SECS: f64 = 10.0;
 
 static STATE: LazyLock<Mutex<Machine>> = LazyLock::new(|| Mutex::new(Machine::new()));
 
@@ -1289,7 +1310,7 @@ fn tick(app: &AppHandle, p: &Player) {
         // Nothing loaded is not a reading of zero buffer, it is no reading:
         // recording it would fill the graph with a flat line drawn while
         // there was nothing to draw.
-        loaded = m.dto.stream_id.is_some();
+        loaded = m.dto.stream_id.is_some() || m.dto.on_demand.is_some();
 
         m.changed()
     };
@@ -1932,7 +1953,7 @@ pub async fn seek_to(app: AppHandle, seconds: f64) -> Result<(), String> {
         return Err("seeking to a time is for movies".into());
     }
     on_player(&app, move |p| {
-        let at = clamp_to_title(seconds, p.probe().duration);
+        let at = clamp_to_title(seconds, p.get_f64("duration").filter(|d| d.is_finite() && *d > 0.0));
         p.command("seek", &[&format!("{at:.3}"), "absolute"])
             .map_err(|e| e.to_string())
     })
@@ -2033,9 +2054,7 @@ const MIN_REPORTED_JUMP: f64 = 1.0;
 pub async fn seek_live(app: AppHandle) -> Result<(), String> {
     // Asking for live means staying there, not visiting once.
     {
-        let mut m = STATE.lock().expect("player state mutex poisoned");
-        m.following_live = true;
-        m.last_live_nudge = None;
+        STATE.lock().expect("player state mutex poisoned").follow_live()?;
     }
     let by = on_player(&app, |p| {
         let probe = p.probe();
@@ -2537,6 +2556,11 @@ mod tests {
     fn a_movie_that_plays_to_its_end_stops_rather_than_failing() {
         let mut m = a_playing_movie(7);
         m.shown = true;
+        m.apply(&Probe {
+            time_pos: Some(119.6),
+            duration: Some(120.0),
+            ..Probe::default()
+        });
         m.ended_with(How::Eof);
         assert_eq!(m.dto.state, PlaybackState::Stopped);
         assert!(m.dto.ending.is_none());
@@ -2557,6 +2581,46 @@ mod tests {
         let mut m = a_playing_movie(7);
         m.plan_reconnect(network, false);
         assert!(m.reconnect_due.is_none());
+    }
+
+    #[test]
+    fn an_end_of_file_in_the_middle_of_a_movie_is_a_failure_that_keeps_its_place() {
+        let mut m = a_playing_movie(7);
+        m.shown = true;
+        m.apply(&Probe {
+            time_pos: Some(1200.0),
+            duration: Some(5400.0),
+            ..Probe::default()
+        });
+        m.ended_with(How::Eof);
+        assert_eq!(m.dto.state, PlaybackState::Failed);
+        assert!(m.dto.ending.is_some());
+        assert!(m.reconnect_due.is_none());
+        let od = m.dto.on_demand.unwrap();
+        assert_eq!((od.id, od.position), (7, 1200.0));
+    }
+
+    #[test]
+    fn an_end_of_file_at_the_end_of_a_movie_stops_it() {
+        let mut m = a_playing_movie(7);
+        m.shown = true;
+        m.apply(&Probe {
+            time_pos: Some(5395.0),
+            duration: Some(5400.0),
+            ..Probe::default()
+        });
+        m.ended_with(How::Eof);
+        assert_eq!(m.dto.state, PlaybackState::Stopped);
+    }
+
+    #[test]
+    fn a_movie_has_no_live_edge_to_seek_to() {
+        let mut m = a_playing_movie(7);
+        assert!(m.follow_live().is_err());
+        assert!(!m.following_live, "catch-up must not be armed for a film");
+        m.opening(Opened::Channel(1));
+        m.following_live = false;
+        assert!(m.follow_live().is_ok() && m.following_live);
     }
 
     #[test]
