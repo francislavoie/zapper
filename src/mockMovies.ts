@@ -378,6 +378,7 @@ export function createMockMovies(host: MoviePlayerHost) {
           favourites: 0,
           recent: 0,
           watched: 0,
+          origin: "",
         };
       }
       return {
@@ -387,6 +388,7 @@ export function createMockMovies(host: MoviePlayerHost) {
         favourites: favourites.size,
         recent: RECENT_TOTAL,
         watched: watched.size,
+        origin: "mock",
       };
     },
 
