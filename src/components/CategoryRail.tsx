@@ -88,14 +88,14 @@ export function CategoryRail() {
       ? categories.data.reduce((n, c) => n + c.channelCount, 0)
       : sync.channelsTotal;
 
-  /** Row zero is "All channels". Making it part of the list rather than a
-   *  sibling above it means one set of offsets, and the window arithmetic
-   *  does not need to know it exists. The pinned block is the same: ordinary
-   *  rows at ordinary offsets, with the divider drawn inside the last one. */
+  /** The rail's own items lead the list rather than sitting above it, so
+   *  there is one set of offsets and the window arithmetic does not need to
+   *  know they exist. The pinned block is the same: ordinary rows at ordinary
+   *  offsets, with the divider drawn inside the last one. */
   const rows = useMemo(
     () =>
       railRows(
-        { id: ALL_CATEGORIES, name: "All channels", count: total },
+        [{ id: ALL_CATEGORIES, name: "All channels", count: total ? total.toLocaleString() : "" }],
         categories.status === "ready" ? categories.data : [],
         {
           pins: categoryPins,
@@ -104,7 +104,7 @@ export function CategoryRail() {
           hidden: categoryHidden,
           showHidden: categoryShowHidden,
         },
-      ),
+      ).filter((r) => r.kind !== "hint"),
     [categories, total, categoryPins, categorySort, categoryFilter, categoryHidden, categoryShowHidden],
   );
 
@@ -300,7 +300,7 @@ export function CategoryRail() {
                     {r.name}
                     {r.hidden ? <span className="rail-hidden-note"> (hidden)</span> : null}
                   </span>
-                  <span className="rail-count">{r.count ? r.count.toLocaleString() : ""}</span>
+                  <span className="rail-count">{r.count}</span>
                 </button>
                 {pinnable ? (
                   // Over the count, and only while the row is hovered or the
