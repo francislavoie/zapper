@@ -429,8 +429,10 @@ function Ready({
 }) {
   return (
     <>
-      <p className="watch-state">Where you left off</p>
-      <ChannelProgramme channel={channel} onNow={onNow} next={next} now={now} />
+      <div className="watch-body">
+        <p className="watch-state">Where you left off</p>
+        <ChannelProgramme channel={channel} onNow={onNow} next={next} now={now} />
+      </div>
       <div className="watch-actions">
         <button className="ctl" onClick={onPlay}>
           Resume
@@ -469,17 +471,19 @@ function Playing({
 
   return (
     <>
-      <ChannelProgramme channel={channel} onNow={onNow} next={next} now={now} badge={playerBadge(player) ?? undefined} />
-      <p className="watch-facts">{facts.join(" · ")}</p>
-      {starting ? (
-        <p className="watch-state">{starting}</p>
-      ) : ended ? (
-        <>
-          <p className="watch-state bad">{ended.title}</p>
-          {ended.detail ? <p className="watch-state">{ended.detail}</p> : null}
-          {ended.code ? <p className="watch-state">{ended.code}</p> : null}
-        </>
-      ) : null}
+      <div className="watch-body">
+        <ChannelProgramme channel={channel} onNow={onNow} next={next} now={now} badge={playerBadge(player) ?? undefined} />
+        <p className="watch-facts">{facts.join(" · ")}</p>
+        {starting ? (
+          <p className="watch-state">{starting}</p>
+        ) : ended ? (
+          <>
+            <p className="watch-state bad">{ended.title}</p>
+            {ended.detail ? <p className="watch-state">{ended.detail}</p> : null}
+            {ended.code ? <p className="watch-state">{ended.code}</p> : null}
+          </>
+        ) : null}
+      </div>
       <div className="watch-actions">
         {record ? <PlayerRecordLine record={record} /> : null}
         <ChannelLinks channel={channel} />

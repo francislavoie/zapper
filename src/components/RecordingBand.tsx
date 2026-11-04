@@ -140,6 +140,7 @@ export function RecordingBand({ rec, channel }: { rec: RecordingDto; channel: Ch
 
   return (
     <>
+      <div className="watch-body">
       <h2 className="watch-title-h" data-tip-overflow="">
         {active ? <RecDot recording={rec} /> : null}
         {rec.title}
@@ -190,6 +191,7 @@ export function RecordingBand({ rec, channel }: { rec: RecordingDto; channel: Ch
           ))}
         </ul>
       ) : null}
+      </div>
       <div className="watch-actions">
         {rec.state === "scheduled" ? (
           <button className="ctl" onClick={() => void cancelRecording(dispatch, rec)}>
