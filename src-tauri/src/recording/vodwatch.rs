@@ -163,17 +163,7 @@ pub fn remux_plan(info: &MediaInfo, want: Option<usize>, can: &Can) -> Result<Vo
     match video {
         Some(Video::H264) => {}
         Some(Video::Hevc) if can.hevc => {}
-        Some(v) => {
-            return Err(format!(
-                "Its video is {}, which {} can’t play. Watch it in the zapper app.",
-                v.name(),
-                if v == Video::Hevc {
-                    "this browser"
-                } else {
-                    "browsers"
-                }
-            ))
-        }
+        Some(v) => return Err(v.unplayable(false)),
         None if info.audio.is_empty() => {
             return Err("Its file has neither video nor sound a browser can play.".into())
         }
@@ -483,16 +473,22 @@ impl MovieViewers {
 
     /// Lets go of viewers nobody reads, and forgets ended ones.
     fn reap(&self) {
+        self.reap_at(Instant::now());
+    }
+
+    /// [`Self::reap`], as of `now`.
+    fn reap_at(&self, now: Instant) {
+        let since = |t: Instant| now.saturating_duration_since(t);
         let mut map = self.map();
         let gone: Vec<String> = map
             .iter()
             .filter(|(_, v)| match v.ended {
                 _ if v.reading => false,
                 Some((Ended::Stopped, _)) => true,
-                Some((_, at)) => at.elapsed() >= KEEP_ENDED,
+                Some((_, at)) => since(at) >= KEEP_ENDED,
                 None => {
-                    v.idle_since.elapsed() >= IDLE
-                        && v.asked_at.is_none_or(|a| a.elapsed() >= ASKED_IDLE)
+                    since(v.idle_since) >= IDLE
+                        && v.asked_at.is_none_or(|a| since(a) >= ASKED_IDLE)
                 }
             })
             .map(|(id, _)| id.clone())
@@ -1889,19 +1885,21 @@ mod tests {
             Some((9, 1, true))
         );
         assert_eq!(vod.asked("other", &quiet), None, "another device's");
-        let ago = |secs: u64| Instant::now().checked_sub(Duration::from_secs(secs));
+        // Times are shifted forward rather than set in the past: an Instant
+        // may not go back further than the machine has been up. Every
+        // viewer was made just now; the reaping is looked at from later.
+        let later = ASKED_IDLE + IDLE + Duration::from_secs(1);
+        let base = vod.map()[&asked].idle_since;
         {
             let mut map = vod.map();
-            // Every browser holds all it needs, and reads nothing for a while.
-            for v in map.values_mut() {
-                v.idle_since = ago(IDLE.as_secs() + 1).unwrap();
-            }
-            // A background tab's page asks about once a minute; a closed
+            // Every browser holds all it needs, and reads nothing for a while;
+            // a background tab's page asks about once a minute; a closed
             // page's last ask is longer ago than that.
-            map.get_mut(&slow).unwrap().asked_at = ago(60);
-            map.get_mut(&gone).unwrap().asked_at = ago(ASKED_IDLE.as_secs() + 1);
+            map.get_mut(&asked).unwrap().asked_at = Some(base + later);
+            map.get_mut(&slow).unwrap().asked_at = Some(base + later - Duration::from_secs(60));
+            map.get_mut(&gone).unwrap().asked_at = Some(base);
         }
-        vod.reap();
+        vod.reap_at(base + later);
         let map = vod.map();
         assert!(map.contains_key(&asked), "its page is still there");
         assert!(map.contains_key(&slow), "a background tab's is kept");

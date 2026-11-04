@@ -500,9 +500,11 @@ impl Machine {
         self.following_live = false;
         // A movie is over only when it got to its end: an EOF anywhere else
         // is the provider dropping the connection, which must keep the
-        // place to resume from and not mark it watched.
+        // place to resume from and not mark it watched. A length of zero
+        // says nothing of where the end is.
         let at_end = self.dto.on_demand.is_none_or(|o| {
-            o.duration.is_some_and(|d| d - o.position <= MOVIE_END_SLACK_SECS)
+            o.duration
+                .is_some_and(|d| d > 0.0 && d - o.position <= MOVIE_END_SLACK_SECS)
         });
         if how == How::Eof && self.shown && !self.live && at_end {
             self.stopped();
@@ -2598,6 +2600,18 @@ mod tests {
         assert!(m.reconnect_due.is_none());
         let od = m.dto.on_demand.unwrap();
         assert_eq!((od.id, od.position), (7, 1200.0));
+    }
+
+    #[test]
+    fn an_end_of_file_with_no_known_length_is_a_failure() {
+        let mut m = a_playing_movie(7);
+        m.shown = true;
+        if let Some(od) = m.dto.on_demand.as_mut() {
+            od.position = 0.0;
+            od.duration = Some(0.0);
+        }
+        m.ended_with(How::Eof);
+        assert_eq!(m.dto.state, PlaybackState::Failed);
     }
 
     #[test]
