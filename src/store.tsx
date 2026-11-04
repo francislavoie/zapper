@@ -534,6 +534,8 @@ export function reducer(state: State, action: Action): State {
         categoryId: RECORDINGS,
         query: "",
         mode: "browse",
+        // Recordings are Live TV's.
+        section: "live",
         menuOpen: false,
         programmeMenu: null,
       };
@@ -544,6 +546,8 @@ export function reducer(state: State, action: Action): State {
         ...state,
         categoryId: action.categoryId,
         query: "",
+        // A channel's category is on Live TV's rail.
+        section: "live",
         guideFocus: {
           streamId: action.streamId,
           index: action.index,

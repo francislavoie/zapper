@@ -201,8 +201,10 @@ test("the toolbar is tall enough for its controls and their edge inset", () => {
   assert.ok(TOOLBAR_HEIGHT <= 48, "a title bar this app drew should not be a header");
 });
 
-test("the title bar's tabs: Live TV always, Movies and Shows only with on-demand", () => {
+test("the title bar's tabs: Live TV always, Movies with on-demand and movies to show", () => {
   assert.deepEqual(titleTabs({ onDemand: false }), ["live"]);
-  assert.deepEqual(titleTabs({ onDemand: true }), ["live", "movies", "shows"]);
-  assert.deepEqual(titleTabs({ onDemand: true }).map((s) => SECTION_LABEL[s]), ["Live TV", "Movies", "Shows"]);
+  assert.deepEqual(titleTabs({ onDemand: true }), ["live", "movies"]);
+  assert.deepEqual(titleTabs({ onDemand: true }).map((s) => SECTION_LABEL[s]), ["Live TV", "Movies"]);
+  // An account without movies has no tab for them, whatever the app can do.
+  assert.deepEqual(titleTabs({ onDemand: true }, false), ["live"]);
 });

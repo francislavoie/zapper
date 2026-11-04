@@ -9,7 +9,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { forgetChannel, playChannel } from "../actions";
 import { backend } from "../backend";
 import { registerZapList, type ZapList } from "../mediaKeys";
-import { registerSearchInput } from "../focus";
+import { searchInputRegistration } from "../focus";
 import type { RowSource } from "../hooks/useChannelPages";
 import { useClock } from "../hooks/useClock";
 import { useGuideRows } from "../hooks/useGuideRows";
@@ -48,6 +48,7 @@ export function ChannelList() {
   const state = useApp();
   const dispatch = useDispatch();
   const viewportRef = useRef<HTMLDivElement | null>(null);
+  const searchRef = useMemo(searchInputRegistration, []);
   const [scrollTop, setScrollTop] = useState(0);
   const [height, setHeight] = useState(0);
   /** Where we were last time, until it has been applied. Zeroed once used,
@@ -329,7 +330,7 @@ export function ChannelList() {
         />
         <SearchField
           className="list-search"
-          inputRef={registerSearchInput}
+          inputRef={searchRef}
           placeholder={SEARCH_PLACEHOLDER}
           value={state.query}
           onChange={(text) => dispatch({ type: "query", text })}

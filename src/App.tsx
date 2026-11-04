@@ -18,7 +18,8 @@ import {
   subscribeSync,
 } from "./backend";
 import { paintMockStill } from "./mock";
-import { loadCategories, loadMoviesSummary, loadWatchLists } from "./actions";
+import { loadCategories, loadMovieCategories, loadMoviesSummary, loadWatchLists } from "./actions";
+import { moviesAvailable } from "./logic/movies";
 import { errorMessage } from "./logic/async";
 import { useGlobalKeys } from "./hooks/useGlobalKeys";
 import { useMenuCommands } from "./hooks/useMenuCommands";
@@ -39,6 +40,8 @@ import { saveStacked } from "./stacked";
 import { saveCategoryHidden, saveCategoryPins, saveCategorySort } from "./categoryPrefs";
 import { AboutModal } from "./components/AboutModal";
 import { ProgrammeMenu } from "./components/ProgrammeMenu";
+import { MoviesList } from "./components/MoviesList";
+import { MoviesRail } from "./components/MoviesRail";
 import { RecordingsView } from "./components/RecordingsView";
 import { RecordingsWatcher } from "./components/RecordingsWatcher";
 import { Rail } from "./components/Rail";
@@ -79,8 +82,11 @@ export function App() {
   }, []);
   const browsing = state.mode === "browse";
   const guiding = state.mode === "guide";
+  // The Movies tab, where the account has movies. The tab itself goes when it
+  // has none, and a section left selected falls back to Live TV (below).
+  const moviesOn = state.section === "movies" && moviesAvailable(state.movies.summary);
   // Recordings has no grid, so it only ever shows in the list view.
-  const recordingsShown = railItemKind(state.categoryId) === "recordings" && !guiding;
+  const recordingsShown = railItemKind(state.categoryId) === "recordings" && !guiding && !moviesOn;
   // The band is the playing channel, and the selected recording where
   // Recordings shows: a browser has no picture but still has recordings.
   const bandShown = capabilities.playback || recordingsShown;
@@ -304,14 +310,25 @@ export function App() {
 
   // A movie is playing that the store does not know — a reloaded window,
   // where the player kept going — so look it up for its name and marks.
+  //
+  // Only when the store has no movie at all. One it does have was asked for
+  // by this window, and the player's own state may simply not have caught up
+  // yet (a second movie played before the first one's state changes): looking
+  // up the one the player still reports would then overwrite the newer one.
+  // The answer is dropped if the player has moved on or the store has learnt
+  // of a movie while it was on its way.
   const openMovie = state.player.onDemand?.kind === "movie" ? state.player.onDemand.id : null;
   const knownMovie = state.movies.playing?.movieId ?? null;
+  const knownNow = useRef(knownMovie);
+  knownNow.current = knownMovie;
   useEffect(() => {
-    if (openMovie === null || openMovie === knownMovie) return;
+    if (openMovie === null || knownMovie !== null) return;
     let live = true;
     backend
       .movieDetails(openMovie)
-      .then((d) => live && dispatch({ type: "movies/playing", movie: d.movie }))
+      .then((d) => {
+        if (live && knownNow.current === null) dispatch({ type: "movies/playing", movie: d.movie });
+      })
       .catch(() => {
         // Without its name the player still plays it.
       });
@@ -326,6 +343,27 @@ export function App() {
   useEffect(() => {
     void loadMoviesSummary(dispatch, catalogueRev > 0);
   }, [catalogueRev, dispatch]);
+
+  // The Movies rail's categories, loaded when the tab first shows (a catalogue
+  // of movies is not read for someone who never opens it) and again after a
+  // sync has rewritten it.
+  const movieCategoriesStatus = state.movies.categories.status;
+  useEffect(() => {
+    if (moviesOn && movieCategoriesStatus === "idle") void loadMovieCategories(dispatch);
+  }, [moviesOn, movieCategoriesStatus, dispatch]);
+  useEffect(() => {
+    if (catalogueRev > 0 && movieCategoriesStatus !== "idle") void loadMovieCategories(dispatch, true);
+    // Only a sync: the status changing is the load above, not news.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [catalogueRev, dispatch]);
+
+  // An account that turns out to have no movies has no tab for them, so a
+  // section left on Movies goes back to Live TV rather than showing nothing.
+  const moviesKnownAbsent =
+    state.movies.summary.status === "ready" && !state.movies.summary.data.available;
+  useEffect(() => {
+    if (moviesKnownAbsent && state.section === "movies") dispatch({ type: "section", section: "live" });
+  }, [moviesKnownAbsent, state.section, dispatch]);
 
   // Only browse has a slot to dock into. The guide covers the stage with an
   // opaque grid, so the video goes back to filling the stage underneath it —
@@ -488,11 +526,19 @@ export function App() {
                 plays (a browser, for now) there is no picture to show, and
                 the list and the guide take its room. */}
             {bandShown ? <WatchBand videoRef={dockRef} picture={capabilities.playback} /> : null}
-            <Activity mode={state.railCollapsed ? "hidden" : "visible"}>
+            <Activity mode={state.railCollapsed || moviesOn ? "hidden" : "visible"}>
               <Rail />
             </Activity>
-            <Activity mode={guiding || recordingsShown ? "hidden" : "visible"}>
+            <Activity mode={state.railCollapsed || !moviesOn ? "hidden" : "visible"}>
+              <Rail>
+                <MoviesRail />
+              </Rail>
+            </Activity>
+            <Activity mode={guiding || recordingsShown || moviesOn ? "hidden" : "visible"}>
               <ChannelList />
+            </Activity>
+            <Activity mode={moviesOn ? "visible" : "hidden"}>
+              <MoviesList />
             </Activity>
             <Activity mode={recordingsShown ? "visible" : "hidden"}>
               <RecordingsView />
@@ -530,7 +576,7 @@ export function App() {
               <PlayerChrome />
             </div>
             <div className="stacked-guide">
-              <GuideGrid />
+              {moviesOn ? <MoviesList besideRail={false} /> : <GuideGrid />}
             </div>
           </div>
         ) : null}

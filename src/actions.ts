@@ -157,6 +157,8 @@ const HANDLERS: Record<ActionId, (ctx: ActionContext) => void> = {
   sync: ({ dispatch }) => void run(dispatch, "sync", backend.syncNow()),
   record: ({ dispatch, record }) => void recordFromPlayer(dispatch, record ?? null),
   recordings: ({ dispatch }) => dispatch({ type: "showRecordings" }),
+  movies: ({ dispatch }) => dispatch({ type: "section", section: "movies" }),
+  liveTv: ({ dispatch }) => dispatch({ type: "section", section: "live" }),
   settings: ({ dispatch }) => dispatch({ type: "settings", open: true }),
   updates: ({ dispatch }) => {
     dispatch({ type: "updateDialog", open: true });

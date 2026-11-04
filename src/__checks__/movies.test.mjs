@@ -11,6 +11,7 @@ import {
   POSTER_MIN_WIDTH,
   fixedMovieItems,
   languagesLine,
+  moviesAvailable,
   movieBadges,
   movieCount,
   movieFacts,
@@ -92,4 +93,13 @@ test("people and languages lines", () => {
   assert.equal(languagesLine({ audioLanguages: ["EN", "FR"], subtitleLanguages: ["EN", "FR"] }), "EN · FR audio · subtitles EN, FR");
   assert.equal(languagesLine({ audioLanguages: [], subtitleLanguages: ["EN"] }), "subtitles EN");
   assert.equal(languagesLine({ audioLanguages: [], subtitleLanguages: [] }), "");
+});
+
+test("the Movies tab shows only once the summary says the account has movies", () => {
+  const data = (available) => ({ available, note: null, total: 1, favourites: 0, recent: 1, watched: 0 });
+  assert.equal(moviesAvailable({ status: "idle" }), false);
+  assert.equal(moviesAvailable({ status: "loading" }), false);
+  assert.equal(moviesAvailable({ status: "error", message: "x" }), false);
+  assert.equal(moviesAvailable({ status: "ready", data: data(false) }), false);
+  assert.equal(moviesAvailable({ status: "ready", data: data(true) }), true);
 });
