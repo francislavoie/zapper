@@ -9,9 +9,10 @@
 // and the page goes back to the sign-in (src/components/WebGate.tsx).
 //
 // Watching plays in a <video> element through the service's own stream
-// (src/webPlayer.ts). What has no meaning here — the window, the updater,
-// backups, installing the service, mpv's own settings and statistics, the
-// provider's archive — is hidden through `BROWSER`'s capabilities. The calls
+// (src/webPlayer.ts; a movie's, src/webVod.ts). What has no meaning here —
+// the window, the updater, backups, installing the service, mpv's own
+// settings and statistics, the provider's archive — is hidden through
+// `BROWSER`'s capabilities. The calls
 // are still answered, harmlessly: they say they are not available.
 
 import type { api } from "./api";
@@ -30,6 +31,7 @@ import {
   withBrowserSettings,
 } from "./logic/web";
 import * as player from "./webPlayer";
+import * as vod from "./webVod";
 import type {
   AccountCandidateDto,
   AccountDto,
@@ -205,14 +207,20 @@ export const webBackend: typeof api = {
   syncStatus: () => get<SyncStatusDto>("/api/sync"),
   syncNow: () => post<unknown>("/api/sync").then(watchSyncStart),
 
-  // The player is a <video> element here (src/webPlayer.ts). The provider's
-  // archive, mpv's statistics, deinterlacing and subtitles are not.
-  play: (streamId) => player.play(streamId),
+  // The player is a <video> element here (src/webPlayer.ts), a movie's
+  // controls its own (src/webVod.ts) while one is open. The provider's
+  // archive, mpv's statistics and deinterlacing are not; subtitles are a
+  // movie's.
+  play: (streamId) => player.play(streamId, vod.handOver()),
   playCatchup: notHere,
-  stop: () => player.stop(),
-  togglePause: () => player.togglePause(),
-  seekRelative: (seconds) => player.seekRelative(seconds),
-  seekLive: () => player.seekLive(),
+  stop: async () => {
+    await vod.stop();
+    await player.stop();
+  },
+  togglePause: () => (vod.active() ? vod.togglePause() : player.togglePause()),
+  seekRelative: (seconds) =>
+    vod.active() ? vod.seekRelative(seconds) : player.seekRelative(seconds),
+  seekLive: () => (vod.active() ? Promise.resolve() : player.seekLive()),
   setVolume: (volume) => player.setVolume(volume),
   setMuted: (muted) => player.setMuted(muted),
   setCompressor: (enabled) => player.setCompressor(enabled),
@@ -223,9 +231,10 @@ export const webBackend: typeof api = {
   },
   playerState: () => Promise.resolve(player.state()),
   playerStats: notHere,
-  playerOptions: () => Promise.resolve(player.options()),
-  setAudioTrack: (id) => player.setAudioTrack(id),
-  setSubtitleTrack: () => Promise.resolve(player.options()),
+  playerOptions: () => Promise.resolve(vod.active() ? vod.options() : player.options()),
+  setAudioTrack: (id) => (vod.active() ? vod.setAudioTrack(id) : player.setAudioTrack(id)),
+  setSubtitleTrack: (id) =>
+    vod.active() ? vod.setSubtitleTrack(id) : Promise.resolve(player.options()),
   setAspect: (mode) => player.setAspect(mode),
   setDeinterlace: () => Promise.resolve(player.options()),
   thumbnailAt: () => Promise.resolve(null),
@@ -263,9 +272,8 @@ export const webBackend: typeof api = {
   forgetActivity: (streamId) =>
     del<unknown>(`/api/favourites/${streamId}`).then(() => undefined),
 
-  // Playing a movie comes with the browser's player for them.
-  playMovie: notHere,
-  seekTo: notHere,
+  playMovie: (movieId, start) => vod.playMovie(movieId, start),
+  seekTo: (seconds) => vod.seekTo(seconds),
   moviesSummary: () => get<MoviesSummaryDto>("/api/vod/summary"),
   movieCategories: () => get<VodCategoryDto[]>("/api/vod/categories"),
   movies: (query, offset, limit) =>

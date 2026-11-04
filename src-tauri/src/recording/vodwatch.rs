@@ -53,7 +53,9 @@
 //! **Limits** are live's, counted together: a device's
 //! [`watch::PER_DEVICE`] viewers and [`watch::STARTS_PER_MINUTE`] starts,
 //! and the service's [`watch::MAX_VIEWERS`], channels and movies alike. A
-//! viewer nobody has read from for [`IDLE`] is let go.
+//! viewer nobody has read from, and whose page has not asked after it
+//! (`GET /api/vod/watch/{viewer}`), for [`IDLE`] is let go. A browser that
+//! holds all it needs for now reads nothing, but its page still asks.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
@@ -410,6 +412,22 @@ impl MovieViewers {
         {
             self.finish(v, Ended::TakenOver);
         }
+    }
+
+    /// Viewer `id` of `device`, as its page asks after it: its movie, its
+    /// rider and why it ended. A page that asks is still open, so its viewer
+    /// counts as read from: a browser that holds all it needs for now (a
+    /// short film read to its end, a file read well ahead) keeps its place,
+    /// and a closed page's goes after [`IDLE`].
+    fn asked(&self, device: &str, id: &str) -> Option<(i64, i64, Option<Ended>)> {
+        let mut map = self.map();
+        let v = map
+            .get_mut(id)
+            .filter(|v| v.device == device && !matches!(v.ended, Some((Ended::Stopped, _))))?;
+        if v.ended.is_none() {
+            v.idle_since = Instant::now();
+        }
+        Some((v.movie_id, v.rider, v.ended.map(|(why, _)| why)))
     }
 
     /// Ends viewer `id` of `device`, if it is that device's. Its rider.
@@ -929,13 +947,7 @@ async fn status(
     Extension(caller): Extension<Caller>,
     Path(id): Path<String>,
 ) -> Response {
-    let device = device_of(&caller);
-    let found = s
-        .vod
-        .map()
-        .get(&id)
-        .filter(|v| v.device == device && !matches!(v.ended, Some((Ended::Stopped, _))))
-        .map(|v| (v.movie_id, v.rider, v.ended));
+    let found = s.vod.asked(&device_of(&caller), &id);
     let Some((movie_id, rider, ended)) = found else {
         return plain(StatusCode::NOT_FOUND, "movie", "No such viewer.");
     };
@@ -945,12 +957,12 @@ async fn status(
         limit: false,
     };
     let dto = match ended {
-        Some((Ended::Feed(f), _)) => StatusDto {
+        Some(Ended::Feed(f)) => StatusDto {
             ended: Some(ending_of(f)),
             taken_over: false,
             notice: None,
         },
-        Some((_, _)) => StatusDto {
+        Some(_) => StatusDto {
             ended: Some(dropped),
             taken_over: true,
             notice: None,
@@ -1894,6 +1906,25 @@ mod tests {
         let earliest = c.tracks.values().map(|q| q[0].start).fold(f64::MAX, f64::min);
         let latest = c.tracks.values().map(|q| q[q.len() - 1].start).fold(0.0, f64::max);
         assert!(earliest > 0.0 && latest == (MAX_CUES - 1) as f64 / 10.0, "{earliest} {latest}");
+    }
+
+    #[test]
+    fn a_viewer_its_page_asks_after_is_not_let_go_as_idle() {
+        let vod = MovieViewers::default();
+        let asked = vod.add_for_test("dev", 9, 1);
+        let quiet = vod.add_for_test("dev", 8, 2);
+        // Both browsers hold all they need, and read nothing for a while.
+        for v in vod.map().values_mut() {
+            v.idle_since = Instant::now() - IDLE - Duration::from_secs(1);
+        }
+        assert_eq!(
+            vod.asked("dev", &asked).map(|(m, r, e)| (m, r, e.is_none())),
+            Some((9, 1, true))
+        );
+        assert_eq!(vod.asked("other", &quiet), None, "another device's");
+        vod.reap();
+        assert!(vod.asked("dev", &asked).is_some(), "its page is still there");
+        assert!(vod.asked("dev", &quiet).is_none(), "a closed page's goes");
     }
 
     #[test]

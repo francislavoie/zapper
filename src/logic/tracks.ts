@@ -81,7 +81,27 @@ const CODECS: Record<string, string> = {
   webvtt: "Text",
   mov_text: "Text",
   hdmv_pgs_subtitle: "PGS",
+  dvd_subtitle: "DVD",
+  picture: "Pictures",
 };
+
+/** Subtitles drawn as pictures rather than written as text. `picture` is a
+ *  browser's word for any of them (src/webVod.ts): the service says only
+ *  that they are not text. */
+const PICTURE_SUBTITLES = new Set([
+  "dvb_subtitle",
+  "hdmv_pgs_subtitle",
+  "dvd_subtitle",
+  "xsub",
+  "picture",
+]);
+
+export function isPictureSubtitle(t: Pick<TrackDto, "codec">): boolean {
+  return t.codec !== null && PICTURE_SUBTITLES.has(t.codec);
+}
+
+/** Said beside subtitles that can't be shown where pictures can't. */
+export const PICTURE_SUBTITLES_NOTE = "Subtitles that are pictures can’t be shown in a browser.";
 
 export function codecName(codec: string | null): string | null {
   if (!codec) return null;

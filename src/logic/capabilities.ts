@@ -50,6 +50,9 @@ export interface Capabilities {
   /** Movies from the provider's on-demand catalogue. Whether there are any to
  *  show is the account's, and the movies summary says. */
   onDemand: boolean;
+  /** Shows subtitles that are pictures (DVB, Blu-ray, DVD), not only text:
+   *  mpv does; a browser's player is given text alone. */
+  pictureSubtitles: boolean;
 }
 
 /** The app's window, and the mock that stands in for it. */
@@ -67,6 +70,7 @@ export const DESKTOP: Capabilities = {
   networkAdmin: true,
   signOut: false,
   onDemand: true,
+  pictureSubtitles: true,
 };
 
 /** A browser signed in to the recording service. Browsing, the guide,
@@ -88,6 +92,7 @@ export const BROWSER: Capabilities = {
   networkAdmin: false,
   signOut: true,
   onDemand: true,
+  pictureSubtitles: false,
 };
 
 export type Capability = keyof Capabilities;

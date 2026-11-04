@@ -22,6 +22,11 @@ test("Movies are on offer in the app and in a browser alike", () => {
   assert.equal(BROWSER.onDemand, true);
 });
 
+test("a browser shows a movie's text subtitles, not those that are pictures", () => {
+  assert.equal(DESKTOP.pictureSubtitles, true);
+  assert.equal(BROWSER.pictureSubtitles, false);
+});
+
 test("a browser keeps the guide, recordings, the account, refreshing and watching, and nothing of the computer's", () => {
   assert.deepEqual(settingsSections(BROWSER), [
     "Account",
