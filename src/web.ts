@@ -253,6 +253,7 @@ export const webBackend: typeof api = {
   },
 
   favourites: (limit) => get<FavouriteDto[]>(apiUrl("/api/favourites", { limit })),
+  recentlyWatched: (limit) => get<FavouriteDto[]>(apiUrl("/api/recent", { limit })),
   forgetActivity: (streamId) =>
     del<unknown>(`/api/favourites/${streamId}`).then(() => undefined),
 

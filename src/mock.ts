@@ -566,6 +566,31 @@ function favouriteRows(limit: number): FavouriteDto[] {
   return scored.slice(0, limit).map((s) => s.f);
 }
 
+/** The channels watched most recently, newest first, whatever the watch time;
+ *  mirrors catalog::activity::recent over the same activity map. */
+function recentRows(limit: number): FavouriteDto[] {
+  const c = getCatalog();
+  if (!activitySeeded) seedActivity(c.rows);
+  const now = Math.floor(Date.now() / 1000);
+  const byId = new Map(c.rows.map((r) => [r.streamId, r]));
+  const rows: Array<{ ago: number; f: FavouriteDto }> = [];
+  for (const [streamId, a] of activity) {
+    const channel = byId.get(streamId);
+    if (!channel || channel.isSeparator) continue;
+    rows.push({
+      ago: a.ago,
+      f: {
+        channel,
+        watchSeconds: a.watchSeconds,
+        lastWatched: now - a.ago,
+        openCount: a.openCount,
+      },
+    });
+  }
+  rows.sort((x, y) => x.ago - y.ago || x.f.channel.streamId - y.f.channel.streamId);
+  return rows.slice(0, limit).map((r) => r.f);
+}
+
 // ----------------------------------------------------------------- the fake
 
 const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -2001,6 +2026,11 @@ export const mockApi = {
   favourites: async (limit: number) => {
     await delay(40);
     return favouriteRows(limit);
+  },
+
+  recentlyWatched: async (limit: number) => {
+    await delay(40);
+    return recentRows(limit);
   },
 
   forgetActivity: async (streamId: number) => {

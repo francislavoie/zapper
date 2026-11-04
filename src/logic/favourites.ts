@@ -198,3 +198,6 @@ export function subMenuPosition(
  *  component and a constant cannot be hot-reloaded — see
  *  src/__checks__/fast-refresh.test.mjs. */
 export const FAVOURITE_LIMIT = 40;
+
+/** How many recently watched channels the rail asks for. */
+export const RECENT_LIMIT = 20;

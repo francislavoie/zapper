@@ -1922,6 +1922,8 @@ pub(crate) mod tests {
         assert_eq!(st, StatusCode::OK);
         let (st, _) = call(&s, get("/api/favourites?limit=10")).await;
         assert_eq!(st, StatusCode::OK);
+        let (st, _) = call(&s, get("/api/recent?limit=10")).await;
+        assert_eq!(st, StatusCode::OK);
         let (st, sync) = call(&s, get("/api/sync")).await;
         assert_eq!(st, StatusCode::OK);
         assert!(sync["phase"].is_string());

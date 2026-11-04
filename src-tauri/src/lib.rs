@@ -113,6 +113,7 @@ pub fn run() {
             ipc::catalog_cmds::set_settings,
             ipc::catalog_cmds::guide_rows,
             ipc::catalog_cmds::favourites,
+            ipc::catalog_cmds::recently_watched,
             ipc::catalog_cmds::forget_activity,
             ipc::player_cmds::play,
             ipc::player_cmds::play_catchup,

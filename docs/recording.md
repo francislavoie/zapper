@@ -814,6 +814,7 @@ The catalogue, for the web interface (the app or a device); channels come as the
 | `GET /api/guide?ids=&from=&to=` | `[[streamId, [Programme]]]` overlapping the window (at most 500 channels) |
 | `GET /api/guide/rows?ids=&from=&to=` | the guide's rows: each channel's name, logo and programmes |
 | `GET /api/favourites?limit=` | the most watched channels; `DELETE /api/favourites/{id}` forgets one |
+| `GET /api/recent?limit=` | the channels watched most recently, newest first |
 | `GET /api/sync` | `{phase, message, channelsTotal, lastSynced}`; `POST /api/sync` asks for a refresh (`202`) |
 | `GET /api/logo/{id}` | the channel's logo, fetched by the service |
 | `GET /api/account` | the provider account as the app's `AccountDto`, with no secret in it (`hasPassword`, `tvheadendHasPassword`; addresses with `<redacted>` in place of a login, flagged `playlistRedacted`, `epgRedacted`, `hdhomerunEpgRedacted`) and an empty `path` |
