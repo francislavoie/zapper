@@ -136,10 +136,9 @@ export function App() {
   useEffect(() => {
     saveSession({
       categoryId: state.categoryId,
-      railTab: state.railTab,
       railCollapsed: state.railCollapsed,
     });
-  }, [state.categoryId, state.railTab, state.railCollapsed]);
+  }, [state.categoryId, state.railCollapsed]);
 
   // Closing mid-scroll must still remember where you were; writes are
   // otherwise coalesced and the last one would be lost.

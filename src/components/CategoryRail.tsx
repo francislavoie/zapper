@@ -7,12 +7,13 @@
 // dozen the channel list keeps for any number of rows. The scroll handler is
 // not the cost; repainting that much of a webview that is composited over the
 // video surface is. So the rail windows itself the same way the
-// channel list does, through the same arithmetic, and the "All channels"
-// entry is simply row zero rather than a special case outside the window.
+// channel list does, through the same arithmetic, and the rail's own items
+// (Favourites, Recently watched, Recordings, All channels) are simply the
+// first rows rather than a special case outside the window.
 //
 // Some of those categories are the only ones a given viewer ever opens, so
-// they can be pinned: drawn straight under "All channels", above a hairline,
-// in the order they were pinned. The rest can be re-sorted from the button
+// they can be pinned: drawn straight under the rail's own items, above a
+// hairline, in the order they were pinned. The rest can be re-sorted from the button
 // beside the filter box. Others are never wanted at all, so they can be
 // hidden, from the same right-click menu; the ▾ beside the sort button brings
 // them back, and picks a sort directly. What goes where is worked out in
@@ -28,10 +29,13 @@ import {
   railRows,
   sortTip,
   type CategorySort,
+  type RailRow,
 } from "../logic/categoryOrder";
+import { FAVOURITES, RECENT, RECORDINGS, fixedRailItems } from "../logic/railItems";
+import { recordingsRailCount } from "../logic/recordings";
 import { loadSession, saveSession } from "../session";
 import { loadCategories } from "../actions";
-import { ALL_CATEGORIES, useApp, useDispatch } from "../store";
+import { useApp, useDispatch } from "../store";
 import { ContextMenu } from "./ContextMenu";
 import { Check, ChevronDown, EyeOff, Pin, SortOrder } from "./icons";
 import { SearchField } from "./SearchField";
@@ -48,6 +52,9 @@ export function CategoryRail() {
     categoryMenu,
     categoryOptions,
     sync,
+    favourites,
+    recent,
+    recordings,
   } = useApp();
   const dispatch = useDispatch();
   const scrollerRef = useRef<HTMLDivElement | null>(null);
@@ -95,7 +102,12 @@ export function CategoryRail() {
   const rows = useMemo(
     () =>
       railRows(
-        [{ id: ALL_CATEGORIES, name: "All channels", count: total ? total.toLocaleString() : "" }],
+        fixedRailItems({
+          favourites: favourites.status === "ready" ? favourites.data.length : null,
+          recent: recent.status === "ready" ? recent.data.length : null,
+          recordings: recordingsRailCount(recordings ?? []),
+          total,
+        }),
         categories.status === "ready" ? categories.data : [],
         {
           pins: categoryPins,
@@ -104,8 +116,19 @@ export function CategoryRail() {
           hidden: categoryHidden,
           showHidden: categoryShowHidden,
         },
-      ).filter((r) => r.kind !== "hint"),
-    [categories, total, categoryPins, categorySort, categoryFilter, categoryHidden, categoryShowHidden],
+      ),
+    [
+      categories,
+      total,
+      favourites,
+      recent,
+      recordings,
+      categoryPins,
+      categorySort,
+      categoryFilter,
+      categoryHidden,
+      categoryShowHidden,
+    ],
   );
 
   const hiddenN = useMemo(
@@ -156,8 +179,7 @@ export function CategoryRail() {
     dispatch({ type: "categoryOptions", menu: { x: box.left, y: box.bottom + 4 } });
   };
 
-  // The `.rail` column itself, and the tab bar above this, belong to Rail:
-  // this component is one of the two lists that can be in it.
+  // The `.rail` column itself belongs to Rail; the filter row is the top of it.
   return (
     <>
       <div className="pane-head rail-filter-row">
@@ -243,8 +265,8 @@ export function CategoryRail() {
           </div>
         ) : null}
 
-        {/* Only "All channels" left: nothing matched, pinned or not. */}
-        {categories.status === "ready" && rows.length === 1 ? (
+        {/* No category rows: nothing matched, pinned or not. */}
+        {categories.status === "ready" && !rows.some((r) => r.kind === "category") ? (
           <div className="pane-note">
             {categories.data.length === 0
               ? "No categories yet. Sync has not run."
@@ -257,20 +279,40 @@ export function CategoryRail() {
         <div className="rail-spacer" style={{ height: win.totalHeight }}>
           {rows.slice(win.start, win.end).map((r, i) => {
             const index = win.start + i;
-            // "All channels" is not a category and cannot be pinned.
-            const pinnable = r.id !== ALL_CATEGORIES;
+            if (r.kind === "hint") {
+              return (
+                <div
+                  key={r.id}
+                  className="rail-row rail-hint"
+                  style={{ top: index * ROW_HEIGHT }}
+                >
+                  <button
+                    className="rail-item"
+                    onClick={() => dispatch({ type: "categoryShowHidden", on: true })}
+                  >
+                    <span className="rail-name">{r.name}</span>
+                  </button>
+                </div>
+              );
+            }
+            // The rail's own items are not categories: nothing to pin or hide.
+            const pinnable = r.kind === "category";
             return (
               // A box holding two buttons rather than one button, because
               // the pin is a second thing to press and HTML does not allow a
               // button inside a button.
               <div
                 key={r.id}
-                className={`rail-row ${r.pinned ? "pinned" : ""} ${r.pinEnd ? "pin-end" : ""} ${r.hidden ? "is-hidden" : ""}`}
+                className={`rail-row ${r.kind === "fixed" ? "fixed" : ""} ${r.pinned ? "pinned" : ""} ${r.pinEnd ? "pin-end" : ""} ${r.hidden ? "is-hidden" : ""}`}
                 style={{ top: index * ROW_HEIGHT }}
               >
                 <button
                   className={`rail-item ${r.id === categoryId ? "sel" : ""}`}
-                  onClick={() => dispatch({ type: "selectCategory", id: r.id })}
+                  onClick={() =>
+                    r.id === RECORDINGS
+                      ? dispatch({ type: "showRecordings" })
+                      : dispatch({ type: "selectCategory", id: r.id })
+                  }
                   onContextMenu={(e) => {
                     if (!pinnable) return;
                     // As in the favourites: WebKit's own menu is suppressed
@@ -294,10 +336,11 @@ export function CategoryRail() {
                     });
                   }}
                 >
+                  <FixedIcon id={r.id} />
                   {r.pinned ? <Pin className="rail-pinned" filled /> : null}
                   {r.hidden ? <EyeOff className="rail-hidden-i" /> : null}
                   <span className="rail-name" data-tip-overflow="">
-                    {r.name}
+                    <Matched row={r} />
                     {r.hidden ? <span className="rail-hidden-note"> (hidden)</span> : null}
                   </span>
                   <span className="rail-count">{r.count}</span>
@@ -410,6 +453,34 @@ export function CategoryRail() {
           ) : null}
         </ContextMenu>
       ) : null}
+    </>
+  );
+}
+
+/** The mark before a fixed row's name: a star, a clock-back arrow, the red
+ *  recording dot; All channels has none. Every other row has nothing. */
+function FixedIcon({ id }: { id: string }) {
+  if (id === FAVOURITES) return <span className="rail-fixed-i" aria-hidden>★</span>;
+  if (id === RECENT) return <span className="rail-fixed-i" aria-hidden>↺</span>;
+  if (id === RECORDINGS) {
+    return (
+      <span className="rail-fixed-i" aria-hidden>
+        <span className="rec-dot" />
+      </span>
+    );
+  }
+  return null;
+}
+
+/** The row's name, with the filter's match picked out. */
+function Matched({ row }: { row: RailRow }) {
+  if (!row.match) return <>{row.name}</>;
+  const [from, to] = row.match;
+  return (
+    <>
+      {row.name.slice(0, from)}
+      <mark>{row.name.slice(from, to)}</mark>
+      {row.name.slice(to)}
     </>
   );
 }

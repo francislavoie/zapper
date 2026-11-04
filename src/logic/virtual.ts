@@ -6,6 +6,9 @@
 
 /** Dense rows: ~40 fit a normal window, against the 8 the grid managed. */
 export const ROW_HEIGHT = 26;
+/** The channel list's two-line rows (name over category, on now with its
+ *  progress); the rail keeps the dense ROW_HEIGHT. */
+export const LIST_ROW_HEIGHT = 40;
 export const OVERSCAN = 8;
 export const PAGE_SIZE = 200;
 
