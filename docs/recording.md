@@ -839,6 +839,9 @@ Watching (the app or a device; a viewer is its device's alone, `404` to anyone e
 | `GET /api/stream/{viewer}?audio=` | the stream, `video/mp2t`, for as long as it is read; `audio` switches to another track (from live). Refused when the browser says the request came from another site |
 | `GET /api/watch/{viewer}` | `{ended?, takenOver, notice?}`: why it stopped, and the recording it is in the way of (`{recordingId, title, channel, streamId, from, start, waiting}`) |
 | `DELETE /api/watch/{viewer}` | stops it at once (`204`) |
+| `POST /api/vod/watch` | body `{movieId, anyway?, replaces?, audio?, from?, can?}` (`replaces`: a channel's viewer or a movie's; `from`: seconds into the movie to start at, for the remuxer) → `{viewer, stream, mode, duration, audio, audioIndex, converting, notice?}`. A movie always has a connection of its own, asked of the same budget as a channel's and refused the same ways (`404` `movie` for one not in the catalogue). `mode` is `direct` for an MP4 whose details say H.264 and AAC or MP3 sound (the browser plays the file as it is), else `remux` |
+| `GET /api/vod/stream/{viewer}` | `direct`: the file, by the request's `Range` (passed on to the provider; `206` with `Content-Range`, or `200`), `Accept-Ranges: bytes`. A new request ends the one before, so the account sees one connection per viewer. `remux`: `501` for now |
+| `GET /api/vod/watch/{viewer}`, `DELETE /api/vod/watch/{viewer}` | as a channel's viewer's |
 
 "The app" is the `server-token` from a loopback address; a device's token is refused there
 (`403`). `Device` is `{id, name, userAgent, created, lastUsed?, address?}`; `fingerprint` is the

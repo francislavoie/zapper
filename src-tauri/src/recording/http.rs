@@ -33,7 +33,7 @@ use super::api::{
 use super::backup::SetBackupRequest;
 use super::now;
 use super::server::Server;
-use super::{account, browse, strm, vod_browse, watch, web};
+use super::{account, browse, strm, vod_browse, vodwatch, watch, web};
 
 type Shared = Arc<Server>;
 
@@ -442,6 +442,7 @@ pub fn router(server: Shared) -> Router {
         .merge(vod_browse::routes())
         .merge(account::routes())
         .merge(watch::routes())
+        .merge(vodwatch::routes())
         .route_layer(middleware::from_fn_with_state(server.clone(), auth));
     let app = Router::new()
         .route("/api/network", get(network).put(set_network))
@@ -2803,6 +2804,253 @@ pub(crate) mod tests {
             call(&s, from_page("POST", "/api/watch", Some(&cookie), watch_body(99, false))).await;
         assert_eq!(st, StatusCode::TOO_MANY_REQUESTS, "{body}");
         assert_eq!(body["reason"], "limit");
+    }
+
+    // ------------------------------------------------------- watching movies
+
+    /// Movie `id` in the catalogue as `container`, its kept details saying
+    /// H.264 video and AAC sound. Written afresh before each use: another
+    /// test's landing of its own movies sets aside every other one.
+    fn seed_movie(id: i64, container: &str) {
+        use crate::catalog::{db, vod_store};
+        db::install_test_db();
+        db::with_db(|c| {
+            c.execute(
+                "INSERT INTO movies (movie_id, category_id, name, clean_name, added, container)
+                 VALUES (?1, 'vod-9120', 'Quay Lights', 'Quay Lights', 1, ?2)
+                 ON CONFLICT(movie_id) DO UPDATE SET deleted_at = NULL, container = excluded.container",
+                rusqlite::params![id, container],
+            )?;
+            let info = serde_json::json!({
+                "video_codec": "h264", "audio_codecs": ["aac"], "audio_languages": ["eng"],
+                "runtime": 5400
+            });
+            vod_store::store_details(c, id, now(), &info.to_string(), Some(5400))
+        })
+        .unwrap();
+    }
+
+    /// Every movie's file is the fake provider's.
+    fn movies_from(s: &Shared, base: &str) {
+        let url = format!("{base}/movie/secret-user/secret-pass/1.mp4");
+        s.vod
+            .set_playables(Arc::new(move |_| Ok(crate::source::Playable::plain(url.clone()))));
+    }
+
+    fn movie_body(id: i64) -> Option<serde_json::Value> {
+        Some(serde_json::json!({"movieId": id}))
+    }
+
+    /// The next piece of a streaming answer, or `None` at its end.
+    async fn next_piece(body: &mut axum::body::BodyDataStream) -> Option<bytes::Bytes> {
+        use futures_core::Stream;
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            std::future::poll_fn(|cx| std::pin::Pin::new(&mut *body).poll_next(cx)),
+        )
+        .await
+        .expect("stream data in time")
+        .and_then(Result::ok)
+    }
+
+    fn with_range(mut r: Request, range: &'static str) -> Request {
+        r.headers_mut()
+            .insert(header::RANGE, HeaderValue::from_static(range));
+        r
+    }
+
+    #[tokio::test]
+    async fn a_new_request_ends_the_one_before() {
+        use crate::recording::upstream::fake;
+        use std::sync::atomic::Ordering;
+        let s = server("vod-watch");
+        enable(&s, true).await;
+        let (base, counts) = fake::serve().await;
+        movies_from(&s, &base);
+        let cookie = browser_login(&s).await;
+        let (st, _) = call(&s, from_page("POST", "/api/vod/watch", None, movie_body(9_120_001))).await;
+        assert_eq!(st, StatusCode::UNAUTHORIZED);
+
+        seed_movie(9_120_001, "mp4");
+        let (st, body) =
+            call(&s, from_page("POST", "/api/vod/watch", Some(&cookie), movie_body(9_120_001))).await;
+        assert_eq!(st, StatusCode::OK, "{body}");
+        assert_eq!(body["mode"], "direct");
+        assert_eq!(body["duration"], 5400);
+        assert_eq!(body["audio"][0]["codec"], "aac");
+        assert_eq!(body["audio"][0]["lang"], "eng");
+        assert_eq!(body["audioIndex"], 0);
+        assert_eq!(body["converting"], false);
+        for leak in ["127.0.0.1", "secret-user", "secret-pass", base.as_str()] {
+            assert!(!body.to_string().contains(leak), "{leak} reached the browser: {body}");
+        }
+        let stream = body["stream"].as_str().unwrap().to_string();
+        assert!(stream.starts_with("/api/vod/stream/"), "{stream}");
+        assert_eq!(s.own_conns().len(), 1, "the viewer holds a connection");
+
+        // Its own page alone reads it.
+        let (st, _) = call(&s, req("GET", &stream, HOME, false, Some(APP))).await;
+        assert_eq!(st, StatusCode::NOT_FOUND);
+        let mut r = from_page("GET", &stream, Some(&cookie), None);
+        r.headers_mut()
+            .insert("sec-fetch-site", HeaderValue::from_static("cross-site"));
+        assert_eq!(call(&s, r).await.0, StatusCode::FORBIDDEN);
+
+        // The browser's player reads from the start...
+        let get = |range| with_range(from_page("GET", &stream, Some(&cookie), None), range);
+        let first = router(s.clone()).oneshot(get("bytes=0-")).await.unwrap();
+        assert_eq!(first.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(first.headers()[header::CONTENT_RANGE], "bytes 0-999999/1000000");
+        assert_eq!(first.headers()[header::CONTENT_LENGTH], "1000000");
+        assert_eq!(first.headers()[header::ACCEPT_RANGES], "bytes");
+        assert_eq!(first.headers()[header::CONTENT_TYPE], "video/mp4");
+        let mut first = first.into_body().into_data_stream();
+        let piece = next_piece(&mut first).await.unwrap();
+        assert_eq!(piece[..100], (0..100).map(fake::byte).collect::<Vec<_>>()[..]);
+
+        // ...and, while that one streams, seeks.
+        let second = router(s.clone()).oneshot(get("bytes=500000-")).await.unwrap();
+        assert_eq!(second.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(second.headers()[header::CONTENT_RANGE], "bytes 500000-999999/1000000");
+        assert_eq!(second.headers()[header::CONTENT_LENGTH], "500000");
+        // The first has ended, short of its length.
+        let mut had = piece.len();
+        while let Some(p) = next_piece(&mut first).await {
+            had += p.len();
+        }
+        assert!(had < fake::SIZE, "the first reading stopped");
+        let mut second = second.into_body().into_data_stream();
+        let mut got = Vec::new();
+        while let Some(p) = next_piece(&mut second).await {
+            got.extend_from_slice(&p);
+        }
+        assert_eq!(got.len(), 500_000);
+        assert!(got.iter().enumerate().all(|(i, &b)| b == fake::byte(500_000 + i)));
+        assert_eq!(
+            counts.most_open.load(Ordering::SeqCst),
+            1,
+            "never two responses open at once"
+        );
+        assert_eq!(
+            counts.requests.load(Ordering::SeqCst),
+            2,
+            "the first reading took the response opened for the viewer"
+        );
+
+        // A Matroska file is the remuxer's, which this stream does not run:
+        // said so. It replaces the first viewer, which lets its file go.
+        seed_movie(9_120_002, "mkv");
+        let viewer = viewer_id(&body);
+        let replace = Some(serde_json::json!({"movieId": 9_120_002, "replaces": viewer}));
+        let (st, body) = call(&s, from_page("POST", "/api/vod/watch", Some(&cookie), replace)).await;
+        assert_eq!(st, StatusCode::OK, "{body}");
+        assert_eq!(body["mode"], "remux");
+        let (st, _) = call(&s, from_page("GET", &format!("/api/vod/watch/{viewer}"), Some(&cookie), None)).await;
+        assert_eq!(st, StatusCode::NOT_FOUND, "the first viewer is gone");
+        assert_eq!(s.own_conns().len(), 1);
+        let stream = body["stream"].as_str().unwrap().to_string();
+        let (st, _) = call(&s, from_page("GET", &stream, Some(&cookie), None)).await;
+        assert_eq!(st, StatusCode::NOT_IMPLEMENTED);
+        let (st, status) = call(
+            &s,
+            from_page("GET", &format!("/api/vod/watch/{}", viewer_id(&body)), Some(&cookie), None),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(status["ended"], serde_json::Value::Null);
+
+        // Stopped: its connection is given up.
+        let (st, _) = call(
+            &s,
+            from_page("DELETE", &format!("/api/vod/watch/{}", viewer_id(&body)), Some(&cookie), None),
+        )
+        .await;
+        assert_eq!(st, StatusCode::NO_CONTENT);
+        assert!(s.own_conns().is_empty());
+        until("the provider sees no connection", || {
+            counts.open.load(Ordering::SeqCst) == 0
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn a_browser_cannot_watch_more_than_its_share() {
+        let s = server("vod-share");
+        enable(&s, true).await;
+        let (feeds, _) = feed_server().await;
+        feeds_from(&s, &feeds);
+        let (base, _) = crate::recording::upstream::fake::serve().await;
+        movies_from(&s, &base);
+        let cookie = browser_login(&s).await;
+        let post = |uri: &str, body| from_page("POST", uri, Some(&cookie), body);
+        for ch in 1..crate::recording::watch::PER_DEVICE as i64 {
+            let (st, body) = call(&s, post("/api/watch", watch_body(ch, false))).await;
+            assert_eq!(st, StatusCode::OK, "{body}");
+        }
+        seed_movie(9_120_011, "mp4");
+        let (st, body) = call(&s, post("/api/vod/watch", movie_body(9_120_011))).await;
+        assert_eq!(st, StatusCode::OK, "{body}");
+        let movie = viewer_id(&body);
+        // Channels and movies count together, whichever comes next.
+        let (st, body) = call(&s, post("/api/watch", watch_body(9, false))).await;
+        assert_eq!(st, StatusCode::TOO_MANY_REQUESTS, "{body}");
+        assert_eq!(body["reason"], "limit");
+        seed_movie(9_120_012, "mp4");
+        let (st, body) = call(&s, post("/api/vod/watch", movie_body(9_120_012))).await;
+        assert_eq!(st, StatusCode::TOO_MANY_REQUESTS, "{body}");
+        assert_eq!(body["reason"], "limit");
+        // The movie stopped, a channel may start.
+        let (st, _) =
+            call(&s, from_page("DELETE", &format!("/api/vod/watch/{movie}"), Some(&cookie), None)).await;
+        assert_eq!(st, StatusCode::NO_CONTENT);
+        let (st, body) = call(&s, post("/api/watch", watch_body(9, false))).await;
+        assert_eq!(st, StatusCode::OK, "{body}");
+    }
+
+    #[tokio::test]
+    async fn a_movie_viewer_holds_one_of_the_accounts_connections_and_anyway_takes_it() {
+        let s = server_with("vod-full", Box::new(Full));
+        enable(&s, true).await;
+        let (feeds, _) = feed_server().await;
+        feeds_from(&s, &feeds);
+        let (base, _) = crate::recording::upstream::fake::serve().await;
+        movies_from(&s, &base);
+        let cookie = browser_login(&s).await;
+        seed_movie(9_120_021, "mp4");
+        // Another device holds the account's one connection.
+        let (st, body) =
+            call(&s, from_page("POST", "/api/vod/watch", Some(&cookie), movie_body(9_120_021))).await;
+        assert_eq!(st, StatusCode::CONFLICT, "{body}");
+        assert_eq!(body["reason"], "inUse");
+        assert_eq!(body["anyway"], true);
+        let anyway = Some(serde_json::json!({"movieId": 9_120_021, "anyway": true}));
+        let (st, body) = call(&s, from_page("POST", "/api/vod/watch", Some(&cookie), anyway)).await;
+        assert_eq!(st, StatusCode::OK, "{body}");
+        let movie = viewer_id(&body);
+
+        // The app asking for a channel finds a browser watching a movie,
+        // named, with nothing to watch instead.
+        let app = |anyway| {
+            let mut r =
+                req_body("POST", "/api/watch", HOME, false, Some(APP), watch_body(8, anyway));
+            r.headers_mut()
+                .insert(header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
+            r
+        };
+        let (st, body) = call(&s, app(false)).await;
+        assert_eq!(st, StatusCode::CONFLICT, "{body}");
+        assert_eq!(body["reason"], "viewers");
+        assert_eq!(body["watchInstead"], serde_json::json!([]));
+        assert!(body["error"].as_str().unwrap().contains("Quay Lights"), "{body}");
+        // Anyway: the movie's viewer gives its place up, and is told why.
+        let (st, body) = call(&s, app(true)).await;
+        assert_eq!(st, StatusCode::OK, "{body}");
+        let (st, status) =
+            call(&s, from_page("GET", &format!("/api/vod/watch/{movie}"), Some(&cookie), None)).await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(status["takenOver"], true);
+        assert_eq!(s.own_conns().len(), 1);
+        assert_eq!(s.own_conns()[0].feed, 8);
     }
 
     // ------------------------------------------------- the app's own player

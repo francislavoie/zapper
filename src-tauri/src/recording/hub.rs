@@ -418,7 +418,7 @@ pub fn looks_like_ts(head: &[u8]) -> bool {
 }
 
 /// A refusal's status and words, as a [`Failure`].
-fn refusal(status: u16, body: &str) -> Failure {
+pub(super) fn refusal(status: u16, body: &str) -> Failure {
     let mut clues = crate::ipc::ending::Clues::default();
     clues.observe(&format!(
         "HTTP error {status} {}",

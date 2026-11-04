@@ -23,7 +23,8 @@ use super::hub::Hubs;
 use super::listen::{self, Listening};
 use super::naming::{self, Programme};
 use super::schedule::{busy, plan, sleep_for, window, Busy};
-use super::sharing::{self, Loss, Planned};
+use super::sharing::{self, Conn, Loss, Planned};
+use super::vodwatch::MovieViewers;
 use super::watch::Viewers;
 use super::{capture, http, lifecycle, now, store, strm, tls};
 use crate::source::{Playable, Source};
@@ -71,6 +72,9 @@ pub struct Server {
     stopping: AtomicBool,
     /// Browsers watching channels (`watch`).
     pub viewers: Viewers,
+    /// Browsers watching movies (`vodwatch`), each on a connection of its
+    /// own.
+    pub vod: Arc<MovieViewers>,
     /// Where a channel's stream is, in place of the account's own answer:
     /// tests' fixture servers.
     playables: Mutex<Option<Arc<Resolve>>>,
@@ -110,6 +114,7 @@ impl Server {
             shutdown_asked: Notify::new(),
             stopping: AtomicBool::new(false),
             viewers: Viewers::default(),
+            vod: Arc::new(MovieViewers::default()),
             playables: Mutex::new(None),
         })
     }
@@ -572,9 +577,21 @@ impl Server {
         }
     }
 
-    /// Connections to the provider this service holds open right now.
+    /// Connections to the provider this service holds open right now: its
+    /// feeds' (recordings and browsers watching channels) and the movies'
+    /// browsers watch. What the budget is asked with.
     pub fn open_streams(&self) -> usize {
-        self.hubs.open_count()
+        self.hubs.open_count() + self.vod.conns().len()
+    }
+
+    /// The service's own connections as the sharing rules and the budget's
+    /// decisions see them: one per feed open, and one per movie viewer
+    /// (on its movie's feed, `vodwatch::movie_feed`, which never names a
+    /// channel).
+    pub fn own_conns(&self) -> Vec<Conn> {
+        let mut own = self.hubs.conns();
+        own.extend(self.vod.conns());
+        own
     }
 
     /// Ends the recordings on the connection to `feed` when, at `now`, they
