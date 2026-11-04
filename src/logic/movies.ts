@@ -33,6 +33,16 @@ export function movieRailKind(id: string): MovieRailKind {
   }
 }
 
+/** Whether a summary says the movies are another account's than those shown
+ *  so far (`shown`): a title with the same id is then another film. The
+ *  first summary, or one that did not arrive, is no change. */
+export function moviesOriginChanged(
+  shown: Async<MoviesSummaryDto>,
+  next: Async<MoviesSummaryDto>,
+): boolean {
+  return shown.status === "ready" && next.status === "ready" && shown.data.origin !== next.data.origin;
+}
+
 /** Whether the account has movies, which is what shows the Movies tab. Only
  *  an answer says so: until one arrives the tab is not there. */
 export function moviesAvailable(summary: Async<MoviesSummaryDto>): boolean {

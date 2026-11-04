@@ -55,14 +55,20 @@ Download the package for your system from the
 
 ### Sources
 
-- Xtream Codes: server URL, username and password. Live channels, categories, guide, and
-  catch-up on channels that have an archive.
+- Xtream Codes: server URL, username and password. Live channels, categories, guide, catch-up on
+  channels that have an archive, and the provider's movies.
 - M3U playlists from a URL or a file, with one or more XMLTV guides. Catch-up from the playlist's
-  `catchup` attributes.
+  `catchup` attributes. Entries whose address is on demand are movies: a `/movie/` address, a
+  video file (`.mp4`, `.mkv`, `.avi`, `.m4v`, `.mov`, `.wmv`, `.webm`), or a `/series/` one.
+  A video file or `/series/` entry whose name has a season and episode (`S01E02`) is an episode,
+  not a movie, and stays a channel for now. A `.ts`, `.m3u8` or `/live/` address is always a
+  channel.
 - HDHomeRun tuners by address. Channels from the tuner's lineup, guide from SiliconDust or your
   own XMLTV; subchannels shown as `5.1`.
 - Tvheadend servers, with or without a login. Categories from its channel tags, guide from its
   XMLTV export.
+- Movies come from Xtream accounts and from playlists with movie entries. HDHomeRun, Tvheadend
+  and playlists without any have no Movies tab: it appears only when there are movies to show.
 - Settings, favourites and category choices can be exported to a file and imported again.
 
 ### Browsing
@@ -85,6 +91,12 @@ Download the package for your system from the
 - Each channel's last measured resolution, frame rate and codec is shown in the list; channels
   that failed to load are dimmed, with the reason.
 - The playing channel stays in a docked picture with its own controls while you browse.
+- Movies has a tab of its own (`M`) beside Live TV. A rail lists Favourites, Recently added,
+  Watched and the movie categories; a list or posters (remembered per computer, a list at first)
+  shows the movies in one, sorted by recently added, name, year or rating, and limited to a range
+  of years. Mark a movie as a favourite or as watched. Search by name; a movie's details (plot,
+  cast, rating, pictures, movies like it) open in a sheet. Browsing never starts or stops what is
+  playing: only Play does.
 - Command palette (`Ctrl+P`; `⌘P` on a Mac) with every action. Shortcuts are listed in
   Settings › Keyboard, with ⌘ for Ctrl on a Mac.
 
@@ -96,6 +108,10 @@ Download the package for your system from the
 - Live rewind buffer, sized in megabytes; Settings shows roughly how many minutes it holds.
   Skip 5 seconds back or forward, `L` to jump to live.
 - Catch-up on channels whose source has an archive.
+- Movies play on demand, on a connection of their own under the same rules as a channel's. The
+  picture gets a seek bar with the time played and left, `←`/`→` skip 10 seconds, Space or a click
+  pauses. How far you got is kept, and a movie played past 92 % counts as watched. A movie that
+  stops or can't start says why and can be played again from where it stopped.
 - `P` switches to the previous channel; typing a channel number tunes it.
 - Volume up to 200%, on a perceptual scale, remembered between launches.
 - A compressor that evens out loud and quiet audio.

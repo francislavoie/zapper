@@ -29,7 +29,7 @@ import {
 } from "../logic/movies.ts";
 
 test("the rail's own movie items, counted in words", () => {
-  const f = fixedMovieItems({ available: true, note: null, total: 159000, favourites: 12, recent: 240, watched: 0 });
+  const f = fixedMovieItems({ available: true, note: null, total: 159000, favourites: 12, recent: 240, watched: 0, origin: "a1" });
   assert.deepEqual(f.map((x) => [x.id, x.name, x.count]), [[MOVIE_FAVOURITES, "Favourites", "12"], [MOVIE_RECENT, "Recently added", "240"], [MOVIE_WATCHED, "Watched", ""]]);
   assert.deepEqual(fixedMovieItems(null).map((x) => x.count), ["", "", ""]);
 });
@@ -98,7 +98,7 @@ test("people and languages lines", () => {
 });
 
 test("the Movies tab shows only once the summary says the account has movies", () => {
-  const data = (available) => ({ available, note: null, total: 1, favourites: 0, recent: 1, watched: 0 });
+  const data = (available) => ({ available, note: null, total: 1, favourites: 0, recent: 1, watched: 0, origin: "a1" });
   assert.equal(moviesAvailable({ status: "idle" }), false);
   assert.equal(moviesAvailable({ status: "loading" }), false);
   assert.equal(moviesAvailable({ status: "error", message: "x" }), false);

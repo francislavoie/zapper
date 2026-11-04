@@ -27,21 +27,23 @@
 //! browser's player seeking) ends the one before, its response dropped
 //! before the next is asked for.
 //!
-//! **What the browser can play** is read from the movie's details, before
-//! any connection ([`vod_mode`]); a movie's stream is not probed as a
-//! channel's is. An MP4 with H.264 video and AAC or MP3 sound, and no
-//! subtitles, is played as it is ("direct"): the browser's own player asks
-//! for byte ranges, which are passed on to the provider. Anything else, or
-//! a file whose details are not known, goes through the remuxer
-//! ([`super::vodmux`], "remux"): the watch opens the file once to learn what
-//! is in it (its length, sounds and subtitles, which the answer lists, and
-//! whether a browser plays its video: [`remux_plan`]), and each stream
-//! request (`?from=<secs>&audio=<index>`) starts a remux from that time, as
-//! MPEG-TS, its sound converted to AAC when the browser lacks it. The
-//! answer comes once the remux has found the keyframe it starts on, which
-//! it names (`X-Start`, seconds into the film). Seeking past what the
-//! browser holds is a new request, which ends the remux before it (and the
-//! file's response with it) before the next starts.
+//! **What the browser can play** is read from the file itself: the watch
+//! opens it once, on the viewer's connection, and the remuxer
+//! ([`super::vodmux`]) reads its head to learn what is in it (its length,
+//! sounds and subtitles, which the answer lists). A provider's details are
+//! not asked for: they never list subtitles, and asking would keep the
+//! picture waiting on a slow provider. An MP4 with H.264 video, AAC or MP3
+//! sound and no text subtitles is played as it is ("direct",
+//! [`vod_mode`]): the browser's own player asks for byte ranges, which are
+//! passed on to the provider. Anything else goes through the remuxer
+//! ("remux"; refused when no browser plays its video: [`remux_plan`]), and
+//! so does an MP4 with text subtitles, which only the remuxer's read can
+//! hand over. Each remux request (`?from=<secs>&audio=<index>`) starts a
+//! remux from that time, as MPEG-TS, its sound converted to AAC when the
+//! browser lacks it. The answer comes once the remux has found the keyframe
+//! it starts on, which it names (`X-Start`, seconds into the film). Seeking
+//! past what the browser holds is a new request, which ends the remux
+//! before it (and the file's response with it) before the next starts.
 //!
 //! **Subtitles** come from the same read: the remux hands over the file's
 //! text subtitles as it reads them, kept per viewer for its current remux
@@ -89,7 +91,6 @@ use super::watch::{
     RefusalDto, StatusDto, IDLE, KEEP_ENDED,
 };
 use crate::catalog::sync_engine::scrub;
-use crate::catalog::vod_details::{self, MovieInfo};
 use crate::catalog::{db, reads, vod_store};
 use crate::source::{Playable, Source};
 
@@ -116,20 +117,19 @@ pub enum VodMode {
     Remux,
 }
 
-/// Whether the browser plays movie file of `container` as it is, by what
-/// its details say (`info`; `None` when nobody knows): an MP4 (`mp4`, `m4v`,
-/// `mov`) with H.264 video, every sound AAC or MP3 (or none listed), and no
-/// subtitles listed (they are shown from the remuxer's read). `can`, what
-/// the browser says it decodes, does not change the answer: the codecs
-/// played direct are the ones every browser plays.
-pub fn vod_mode(container: Option<&str>, info: Option<&MovieInfo>, _can: &Can) -> VodMode {
+/// Whether the browser plays a movie's file (`container`, as the catalogue
+/// names it; `info`, what the file holds) as it is: an MP4 (`mp4`, `m4v`,
+/// `mov`) with H.264 video, every sound AAC or MP3 (or none), and no text
+/// subtitles, which only the remuxer's read hands over. Subtitles that are
+/// pictures do not count: a browser shows them neither way. What the
+/// browser says it decodes does not change the answer: the codecs played
+/// direct are the ones every browser plays.
+pub fn vod_mode(container: Option<&str>, info: &MediaInfo) -> VodMode {
     let is = |s: &str, any: &[&str]| any.iter().any(|a| s.eq_ignore_ascii_case(a));
     let mp4 = container.is_some_and(|c| is(c, &["mp4", "m4v", "mov"]));
-    let plays = info.is_some_and(|i| {
-        i.video_codec.as_deref().is_some_and(|v| is(v, &["h264"]))
-            && i.audio_codecs.iter().all(|a| is(a, &["aac", "mp3"]))
-            && i.subtitle_languages.is_empty()
-    });
+    let plays = info.video_codec.as_deref().is_some_and(|v| is(v, &["h264"]))
+        && info.audio.iter().all(|a| is(&a.codec, &["aac", "mp3"]))
+        && !info.subtitles.iter().any(|t| t.text);
     if mp4 && plays {
         VodMode::Direct
     } else {
@@ -163,17 +163,7 @@ pub fn remux_plan(info: &MediaInfo, want: Option<usize>, can: &Can) -> Result<Vo
     match video {
         Some(Video::H264) => {}
         Some(Video::Hevc) if can.hevc => {}
-        Some(v) => {
-            return Err(format!(
-                "Its video is {}, which {} can’t play. Watch it in the zapper app.",
-                v.name(),
-                if v == Video::Hevc {
-                    "this browser"
-                } else {
-                    "browsers"
-                }
-            ))
-        }
+        Some(v) => return Err(v.unplayable(false)),
         None if info.audio.is_empty() => {
             return Err("Its file has neither video nor sound a browser can play.".into())
         }
@@ -483,16 +473,22 @@ impl MovieViewers {
 
     /// Lets go of viewers nobody reads, and forgets ended ones.
     fn reap(&self) {
+        self.reap_at(Instant::now());
+    }
+
+    /// [`Self::reap`], as of `now`.
+    fn reap_at(&self, now: Instant) {
+        let since = |t: Instant| now.saturating_duration_since(t);
         let mut map = self.map();
         let gone: Vec<String> = map
             .iter()
             .filter(|(_, v)| match v.ended {
                 _ if v.reading => false,
                 Some((Ended::Stopped, _)) => true,
-                Some((_, at)) => at.elapsed() >= KEEP_ENDED,
+                Some((_, at)) => since(at) >= KEEP_ENDED,
                 None => {
-                    v.idle_since.elapsed() >= IDLE
-                        && v.asked_at.is_none_or(|a| a.elapsed() >= ASKED_IDLE)
+                    since(v.idle_since) >= IDLE
+                        && v.asked_at.is_none_or(|a| since(a) >= ASKED_IDLE)
                 }
             })
             .map(|(id, _)| id.clone())
@@ -573,8 +569,8 @@ struct VodWatchRequest {
     /// is stopped first, so its connection is free for this one.
     #[serde(default)]
     replaces: Option<String>,
-    /// The sound to play: an index into the details' list, which is the
-    /// file's own (the answer's) once the file is read.
+    /// The sound to play: an index into the file's list, as the answer
+    /// numbers them. Any but the first is the remuxer's to play.
     #[serde(default)]
     audio: Option<usize>,
     /// Where to start, in seconds from the start of the film: the
@@ -615,35 +611,18 @@ struct VodWatchDto {
     stream: String,
     /// `direct` or `remux`.
     mode: &'static str,
-    /// In seconds: the file's (remux), or the details' when they say.
+    /// In seconds: the file's, or the catalogue's when the file does not say.
     duration: Option<i64>,
-    /// The sounds: the file's (remux), or the details' (direct). A track's
-    /// `index` is what the watch's and the stream's `audio` take.
+    /// The file's sounds. A track's `index` is what the watch's and the
+    /// stream's `audio` take.
     audio: Vec<TrackDto>,
     audio_index: Option<usize>,
     /// The sound is being encoded to AAC on the way.
     converting: bool,
-    /// The file's subtitles (remux; none direct).
+    /// The file's subtitles. A file with text ones is always remuxed;
+    /// direct, only pictures, which are not shown, may be listed.
     subtitles: Vec<SubtitleDto>,
     notice: Option<NoticeDto>,
-}
-
-/// The sounds the details list. Their codecs and languages are two lists,
-/// which name the same tracks when they are as long as each other.
-fn tracks(info: Option<&MovieInfo>) -> Vec<TrackDto> {
-    let Some(i) = info else { return Vec::new() };
-    let langs = (i.audio_languages.len() == i.audio_codecs.len()).then_some(&i.audio_languages);
-    i.audio_codecs
-        .iter()
-        .enumerate()
-        .map(|(index, codec)| TrackDto {
-            index,
-            codec: codec.to_ascii_lowercase(),
-            lang: langs.and_then(|l| l.get(index).cloned()),
-            described: false,
-            impaired: false,
-        })
-        .collect()
 }
 
 /// The sounds the file holds, numbered as the answer lists them.
@@ -778,17 +757,10 @@ async fn start(
             );
         }
     };
-    // Unknown details (a provider that does not answer, a playlist's
-    // movie) mean the remuxer, which reads what the file holds; the
-    // failure is logged, scrubbed, where it happens.
-    let info = vod_details::movie_info(movie_id).await.ok().flatten();
     let can = Can::from(req.can);
-    let mut mode = vod_mode(container.as_deref(), info.as_ref(), &can);
     // A browser's player plays a file's first sound: another is the
     // remuxer's to pick.
-    if req.audio.is_some_and(|a| a > 0) {
-        mode = VodMode::Remux;
-    }
+    let pick_sound = req.audio.is_some_and(|a| a > 0);
     let playable = match s.vod.playable(movie_id) {
         Ok(p) => p,
         Err(e) => {
@@ -811,14 +783,15 @@ async fn start(
     let rider = s.viewers.rider_id();
     let id = new_id();
     let (turn_tx, mut turn) = tokio_watch::channel(0);
-    // Counted among the service's connections while it opens.
+    // Counted among the service's connections while it opens; its mode is
+    // known once the file is read.
     s.vod.map().insert(
         id.clone(),
         MovieViewer {
             device: device.clone(),
             movie_id,
             rider,
-            mode,
+            mode: VodMode::Remux,
             up: None,
             from: req.from,
             audio: req.audio,
@@ -836,9 +809,8 @@ async fn start(
     // On a task of its own, so that a browser giving up on the answer
     // leaves a viewer the reaper lets go, not one opening for ever; and
     // given up at once when the viewer is stopped or taken over meanwhile,
-    // so that the one replacing it never meets it at the provider. A file
-    // for the remuxer is read on, to learn what it holds; its response is
-    // let go then.
+    // so that the one replacing it never meets it at the provider. The
+    // file is read on, to learn what it holds; its response is let go then.
     let opening = tokio::spawn({
         let s = Arc::clone(&s);
         let id = id.clone();
@@ -846,40 +818,44 @@ async fn start(
             let opened = tokio::select! {
                 o = up.open(0, None) => Some(match o {
                     Ok(span) if span.beyond => Err(Failure::NotVideo),
-                    Ok(_) => Ok(None),
+                    Ok(_) => Ok(()),
                     Err(f) => Err(f),
                 }),
                 _ = superseded(&mut turn, 0) => None,
             };
-            let (up, opened) = match opened {
-                Some(Ok(_)) if mode == VodMode::Remux => {
+            let (mut up, learnt) = match opened {
+                Some(Ok(())) => {
                     let (stop, stopped) = tokio_watch::channel(false);
                     let learning = learn(up, stopped);
                     tokio::pin!(learning);
                     tokio::select! {
-                        (up, learnt) = &mut learning => (up, Some(learnt.map(Some))),
+                        (up, learnt) = &mut learning => (up, Some(learnt)),
                         _ = superseded(&mut turn, 0) => {
                             let _ = stop.send(true);
                             ((&mut learning).await.0, None)
                         }
                     }
                 }
-                o => (Some(up), o),
+                Some(Err(f)) => (Some(up), Some(Err(f))),
+                None => (Some(up), None),
             };
-            let mut up = up;
             let mut map = s.vod.map();
             if let (Some(v), Some(Ok(media))) =
-                (map.get_mut(&id).filter(|v| v.ended.is_none()), &opened)
+                (map.get_mut(&id).filter(|v| v.ended.is_none()), &learnt)
             {
                 if let Some(up) = up.take() {
-                    if let Some(m) = media {
-                        v.subtitles = m.subtitles.clone();
-                        v.sounds = m.audio.len();
-                    }
+                    let mode = if pick_sound {
+                        VodMode::Remux
+                    } else {
+                        vod_mode(container.as_deref(), media)
+                    };
+                    v.mode = mode;
+                    v.subtitles = media.subtitles.clone();
+                    v.sounds = media.audio.len();
                     v.up = Some(up);
                     v.reading = false;
                     v.idle_since = Instant::now();
-                    return Ok(media.clone());
+                    return Ok((mode, media.clone()));
                 }
             }
             map.remove(&id);
@@ -889,23 +865,26 @@ async fn start(
                 None => s.vod.note_released(),
             }
             // `None`: taken over, or stopped, while it opened.
-            Err(opened.and_then(Result::err))
+            Err(learnt.and_then(Result::err))
         }
     });
-    let media = match opening.await {
-        Ok(Ok(media)) => media,
+    let (mode, media) = match opening.await {
+        Ok(Ok(opened)) => opened,
         Ok(Err(Some(f))) => return feed_refusal(f),
         Ok(Err(None)) | Err(_) => return plain(StatusCode::GONE, "feed", "This stream has ended."),
     };
 
-    // What the answer lists: the file's, once read; the details' otherwise.
-    let (audio, audio_index, converting, duration, subtitles) = match &media {
-        Some(m) => {
-            let audio_index = req
-                .audio
-                .filter(|&a| a < m.audio.len())
-                .or((!m.audio.is_empty()).then_some(0));
-            let plan = match plan_for(m, audio_index, &can) {
+    // The sound: the one asked for, else the first. Direct, the browser's
+    // player plays the first as it is; a remux is planned, and refused when
+    // no browser plays the video.
+    let audio_index = req
+        .audio
+        .filter(|&a| a < media.audio.len())
+        .or((!media.audio.is_empty()).then_some(0));
+    let (audio_index, converting) = match mode {
+        VodMode::Direct => (audio_index, false),
+        VodMode::Remux => {
+            let plan = match plan_for(&media, audio_index, &can) {
                 Ok(p) => p,
                 Err(why) => {
                     s.vod.stop(&device, &id);
@@ -916,18 +895,7 @@ async fn start(
             if let Some(v) = s.vod.map().get_mut(&id) {
                 v.audio = audio_index;
             }
-            (
-                file_tracks(m),
-                audio_index,
-                plan.encode,
-                m.duration.map(|d| d.round() as i64),
-                subtitle_dtos(&m.subtitles),
-            )
-        }
-        None => {
-            let audio = tracks(info.as_ref());
-            let audio_index = (!audio.is_empty()).then_some(0);
-            (audio, audio_index, false, None, Vec::new())
+            (audio_index, plan.encode)
         }
     };
 
@@ -939,13 +907,11 @@ async fn start(
             VodMode::Direct => "direct",
             VodMode::Remux => "remux",
         },
-        duration: duration
-            .or(info.as_ref().and_then(|i| i.runtime))
-            .or(length),
-        audio,
+        duration: media.duration.map(|d| d.round() as i64).or(length),
+        audio: file_tracks(&media),
         audio_index,
         converting,
-        subtitles,
+        subtitles: subtitle_dtos(&media.subtitles),
         notice,
     };
     (
@@ -1645,14 +1611,6 @@ mod tests {
     use crate::recording::budget::Slots;
     use crate::recording::watch::{decide, Decision, Refusal};
 
-    fn details(video: &str, audio: &[&str]) -> MovieInfo {
-        MovieInfo {
-            video_codec: Some(video.into()),
-            audio_codecs: audio.iter().map(|a| a.to_string()).collect(),
-            ..Default::default()
-        }
-    }
-
     #[test]
     fn a_movie_feed_never_names_a_channel() {
         assert_eq!(movie_feed(7), -7);
@@ -1662,51 +1620,44 @@ mod tests {
         assert_eq!(movie_of(i64::MIN), None);
     }
 
+    fn subtitles(text: bool) -> SubtitleStream {
+        SubtitleStream {
+            index: 3,
+            codec: if text { "mov_text" } else { "dvd_subtitle" }.into(),
+            lang: Some("eng".into()),
+            title: None,
+            text,
+        }
+    }
+
     #[test]
     fn direct_only_for_mp4_that_browsers_play() {
-        let can = Can::default();
-        let h264_aac = details("h264", &["aac"]);
+        let h264_aac = file(Some("h264"), &[(1, "aac")]);
+        assert_eq!(vod_mode(Some("mp4"), &h264_aac), VodMode::Direct);
+        assert_eq!(vod_mode(Some("M4V"), &h264_aac), VodMode::Direct);
         assert_eq!(
-            vod_mode(Some("mp4"), Some(&h264_aac), &can),
+            vod_mode(Some("mov"), &file(Some("H264"), &[(1, "mp3")])),
             VodMode::Direct
         );
+        assert_eq!(vod_mode(Some("mp4"), &file(Some("h264"), &[])), VodMode::Direct);
+        assert_eq!(vod_mode(Some("mkv"), &h264_aac), VodMode::Remux);
+        assert_eq!(vod_mode(None, &h264_aac), VodMode::Remux);
         assert_eq!(
-            vod_mode(Some("M4V"), Some(&h264_aac), &can),
-            VodMode::Direct
-        );
-        assert_eq!(
-            vod_mode(Some("mov"), Some(&details("H264", &["mp3"])), &can),
-            VodMode::Direct
-        );
-        assert_eq!(
-            vod_mode(Some("mp4"), Some(&details("h264", &[])), &can),
-            VodMode::Direct
-        );
-        assert_eq!(vod_mode(Some("mkv"), Some(&h264_aac), &can), VodMode::Remux);
-        assert_eq!(vod_mode(None, Some(&h264_aac), &can), VodMode::Remux);
-        assert_eq!(
-            vod_mode(Some("mp4"), Some(&details("h264", &["aac", "ac3"])), &can),
+            vod_mode(Some("mp4"), &file(Some("h264"), &[(1, "aac"), (2, "ac3")])),
             VodMode::Remux
         );
-        assert_eq!(vod_mode(Some("mp4"), None, &can), VodMode::Remux);
+        assert_eq!(vod_mode(Some("mp4"), &file(None, &[(1, "aac")])), VodMode::Remux);
         assert_eq!(
-            vod_mode(Some("mp4"), Some(&MovieInfo::default()), &can),
-            VodMode::Remux,
-            "no video codec said"
-        );
-        assert_eq!(
-            vod_mode(Some("mp4"), Some(&details("hevc", &["aac"])), &can),
+            vod_mode(Some("mp4"), &file(Some("hevc"), &[(1, "aac")])),
             VodMode::Remux
         );
-        // Subtitles are shown from the remuxer's read.
-        let subtitled = MovieInfo {
-            subtitle_languages: vec!["eng".into()],
-            ..h264_aac.clone()
-        };
-        assert_eq!(
-            vod_mode(Some("mp4"), Some(&subtitled), &can),
-            VodMode::Remux
-        );
+        // Text subtitles are shown from the remuxer's read; pictures are
+        // shown neither way.
+        let mut subtitled = h264_aac.clone();
+        subtitled.subtitles = vec![subtitles(true)];
+        assert_eq!(vod_mode(Some("mp4"), &subtitled), VodMode::Remux);
+        subtitled.subtitles = vec![subtitles(false)];
+        assert_eq!(vod_mode(Some("mp4"), &subtitled), VodMode::Direct);
     }
 
     fn rec(id: i64, feed: i64) -> Conn {
@@ -1934,19 +1885,21 @@ mod tests {
             Some((9, 1, true))
         );
         assert_eq!(vod.asked("other", &quiet), None, "another device's");
-        let ago = |secs: u64| Instant::now().checked_sub(Duration::from_secs(secs));
+        // Times are shifted forward rather than set in the past: an Instant
+        // may not go back further than the machine has been up. Every
+        // viewer was made just now; the reaping is looked at from later.
+        let later = ASKED_IDLE + IDLE + Duration::from_secs(1);
+        let base = vod.map()[&asked].idle_since;
         {
             let mut map = vod.map();
-            // Every browser holds all it needs, and reads nothing for a while.
-            for v in map.values_mut() {
-                v.idle_since = ago(IDLE.as_secs() + 1).unwrap();
-            }
-            // A background tab's page asks about once a minute; a closed
+            // Every browser holds all it needs, and reads nothing for a while;
+            // a background tab's page asks about once a minute; a closed
             // page's last ask is longer ago than that.
-            map.get_mut(&slow).unwrap().asked_at = ago(60);
-            map.get_mut(&gone).unwrap().asked_at = ago(ASKED_IDLE.as_secs() + 1);
+            map.get_mut(&asked).unwrap().asked_at = Some(base + later);
+            map.get_mut(&slow).unwrap().asked_at = Some(base + later - Duration::from_secs(60));
+            map.get_mut(&gone).unwrap().asked_at = Some(base);
         }
-        vod.reap();
+        vod.reap_at(base + later);
         let map = vod.map();
         assert!(map.contains_key(&asked), "its page is still there");
         assert!(map.contains_key(&slow), "a background tab's is kept");
@@ -1955,19 +1908,9 @@ mod tests {
     }
 
     #[test]
-    fn the_details_name_the_sounds() {
-        let mut i = details("h264", &["AAC", "ac3"]);
-        i.audio_languages = vec!["eng".into(), "fre".into()];
-        let t = tracks(Some(&i));
-        assert_eq!(t.len(), 2);
-        assert_eq!(
-            (t[1].codec.as_str(), t[1].lang.as_deref()),
-            ("ac3", Some("fre"))
-        );
-        // Lists of different lengths do not say which language is which.
-        i.audio_languages.pop();
-        assert_eq!(tracks(Some(&i))[0].lang, None);
+    fn a_browser_plays_aac_and_mp3_and_says_what_else() {
         assert!(plays_sound("aac", Can::default()));
+        assert!(plays_sound("MP3", Can::default()));
         assert!(!plays_sound("ac3", Can::default()));
         assert!(plays_sound(
             "ac3",

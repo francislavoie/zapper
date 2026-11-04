@@ -6,9 +6,7 @@
 // from the title, so the same film is the same colour every time.
 
 import { useState } from "react";
-
-/** Posters that failed once are not asked for again this session. */
-const deadPosters = new Set<string>();
+import { isDeadPoster, markDeadPoster } from "../deadPosters";
 
 /** A hue from the title's letters: stable, and spread over the wheel. */
 function hueOf(name: string): number {
@@ -28,7 +26,7 @@ export function Poster({
   className?: string;
 }) {
   const [broken, setBroken] = useState(false);
-  if (!url || broken || deadPosters.has(url)) {
+  if (!url || broken || isDeadPoster(url)) {
     const initial = name.trim().charAt(0).toUpperCase();
     return (
       <span
@@ -48,7 +46,7 @@ export function Poster({
       loading="lazy"
       decoding="async"
       onError={() => {
-        deadPosters.add(url);
+        markDeadPoster(url);
         setBroken(true);
       }}
     />
