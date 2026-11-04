@@ -146,14 +146,20 @@ async fn details(Path(id): Path<i64>) -> Result<Response, Failed> {
     present(id).await?;
     // The one read here that may ask the provider, the first time a title is
     // opened in a week; its errors are scrubbed of the account already.
-    let mut d = vod_details::movie_details(id)
-        .await
-        .map_err(|e| Failed(StatusCode::BAD_GATEWAY, format!("{e:#}")))?;
+    // The failure is logged where it happens; what a transport error says
+    // carries the provider's address, so the page is told only that it failed.
+    let mut d = vod_details::movie_details(id).await.map_err(|_| {
+        Failed(
+            StatusCode::BAD_GATEWAY,
+            "the provider did not answer for this movie".into(),
+        )
+    })?;
     local_details(&mut d);
     Ok(Json(d).into_response())
 }
 
 async fn similar(Path(id): Path<i64>, Query(p): Query<LimitParams>) -> Result<Response, Failed> {
+    present(id).await?;
     let limit = p.limit.min(PAGE_MAX);
     let list = read(move || reads::similar_movies(id, limit)).await?;
     Ok(Json(local_movies(list)).into_response())
@@ -169,8 +175,11 @@ async fn save_progress(
     Path(id): Path<i64>,
     Json(b): Json<ProgressBody>,
 ) -> Result<Response, Failed> {
-    if !b.position.is_finite() || b.position < 0.0 || b.duration.is_some_and(|d| !d.is_finite()) {
+    if !b.position.is_finite() || b.position < 0.0 {
         return Err(bad_request("position: seconds from the start"));
+    }
+    if b.duration.is_some_and(|d| !d.is_finite() || d <= 0.0) {
+        return Err(bad_request("duration: seconds, more than zero"));
     }
     present(id).await?;
     let marks = read(move || reads::save_movie_progress(id, b.position, b.duration)).await?;
