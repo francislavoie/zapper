@@ -17,9 +17,8 @@
 export const SESSION_STORAGE_KEY = "zapper.session";
 
 export interface Session {
-  /** ALL_CATEGORIES for the pseudo-entry, else a CategoryDto.id. */
+  /** A rail item id (All, Favourites, Recently watched, Recordings) or a CategoryDto.id. */
   categoryId: string | null;
-  railTab: "categories" | "favourites";
   /** Pixels, in layout units — the same units the lists scroll in. */
   railScrollTop: number;
   channelScrollTop: number;
@@ -34,7 +33,7 @@ export interface Session {
    *  things should be, which does not change between launches — leaving it
    *  off every time means turning it on every time. */
   compressor: boolean;
-  /** Whether the categories/favourites rail is folded away, in the list and
+  /** Whether the rail is folded away, in the list and
    *  the guide alike. A layout taste, kept between launches. */
   railCollapsed: boolean;
   /** The volume the app was closed at, in the slider's own 0–200 units, or
@@ -48,7 +47,6 @@ const VOLUME_CEILING = 200;
 
 export const EMPTY_SESSION: Session = {
   categoryId: null,
-  railTab: "categories",
   railScrollTop: 0,
   channelScrollTop: 0,
   lastStreamId: null,
@@ -85,7 +83,6 @@ export function parseSession(raw: string | null): Session {
     // A category that no longer exists is caught when the rail loads, not
     // here: this cannot know the catalogue.
     categoryId: typeof v.categoryId === "string" && v.categoryId !== "" ? v.categoryId : null,
-    railTab: v.railTab === "favourites" ? "favourites" : "categories",
     railScrollTop: scroll(v.railScrollTop),
     channelScrollTop: scroll(v.channelScrollTop),
     lastStreamId: streamId(v.lastStreamId),
@@ -100,7 +97,6 @@ export function parseSession(raw: string | null): Session {
 export function serialiseSession(s: Session): string {
   return JSON.stringify({
     categoryId: s.categoryId,
-    railTab: s.railTab,
     railScrollTop: scroll(s.railScrollTop),
     channelScrollTop: scroll(s.channelScrollTop),
     lastStreamId: s.lastStreamId,

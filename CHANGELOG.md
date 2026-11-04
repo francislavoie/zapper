@@ -10,6 +10,23 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
 
 ## [Unreleased]
 
+### Changed
+
+- Live TV has a new layout. One rail on the left replaces the Categories and Favourites tabs:
+  Favourites, Recently watched, Recordings and All channels, then your pinned categories and the
+  rest. Choosing an item lists its channels, as a list or as the guide (`G`), for any of them.
+- Channel rows have two lines: the name with the programme on now, and what is next. Where
+  channels from several categories mix, the category is named too.
+- Recordings is part of Live TV, not a window: pick it in the rail, or from the menu, the
+  command palette or the title-bar badge. What you can do with a recording (open its folder,
+  cancel, stop, delete, change its backup channel) is beside the picture.
+- The title bar shows the catalogue's sync status beside Settings.
+
+### Added
+
+- Recently watched: the last 20 channels you watched for at least 30 seconds, in the rail.
+- Recordings shows how much space is free on the recordings disk.
+
 ## [0.3.0] - 2026-11-02
 
 ### Added

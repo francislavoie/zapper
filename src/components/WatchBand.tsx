@@ -14,8 +14,8 @@
 // moving or resizing the picture is one edit and the rect follows by
 // measurement.
 
-import { useRef, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
-import { playChannel } from "../actions";
+import { useMemo, useRef, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
+import { playChannel, showChannelCategory, showChannelInGuide } from "../actions";
 import { endedMessage, startingLine } from "../logic/ending";
 import { chordLabel } from "../logic/keys";
 import { IS_MAC } from "../platform";
@@ -38,6 +38,10 @@ import {
   isDefaultVideoWidth,
   widthAfterDrag,
 } from "../logic/videoSize";
+import { useRecordingChannels } from "../hooks/useRecordingChannels";
+import { listedFor, railItemKind } from "../logic/railItems";
+import { categoryNames } from "../logic/searchGroups";
+import { RecordingBand } from "./RecordingBand";
 import { run, useApp, useDispatch } from "../store";
 import { Fullscreen, ResizeHandle, Stop } from "./icons";
 import { MiniControls } from "./MiniControls";
@@ -49,9 +53,12 @@ import type { ChannelDto, ProgrammeDto } from "../types";
 export interface WatchBandProps {
   /** The transparent hole mpv is told to draw into. */
   videoRef: RefObject<HTMLDivElement | null>;
+  /** Whether there is a picture to draw. Without one (a browser, for now) the
+   *  band is only the information: no slot, no handle. */
+  picture: boolean;
 }
 
-export function WatchBand({ videoRef }: WatchBandProps) {
+export function WatchBand({ videoRef, picture }: WatchBandProps) {
   const app = useApp();
   const { nowChannel, player } = app;
   // The width on screen, not the one remembered: a drag starts from what
@@ -60,6 +67,15 @@ export function WatchBand({ videoRef }: WatchBandProps) {
   const dispatch = useDispatch();
   const now = useClock();
   const { now: onNow, next } = useNowNext(nowChannel, now);
+
+  // While Recordings is chosen the band is about the recording picked in
+  // the list; with none picked it shows the channel as usual.
+  const recording =
+    railItemKind(app.categoryId) === "recordings" && app.selectedRecordingId !== null
+      ? (app.recordings?.find((r) => r.id === app.selectedRecordingId) ?? null)
+      : null;
+  const recordingList = useMemo(() => (recording ? [recording] : null), [recording]);
+  const recordingChannel = useRecordingChannels(recordingList).get(recording?.streamId ?? -1) ?? null;
 
   const live = player.state !== "stopped";
   const toWatch = () => dispatch({ type: "mode", mode: "watch" });
@@ -140,7 +156,9 @@ export function WatchBand({ videoRef }: WatchBandProps) {
   return (
     <section className="watch-band" aria-label="Now watching">
       <div className="watch-info">
-        {live && nowChannel ? (
+        {recording ? (
+          <RecordingBand key={recording.id} rec={recording} channel={recordingChannel} />
+        ) : live && nowChannel ? (
           <Playing
             channel={nowChannel}
             onNow={onNow}
@@ -155,13 +173,17 @@ export function WatchBand({ videoRef }: WatchBandProps) {
           <Ready
             channel={nowChannel}
             onNow={onNow}
+            next={next}
+            now={now}
             onPlay={() => void playChannel(dispatch, nowChannel)}
           />
         ) : (
-          <Idle />
+          <Idle picture={picture} />
         )}
       </div>
 
+      {picture ? (
+        <>
       {/* Beside the picture, not over it. Inside the slot it would be a
           control drawn on top of the video — and the video is the one surface in this app that nothing may be drawn on, because
           mpv is underneath and anything here is a hole punched in it.
@@ -241,13 +263,23 @@ export function WatchBand({ videoRef }: WatchBandProps) {
           <MiniControls onActivate={activate} />
         ) : null}
       </div>
+        </>
+      ) : null}
     </section>
   );
 }
 
 /** Nothing playing. The band explains what it is for rather than leaving an
  *  empty frame and letting the user guess. */
-function Idle() {
+function Idle({ picture }: { picture: boolean }) {
+  if (!picture) {
+    return (
+      <div className="watch-idle">
+        <h2>Nothing selected</h2>
+        <p>Choose a recording to see what can be done with it.</p>
+      </div>
+    );
+  }
   return (
     <div className="watch-idle">
       <h2>Nothing playing</h2>
@@ -270,6 +302,111 @@ function Idle() {
   );
 }
 
+/** The programme first, as the mockup has it: its title, the channel's
+ *  category, the channel with the programme's times, how far along it is, what
+ *  it is about, and what follows. Without guide data the channel's name takes
+ *  the title's place. Shared by the playing and the restored channel. */
+function ChannelProgramme({
+  channel,
+  onNow,
+  next,
+  now,
+  badge,
+}: {
+  channel: ChannelDto;
+  onNow: ProgrammeDto | null;
+  next: ProgrammeDto | null;
+  now: number;
+  badge?: string;
+}) {
+  const { categories } = useApp();
+  const category =
+    channel.categoryId !== null && categories.status === "ready"
+      ? categoryNames(categories.data).get(channel.categoryId)
+      : undefined;
+  return (
+    <>
+      <h2 className="watch-title-h" data-tip-overflow={onNow ? onNow.title : channel.name}>
+        {onNow ? onNow.title : channel.cleanName}
+      </h2>
+      {category ? (
+        <p className="watch-cat" data-tip-overflow="">
+          {category}
+        </p>
+      ) : null}
+      <div className="watch-sub">
+        <span className="watch-chan" data-tip-overflow={channel.name}>
+          {channel.cleanName}
+        </span>
+        {channel.num != null ? <span className="watch-num">#{channel.numLabel ?? channel.num}</span> : null}
+        {badge ? <span className="badge">{badge}</span> : null}
+        {channel.hasArchive ? (
+          <span className="badge archive" data-tip={`${channel.archiveDays ?? "?"}-day catchup`}>
+            ⏱ {channel.archiveDays ?? "?"}d catchup
+          </span>
+        ) : null}
+        {onNow ? <span className="watch-time">{timeRange(onNow.start, onNow.stop)}</span> : null}
+      </div>
+      {onNow ? (
+        <>
+          <div className="watch-prog-line">
+            <div className="watch-progress">
+              <span style={{ width: `${programmeProgress(onNow.start, onNow.stop, now) * 100}%` }} />
+            </div>
+            <span className="watch-left">{duration(Math.max(0, onNow.stop - now))} left</span>
+          </div>
+          {onNow.description ? (
+            <p className="watch-desc" data-tip-overflow="">
+              {onNow.description}
+            </p>
+          ) : null}
+        </>
+      ) : (
+        // 15% EPG coverage: this is the common case, and it is not an error.
+        <p className="watch-none">no guide data for this channel</p>
+      )}
+      {next ? (
+        <p className="watch-next" data-tip-overflow="">
+          Next {hhmm(next.start)} {next.title}
+        </p>
+      ) : null}
+    </>
+  );
+}
+
+/** Show its category and Guide: where the channel is in the lists. Each is
+ *  left out where it would go nowhere new. */
+function ChannelLinks({ channel }: { channel: ChannelDto }) {
+  const { categoryId, mode, favourites, recent } = useApp();
+  const dispatch = useDispatch();
+  return (
+    <>
+      {channel.categoryId !== null && channel.categoryId !== categoryId ? (
+        <button className="ctl" onClick={() => void showChannelCategory(dispatch, channel)}>
+          Show its category
+        </button>
+      ) : null}
+      {mode !== "guide" ? (
+        <button
+          className="ctl"
+          onClick={() =>
+            void showChannelInGuide(dispatch, channel, {
+              categoryId,
+              listed: listedFor(
+                categoryId,
+                favourites.status === "ready" ? favourites.data : null,
+                recent.status === "ready" ? recent.data : null,
+              ),
+            })
+          }
+        >
+          Guide
+        </button>
+      ) : null}
+    </>
+  );
+}
+
 /** Where you left off: the channel is restored, the picture is not.
  *
  *  It says "Resume" rather than starting by itself on purpose. Opening a
@@ -279,31 +416,29 @@ function Idle() {
 function Ready({
   channel,
   onNow,
+  next,
+  now,
   onPlay,
 }: {
   channel: ChannelDto;
   onNow: ProgrammeDto | null;
+  next: ProgrammeDto | null;
+  now: number;
   onPlay: () => void;
 }) {
   return (
-    <div className="watch-col identity">
-      <p className="watch-state">Where you left off</p>
-      <h2 data-tip-overflow={channel.name}>{channel.cleanName}</h2>
-      <div className="watch-sub">
-        {channel.num != null ? <span className="watch-num">#{channel.numLabel ?? channel.num}</span> : null}
-        {onNow ? <span className="watch-now" data-tip-overflow="">{onNow.title}</span> : null}
-        {channel.hasArchive ? (
-          <span className="badge archive" data-tip={`${channel.archiveDays ?? "?"}-day catchup`}>
-            ⏱ {channel.archiveDays ?? "?"}d catchup
-          </span>
-        ) : null}
+    <>
+      <div className="watch-body">
+        <p className="watch-state">Where you left off</p>
+        <ChannelProgramme channel={channel} onNow={onNow} next={next} now={now} />
       </div>
       <div className="watch-actions">
         <button className="ctl" onClick={onPlay}>
           Resume
         </button>
+        <ChannelLinks channel={channel} />
       </div>
-    </div>
+    </>
   );
 }
 
@@ -324,44 +459,20 @@ function Playing({
 }) {
   const { player } = useApp();
   const measured = measuredLine(player);
-  const badge = playerBadge(player);
   const ended = endedMessage(player);
   const starting = startingLine(player);
   const record = usePlayerRecord();
+  const facts = [
+    measured,
+    liveOffset(player.atLiveEdge, player.behindLive),
+    `Rewind ${duration(player.bufferedBack)}`,
+  ].filter(Boolean);
 
   return (
     <>
-      <div className="watch-col identity">
-        {/* The name and, at the right of the same line, what you can do
-            with it. Icons rather than worded buttons: two words-in-boxes
-            under the name took a row of their own for two actions everybody
-            recognises by shape. The name gives way first when it is long. */}
-        <div className="watch-head">
-          <h2 data-tip-overflow={channel.name}>{channel.cleanName}</h2>
-          <div className="watch-head-actions">
-            <button
-              className="ctl icon"
-              aria-label="Full screen"
-              data-tip="Full screen (F)"
-              onClick={onFullScreen}
-            >
-              <Fullscreen className="i" />
-            </button>
-            <button className="ctl icon" aria-label="Stop" data-tip="Stop" onClick={onStop}>
-              <Stop className="i" />
-            </button>
-          </div>
-        </div>
-        <div className="watch-sub">
-          {channel.num != null ? <span className="watch-num">#{channel.numLabel ?? channel.num}</span> : null}
-          {badge ? <span className="badge">{badge}</span> : null}
-          {channel.hasArchive ? (
-            <span className="badge archive" data-tip={`${channel.archiveDays ?? "?"}-day catchup`}>
-              ⏱ {channel.archiveDays ?? "?"}d catchup
-            </span>
-          ) : null}
-        </div>
-        {record ? <PlayerRecordLine record={record} /> : null}
+      <div className="watch-body">
+        <ChannelProgramme channel={channel} onNow={onNow} next={next} now={now} badge={playerBadge(player) ?? undefined} />
+        <p className="watch-facts">{facts.join(" · ")}</p>
         {starting ? (
           <p className="watch-state">{starting}</p>
         ) : ended ? (
@@ -372,54 +483,25 @@ function Playing({
           </>
         ) : null}
       </div>
-
-      <div className="watch-col epg">
-        {onNow ? (
-          <div className="watch-prog">
-            <div className="watch-prog-head">
-              <span className="watch-when">NOW</span>
-              <span className="watch-time">
-                {timeRange(onNow.start, onNow.stop)}
-              </span>
-            </div>
-            <div className="watch-title" data-tip-overflow="">{onNow.title}</div>
-            <div className="watch-progress">
-              <span
-                style={{ width: `${programmeProgress(onNow.start, onNow.stop, now) * 100}%` }}
-              />
-            </div>
-            {onNow.description ? <p className="watch-desc" data-tip-overflow="">{onNow.description}</p> : null}
-          </div>
-        ) : (
-          // 15% EPG coverage: this is the common case, and it is not an error.
-          <div className="watch-prog none">no guide data for this channel</div>
-        )}
-
-        {next ? (
-          <div className="watch-prog">
-            <div className="watch-prog-head">
-              <span className="watch-when">NEXT</span>
-              <span className="watch-time">{hhmm(next.start)}</span>
-            </div>
-            <div className="watch-title" data-tip-overflow="">{next.title}</div>
-          </div>
-        ) : null}
+      <div className="watch-actions">
+        {record ? <PlayerRecordLine record={record} /> : null}
+        <ChannelLinks channel={channel} />
+        {/* Icons at the end: shapes everybody recognises, out of the way of
+            the actions that are about this programme. */}
+        <span className="watch-actions-end">
+          <button
+            className="ctl icon"
+            aria-label="Full screen"
+            data-tip="Full screen (F)"
+            onClick={onFullScreen}
+          >
+            <Fullscreen className="i" />
+          </button>
+          <button className="ctl icon" aria-label="Stop" data-tip="Stop" onClick={onStop}>
+            <Stop className="i" />
+          </button>
+        </span>
       </div>
-
-      <dl className="watch-col facts">
-        <div>
-          <dt>Measured</dt>
-          <dd>{measured || "not measured yet"}</dd>
-        </div>
-        <div>
-          <dt>Position</dt>
-          <dd>{liveOffset(player.atLiveEdge, player.behindLive)}</dd>
-        </div>
-        <div>
-          <dt>Rewind buffer</dt>
-          <dd>{duration(player.bufferedBack)}</dd>
-        </div>
-      </dl>
     </>
   );
 }

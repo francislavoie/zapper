@@ -207,6 +207,26 @@ pub fn rank(rows: Vec<FavouriteDto>, now: i64, limit: usize) -> Vec<FavouriteDto
     scored.into_iter().map(|(_, f)| f).collect()
 }
 
+/// What was watched most recently, newest first.
+///
+/// Unlike [`rank`] this ignores how much was watched: a channel opened for a
+/// minute a moment ago comes before one watched for a day last week. Rows with
+/// no `last_watched` were never opened, so they are left out. Ties break on id
+/// so the order is stable.
+pub fn recent(watched: Vec<FavouriteDto>, limit: usize) -> Vec<FavouriteDto> {
+    let mut rows: Vec<FavouriteDto> = watched
+        .into_iter()
+        .filter(|f| f.last_watched.is_some())
+        .collect();
+    rows.sort_by(|a, b| {
+        b.last_watched
+            .cmp(&a.last_watched)
+            .then(a.channel.stream_id.cmp(&b.channel.stream_id))
+    });
+    rows.truncate(limit);
+    rows
+}
+
 /// Unix seconds. Zero if the clock is before the epoch, which is not a
 /// situation worth a `Result` on this path.
 pub fn now_secs() -> i64 {
@@ -244,6 +264,38 @@ mod tests {
             last_watched,
             open_count: 1,
         }
+    }
+
+    // ------------------------------------------------------------- recency
+
+    fn ids(rows: &[FavouriteDto]) -> Vec<i64> {
+        rows.iter().map(|f| f.channel.stream_id).collect()
+    }
+
+    #[test]
+    fn recent_is_newest_first_not_most_watched() {
+        let rows = vec![
+            fav(1, 72_000, Some(100)),
+            fav(2, 40, Some(300)),
+            fav(3, 600, Some(200)),
+        ];
+        assert_eq!(ids(&recent(rows, 10)), [2, 3, 1]);
+    }
+
+    #[test]
+    fn recent_leaves_out_what_has_no_last_watched() {
+        let rows = vec![fav(4, 999, None), fav(5, 60, Some(10))];
+        assert_eq!(ids(&recent(rows, 10)), [5]);
+    }
+
+    #[test]
+    fn recent_stops_at_the_limit_and_breaks_ties_by_id() {
+        let rows = vec![
+            fav(9, 60, Some(50)),
+            fav(7, 60, Some(50)),
+            fav(8, 60, Some(10)),
+        ];
+        assert_eq!(ids(&recent(rows, 1)), [7]);
     }
 
     // ------------------------------------------------------------- scoring

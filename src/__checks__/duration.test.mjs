@@ -5,7 +5,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { duration } from "../logic/format.ts";
+import { duration, startsIn } from "../logic/format.ts";
 
 test("under a minute is seconds", () => {
   assert.equal(duration(0), "0s");
@@ -36,4 +36,14 @@ test("never looks like a clock", () => {
 test("nonsense clamps to zero", () => {
   assert.equal(duration(-3), "0s");
   assert.equal(duration(Number.NaN), "0s");
+});
+
+test("a countdown to a start is rounded to the minute, and empty under one", () => {
+  assert.equal(startsIn(54 * 60 + 1), "54m");
+  assert.equal(startsIn(54 * 60 + 40), "55m");
+  assert.equal(startsIn(60), "1m");
+  assert.equal(startsIn(3660 + 20), "1h01m");
+  assert.equal(startsIn(29), null);
+  assert.equal(startsIn(-5), null);
+  assert.equal(startsIn(Number.NaN), null);
 });

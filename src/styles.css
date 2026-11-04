@@ -140,7 +140,6 @@ input {
 .app .settings-note,
 .app .measured,
 .app .watch-state,
-.app .watch-col.facts dd,
 .app [data-selectable] {
   user-select: text;
   -webkit-user-select: text;
@@ -248,8 +247,7 @@ select option {
 .settings-side,
 .settings-body,
 .palette-list,
-.guide-body,
-.watch-info {
+.guide-body {
   scrollbar-color: #39414f transparent;
   scrollbar-width: thin;
 }
@@ -321,12 +319,17 @@ select option {
   z-index: 1;
 }
 
-/* The lead carries the status line as well as the hamburger, so it is the one
-   part of the bar allowed to give ground when the window is narrow. */
+/* The lead carries the tabs as well as the hamburger. */
 .tb-lead {
+  gap: 0.5rem;
+}
+
+/* The tail carries the status line, so it is the one part of the bar allowed
+   to give ground when the window is narrow; the buttons after it keep their
+   size. */
+.tb-tail {
   flex: 0 1 auto;
   min-width: 0;
-  gap: 0.5rem;
 }
 
 /* A Mac's traffic lights: AppKit draws them over the bar's top-left corner
@@ -456,6 +459,37 @@ select option {
   background: currentColor;
 }
 
+/* -------------------------------------------------------- toolbar: the tabs */
+
+/* Live TV, Movies, Shows. The selected one is underlined in the accent, the
+   underline sitting on the bar's own bottom rule. */
+.tb-tabs {
+  display: flex;
+  align-items: stretch;
+  align-self: stretch;
+  gap: 0.25rem;
+}
+
+.tb-tab {
+  padding: 0 0.625rem;
+  /* The bar's padding ring leaves the buttons 26px; the tab runs to the
+     rule so its underline meets it. */
+  margin-bottom: calc(1px - var(--edge-inset));
+  border-bottom: 2px solid transparent;
+  font-size: 0.75rem;
+  color: var(--dim);
+  white-space: nowrap;
+}
+
+.tb-tab:hover {
+  color: var(--text);
+}
+
+.tb-tab.on {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
 /* ---------------------------------------------------- toolbar: the status */
 
 /* Part of the drag surface: pressing the words moves the window, so they must
@@ -477,6 +511,15 @@ select option {
 
 .tb-status.bad {
   color: var(--bad);
+}
+
+/* At the right, beside the recording badge and the gear: it drags, and it
+   gives way before anything else does. */
+.tb-tail .tb-status {
+  flex: 0 1 auto;
+  max-width: 22rem;
+  justify-content: flex-end;
+  margin-right: 0.5rem;
 }
 
 .tb-status-text,
@@ -685,13 +728,10 @@ select option {
   color: var(--dimmer);
 }
 
-/* Wraps rather than being crushed.
- 
-   The picture beside this is resizable, and a large one leaves the three
-   columns sharing very little. Without wrapping they each become an
-   ellipsis at once — three unreadable columns instead of one or two
-   readable ones. With it, the facts drop below the name, then the
-   programme does, and what is left is still legible. */
+/* One column, programme first, as the mockup has it. The picture beside this
+   is resizable, and a large one leaves little room: lines are truncated or
+   clamped rather than wrapped into the picture's height, and what does not
+   fit (a recording's backup picker, its notes) scrolls. */
 .watch-info {
   flex: 1 1 auto;
   min-width: 0;
@@ -700,88 +740,163 @@ select option {
   border-bottom: 1px solid var(--line);
   border-right: 1px solid var(--line);
   display: flex;
-  flex-wrap: wrap;
-  align-content: flex-start;
-  gap: 0.375rem 1.125rem;
+  flex-direction: column;
+  gap: 0.375rem;
   padding: 0.75rem 1rem;
 }
 
-.watch-col {
+/* The text gives way first: it fills what the actions leave and scrolls
+   when there is more of it (a long description, a recording's conflicts and
+   notes). The actions below it are never part of the scrolling. */
+.watch-body {
+  flex: 1 1 0;
+  min-height: 0;
   min-width: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 0.375rem;
+  scrollbar-color: #39414f transparent;
+  scrollbar-width: thin;
 }
 
-/* The basis values are also the widths below which each column stops being
-   worth reading, so they are what decides when to wrap. A flex item with no
-   minimum shrinks to nothing first and wrapping never happens. */
-.watch-col.identity {
-  flex: 1 1 11rem;
-  min-width: 9rem;
+.watch-body > * {
+  flex: 0 0 auto;
+  min-width: 0;
 }
 
-.watch-col.epg {
-  flex: 1 1 15rem;
-  min-width: 11rem;
-  gap: 0.625rem;
-}
-
-.watch-col.facts {
-  /* Wide enough for "1920×1080 · 59.94 fps · hevc" without an ellipsis: the
-     measured line is the one number in this app that must never be truncated,
-     because the channel name already lies about it. */
-  flex: 0 1 18.75rem;
-  min-width: 14rem;
+.watch-title-h {
   margin: 0;
-  gap: 0.1875rem;
-}
-
-/* Name on the left, Full screen and Stop at the right of the same line. The
-   name is the one that gives way: it shrinks and ellipsizes, the buttons
-   never move off the line. */
-.watch-head {
   display: flex;
   align-items: center;
-  gap: 0.375rem;
-  min-width: 0;
-}
-
-.watch-head h2 {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.watch-head-actions {
-  flex: 0 0 auto;
-  display: flex;
-  gap: 0.25rem;
-}
-
-.watch-col.identity h2 {
-  margin: 0;
-  font-size: 0.9375rem;
+  gap: 0.5rem;
+  font-size: 1.125rem;
   font-weight: 600;
+  line-height: 1.25;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* The category (or "channel · category" for a recording): the whole name, up
+   to two lines, since the long ones are what tells groups apart. */
+.watch-cat {
+  margin: 0;
+  font-size: 0.6875rem;
+  letter-spacing: 0.02em;
+  color: var(--dimmer);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+
 .watch-sub {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 0.375rem;
+  gap: 0.5rem;
+  min-width: 0;
+  font-size: 0.8125rem;
+}
+
+.watch-chan {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dim);
 }
 
 .watch-num {
+  flex: 0 0 auto;
   font-variant-numeric: tabular-nums;
   font-size: 0.6875rem;
   color: var(--dimmer);
 }
 
-/* Record from the player, under the channel's name: the button, or what
-   is being recorded and Stop. */
+.watch-time {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  color: var(--dim);
+}
+
+/* The bar and what is left of the programme, side by side. */
+.watch-prog-line {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.6875rem;
+  color: var(--dimmer);
+}
+
+.watch-progress {
+  flex: 0 0 12.5rem;
+  max-width: 50%;
+  height: 0.25rem;
+  background: var(--bg-3);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.watch-progress span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+.watch-left {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.watch-left.bad {
+  color: var(--bad);
+}
+
+.watch-desc {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--dim);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+
+/* Missing EPG is the normal case at 15% coverage: muted, not flagged. */
+.watch-none {
+  margin: 0;
+  font-size: 0.75rem;
+  font-style: italic;
+  color: var(--dimmer);
+}
+
+.watch-next {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The measured line, and for a recording its padding and folder. Never
+   cut short for the playing channel: the channel's name already lies about
+   what it is, so these numbers are the truth, and they wrap instead. */
+.watch-facts {
+  margin: 0;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--dim);
+}
+
+/* Record from the player: the button, or what is being recorded and Stop. */
 .watch-rec {
   display: flex;
   align-items: center;
@@ -820,95 +935,20 @@ select option {
   color: var(--bad);
 }
 
-.watch-prog {
-  border-left: 0.125rem solid var(--accent-dim);
-  padding-left: 0.5rem;
-  min-width: 0;
-}
-
-/* Missing EPG is the normal case at 15% coverage: muted, not flagged. */
-.watch-prog.none {
-  border-left-color: var(--line);
-  color: var(--dimmer);
-  font-size: 0.75rem;
-  font-style: italic;
-}
-
-.watch-prog-head {
-  display: flex;
-  gap: 0.5rem;
-  align-items: baseline;
-  font-size: 0.625rem;
-  letter-spacing: 0.12em;
-  color: var(--dimmer);
-}
-
-.watch-when {
-  color: var(--accent);
-}
-
-.watch-time {
-  font-variant-numeric: tabular-nums;
-}
-
-.watch-title {
-  font-size: 0.8125rem;
-  margin-top: 1px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.watch-progress {
-  height: 0.125rem;
-  margin-top: 0.375rem;
-  background: var(--bg-3);
-  border-radius: 1px;
-  overflow: hidden;
-}
-
-.watch-progress span {
-  display: block;
-  height: 100%;
-  background: var(--accent);
-}
-
-.watch-desc {
-  margin: 0.375rem 0 0;
-  font-size: 0.6875rem;
-  color: var(--dim);
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
-  overflow: hidden;
-}
-
-.watch-col.facts > div {
-  display: flex;
-  gap: 0.5rem;
-  align-items: baseline;
-}
-
-.watch-col.facts dt {
-  flex: 0 0 auto;
-  width: 5.5rem;
-  font-size: 0.6875rem;
-  color: var(--dimmer);
-}
-
-.watch-col.facts dd {
-  margin: 0;
-  min-width: 0;
-  font-size: 0.75rem;
-  font-variant-numeric: tabular-nums;
-  color: var(--text);
-}
-
+/* Along the bottom of the band: what can be done with what it shows, and for
+   a playing channel Full screen and Stop at the far end. */
 .watch-actions {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 0.5rem;
-  margin-top: auto;
+  flex: 0 0 auto;
+}
+
+.watch-actions-end {
+  display: flex;
+  gap: 0.25rem;
+  margin-left: auto;
 }
 
 .watch-idle {
@@ -948,42 +988,9 @@ select option {
 
 /* ------------------------------------------------------------------ rail */
 
-/* Two lists, one column. The bar is the only thing above both of them, so it
-   carries the border and the lists start flush underneath it. */
-.rail-tabs {
-  display: flex;
-  flex: 0 0 auto;
-  /* Shared with the list's heading row, so the two columns' filter boxes
-     line up. */
-  height: var(--pane-head-h);
-  border-bottom: 1px solid var(--line);
-  background: var(--bg-2);
-}
-
-.rail-tab {
-  flex: 1 1 0;
-  padding: 0.375rem 0.5rem;
-  text-align: center;
-  font-size: 0.6875rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--dimmer);
-  border-bottom: 0.125rem solid transparent;
-}
-
-.rail-tab:hover {
-  color: var(--text);
-}
-
-.rail-tab.sel {
-  color: var(--text);
-  border-bottom-color: var(--accent);
-  background: var(--bg-3);
-}
-
-/* Folding the rail away, and bringing it back. The same small square in both
-   places — the end of the rail's tab row, and the start of the heading row
-   that is left once the rail has gone — so it reads as one switch. */
+/* Folding the rail away, and bringing it back: one small square, the first
+   thing in the list's and the guide's heading rows, so it is at the same
+   place whether the rail is there or not. */
 .rail-fold {
   flex: 0 0 auto;
   display: inline-flex;
@@ -1005,16 +1012,6 @@ select option {
   height: 1rem;
 }
 
-/* In the tab row it is a cell of the row rather than a tab: the full height,
-   square, with the tabs' hairline beneath it. */
-.rail-tabs .rail-fold {
-  align-self: stretch;
-  height: auto;
-  width: var(--pane-head-h);
-  border-radius: 0;
-  border-left: 1px solid var(--line);
-}
-
 /* Leading a heading row, it takes the place of the row's left padding so the
    title after it does not drift right by a whole gutter. */
 .list-head .rail-fold {
@@ -1025,50 +1022,6 @@ select option {
    .guide-head), so the same button lands on the same x in both views. */
 .guide-head .rail-fold {
   margin-left: -0.5rem;
-}
-
-/* ------------------------------------------------------------ favourites */
-
-/* Nothing in this pane adds anything: the list is earned from what gets
-   watched. Two lines per row, because the second one is the justification for
-   the first being where it is. */
-.fav-item {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  width: 100%;
-  padding: 0.3125rem 0.625rem;
-  text-align: left;
-  color: var(--dim);
-  border-left: 0.125rem solid transparent;
-}
-
-.fav-item:hover {
-  background: var(--bg-2);
-  color: var(--text);
-}
-
-.fav-item.sel {
-  background: var(--accent-dim);
-  color: var(--text);
-  border-left-color: var(--accent);
-}
-
-.fav-item.pending {
-  border-left-color: var(--dim);
-}
-
-.fav-name {
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.fav-meta {
-  font-size: 0.6875rem;
-  color: var(--dimmer);
-  font-variant-numeric: tabular-nums;
 }
 
 /* ---------------------------------------------------------- context menu */
@@ -1261,6 +1214,43 @@ select option {
   white-space: nowrap;
 }
 
+/* Where the filter matched. Colour only: bold would change the width and
+   make the ellipsis jump as the text is typed. */
+.rail-name mark {
+  background: none;
+  color: var(--accent);
+}
+
+/* The rail's own items: a little brighter than categories, an icon where a
+   pin would be, and nothing to pin or hide. */
+.rail-row.fixed .rail-item {
+  color: var(--text);
+}
+
+.rail-fixed-i {
+  flex: 0 0 auto;
+  width: 0.8125rem;
+  text-align: center;
+  font-size: 0.8125rem;
+  line-height: 1;
+  color: var(--dim);
+}
+
+.rail-row.fixed .rec-dot {
+  margin-right: 0;
+}
+
+/* "N more in hidden categories": a row that says what the filter is not
+   showing, and is the way to show it. */
+.rail-row.rail-hint .rail-item {
+  font-style: italic;
+  color: var(--dimmer);
+}
+
+.rail-row.rail-hint:hover .rail-item {
+  color: var(--text);
+}
+
 /* At least as wide as the pin button that replaces it on hover, so a short
    count ("5") does not leave the end of the name under the pin. Fixed for
    every row, so revealing the pin moves no text. */
@@ -1322,8 +1312,8 @@ select option {
   opacity: 1;
 }
 
-.rail-row:hover .rail-count,
-.rail-row:has(:focus-visible) .rail-count {
+.rail-row:not(.fixed):hover .rail-count,
+.rail-row:not(.fixed):has(:focus-visible) .rail-count {
   visibility: hidden;
 }
 
@@ -1538,15 +1528,15 @@ select option {
 
 /* ------------------------------------------------------------------ list */
 
-/* The list's heading row: what it shows, how many, and List | Guide. Exactly
-   as tall as the rail's tabs beside it (--pane-head-h), so the search box
-   under it lands on the same line as the rail's filter box. */
+/* The list's heading row: the rail toggle, what it shows, how many, the
+   search box, and List | Guide. Its height is its content's — the search box
+   and the padding around it — as the rail's filter row beside it is, so the
+   two boxes sit on one line and the borders under them join. */
 .list-head {
   display: flex;
   gap: 0.5rem;
   align-items: center;
-  height: var(--pane-head-h);
-  padding: 0 0.375rem 0 0.625rem;
+  padding: 0.5rem 0.5rem 0.5rem 0.625rem;
   border-bottom: 1px solid var(--line);
   background: var(--bg-2);
   flex: 0 0 auto;
@@ -1573,6 +1563,31 @@ select option {
    window: a channel name is a few words. */
 .list-search {
   flex: 0 1 22rem;
+  margin-left: 0.5rem;
+}
+
+/* The columns of a channel row, shared with the header above the list so
+   the labels sit over what they name. */
+.list-cols,
+.row {
+  --list-cols: 2.875rem 1.375rem minmax(0, 1.3fr) minmax(0, 1.2fr) minmax(0, 1fr);
+  display: grid;
+  grid-template-columns: var(--list-cols);
+  column-gap: 0.625rem;
+  align-items: center;
+  padding: 0 0.625rem;
+}
+
+.list-cols {
+  flex: 0 0 auto;
+  height: 1.625rem;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.6875rem;
+  color: var(--dimmer);
+}
+
+.list-cols > :first-child {
+  text-align: right;
 }
 
 .viewport {
@@ -1593,11 +1608,7 @@ select option {
   position: absolute;
   left: 0;
   right: 0;
-  height: var(--row-h);
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0 0.625rem;
+  height: 2.5rem;
   text-align: left;
   /* Layout and paint containment, but not size: the row's height comes from
      the variable and its width from left/right, and size containment on top
@@ -1645,17 +1656,28 @@ select option {
   color: var(--dimmer);
 }
 
+/* The name over its category, in the third column. */
+.row-title {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
 .row-name {
-  flex: 0 0 auto;
-  width: 34%;
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-width: 0;
+}
+
+.row-name-text {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.row-now {
-  flex: 1 1 auto;
-  min-width: 0;
+.row-cat {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1663,11 +1685,62 @@ select option {
   color: var(--dim);
 }
 
+/* What is on: the title, then how far through it is and when it runs. */
+.row-now {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  font-size: 0.75rem;
+  color: var(--dim);
+}
+
+.row-now-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.row-now-line {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.row-prog {
+  flex: 0 0 4.375rem;
+  height: 0.25rem;
+  border-radius: 0.125rem;
+  background: var(--bg-3);
+  overflow: hidden;
+}
+
+.row-prog > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+.row-times {
+  font-size: 0.6875rem;
+  color: var(--dimmer);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 /* Missing EPG is the normal case — 15% coverage — so it is greyed, not
    flagged. */
 .row-now.none {
   color: var(--dimmer);
   font-style: italic;
+}
+
+.row-next {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.75rem;
+  color: var(--dimmer);
 }
 
 .badge {
@@ -1700,7 +1773,8 @@ select option {
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
   cursor: default;
-  padding: 0 0.625rem;
+  display: flex;
+  align-items: center;
 }
 
 .sticky-head {
@@ -1708,7 +1782,8 @@ select option {
   top: 0;
   left: 0;
   right: 0;
-  height: var(--row-h);
+  /* One list row, LIST_ROW_HEIGHT. */
+  height: 2.5rem;
   display: flex;
   align-items: center;
   padding: 0 0.625rem;
@@ -2012,6 +2087,12 @@ select option {
   animation: guide-focus 1.6s ease-out;
 }
 
+/* The same ring in the channel list, where "Show its category" lands. */
+.row.focus {
+  box-shadow: inset 0 0 0 1px var(--accent);
+  animation: guide-focus 1.6s ease-out;
+}
+
 @keyframes guide-focus {
   from {
     background: var(--accent-dim);
@@ -2038,21 +2119,42 @@ select option {
   overflow: hidden;
 }
 
-.guide-num {
+.guide-logo {
   flex: 0 0 auto;
-  width: 2.625rem;
-  text-align: right;
+  width: 1.375rem;
+  height: 1.375rem;
+  object-fit: contain;
+  border-radius: 0.125rem;
+  background: var(--bg-3);
+}
+
+/* The name over its category. */
+.guide-title {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.guide-num {
   font-size: 0.6875rem;
   font-variant-numeric: tabular-nums;
   color: var(--dimmer);
 }
 
 .guide-name {
-  flex: 1 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 0.75rem;
+}
+
+.guide-cat {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.6875rem;
+  color: var(--dim);
 }
 
 .guide-arch {
@@ -4330,14 +4432,6 @@ textarea.field {
   inset: 0;
 }
 
-/* While a tab switch is pending. With both panes mounted the switch is
-   normally instantaneous and this never shows; it exists for the case where
-   the incoming pane has real work to do, so the rail reads as busy rather
-   than as frozen. */
-.rail.switching {
-  opacity: 0.85;
-}
-
 /* The scrollback preview. The hint was a single line of text; with an image
    it becomes a small card, so it stacks and stops being nowrap-only. */
 .scrub-hint {
@@ -4359,16 +4453,6 @@ textarea.field {
   /* Chrome, and chrome is not dragged out of the window. */
   user-select: none;
   -webkit-user-drag: none;
-}
-
-/* The programme name beside a restored channel. Dimmer than the channel: the
-   channel is what a click acts on, the programme is only context. */
-.watch-now {
-  color: var(--dim);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 28ch;
 }
 
 /* Guide mode keeps the picture docked: it is the same .browse grid as the
@@ -4663,58 +4747,6 @@ textarea.field {
 }
 
 /* ------------------------------------------------ the docked picture */
-
-/* The same logo the channel list draws, at the same size. A favourite is
-   usually also a row in that list, and two sizes for one thing makes the
-   rail look like a different app. */
-.fav-logo {
-  flex: 0 0 auto;
-  width: 1.375rem;
-  height: 1rem;
-  object-fit: contain;
-  border-radius: 0.125rem;
-  background: var(--bg-3);
-}
-
-.fav-logo.blank {
-  background: var(--bg-3);
-}
-
-.fav-text {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  flex: 1 1 auto;
-  gap: 0.0625rem;
-}
-
-/* The two halves sit at opposite ends: what it earned on the left, when it
-   was last on at the right, so a column of rows can be read down either
-   edge rather than through the middle of a sentence. */
-.fav-meta {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 0.5rem;
-}
-
-.fav-ago {
-  flex: 0 0 auto;
-  color: var(--dimmer);
-}
-
-/* A kicker above the channel name rather than a footnote below it: it is
-   the coarsest thing about the row, and it is what a column of favourites
-   groups by when you scan it. */
-.fav-cat {
-  color: var(--dimmer);
-  font-size: 0.5625rem;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 
 /* ------------------------------------------- docked picture's transport */
 
@@ -5226,6 +5258,14 @@ textarea.field {
 
   .tb-rec .rec-dot {
     margin-right: 0;
+  }
+}
+
+/* Below this the title and the status's detail make room for the tabs. */
+@media (max-width: 52rem) {
+  .tb-title,
+  .tb-status-detail {
+    display: none;
   }
 }
 
@@ -5790,67 +5830,138 @@ textarea.field {
   color: #ffc9c9;
 }
 
-/* The Recordings dialog: a scrolling list of rows grouped by state. */
-.about.recordings {
-  width: min(42rem, 100%);
-  max-height: min(36rem, 100%);
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
+/* The Recordings pane: the list pane's head, then one scrolling list of
+   two-line rows under group heads. Its columns are shared with the header
+   above them, as the channel rows' are. */
+.rec-pane {
+  --rec-cols: 1.25rem 1.5rem minmax(0, 1.6fr) 11rem minmax(0, 1.1fr);
 }
 
-.rec-list {
+.rec-pane .rec-cols,
+.rec-item {
+  grid-template-columns: var(--rec-cols);
+}
+
+.rec-free {
+  flex: 0 0 auto;
+  font-size: 0.6875rem;
+  color: var(--dimmer);
+  font-variant-numeric: tabular-nums;
+}
+
+.rec-scroll {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
 }
 
-.rec-group h4 {
-  margin: 0.5rem 0 0.25rem;
-  font-size: 0.625rem;
+.rec-group-head {
+  margin: 0;
+  padding: 0.5rem 0.625rem 0.25rem;
+  font-size: 0.6875rem;
+  font-weight: 400;
   color: var(--dimmer);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-}
-
-.rec-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.75rem;
-  padding: 0.5rem 0;
   border-bottom: 1px solid var(--line);
 }
 
-.rec-main {
-  flex: 1 1 auto;
+.rec-item {
+  display: grid;
+  column-gap: 0.625rem;
+  align-items: center;
+  width: 100%;
+  height: 2.5rem;
+  padding: 0 0.625rem;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+}
+
+.rec-item:hover {
+  background: var(--bg-2);
+}
+
+.rec-item.sel {
+  background: var(--accent-dim);
+}
+
+.rec-item .rec-dot {
+  margin-right: 0;
+}
+
+.rec-clock {
+  font-size: 0.8125rem;
+  color: var(--dim);
+  line-height: 1;
+}
+
+.rec-text {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
+}
+
+.rec-title,
+.rec-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .rec-title {
   font-size: 0.8125rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .rec-sub {
-  display: flex;
-  gap: 0.625rem;
-  margin-top: 0.125rem;
   font-size: 0.6875rem;
-  color: var(--dim);
-  font-variant-numeric: tabular-nums;
+  color: var(--dimmer);
 }
 
-.rec-chan {
+.rec-when {
+  font-size: 0.75rem;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.rec-status {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  font-size: 0.75rem;
+  color: var(--dim);
+}
+
+.rec-status-text {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 12rem;
+}
+
+.rec-status.warn {
+  color: #e0a34a;
 }
 
 .rec-status.bad {
   color: var(--bad);
+}
+
+.rec-status.good {
+  color: var(--dim);
+}
+
+.rec-progress {
+  flex: 0 0 4.375rem;
+  height: 0.25rem;
+  border-radius: 0.125rem;
+  background: var(--track);
+  overflow: hidden;
+}
+
+.rec-progress > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
 }
 
 /* The backup channel under a scheduled or recording row, and its picker. */
@@ -5964,12 +6075,6 @@ textarea.field {
   padding-left: 1rem;
   font-size: 0.6875rem;
   color: var(--dim);
-}
-
-.rec-actions {
-  display: flex;
-  gap: 0.375rem;
-  flex: 0 0 auto;
 }
 
 /* ---------------------------------------------------------------- web access

@@ -137,16 +137,29 @@ pub fn guide_rows(stream_ids: &[i64], from: i64, to: i64) -> Result<Vec<GuideRow
 pub fn favourites(limit: u32) -> Result<Vec<FavouriteDto>> {
     let at = now();
     db::with_db(|conn| {
-        let mut top = activity::rank(store::watched(conn)?, at, limit as usize);
-        // The same channel row the rest of the app draws, so it should not be
-        // the one place that claims nothing is on air.
-        let mut channels: Vec<ChannelDto> = top.iter().map(|f| f.channel.clone()).collect();
-        attach_now_playing(conn, &mut channels)?;
-        for (f, ch) in top.iter_mut().zip(channels) {
-            f.channel = ch;
-        }
-        Ok(top)
+        let top = activity::rank(store::watched(conn)?, at, limit as usize);
+        with_now_playing(conn, top)
     })
+}
+
+/// Channels in the order they were last watched, newest first, whatever the
+/// watch time; see [`activity::recent`]. Empty before anything is watched.
+pub fn recently_watched(limit: u32) -> Result<Vec<FavouriteDto>> {
+    db::with_db(|conn| {
+        let rows = activity::recent(store::watched(conn)?, limit as usize);
+        with_now_playing(conn, rows)
+    })
+}
+
+/// The same channel row the rest of the app draws, so a watched channel is not
+/// the one place that claims nothing is on air.
+fn with_now_playing(conn: &Connection, mut rows: Vec<FavouriteDto>) -> Result<Vec<FavouriteDto>> {
+    let mut channels: Vec<ChannelDto> = rows.iter().map(|f| f.channel.clone()).collect();
+    attach_now_playing(conn, &mut channels)?;
+    for (f, ch) in rows.iter_mut().zip(channels) {
+        f.channel = ch;
+    }
+    Ok(rows)
 }
 
 /// Forgets one channel's history.

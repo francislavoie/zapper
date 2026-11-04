@@ -1,4 +1,4 @@
-// The context menu over a favourite: forget it.
+// The context menu over a favourite or a recently watched channel: forget it.
 //
 // The surface, its placement and how it closes are ContextMenu's; this is
 // only what it says.
@@ -20,6 +20,7 @@ export function FavouriteMenu({ menu, onForget, onClose }: FavouriteMenuProps) {
           Forget this channel
         </span>
       </button>
+      {menu.meta ? <div className="tb-menu-foot">{menu.meta}</div> : null}
       <div className="tb-menu-foot">
         Clears its watch history, so it stops crowding the list.
       </div>

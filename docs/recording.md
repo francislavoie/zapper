@@ -34,8 +34,10 @@ schedules recordings from the guide and shows them; the service does the recordi
    early (what was recorded is kept). What is on the channel playing can be recorded from the
    player too: **R**, the picture's right-click menu, or the panel beside the picture
    ([Recording what you watch](#recording-what-you-watch)).
-3. **Recordings** (in the menu and the command palette) lists what is recording, scheduled,
-   recorded and failed, with *Open folder*, *Cancel*/*Stop* and *Delete*, and the channel each
+3. **Recordings** is an item in Live TV's rail (also in the ☰ menu, the command palette and
+   the title-bar badge below). It shows the free space on the recordings disk and lists what is
+   recording, scheduled, recorded and failed; choosing one shows, beside the picture, its
+   details and *Open folder*, *Cancel*/*Stop* and *Delete*, and the channel each
    one falls back to if its own fails ([backup feeds](#how-it-behaves)). While anything records,
    the title bar says so beside Settings ("Recording", "Recording 2"; the dot alone on a narrow
    window): its tooltip lists each one with how long it has recorded and until when, and whether
@@ -284,13 +286,14 @@ service's own computer, `http://127.0.0.1:8796` works too, once a password is se
 
 What a browser can do there:
 
-- browse the categories and channels, the guide and the favourites, and search channels (`a|b`
+- browse the categories and channels, the guide, the favourites and what was watched
+  recently, and search channels (`a|b`
   matches either) and programmes;
 - watch live TV: choosing a channel plays it in the page, with the same picture band, player,
   transport, volume, fullscreen and audio tracks as the app ([Watching in the
   browser](#watching-in-the-browser));
 - schedule a recording from the guide's or the search results' right-click menu, and see, cancel
-  and delete recordings (**Recordings** in the menu);
+  and delete recordings (**Recordings** in the rail, and in the menu);
 - change what the service does with recordings (Settings → Recording), as the app can;
 - set the guide's hours per screen and how times are written, which that browser keeps for itself;
 - refresh the catalogue from the provider (Settings → Data, the command palette, or the title
@@ -552,7 +555,8 @@ one, a backup. Scheduling picks it, best first:
 
 It can be chosen by hand too. In the guide, right-click a programme on another channel at the
 same time as a recording and choose **Use as backup for “…”** (or **Stop using as backup**). In
-**Recordings**, each scheduled or recording row says its backup, and *Change…* lists the
+**Recordings**, each scheduled or recording row says its backup, and *Change…*, in the panel
+beside the picture when the row is selected, lists the
 candidates above, best first, with *No backup*. Any channel will do, not only a candidate. A
 change while recording takes effect the next time a feed fails: a feed that is delivering is
 kept, and the recording notes the change. It switches only when the
@@ -814,6 +818,7 @@ The catalogue, for the web interface (the app or a device); channels come as the
 | `GET /api/guide?ids=&from=&to=` | `[[streamId, [Programme]]]` overlapping the window (at most 500 channels) |
 | `GET /api/guide/rows?ids=&from=&to=` | the guide's rows: each channel's name, logo and programmes |
 | `GET /api/favourites?limit=` | the most watched channels; `DELETE /api/favourites/{id}` forgets one |
+| `GET /api/recent?limit=` | the channels watched most recently, newest first |
 | `GET /api/sync` | `{phase, message, channelsTotal, lastSynced}`; `POST /api/sync` asks for a refresh (`202`) |
 | `GET /api/logo/{id}` | the channel's logo, fetched by the service |
 | `GET /api/account` | the provider account as the app's `AccountDto`, with no secret in it (`hasPassword`, `tvheadendHasPassword`; addresses with `<redacted>` in place of a login, flagged `playlistRedacted`, `epgRedacted`, `hdhomerunEpgRedacted`) and an empty `path` |

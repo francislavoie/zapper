@@ -69,3 +69,22 @@ export function groupByCategory(
   }
   return out;
 }
+
+/** The category a row says under its name, or null when the divider it sits
+ *  under already belongs to that category.
+ *
+ *  Under a provider's "ENTERTAINMENT" divider, a second line of
+ *  "CA | ENTERTAINMENT" on every row is the heading said again and again.
+ *  Where channels of different categories mix (favourites, recent, a list
+ *  with no dividers, another country's channels after a divider) the line is
+ *  what tells them apart, so it stays. Decided by category id, which a
+ *  divider row carries like any other row: its text is written shorter than
+ *  the category's name and would match "CA | NEWS" with "UK | NEWS". */
+export function categoryLine(
+  dividerCategoryId: string | null,
+  rowCategoryId: string | null,
+  category: string | null,
+): string | null {
+  if (!category) return null;
+  return dividerCategoryId !== null && dividerCategoryId === rowCategoryId ? null : category;
+}

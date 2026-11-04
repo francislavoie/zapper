@@ -21,7 +21,6 @@ test("a missing or empty session is the empty one", () => {
 test("a round trip preserves everything", () => {
   const s = {
     categoryId: "sports-uk",
-    railTab: "favourites",
     railScrollTop: 420,
     channelScrollTop: 13_000,
     lastStreamId: 107037,
@@ -75,10 +74,12 @@ test("nonsense offsets land at the top, not off the end", () => {
   assert.equal(at('{"channelScrollTop":40.7}').channelScrollTop, 40);
 });
 
-test("an unknown tab falls back to categories", () => {
-  assert.equal(parseSession('{"railTab":"favourites"}').railTab, "favourites");
-  assert.equal(parseSession('{"railTab":"whatever"}').railTab, "categories");
-  assert.equal(parseSession("{}").railTab, "categories");
+test("a session from before the single rail keeps its place and drops the tab", () => {
+  const s = parseSession('{"railTab":"favourites","categoryId":"uk-news"}');
+  assert.equal(s.categoryId, "uk-news");
+  assert.equal("railTab" in s, false);
+  assert.equal(parseSession('{"categoryId":"*recordings*"}').categoryId, "*recordings*");
+  assert.equal(serialiseSession(s).includes("railTab"), false);
 });
 
 test("a channel id has to be a whole number to be remembered", () => {

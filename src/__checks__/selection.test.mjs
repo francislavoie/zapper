@@ -79,7 +79,6 @@ test("selection comes back only where it is the point", () => {
     ".app .measured",
     ".app .watch-state",
     ".app .crashed-why",
-    ".app .watch-col.facts dd",
     ".app [data-selectable]",
   ];
   assert.deepEqual(new Set(selectableSelectors), new Set(expected));
@@ -95,15 +94,16 @@ test("ordinary chrome is not on the allowlist, by class or by ancestor", () => {
   // are things people drag across.
   const chrome = [
     "tb-status-text",
+    "tb-tab",
     "tb-menu-label",
     "tb-menu-hint",
     "rail-item",
     "rail-name",
     "rail-count",
-    "rail-tab",
-    "fav-item",
-    "fav-name",
-    "fav-meta",
+    "rail-hint",
+    "row-cat",
+    "row-next",
+    "list-cols",
     "ctx-head",
     "chrome-back",
     "vfb-label",
@@ -112,9 +112,11 @@ test("ordinary chrome is not on the allowlist, by class or by ancestor", () => {
     "row-now",
     "badge",
     "watch-title",
+    "watch-cat",
+    "watch-facts",
     "watch-video-empty",
-    "watch-when",
     "guide-name",
+    "guide-cat",
     "guide-num",
     "prog-title",
     "prog-time",
@@ -123,6 +125,8 @@ test("ordinary chrome is not on the allowlist, by class or by ancestor", () => {
     "list-title",
     "list-count",
     "sticky-head",
+    "rec-title",
+    "rec-sub",
   ];
   for (const cls of chrome) {
     const hit = selectableSelectors.find((s) =>

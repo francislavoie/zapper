@@ -336,6 +336,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn recently_watched_is_newest_first() {
+        seed(13000, "cmd-recent");
+        let t = now();
+        db::with_db(|c| {
+            store::record_activity(c, 13001, 20 * 3600, true, t - 3 * 86_400)?;
+            store::record_activity(c, 13002, 60, true, t - 3600)?;
+            Ok(())
+        })
+        .unwrap();
+
+        // Shared database: assert the order of these two rows only.
+        let ids: Vec<i64> = recently_watched(500)
+            .await
+            .unwrap()
+            .iter()
+            .map(|f| f.channel.stream_id)
+            .filter(|id| (13000..14000).contains(id))
+            .collect();
+        assert_eq!(ids, [13002, 13001]);
+    }
+
+    #[tokio::test]
     async fn favourites_is_empty_rather_than_failing_before_anything_is_watched() {
         db::install_test_db();
         // Nothing has ever been watched on *this* channel, and the command
@@ -562,6 +584,13 @@ pub async fn guide_rows(
 #[tauri::command]
 pub async fn favourites(limit: u32) -> Result<Vec<FavouriteDto>, String> {
     reads::favourites(limit).map_err(words)
+}
+
+/// The channels watched most recently, newest first, for the rail's Recently
+/// watched. Empty before anything is watched.
+#[tauri::command]
+pub async fn recently_watched(limit: u32) -> Result<Vec<FavouriteDto>, String> {
+    reads::recently_watched(limit).map_err(words)
 }
 
 /// Forgets one channel's history, for when something was left playing by

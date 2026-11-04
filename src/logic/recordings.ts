@@ -1,4 +1,4 @@
-// Recordings, as the guide and the Recordings dialog show them: which
+// Recordings, as the guide and the Recordings pane show them: which
 // programmes carry the red dot, what scheduling one sends, and how the list
 // is grouped and worded.
 //
@@ -18,7 +18,7 @@ import type {
   ScheduleRequest,
   WhileRecording,
 } from "../types";
-import { duration, hhmm, timeRange } from "./format.ts";
+import { duration, hhmm, startsIn, timeRange } from "./format.ts";
 import { dayLabel } from "./guide.ts";
 
 /** A recording is found by its channel and its programme's start, which is
@@ -153,30 +153,34 @@ export function backupCandidateLabel(b: BackupDto): string {
   return bits.join(" · ");
 }
 
-const ORDER: { state: RecordingState; label: string }[] = [
-  { state: "recording", label: "Recording" },
-  { state: "finishing", label: "Saving" },
-  { state: "scheduled", label: "Scheduled" },
-  { state: "done", label: "Recorded" },
-  { state: "failed", label: "Failed" },
-];
+export type RecordingsFilter = "all" | "scheduled" | "recorded";
 
-export interface RecordingGroup {
-  state: RecordingState;
+export interface RecordingSection {
+  id: "now" | "scheduled" | "recorded";
   label: string;
   items: RecordingDto[];
 }
 
-/** Recording now first, then what is coming up (soonest first), then what
- *  has been recorded (newest first), then failures (newest first). Empty
- *  groups are left out. */
-export function groupRecordings(recs: readonly RecordingDto[]): RecordingGroup[] {
-  return ORDER.map(({ state, label }) => {
-    const items = recs.filter((r) => r.state === state);
-    const ahead = state === "scheduled" || state === "recording" || state === "finishing";
-    items.sort((a, b) => (ahead ? a.start - b.start : b.start - a.start));
-    return { state, label, items };
-  }).filter((g) => g.items.length > 0);
+/** The Recordings pane's one list: what is recording or being saved, then
+ *  what is coming up (soonest first), then what has been recorded or
+ *  failed (newest first). The filter keeps the first two ("scheduled") or
+ *  only the last; empty sections are left out. */
+export function recordingSections(recs: readonly RecordingDto[], filter: RecordingsFilter): RecordingSection[] {
+  const pick = (states: RecordingState[], newestFirst: boolean) =>
+    recs
+      .filter((r) => states.includes(r.state))
+      .sort((a, b) => (newestFirst ? b.start - a.start : a.start - b.start) || a.id - b.id);
+  const all: RecordingSection[] = [
+    { id: "now", label: "Recording now", items: pick(["recording", "finishing"], false) },
+    { id: "scheduled", label: "Scheduled", items: pick(["scheduled"], false) },
+    { id: "recorded", label: "Recorded", items: pick(["done", "failed"], true) },
+  ];
+  return all.filter((s) => s.items.length > 0 && (filter === "all" || (filter === "recorded") === (s.id === "recorded")));
+}
+
+/** The selected recording, or none when the filter hides it. */
+export function visibleSelection(sections: readonly RecordingSection[], id: number | null): number | null {
+  return id !== null && sections.some((s) => s.items.some((r) => r.id === id)) ? id : null;
 }
 
 /** "Today 20:00–21:00", "Tomorrow 06:30–07:00", "Tue 21:00–22:15", on the
@@ -192,7 +196,8 @@ export function recordingStatus(r: RecordingDto, now: number): string {
   switch (r.state) {
     case "scheduled": {
       const from = r.start - r.padBefore;
-      return from > now ? `starts in ${duration(from - now)}` : "starting";
+      const left = from > now ? startsIn(from - now) : null;
+      return left ? `starts in ${left}` : "starting";
     }
     case "recording":
       return r.waiting ? capitalise(r.waiting) : `${size} so far${parts}`;
@@ -202,6 +207,55 @@ export function recordingStatus(r: RecordingDto, now: number): string {
       return `${size}${parts}`;
     case "failed":
       return r.error ? capitalise(r.error) : "Nothing was recorded";
+  }
+}
+
+/** A scheduled recording this near (padded start) is worth saying so. */
+export const SOON_SECS = 12 * 3600;
+
+/** What a row's Status column says: how its recording is going, with a
+ *  progress bar while it records. `tone` colours it: a conflict or a
+ *  connection it waits for is a warning, a failure is bad, a finished one
+ *  good. */
+export interface RowStatus {
+  text: string;
+  tone: "" | "warn" | "bad" | "good";
+  progress: number | null;
+}
+
+const lowerFirst = (s: string) => s.charAt(0).toLowerCase() + s.slice(1);
+
+/** For a scheduled row, conflicts first, then how soon it starts, then its
+ *  backup channel; for the others, how far along or how it ended. */
+export function recordingRowStatus(r: RecordingDto, now: number): RowStatus {
+  const size = bytes(r.parts.reduce((n, p) => n + p.bytes, 0));
+  switch (r.state) {
+    case "scheduled":
+    case "recording": {
+      const from = r.start - r.padBefore;
+      const until = r.stop + r.padAfter;
+      const conflict = r.conflicts?.[0];
+      if (r.state === "recording") {
+        if (r.waiting) return { text: capitalise(r.waiting), tone: "warn", progress: null };
+        const progress = Math.min(1, Math.max(0, (now - from) / (until - from)));
+        return { text: `recording · ${duration(Math.max(0, until - now))} left`, tone: "", progress };
+      }
+      if (conflict) return { text: lowerFirst(conflictText(conflict)), tone: "warn", progress: null };
+      const left = startsIn(from - now);
+      if (left === null) return { text: "starting", tone: "", progress: null };
+      if (from - now < SOON_SECS) return { text: `starts in ${left}`, tone: "", progress: null };
+      if (r.backupStreamId != null)
+        return { text: `backup: ${r.backupName ?? `channel ${r.backupStreamId}`}`, tone: "", progress: null };
+      return { text: "", tone: "", progress: null };
+    }
+    case "finishing":
+      return { text: `saving ${size}…`, tone: "", progress: null };
+    case "done": {
+      const n = r.parts.length;
+      return { text: `✓ ${n === 1 ? "1 file" : `${n} parts`} · ${size}`, tone: "good", progress: null };
+    }
+    case "failed":
+      return { text: r.error ? capitalise(r.error) : "Nothing was recorded", tone: "bad", progress: null };
   }
 }
 
@@ -325,17 +379,17 @@ export const TOUCHED_MS = 10_000;
 
 /** How long to wait before fetching the recordings again: often while any
  *  is recording or being saved (its size grows, it finishes) and just after
- *  something was asked of the service; every few seconds while Recordings
- *  is open; otherwise every half minute, which is what keeps the guide's
+ *  something was asked of the service; every few seconds while the Recordings
+ *  pane shows; otherwise every half minute, which is what keeps the guide's
  *  dots current. */
 export function pollDelay(
   recs: readonly Pick<RecordingDto, "state">[] | null,
-  dialogOpen: boolean,
+  shown: boolean,
   sinceTouchedMs: number,
 ): number {
   const busy = recs?.some((r) => r.state === "recording" || r.state === "finishing") ?? false;
   if (busy || (sinceTouchedMs >= 0 && sinceTouchedMs < TOUCHED_MS)) return POLL_BUSY_MS;
-  return dialogOpen ? POLL_OPEN_MS : POLL_IDLE_MS;
+  return shown ? POLL_OPEN_MS : POLL_IDLE_MS;
 }
 
 /** The service's defaults (src-tauri/src/recording/config.rs), for the ↺
@@ -383,3 +437,28 @@ export function strmReach(strmBase: string, hostChosen: boolean): "fine" | "loca
 /** Minutes from the seconds the service keeps padding in, and back. */
 export const padMinutes = (seconds: number) => Math.round(seconds / 60);
 export const padSeconds = (minutes: number) => Math.max(0, Math.round(minutes)) * 60;
+
+/** The Recordings rail item's count: how many are capturing now and how many
+ *  are still waiting, blank when neither. */
+export function recordingsRailCount(recs: readonly Pick<RecordingDto, "state">[] | null): string {
+  const now = recs?.filter((r) => r.state === "recording").length ?? 0;
+  const next = recs?.filter((r) => r.state === "scheduled").length ?? 0;
+  return [now && `${now} now`, next && `${next} next`].filter(Boolean).join(" · ");
+}
+
+/** The selected recording, or none once it is no longer in the list. A list
+ *  that could not be fetched says nothing about it, so the choice stays. */
+export function keepSelected(recs: readonly { id: number }[] | null, id: number | null): number | null {
+  if (recs === null) return id;
+  return id !== null && recs.some((r) => r.id === id) ? id : null;
+}
+
+/** The band's line under a recording: how much it records either side of the
+ *  programme, and the folder its files go to. */
+export function recordingFacts(r: Pick<RecordingDto, "padBefore" | "padAfter" | "folder">): string {
+  const padding =
+    r.padBefore === 0 && r.padAfter === 0
+      ? "No padding"
+      : `Padding ${padMinutes(r.padBefore)} min before, ${padMinutes(r.padAfter)} after`;
+  return `${padding} · Folder ${r.folder}`;
+}
