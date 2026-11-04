@@ -35,8 +35,9 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
   is kept, a movie played past 92 % counts as watched, and one that stops can be played again from
   where it stopped.
 - Movies in the browser through the recording service: played as they are when the browser can,
-  otherwise converted on the way without re-encoding the picture. Text subtitles show there;
-  subtitles stored as pictures (DVD, Blu-ray, DVB) can't, and the player's menu says so.
+  otherwise converted on the way without re-encoding the picture. Text subtitles show there,
+  MP4 ones included; subtitles stored as pictures (DVD, Blu-ray, DVB) can't, and the player's
+  menu says so.
 
 ## [0.3.0] - 2026-11-02
 
