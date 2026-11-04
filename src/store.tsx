@@ -285,7 +285,6 @@ export interface State {
   recordingsTouchedAt: number;
   /** The menu over a programme in the guide or the programme results. */
   programmeMenu: ProgrammeMenu | null;
-  recordingsOpen: boolean;
 }
 
 /** An open context menu over a programme: record it, or cancel its
@@ -399,7 +398,6 @@ export const initialState: State = {
   recent: idle(),
   recordingsTouchedAt: 0,
   programmeMenu: null,
-  recordingsOpen: false,
 };
 
 export type Action =
@@ -408,7 +406,6 @@ export type Action =
   /** Something was asked of the recording service (record, stop, …). */
   | { type: "recordingsTouched"; at: number }
   | { type: "programmeMenu"; menu: ProgrammeMenu | null }
-  | { type: "recordingsDialog"; open: boolean }
   | { type: "categories"; value: Async<CategoryDto[]> }
   | { type: "selectCategory"; id: string }
   | { type: "watchList"; list: "favourites" | "recent"; value: Async<FavouriteDto[]> }
@@ -676,9 +673,6 @@ export function reducer(state: State, action: Action): State {
       return { ...state, recordingsTouchedAt: action.at };
     case "programmeMenu":
       return { ...state, programmeMenu: action.menu };
-    case "recordingsDialog":
-      // Like About: chosen from the menu, which has done its job.
-      return { ...state, recordingsOpen: action.open, menuOpen: false, programmeMenu: null };
     case "about":
       // Opening a dialog from the menu closes the menu: leaving it hanging
       // over its own result is how you end up with two things to dismiss.
