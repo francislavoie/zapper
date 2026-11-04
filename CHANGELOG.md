@@ -21,11 +21,22 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
   command palette or the title-bar badge. What you can do with a recording (open its folder,
   cancel, stop, delete, change its backup channel) is beside the picture.
 - The title bar shows the catalogue's sync status beside Settings.
+- The title bar shows Movies beside Live TV, and `M` opens it. It appears only for an account that
+  has movies.
 
 ### Added
 
 - Recently watched: the last 20 channels you watched for at least 30 seconds, in the rail.
 - Recordings shows how much space is free on the recordings disk.
+- Movies: a tab listing an Xtream account's or a playlist's movies by category, as a list or
+  posters, sorted by recently added, name, year or rating and limited to a range of years, with
+  favourites, watched, search, and a details sheet (plot, cast, pictures, movies like it).
+- Movies play on demand, with a seek bar, the time played and left, and 10-second skips; the place
+  is kept, a movie played past 92 % counts as watched, and one that stops can be played again from
+  where it stopped.
+- Movies in the browser through the recording service: played as they are when the browser can,
+  otherwise converted on the way without re-encoding the picture. Text subtitles show there;
+  subtitles stored as pictures (DVD, Blu-ray, DVB) can't, and the player's menu says so.
 
 ## [0.3.0] - 2026-11-02
 
