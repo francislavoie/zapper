@@ -32,5 +32,7 @@ pub mod tracks;
 pub mod types;
 #[cfg(feature = "gui")]
 pub mod update_cmds;
+#[cfg(feature = "gui")]
+pub mod vod_cmds;
 
 pub use types::*;

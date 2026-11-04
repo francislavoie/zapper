@@ -18,6 +18,13 @@ import {
   type PlayerOptionsDto,
   type AspectMode,
   type ConnectionsDto,
+  type MarksDto,
+  type MovieDetailsDto,
+  type MovieDto,
+  type MoviePageDto,
+  type MovieQueryDto,
+  type MoviesSummaryDto,
+  type VodCategoryDto,
   type DeinterlaceMode,
   type ProgrammeDto,
   type ProgrammeHitDto,
@@ -83,6 +90,11 @@ export const api = {
   togglePause: () => invoke<void>("toggle_pause"),
   seekRelative: (seconds: number) => invoke<void>("seek_relative", { seconds }),
   seekLive: () => invoke<void>("seek_live"),
+  /** Plays a movie, from `start` seconds or, with `null`, where it was left. */
+  playMovie: (movieId: number, start: number | null) =>
+    invoke<void>("play_movie", { movieId, start }),
+  /** To an absolute position in a movie, in seconds. */
+  seekTo: (seconds: number) => invoke<void>("seek_to", { seconds }),
   setVolume: (volume: number) => invoke<void>("set_volume", { volume }),
   setMuted: (muted: boolean) => invoke<void>("set_muted", { muted }),
   setCompressor: (enabled: boolean) =>
@@ -141,6 +153,24 @@ export const api = {
   recentlyWatched: (limit: number) => invoke<FavouriteDto[]>("recently_watched", { limit }),
   forgetActivity: (streamId: number) =>
     invoke<void>("forget_activity", { streamId }),
+
+  moviesSummary: () => invoke<MoviesSummaryDto>("movies_summary"),
+  movieCategories: () => invoke<VodCategoryDto[]>("movie_categories"),
+  movies: (query: MovieQueryDto, offset: number, limit: number) =>
+    invoke<MoviePageDto>("movies", { query, offset, limit }),
+  searchMovies: (query: string, limit: number) =>
+    invoke<MovieDto[]>("search_movies", { query, limit }),
+  /** Fetched from the provider the first time and kept for a week. */
+  movieDetails: (movieId: number) => invoke<MovieDetailsDto>("movie_details", { movieId }),
+  similarMovies: (movieId: number, limit: number) =>
+    invoke<MovieDto[]>("similar_movies", { movieId, limit }),
+  /** An absent mark is left as it is. */
+  setMovieMarks: (movieId: number, marks: { favourite?: boolean; watched?: boolean }) =>
+    invoke<MarksDto>("set_movie_marks", {
+      movieId,
+      favourite: marks.favourite ?? null,
+      watched: marks.watched ?? null,
+    }),
 
   // Backups (Settings › Data). The backend opens the file dialogs itself, so
   // no path crosses this boundary, and it adds and removes the account, so

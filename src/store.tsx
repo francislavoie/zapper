@@ -323,6 +323,7 @@ export const initialPlayer: PlayerStateDto = {
   joiningLive: false,
   ending: null,
   reconnect: null,
+  onDemand: null,
 };
 
 /** Until the backend answers: nothing known, nothing to show. */
