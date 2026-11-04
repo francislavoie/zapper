@@ -10,6 +10,7 @@ import {
   moveIndex,
   paletteItems,
 } from "../logic/palette.ts";
+import { DESKTOP } from "../logic/capabilities.ts";
 
 const chan = (streamId, cleanName, isSeparator = false) => ({
   streamId,
@@ -175,4 +176,19 @@ test("'end of this programme' needs the guide to know the end, and 'off' needs a
   assert.equal(off.label, "Sleep timer: off");
   assert.equal(off.short, "Off");
   assert.equal(off.sleep, null);
+});
+
+test("Movies and Live TV are offered where there is something to switch between", () => {
+  const on = { ...DESKTOP, onDemand: true };
+  const off = { ...DESKTOP, onDemand: false };
+  const movies = ACTIONS.find((a) => a.id === "movies");
+  assert.equal(movies.label, "Movies");
+  assert.equal(movies.hint, "M");
+  assert.ok(ACTIONS.some((a) => a.id === "liveTv" && a.label === "Live TV"));
+  for (const id of ["movies", "liveTv"]) {
+    assert.ok(availableActions(false, { capabilities: on }).some((a) => a.id === id), id);
+    assert.ok(!availableActions(false, { capabilities: off }).some((a) => a.id === id), id);
+    // An account without movies has no Movies tab, so no way to it here either.
+    assert.ok(!availableActions(false, { capabilities: on, movies: false }).some((a) => a.id === id), id);
+  }
 });

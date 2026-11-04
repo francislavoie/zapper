@@ -1813,6 +1813,220 @@ select option {
   font-size: 0.75rem;
 }
 
+/* ---------------------------------------------------------------- movies */
+
+/* The Movies rail has no pin to reveal, so a category's count stays where it
+   is under the pointer. */
+.rail-row.plain:hover .rail-count,
+.rail-row.plain:has(:focus-visible) .rail-count {
+  visibility: visible;
+}
+
+/* One sort button where the channel rail has the pair: a split's rounded
+   right end belongs to its ▾. */
+.rail-sort-split > .rail-sort:only-child {
+  border-radius: 0.3125rem;
+}
+
+/* A header control that opens a menu: the sort order and the years. As tall
+   as the search box beside it, like the rail's sort button. */
+.movies-menu-btn {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.3125rem 0.5rem;
+  background: var(--bg-3);
+  border: 1px solid var(--line);
+  border-radius: 0.3125rem;
+  font-size: 0.75rem;
+  color: var(--dim);
+  white-space: nowrap;
+}
+
+.movies-menu-btn:hover,
+.movies-menu-btn.on {
+  color: var(--text);
+  border-color: #39414f;
+}
+
+.movies-menu-i {
+  width: 0.8125rem;
+  height: 0.8125rem;
+}
+
+/* A title's row: a thumbnail, the title, then the figures. Header and rows
+   share the columns. */
+.movie-cols,
+.movie-row {
+  --list-cols: 1.625rem minmax(0, 1fr) 3.5rem 4.5rem 4rem 2.75rem;
+}
+
+.movie-cols > :nth-child(3),
+.movie-cols > :nth-child(4),
+.movie-cols > :nth-child(5),
+.movie-year,
+.movie-length,
+.movie-rating {
+  text-align: right;
+}
+
+.movie-row {
+  cursor: default;
+}
+
+.movie-year,
+.movie-length,
+.movie-rating {
+  font-size: 0.75rem;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.movie-marks {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.25rem;
+  font-size: 0.75rem;
+  color: var(--dimmer);
+}
+
+.movie-mark.watched {
+  color: var(--good);
+}
+
+.movie-badge {
+  font-size: 0.5625rem;
+}
+
+/* The poster. A thumbnail in the list, a card's picture in the grid; the
+   placeholder is the same box with the title's initial in it. */
+.poster {
+  display: block;
+  object-fit: cover;
+  background: var(--bg-3);
+  border-radius: 0.1875rem;
+}
+
+.poster.blank {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.55);
+  font-weight: 600;
+}
+
+.row-poster {
+  width: 1.625rem;
+  height: 2.25rem;
+  font-size: 0.75rem;
+}
+
+/* The posters view: cards placed by the windowing at exact offsets, inside a
+   spacer the height of the whole grid. */
+.poster-card {
+  position: absolute;
+  contain: content;
+  cursor: default;
+}
+
+.poster-card.gap {
+  height: 1px;
+}
+
+.poster-art {
+  position: relative;
+  border-radius: 0.375rem;
+  overflow: hidden;
+  border: 1px solid var(--line);
+}
+
+.poster-card:hover .poster-art {
+  border-color: #39414f;
+}
+
+.poster-card.sel .poster-art {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.poster-img {
+  width: 100%;
+  height: 100%;
+  border-radius: 0;
+  font-size: 2rem;
+}
+
+.poster-badges {
+  position: absolute;
+  top: 0.375rem;
+  left: 0.375rem;
+  display: flex;
+  gap: 0.25rem;
+}
+
+.poster-badges .movie-badge {
+  background: rgba(0, 0, 0, 0.62);
+  color: var(--text);
+  border-color: transparent;
+}
+
+.poster-watched {
+  position: absolute;
+  top: 0.375rem;
+  right: 0.375rem;
+  width: 1.125rem;
+  height: 1.125rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--good);
+  color: #08130c;
+  font-size: 0.6875rem;
+  font-weight: 700;
+}
+
+/* Over the picture's foot, on a scrim so it reads over any poster. */
+.poster-title {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 1.5rem 0.5rem 0.375rem;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.78), transparent);
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.25;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.poster-meta {
+  display: block;
+  padding-top: 0.25rem;
+  font-size: 0.6875rem;
+  color: var(--dimmer);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The list is one focus stop with the keys moving the selection inside it;
+   the outline would ring the whole pane. The selected row says where it is. */
+.movies-viewport:focus-visible {
+  outline: none;
+}
+
+/* Stacked under the picture, in the guide's place. */
+.stacked-guide > .movies-pane {
+  position: absolute;
+  inset: 0;
+}
+
 /* Channels | Programmes, beside the search box. The view switch's segmented
    look, sized down to sit in the filter row. */
 .search-kind {

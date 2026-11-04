@@ -46,7 +46,29 @@ test("a mark for another title leaves the open one alone", () => {
   s = moviesReducer(s, { type: "movies/marked", marks: marks(2, { favourite: true }) });
   assert.equal(s.selected, open);
 });
+test("a header menu closes when it is used", () => {
+  let s = moviesReducer(initialMovies("list"), { type: "movies/menu", menu: { kind: "sort", x: 1, y: 2 } });
+  assert.equal(s.menu.kind, "sort");
+  s = moviesReducer(s, { type: "movies/sort", sort: "az" });
+  assert.equal(s.menu, null);
+  assert.equal(s.sort, "az");
+  s = moviesReducer(s, { type: "movies/menu", menu: { kind: "years", x: 1, y: 2 } });
+  s = moviesReducer(s, { type: "movies/years", range: { from: 1990, to: 1999 } });
+  assert.equal(s.menu, null);
+});
 test("only movies/ actions are the movies reducer's", () => {
   assert.equal(isMoviesAction({ type: "query" }), false);
   assert.equal(isMoviesAction({ type: "movies/query" }), true);
+});
+
+test("a summary that was ready stays ready through a failed or repeated refresh", () => {
+  const ready = { status: "ready", data: { available: true, note: null, total: 5, favourites: 0, recent: 5, watched: 0 } };
+  let s = moviesReducer(initialMovies("list"), { type: "movies/summary", value: ready });
+  s = moviesReducer(s, { type: "movies/summary", value: { status: "loading" } });
+  s = moviesReducer(s, { type: "movies/summary", value: { status: "error", message: "offline" } });
+  assert.equal(s.summary, ready);
+  // A newer answer still replaces it.
+  const gone = { status: "ready", data: { ...ready.data, available: false } };
+  s = moviesReducer(s, { type: "movies/summary", value: gone });
+  assert.equal(s.summary, gone);
 });
