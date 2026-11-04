@@ -15,6 +15,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::catalog::epg_match::Matcher;
 use crate::catalog::sync::{clean_name, SyncStats};
+use crate::catalog::vod_sync::{self, MovieWriter, NewMovie};
+use crate::catalog::origin;
+use crate::m3u::kind::{classify, EntryKind};
 use crate::m3u::{catchup, ids, Entry, Header};
 
 fn now() -> i64 {
@@ -31,6 +34,9 @@ pub struct PlaylistStats {
     pub channels: SyncStats,
     /// Entries with usable catch-up.
     pub with_catchup: usize,
+    /// The on-demand entries, which are movies and not channels.
+    pub movies: SyncStats,
+    pub movie_categories: usize,
 }
 
 /// Where the playlist's own `x-tvg-url` is remembered between phases and
@@ -43,6 +49,12 @@ const HEADER_EPG_KEY: &str = "m3u_header_epg_urls";
 /// back, which is what a download that fails halfway should do.
 pub struct PlaylistWriter<'c> {
     tx: Transaction<'c>,
+    /// The movies of the same playlist, written inside the same transaction
+    /// so that a download that fails halfway undoes them too.
+    movies: MovieWriter<'c>,
+    /// The catalogue this write is filling, when the caller knows it. See
+    /// [`set_origin`](Self::set_origin).
+    origin: Option<String>,
     existing: HashSet<i64>,
     seen: HashSet<i64>,
     /// How many times each identity (by hash) has appeared, for the ordinal
@@ -64,8 +76,15 @@ impl<'c> PlaylistWriter<'c> {
             let ids = s.query_map([], |r| r.get(0))?.collect::<Result<_, _>>()?;
             ids
         };
+        let mut movies = MovieWriter::begin_on(conn)?;
+        // A playlist that still has channels but no movies any more has
+        // dropped them; the guard against a bad minute is the empty
+        // playlist's, in `finish`.
+        movies.accept_empty();
         Ok(Self {
             tx,
+            movies,
+            origin: None,
             existing,
             seen: HashSet::new(),
             occurrences: HashMap::new(),
@@ -76,11 +95,52 @@ impl<'c> PlaylistWriter<'c> {
         })
     }
 
+    /// Names the catalogue being written, so that [`finish`](Self::finish)
+    /// records it before it lands the movies: the movie list compares its
+    /// own record of where it came from with the one on file, and a write
+    /// that only recorded the new catalogue afterwards would see no change
+    /// of account until the pass after.
+    pub fn set_origin(&mut self, origin: String) {
+        self.origin = Some(origin);
+    }
+
     pub fn push(&mut self, e: Entry) -> Result<()> {
         // See `m3u::ids`: the id comes from what the entry is called, not
         // from its URL, which may carry a token that changes every download.
         let identity = ids::identity(&e);
-        self.push_identified(e, &identity)
+        match classify(&e) {
+            EntryKind::Movie => self.push_movie(e, &identity),
+            EntryKind::Channel | EntryKind::Episode => self.push_identified(e, &identity),
+        }
+    }
+
+    /// The ordinal that tells entries of one identity apart.
+    fn occurrence(&mut self, identity: &str) -> u32 {
+        let n = self
+            .occurrences
+            .entry(ids::fnv1a(identity.as_bytes()))
+            .or_insert(0);
+        let this = *n;
+        *n += 1;
+        this
+    }
+
+    fn push_movie(&mut self, e: Entry, identity: &str) -> Result<()> {
+        // Apart from channels' ids by the prefix: the same name can be a
+        // channel and a film, and their ids are different tables' keys.
+        let identity = format!("movie\u{0}{identity}");
+        let occurrence = self.occurrence(&identity);
+        let movie = NewMovie {
+            movie_id: ids::stream_id(&identity, occurrence),
+            year: vod_sync::year_from_name(&e.name),
+            poster_url: e.logo,
+            stream_url: Some(e.url),
+            user_agent: e.user_agent,
+            referrer: e.referrer,
+            name: e.name,
+            ..NewMovie::default()
+        };
+        self.movies.push(&movie, e.group.as_deref())
     }
 
     /// [`push`](Self::push), for an entry whose source knows better than a
@@ -91,15 +151,7 @@ impl<'c> PlaylistWriter<'c> {
     /// tell — and does not need to — which kind of source wrote a row.
     pub fn push_identified(&mut self, e: Entry, identity: &str) -> Result<()> {
         self.position += 1;
-        let occurrence = {
-            let n = self
-                .occurrences
-                .entry(ids::fnv1a(identity.as_bytes()))
-                .or_insert(0);
-            let this = *n;
-            *n += 1;
-            this
-        };
+        let occurrence = self.occurrence(identity);
         let stream_id = ids::stream_id(identity, occurrence);
         let category = e.group.as_deref().map(|g| {
             if self.group_set.insert(g.to_owned()) {
@@ -196,12 +248,12 @@ impl<'c> PlaylistWriter<'c> {
         self.groups.sort_by_key(rank);
     }
 
-    /// Commits the write. Refuses an empty playlist outright: an empty answer
-    /// is far more likely to be a provider having a bad minute than a
-    /// subscription with no channels, and accepting it would soft-delete the
-    /// whole catalogue.
+    /// Commits the write. Refuses a playlist with neither channels nor
+    /// movies in it outright: an empty answer is far more likely to be a
+    /// provider having a bad minute than a subscription with nothing, and
+    /// accepting it would soft-delete the whole catalogue.
     pub fn finish(mut self, header: &Header) -> Result<PlaylistStats> {
-        if self.seen.is_empty() {
+        if self.seen.is_empty() && self.movies.seen() == 0 {
             return Err(anyhow!(
                 "the playlist had no channels in it; keeping the ones already here"
             ));
@@ -227,6 +279,13 @@ impl<'c> PlaylistWriter<'c> {
             )?;
         }
         self.stats.categories = self.groups.len();
+
+        if let Some(o) = &self.origin {
+            origin::record(&self.tx, o)?;
+        }
+        let (movies, categories) = self.movies.finish(at)?;
+        self.stats.movies = movies;
+        self.stats.movie_categories = categories;
 
         self.tx.execute(
             "INSERT INTO meta (key, value) VALUES (?1, ?2)
@@ -589,6 +648,96 @@ mod tests {
         assert_eq!(
             count(&c, "SELECT COUNT(*) FROM channels WHERE deleted_at IS NULL"),
             1
+        );
+    }
+
+    /// Two channels, an episode's file, and two films in one group.
+    const WITH_MOVIES: &str = "#EXTM3U\n\
+        #EXTINF:-1 group-title=\"News\",Eurowire\nhttp://p.example/live/u/p/1.ts\n\
+        #EXTINF:-1 group-title=\"News\",Meridian 24\nhttp://p.example/live/u/p/2.ts\n\
+        #EXTINF:-1 group-title=\"Shows\",A Show S01E01\nhttp://p.example/series/u/p/3.mkv\n\
+        #EXTINF:-1 group-title=\"Films\" tvg-logo=\"http://img.example/a.jpg\",A Film (2021)\nhttp://p.example/movie/u/p/4.mkv\n\
+        #EXTINF:-1 group-title=\"Films\",Another Film\nhttp://p.example/movie/u/p/5.mp4\n";
+
+    fn names(c: &Connection, sql: &str) -> Vec<String> {
+        c.prepare(sql)
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    }
+
+    #[test]
+    fn movies_in_a_playlist_go_to_movies_not_channels() {
+        let c = open_in_memory().unwrap();
+        let s = write(&c, WITH_MOVIES).unwrap();
+        // The episode stays a channel: shows are not browsed.
+        assert_eq!(s.channels.inserted, 3);
+        assert_eq!(s.movies.inserted, 2);
+        assert_eq!(s.movie_categories, 1);
+        assert_eq!(
+            names(&c, "SELECT name FROM vod_categories WHERE kind = 'movie'"),
+            ["Films"]
+        );
+        let cats = names(&c, "SELECT name FROM categories ORDER BY sort");
+        assert_eq!(cats, ["News", "Shows"]);
+        let (year, poster, url): (Option<i32>, Option<String>, Option<String>) = c
+            .query_row(
+                "SELECT year, poster_url, stream_url FROM movies WHERE name = 'A Film (2021)'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(year, Some(2021));
+        assert_eq!(poster.as_deref(), Some("http://img.example/a.jpg"));
+        assert_eq!(url.as_deref(), Some("http://p.example/movie/u/p/4.mkv"));
+    }
+
+    #[test]
+    fn a_playlist_of_only_movies_is_not_refused() {
+        let c = open_in_memory().unwrap();
+        let s = write(
+            &c,
+            "#EXTM3U\n#EXTINF:-1 group-title=\"Films\",One\nhttp://h/movie/u/p/1.mkv\n\
+             #EXTINF:-1 group-title=\"Films\",Two\nhttp://h/movie/u/p/2.mkv\n",
+        )
+        .unwrap();
+        assert_eq!(s.movies.inserted, 2);
+        assert_eq!(s.channels.inserted, 0);
+    }
+
+    #[test]
+    fn ids_of_playlist_movies_survive_a_reparse() {
+        let c = open_in_memory().unwrap();
+        write(&c, WITH_MOVIES).unwrap();
+        let ids = |c: &Connection| -> Vec<i64> {
+            c.prepare("SELECT movie_id FROM movies ORDER BY movie_id")
+                .unwrap()
+                .query_map([], |r| r.get(0))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect()
+        };
+        let before = ids(&c);
+        // A new download's token does not make new titles.
+        let s = write(&c, &WITH_MOVIES.replace("/u/p/", "/u2/p2/")).unwrap();
+        assert_eq!(ids(&c), before);
+        assert_eq!(
+            (s.movies.inserted, s.movies.updated, s.movies.deleted),
+            (0, 2, 0)
+        );
+    }
+
+    #[test]
+    fn a_playlist_that_drops_its_movies_drops_them_from_the_mirror() {
+        let c = open_in_memory().unwrap();
+        write(&c, WITH_MOVIES).unwrap();
+        let s = write(&c, FIXTURE).unwrap();
+        assert_eq!(s.movies.deleted, 2);
+        assert_eq!(
+            count(&c, "SELECT COUNT(*) FROM movies WHERE deleted_at IS NULL"),
+            0
         );
     }
 

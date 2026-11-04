@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use crate::catalog::credentials::Account;
 use crate::catalog::playlist::{self, PlaylistStats, PlaylistWriter};
-use crate::catalog::{db, index, origin, prune, status, sync};
+use crate::catalog::{db, index, origin, prune, status, sync, vod_sync};
 use crate::ipc::types::{SyncPhase, SyncStatusDto};
 use crate::m3u::fetch;
 use crate::source::{M3uSource, Refused};
@@ -255,6 +255,31 @@ fn land_channels(
     Ok(stats)
 }
 
+/// The provider's movies: both list calls, landed in one write, and the
+/// movie index rebuilt.
+///
+/// The errors of those calls are `reqwest`'s, whose text includes the
+/// request URL and so the account's username and password. They leave this
+/// function scrubbed, because this phase's failure is read by people and
+/// logs both.
+async fn step_movies(client: &XtreamClient) -> Result<String> {
+    let fetched = async {
+        let cats = client.vod_categories().await?;
+        let streams = client.vod_streams().await?;
+        Ok::<_, anyhow::Error>((cats, streams))
+    }
+    .await
+    .map_err(|e| anyhow::anyhow!("fetching movies: {}", scrub(&format!("{e:#}"))))?;
+    let (cats, streams) = fetched;
+    let movies: Vec<_> = streams.iter().map(vod_sync::NewMovie::from).collect();
+    let stats = db::with_write_db(|conn| vod_sync::land_movies(conn, &cats, &movies, now()))?;
+    let indexed = db::with_write_db(index::rebuild_movies)?;
+    Ok(format!(
+        "{indexed} movies ({} new, {} gone)",
+        stats.inserted, stats.deleted
+    ))
+}
+
 async fn step_channels(client: &XtreamClient, origin: &str) -> Result<String> {
     let chans = client.channels().await.context("fetching channels")?;
     let stats = db::with_write_db(|conn| land_channels(conn, &chans, origin))?;
@@ -363,7 +388,13 @@ impl Drop for RunningGuard {
     }
 }
 
-/// Categories, then channels (and the index), then the guide.
+/// Categories, then channels (and the index), then the guide, then movies.
+///
+/// Movies come last because live TV is what the app is for and the movie
+/// list is the biggest download after the guide: a server that is slow or
+/// refuses it should cost nothing that came before. They also land after the
+/// channels have recorded which catalogue this is, which the movie list
+/// compares with its own record to notice a change of account.
 ///
 /// `None` when a pass was already running, so this one did not start: in
 /// this process, or in another one sharing the mirror (the app and the
@@ -414,6 +445,7 @@ pub async fn run_once<S: StatusSink>(app: &S) -> Result<Option<PassOutcome>> {
             (SyncPhase::Categories, Box::pin(step_categories(&client, switched))),
             (SyncPhase::Channels, Box::pin(step_channels(&client, &from))),
             (SyncPhase::Epg, Box::pin(step_epg(&client))),
+            (SyncPhase::Movies, Box::pin(step_movies(&client))),
         ],
     )
     .await;
@@ -422,7 +454,7 @@ pub async fn run_once<S: StatusSink>(app: &S) -> Result<Option<PassOutcome>> {
 
 // ------------------------------------------------------------- M3U playlists
 
-/// The same three phases an Xtream server gets, so the toolbar says the same
+/// The same phases an Xtream server gets, so the toolbar says the same
 /// things.
 ///
 /// The playlist is downloaded once, in the categories phase, because one
@@ -431,15 +463,21 @@ pub async fn run_once<S: StatusSink>(app: &S) -> Result<Option<PassOutcome>> {
 /// reports what landed and rebuilds the search index. If the download failed,
 /// the channels phase fails with the same reason rather than claiming
 /// success — a pass where nothing new arrived must not count as a refresh,
-/// or the backoff would never apply.
+/// or the backoff would never apply. The movies phase does the same with the
+/// movies the one document carried.
 async fn run_m3u_pass<S: StatusSink>(sink: &S, src: &M3uSource) -> PassOutcome {
     let landed: Landed = std::sync::Mutex::new(None);
+    let landed_movies: Landed = std::sync::Mutex::new(None);
     run_steps(
         sink,
         vec![
-            (SyncPhase::Categories, Box::pin(step_m3u_playlist(src, &landed))),
+            (
+                SyncPhase::Categories,
+                Box::pin(step_m3u_playlist(src, &landed, &landed_movies)),
+            ),
             (SyncPhase::Channels, Box::pin(step_m3u_channels(&landed))),
             (SyncPhase::Epg, Box::pin(step_m3u_epg(src))),
+            (SyncPhase::Movies, Box::pin(step_landed_movies(&landed_movies))),
         ],
     )
     .await
@@ -459,19 +497,47 @@ pub(crate) fn hand_off(landed: &Landed, r: std::result::Result<&PlaylistStats, &
     *landed.lock().unwrap_or_else(|e| e.into_inner()) = Some(handoff);
 }
 
-async fn step_m3u_playlist(src: &M3uSource, landed: &Landed) -> Result<String> {
-    let r = load_playlist(src).await;
+async fn step_m3u_playlist(
+    src: &M3uSource,
+    landed: &Landed,
+    landed_movies: &Landed,
+) -> Result<String> {
     // A playlist's write replaces categories and soft-deletes unseen channels
     // whatever came before, so it needs no `switched`; it only has to say
-    // that it is now the origin, for the server that may come after it.
-    let r = r.and_then(|s| {
-        let from = origin::of_playlist(&src.account().playlist);
-        db::with_write_db(|conn| origin::record(conn, &from))?;
-        Ok(s)
-    });
+    // that it is now the origin, for the server that may come after it. The
+    // writer records that itself, before it lands the movies.
+    let r = load_playlist(src).await;
     hand_off(landed, r.as_ref());
+    hand_off_movies(landed_movies, r.as_ref());
     let s = r?;
     Ok(format!("{} categories", s.categories))
+}
+
+/// Records what a playlist-shaped write did to the movies, for the movies
+/// phase that follows it.
+pub(crate) fn hand_off_movies(
+    landed: &Landed,
+    r: std::result::Result<&PlaylistStats, &anyhow::Error>,
+) {
+    let handoff = match r {
+        Ok(s) => Ok((s.movies.inserted, s.movies.deleted)),
+        Err(e) => Err(failure_message(e)),
+    };
+    *landed.lock().unwrap_or_else(|e| e.into_inner()) = Some(handoff);
+}
+
+/// The movies phase of a playlist pass: what the write landed, and the movie
+/// index rebuilt over it, or the write's failure repeated.
+pub(crate) async fn step_landed_movies(landed: &Landed) -> Result<String> {
+    let handoff = landed.lock().unwrap_or_else(|e| e.into_inner()).take();
+    match handoff {
+        Some(Ok((new, gone))) => {
+            let indexed = db::with_write_db(index::rebuild_movies)?;
+            Ok(format!("{indexed} movies ({new} new, {gone} gone)"))
+        }
+        Some(Err(why)) => Err(anyhow::anyhow!(why)),
+        None => Err(anyhow::anyhow!("the playlist was not read")),
+    }
 }
 
 async fn step_m3u_channels(landed: &Landed) -> Result<String> {
@@ -529,6 +595,7 @@ async fn load_playlist(src: &M3uSource) -> Result<PlaylistStats> {
 /// One channel, for a "playlist" that turned out to be a stream.
 fn write_single(conn: &rusqlite::Connection, location: &str) -> Result<PlaylistStats> {
     let mut w = PlaylistWriter::begin(conn)?;
+    w.set_origin(origin::of_playlist(location));
     w.push(crate::m3u::Entry {
         name: crate::m3u::parse::name_from_url(location),
         url: location.to_owned(),
@@ -550,6 +617,7 @@ pub(crate) fn write_playlist_from(
         return write_single(conn, location);
     }
     let mut w = PlaylistWriter::begin(conn)?;
+    w.set_origin(origin::of_playlist(location));
     let header = crate::m3u::parse::parse(r, |e| w.push(e))?;
     if header.hls {
         // An HLS playlist is one stream, however many segments it lists.
@@ -1176,6 +1244,68 @@ mod tests {
         assert_eq!(news.watch_seconds, 7200);
     }
 
+    fn live_movies(c: &rusqlite::Connection) -> i64 {
+        c.query_row(
+            "SELECT COUNT(*) FROM movies WHERE deleted_at IS NULL",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// An Xtream pass as `run_once` orders it: the channels record the
+    /// origin, then the movies land.
+    fn xtream_movies_pass(c: &rusqlite::Connection, from: &str, movies: &[vod_sync::NewMovie]) {
+        xtream_pass(c, from);
+        vod_sync::land_movies(c, &[], movies, 1_000).unwrap();
+    }
+
+    fn film(id: i64) -> vod_sync::NewMovie {
+        vod_sync::NewMovie {
+            movie_id: id,
+            name: format!("Film {id}"),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn switching_accounts_empties_the_movies_through_the_real_sync_path() {
+        let c = crate::catalog::open_in_memory().unwrap();
+        xtream_movies_pass(&c, "xtream:000000000000000a", &[film(1), film(2)]);
+        assert_eq!(live_movies(&c), 2);
+        // The same account's empty answer is a bad minute, and refused.
+        assert!(vod_sync::land_movies(&c, &[], &[], 2_000).is_err());
+        assert_eq!(live_movies(&c), 2);
+        // Another account, with none.
+        xtream_movies_pass(&c, "xtream:000000000000000b", &[]);
+        assert_eq!(live_movies(&c), 0);
+    }
+
+    #[test]
+    fn switching_to_a_playlist_without_movies_empties_them_in_that_write() {
+        let c = crate::catalog::open_in_memory().unwrap();
+        xtream_movies_pass(&c, "xtream:000000000000000a", &[film(1)]);
+        let fixture = include_str!("../../tests/fixtures/sample.m3u")
+            .as_bytes()
+            .to_vec();
+        write_playlist_from(
+            &c,
+            Box::new(std::io::Cursor::new(fixture)),
+            "http://cdn.example/list.m3u",
+        )
+        .unwrap();
+        assert_eq!(live_movies(&c), 0);
+        // And the movies' own record moved with the catalogue's.
+        let recorded: String = c
+            .query_row(
+                "SELECT value FROM meta WHERE key = 'movies_origin'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(Some(recorded), origin::recorded(&c).unwrap());
+    }
+
     #[test]
     fn a_server_that_filled_the_mirror_all_along_is_synced_as_before() {
         // No pruning on an unchanged origin: a category the server stopped
@@ -1235,6 +1365,16 @@ mod tests {
         assert!(step_m3u_channels(&none).await.is_err());
     }
 
+    #[tokio::test]
+    async fn the_movies_phase_repeats_a_failed_download_rather_than_succeeding() {
+        let landed: Landed =
+            std::sync::Mutex::new(Some(Err("the server refused the playlist".into())));
+        let err = step_landed_movies(&landed).await.unwrap_err().to_string();
+        assert_eq!(err, "the server refused the playlist");
+        let none: Landed = std::sync::Mutex::new(None);
+        assert!(step_landed_movies(&none).await.is_err());
+    }
+
     #[test]
     fn every_phase_gets_a_well_formed_status() {
         for phase in [
@@ -1242,6 +1382,7 @@ mod tests {
             SyncPhase::Categories,
             SyncPhase::Channels,
             SyncPhase::Epg,
+            SyncPhase::Movies,
             SyncPhase::Failed,
         ] {
             let s = dto(phase, "working", 60_000, Some(1_757_000_000));
@@ -1308,6 +1449,68 @@ mod tests {
             "the failure reason was swallowed: {:?}",
             rec.messages()
         );
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn a_failing_movies_phase_leaves_the_live_phases_landed() {
+        let _guard = status::test_lock();
+        db::install_test_db();
+        let ok = || async { Ok("fine".to_string()) };
+        let rec = Recorder::default();
+        let outcome = run_steps(
+            &rec,
+            vec![
+                (SyncPhase::Categories, Box::pin(ok())),
+                (SyncPhase::Channels, Box::pin(ok())),
+                (SyncPhase::Epg, Box::pin(ok())),
+                (
+                    SyncPhase::Movies,
+                    Box::pin(async { Err(anyhow::anyhow!("the movie list was empty")) }),
+                ),
+            ],
+        )
+        .await;
+        assert_eq!(outcome, PassOutcome::Refreshed);
+        assert_eq!(
+            rec.phases(),
+            [
+                SyncPhase::Categories,
+                SyncPhase::Categories,
+                SyncPhase::Channels,
+                SyncPhase::Channels,
+                SyncPhase::Epg,
+                SyncPhase::Epg,
+                SyncPhase::Movies,
+                SyncPhase::Failed,
+                SyncPhase::Idle,
+            ]
+        );
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn a_movies_phase_the_server_refuses_never_shows_the_password() {
+        let _guard = status::test_lock();
+        db::install_test_db();
+        let server = crate::test_http::serve(|_, _| crate::test_http::Reply::new(503, "busy"));
+        let client = XtreamClient::new(crate::xtream::Credentials {
+            host: server.base.clone(),
+            username: "viewer-name".into(),
+            password: "hunter2-secret".into(),
+        })
+        .unwrap();
+        let rec = Recorder::default();
+        let outcome = run_steps(
+            &rec,
+            vec![(SyncPhase::Movies, Box::pin(step_movies(&client)))],
+        )
+        .await;
+        assert_eq!(outcome, PassOutcome::Failed);
+        let shown = rec.messages().join("\n");
+        assert!(shown.contains("503"), "{shown}");
+        assert!(!shown.contains("hunter2-secret"), "{shown}");
+        assert!(!shown.contains("viewer-name"), "{shown}");
     }
 
     #[allow(clippy::await_holding_lock)]
