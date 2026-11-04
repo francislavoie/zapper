@@ -26,7 +26,7 @@ import { useApp, useDispatch } from "../store";
 import type { Async } from "../logic/async";
 import type { SearchTab } from "../logic/programmes";
 import { SEARCH_PLACEHOLDER } from "../logic/searchQuery";
-import { categoryNames, groupByCategory } from "../logic/searchGroups";
+import { categoryLine, categoryNames, groupByCategory } from "../logic/searchGroups";
 import type { ChannelDto } from "../types";
 import { ChannelRow } from "./ChannelRow";
 import { FavouriteMenu } from "./FavouriteMenu";
@@ -269,9 +269,14 @@ export function ChannelList() {
     [dispatch],
   );
 
+  // The divider each row sits under, carried down the window from the one
+  // above it, so a row can leave out a category line the divider already says.
+  const above = stickyIndex((i) => source.rowAt(i)?.isSeparator, win.start);
+  let divider: string | null = (above !== null ? source.rowAt(above)?.categoryId : undefined) ?? null;
   const rows = [];
   for (let i = win.start; i < win.end; i++) {
     const c = source.rowAt(i);
+    if (c?.isSeparator) divider = c.categoryId;
     const top = i * LIST_ROW_HEIGHT;
     if (!c) {
       rows.push(<div className="row" key={`gap-${i}`} style={{ top, height: LIST_ROW_HEIGHT }} />);
@@ -288,7 +293,7 @@ export function ChannelList() {
       <ChannelRow
         key={c.streamId}
         channel={shown}
-        categoryName={showCategory && c.categoryId ? (names.get(c.categoryId) ?? null) : null}
+        categoryName={showCategory && c.categoryId ? categoryLine(divider, c.categoryId, names.get(c.categoryId) ?? null) : null}
         now={nowNext.now}
         next={nowNext.next}
         minute={minute}

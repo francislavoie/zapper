@@ -397,3 +397,9 @@ test("the band's line about padding and where the files go", () => {
   assert.equal(recordingFacts(rec({ padBefore: 0, padAfter: 0 })), "No padding · Folder /v/News");
   assert.equal(recordingFacts(rec({ padBefore: 0, padAfter: 120 })), "Padding 0 min before, 2 after · Folder /v/News");
 });
+
+test("a scheduled row counts down to the minute, and says starting under one", () => {
+  assert.equal(recordingRowStatus(rec({ start: NOON + 54 * 60 + 1 + 60, padBefore: 60 }), NOON).text, "starts in 54m");
+  assert.equal(recordingRowStatus(rec({ start: NOON + 20, padBefore: 0 }), NOON).text, "starting");
+  assert.equal(recordingStatus(rec({ start: NOON + 54 * 60 + 1 + 60 }), NOON), "starts in 54m");
+});

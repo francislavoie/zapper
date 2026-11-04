@@ -170,6 +170,15 @@ export function duration(seconds: number): string {
   return m === 0 ? `${h}h` : `${h}h${String(m).padStart(2, "0")}m`;
 }
 
+/** How long until something starts, to the minute: "54m", "2h05m". Seconds
+ *  are noise on a countdown that is only re-read each minute, and they made
+ *  "starts in 54m01s" tick like a stopwatch. Null under a minute, where there
+ *  is nothing to count and the caller says "starting". */
+export function startsIn(seconds: number): string | null {
+  const minutes = Math.round((Number.isFinite(seconds) ? seconds : 0) / 60);
+  return minutes < 1 ? null : duration(minutes * 60);
+}
+
 /** A span that is usually small but can run to minutes: `places` decimals
  *  under a minute, where the fraction still means something, and words
  *  ("10 min 40 s") from there up. */
