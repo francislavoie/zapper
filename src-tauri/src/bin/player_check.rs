@@ -20,6 +20,11 @@
 //! whoever is watching; it opens one stream, keeps it for the duration, and
 //! exits.
 //!
+//! `--movie` plays a movie instead (`ZAPPER_FIXTURE_MOVIE` on the fixture
+//! server, default `movie.mp4`; `fake_stream.py --movies 2` serves a film
+//! with ranges at `movie/<user>/<pass>/2.mp4`) and checks its clock,
+//! `seek_to`, a relative seek past what was buffered, pause and stop.
+//!
 //! Audio is disabled outright (`ao=null`) before anything is loaded, not
 //! muted: this runs unattended and must never make noise.
 
@@ -100,7 +105,11 @@ fn main() {
 
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                let verdict = run(&handle).await;
+                let verdict = if std::env::args().any(|a| a == "--movie") {
+                    run_movie(&handle).await
+                } else {
+                    run(&handle).await
+                };
                 // Let the GTK render loop finish the frame it is in before the
                 // process goes away. Exiting straight out of this task tears
                 // mpv's render context down underneath a live GL callback,
@@ -286,6 +295,89 @@ async fn run(app: &tauri::AppHandle) -> Result<String, String> {
         before.behind_live,
         back.behind_live,
         live.behind_live,
+    ))
+}
+
+/// The `--movie` run: a title opens, reports its length, seeks both ways,
+/// pauses and stops.
+#[cfg(target_os = "linux")]
+async fn run_movie(app: &tauri::AppHandle) -> Result<String, String> {
+    use std::time::Duration;
+    use zapper_lib::ipc::player_cmds as cmds;
+    use zapper_lib::ipc::types::{PlaybackState, PlayerStateDto};
+
+    // The title's own clock, which is what a seek moves.
+    fn at(s: &PlayerStateDto) -> f64 {
+        s.on_demand.map_or(-1.0, |o| o.position)
+    }
+
+    cmds::play_movie(app.clone(), 1, None).await?;
+    let opened = await_state(Duration::from_secs(25), |s| {
+        s.state == PlaybackState::Playing && s.on_demand.is_some_and(|o| o.duration.is_some())
+    })
+    .await;
+    if opened.state != PlaybackState::Playing {
+        return Err(format!(
+            "play_movie() ended in {:?}: {}",
+            opened.state,
+            opened.error.as_deref().unwrap_or("no reason given")
+        ));
+    }
+    if opened.stream_id.is_some() {
+        return Err("a movie reported a channel".into());
+    }
+    let length = opened
+        .on_demand
+        .and_then(|o| o.duration)
+        .ok_or("a movie that is playing reported no length")?;
+    if !(115.0..=125.0).contains(&length) {
+        return Err(format!("the film is about 120s long, but it reported {length}s"));
+    }
+
+    cmds::seek_to(app.clone(), 60.0).await?;
+    let there = await_state(Duration::from_secs(8), |s| (58.0..=63.0).contains(&at(s))).await;
+    if !(58.0..=63.0).contains(&at(&there)) {
+        return Err(format!("seek_to(60) landed at {:.1}s", at(&there)));
+    }
+
+    cmds::seek_relative(app.clone(), -10.0).await?;
+    let back = await_state(Duration::from_secs(8), |s| at(s) < at(&there) - 8.0).await;
+    if at(&back) >= at(&there) - 8.0 {
+        return Err(format!(
+            "a 10s seek back moved {:.1}s to {:.1}s",
+            at(&there),
+            at(&back)
+        ));
+    }
+
+    // Before what the demuxer kept: a film can be read from any part of it,
+    // so this is not clamped to the buffer as a live stream's seek is.
+    cmds::seek_to(app.clone(), 30.0).await?;
+    await_state(Duration::from_secs(8), |s| (28.0..=33.0).contains(&at(s))).await;
+    cmds::seek_relative(app.clone(), -20.0).await?;
+    let early = await_state(Duration::from_secs(8), |s| at(s) < 15.0).await;
+    if at(&early) >= 15.0 {
+        return Err(format!("a 20s seek back from 30s landed at {:.1}s", at(&early)));
+    }
+
+    cmds::toggle_pause(app.clone()).await?;
+    let paused = await_state(Duration::from_secs(5), |s| s.state == PlaybackState::Paused).await;
+    if paused.state != PlaybackState::Paused {
+        return Err(format!("toggle_pause() left the player in {:?}", paused.state));
+    }
+    cmds::toggle_pause(app.clone()).await?;
+
+    cmds::stop(app.clone()).await?;
+    let stopped = cmds::player_state().await?;
+    if stopped.state != PlaybackState::Stopped || stopped.on_demand.is_some() {
+        return Err(format!("stop() left the player in {:?}", stopped.state));
+    }
+    Ok(format!(
+        "a {length}s movie played, seek_to(60) landed at {:.1}s, -10s moved to {:.1}s, \
+         -20s from 30s reached {:.1}s, paused and stopped",
+        at(&there),
+        at(&back),
+        at(&early)
     ))
 }
 
