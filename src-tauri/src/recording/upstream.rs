@@ -37,12 +37,30 @@ pub struct Span {
     pub partial: bool,
     /// The range asked for lies past the end of the file (416).
     pub beyond: bool,
-    /// Where in the file the response starts.
+    /// Where in the file the response starts, and its last byte, when said.
     pub first: u64,
-    /// The response's length, when said.
+    pub last: Option<u64>,
+    /// The response's length, when said (by its own header, or by its
+    /// range).
     pub length: Option<u64>,
     /// The file's, when said.
     pub total: Option<u64>,
+}
+
+impl Span {
+    /// The `Content-Range` of a part (`bytes first-last/total`, the total
+    /// `*` when unknown); `None` when the provider's numbers do not make
+    /// one.
+    pub fn content_range(&self) -> Option<String> {
+        let last = self
+            .last
+            .or_else(|| self.first.checked_add(self.length?.checked_sub(1)?))
+            .filter(|&l| l >= self.first)?;
+        let total = self
+            .total
+            .map_or_else(|| "*".to_string(), |t| t.to_string());
+        Some(format!("bytes {}-{last}/{total}", self.first))
+    }
 }
 
 /// A movie's file at the provider; see the module.
@@ -124,14 +142,16 @@ impl HttpUpstream {
             .and_then(|v| v.parse::<u64>().ok());
         let span = match status {
             206 => {
-                let Some((first, _, total)) = range else {
+                let Some((first, last, total)) = range.filter(|&(f, l, _)| l >= f) else {
                     return Err(Failure::NotVideo);
                 };
                 Span {
                     partial: true,
                     beyond: false,
                     first,
-                    length,
+                    last: Some(last),
+                    // What the range says, when the response does not.
+                    length: length.or((last - first).checked_add(1)),
                     total,
                 }
             }
@@ -139,6 +159,7 @@ impl HttpUpstream {
                 partial: false,
                 beyond: false,
                 first: 0,
+                last: length.and_then(|n| n.checked_sub(1)),
                 length,
                 total: length,
             },
@@ -148,6 +169,7 @@ impl HttpUpstream {
                     partial: false,
                     beyond: true,
                     first: from,
+                    last: None,
                     length: Some(0),
                     total: self.size,
                 });
@@ -367,10 +389,16 @@ pub(crate) mod fake {
                             (a, b.min(SIZE - 1))
                         });
                     let (first, last) = range.unwrap_or((0, SIZE - 1));
+                    // A file under `/nolength/` is sent without saying its
+                    // length: the connection's close ends it.
+                    let length = if text.contains("/nolength/") {
+                        String::new()
+                    } else {
+                        format!("Content-Length: {}\r\n", last + 1 - first)
+                    };
                     let head = match range {
                         Some(_) => format!(
-                            "HTTP/1.1 206 Partial Content\r\nContent-Type: video/mp4\r\nContent-Length: {}\r\nContent-Range: bytes {first}-{last}/{SIZE}\r\nAccept-Ranges: bytes\r\nConnection: close\r\n\r\n",
-                            last + 1 - first
+                            "HTTP/1.1 206 Partial Content\r\nContent-Type: video/mp4\r\n{length}Content-Range: bytes {first}-{last}/{SIZE}\r\nAccept-Ranges: bytes\r\nConnection: close\r\n\r\n",
                         ),
                         None => format!(
                             "HTTP/1.1 200 OK\r\nContent-Type: video/mp4\r\nContent-Length: {SIZE}\r\nAccept-Ranges: bytes\r\nConnection: close\r\n\r\n"
@@ -418,6 +446,46 @@ mod tests {
         );
         assert_eq!(content_range(v("items 0-9/10").as_ref()), None);
         assert_eq!(content_range(None), None);
+    }
+
+    #[test]
+    fn a_parts_content_range_comes_from_its_numbers() {
+        let part = |first, last, length, total| Span {
+            partial: true,
+            beyond: false,
+            first,
+            last,
+            length,
+            total,
+        };
+        assert_eq!(
+            part(500, Some(999), None, Some(1000))
+                .content_range()
+                .as_deref(),
+            Some("bytes 500-999/1000")
+        );
+        assert_eq!(
+            part(500, None, Some(500), None).content_range().as_deref(),
+            Some("bytes 500-999/*")
+        );
+        // Numbers that make no range make no header.
+        assert_eq!(part(u64::MAX, None, Some(2), None).content_range(), None);
+        assert_eq!(part(500, None, Some(0), None).content_range(), None);
+        assert_eq!(part(500, Some(10), None, None).content_range(), None);
+        assert_eq!(part(500, None, None, None).content_range(), None);
+    }
+
+    #[tokio::test]
+    async fn a_part_without_its_length_is_measured_by_its_range() {
+        let (base, _) = fake::serve().await;
+        let mut up =
+            HttpUpstream::new(Playable::plain(format!("{base}/nolength/movie.mp4"))).unwrap();
+        let span = up.open(100, None).await.unwrap();
+        assert_eq!(span.length, Some(fake::SIZE as u64 - 100));
+        assert_eq!(
+            span.content_range().as_deref(),
+            Some("bytes 100-999999/1000000")
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
