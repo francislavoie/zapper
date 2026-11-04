@@ -21,7 +21,7 @@
 use anyhow::{anyhow, Context, Result};
 
 use crate::catalog::credentials::{self, Account, Kind};
-use crate::catalog::{db, playlist};
+use crate::catalog::{db, playlist, vod_store};
 use crate::hdhomerun::HdhrSource;
 use crate::m3u::{catchup, fetch, M3uAccount};
 use crate::tvheadend::TvhSource;
@@ -88,6 +88,24 @@ impl Source {
             Source::M3u(m) => m.live(stream_id),
             Source::HdHomeRun(h) => h.live(stream_id),
             Source::Tvheadend(t) => t.live(stream_id),
+        }
+    }
+
+    /// The file for a movie. Like a channel's, the address carries the
+    /// account for an Xtream server, so it is handed to the player and never
+    /// logged or sent to an interface that is not the app's.
+    pub fn movie(&self, movie_id: i64) -> Result<Playable> {
+        match self {
+            Source::Xtream(c) => {
+                let found = db::with_db(|conn| vod_store::movie_source(conn, movie_id))?
+                    .ok_or_else(|| anyhow!("that movie is not in the catalogue any more"))?;
+                let ext = found.container.as_deref().unwrap_or("mp4");
+                Ok(Playable::plain(c.movie_url(movie_id, ext)))
+            }
+            Source::M3u(m) => m.movie(movie_id),
+            Source::HdHomeRun(_) | Source::Tvheadend(_) => {
+                Err(anyhow!("this account has no movies"))
+            }
         }
     }
 }
@@ -170,6 +188,21 @@ impl M3uSource {
         let row = self.row(stream_id)?;
         let url = row.url.clone();
         Ok(self.playable(&row, url))
+    }
+
+    /// A movie from the playlist: the address it was listed with, and the
+    /// headers that came with it.
+    pub fn movie(&self, movie_id: i64) -> Result<Playable> {
+        let found = db::with_db(|conn| vod_store::movie_source(conn, movie_id))?
+            .ok_or_else(|| anyhow!("that movie is not in the catalogue any more"))?;
+        let url = found
+            .stream_url
+            .ok_or_else(|| anyhow!("this movie has no address in the playlist"))?;
+        Ok(Playable {
+            url,
+            user_agent: found.user_agent.or_else(|| self.account.user_agent.clone()),
+            referrer: found.referrer,
+        })
     }
 
     /// The replay of `[start, start + duration_minutes)`.
@@ -381,6 +414,80 @@ mod tests {
         let p = dir.join(name);
         std::fs::write(&p, body).unwrap();
         p
+    }
+
+    fn seed_movie(id: i64, url: Option<&str>, agent: Option<&str>) {
+        db::install_test_db();
+        db::with_db(|c| {
+            c.execute(
+                "INSERT INTO movies (movie_id, name, clean_name, stream_url, http_user_agent, added)
+                 VALUES (?1, 'M', 'M', ?2, ?3, 0)",
+                rusqlite::params![id, url, agent],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn a_playlist_movie_plays_from_its_stored_address() {
+        seed_movie(
+            9701,
+            Some("http://example.test/a/film.mkv"),
+            Some("entry-agent"),
+        );
+        let src = M3uSource::new(M3uAccount {
+            user_agent: Some("account-agent".into()),
+            ..M3uAccount::default()
+        })
+        .unwrap();
+        let p = Source::M3u(src).movie(9701).unwrap();
+        assert_eq!(p.url, "http://example.test/a/film.mkv");
+        // The entry's own agent is the more specific.
+        assert_eq!(p.user_agent.as_deref(), Some("entry-agent"));
+    }
+
+    #[test]
+    fn an_xtream_movie_plays_from_the_servers_address_in_its_container() {
+        db::install_test_db();
+        db::with_db(|c| {
+            c.execute(
+                "INSERT INTO movies (movie_id, name, clean_name, container, added)
+                 VALUES (9702, 'M', 'M', 'mkv', 0), (9703, 'N', 'N', NULL, 0)",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        let src = Source::Xtream(
+            XtreamClient::new(crate::xtream::Credentials {
+                host: "http://example.test".into(),
+                username: "u".into(),
+                password: "p".into(),
+            })
+            .unwrap(),
+        );
+        assert_eq!(
+            src.movie(9702).unwrap().url,
+            "http://example.test/movie/u/p/9702.mkv"
+        );
+        assert_eq!(
+            src.movie(9703).unwrap().url,
+            "http://example.test/movie/u/p/9703.mp4"
+        );
+    }
+
+    #[test]
+    fn a_tuner_has_no_movies() {
+        let src = Source::HdHomeRun(
+            HdhrSource::new(crate::hdhomerun::HdhrAccount {
+                device: "192.0.2.1".into(),
+                ..Default::default()
+            })
+            .unwrap(),
+        );
+        let e = src.movie(1).unwrap_err().to_string();
+        assert_eq!(e, "this account has no movies");
     }
 
     #[tokio::test]
