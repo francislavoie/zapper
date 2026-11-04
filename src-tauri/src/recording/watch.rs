@@ -690,19 +690,20 @@ pub(super) async fn may_connect(
     anyway: bool,
     device: &str,
 ) -> Result<(), Box<Response>> {
-    let conns = s.own_conns();
     let slots = s.budget.check(s.open_streams()).await;
+    let conns = s.own_conns();
     let released = s.hubs.released_recently() + s.vod.released_recently();
     let mut decision = decide(slots, &conns, released, anyway);
     // This browser's own other viewer (a page reloaded, a second tab) is
     // not another device to ask about: the newer one has it, as the app's
-    // one player would.
+    // one player would. A movie's is named by its rider: another device
+    // may watch the same movie, and is never the one ended for this.
+    let mut my_movie = None;
     if let Decision::Refuse(Refusal::Viewers { .. }) = decision {
-        if let Some(feed) = s
-            .viewers
-            .only_mine(&conns, device)
-            .or_else(|| s.vod.only_mine(&conns, device))
-        {
+        if let Some(feed) = s.viewers.only_mine(&conns, device) {
+            decision = Decision::TakeOver(feed);
+        } else if let Some((feed, rider)) = s.vod.only_mine(&conns, device) {
+            my_movie = Some(rider);
             decision = Decision::TakeOver(feed);
         }
     }
@@ -713,10 +714,10 @@ pub(super) async fn may_connect(
             // connection of its own: one is ended, so wait for one fewer.
             let on_it = |s: &Server| s.own_conns().iter().filter(|c| c.feed == feed).count();
             let before = on_it(s);
-            if movie_of(feed).is_some() {
-                s.vod.end(feed);
-            } else {
-                s.viewers.take_over(feed);
+            match my_movie {
+                Some(rider) => s.vod.end_rider(rider),
+                None if movie_of(feed).is_some() => s.vod.end(feed),
+                None => s.viewers.take_over(feed),
             }
             // The connection closes once its viewers have let go; the
             // provider is then given a moment, as for a recording.

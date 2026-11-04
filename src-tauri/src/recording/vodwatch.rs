@@ -47,7 +47,7 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, Result};
 use axum::body::Body;
 use axum::extract::{Path, Request, State};
-use axum::http::{header, HeaderMap, StatusCode};
+use axum::http::{header, HeaderMap, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Extension, Json, Router};
@@ -241,7 +241,8 @@ impl MovieViewers {
     }
 
     /// Ends a viewer on `feed` (a movie's), saying another browser took its
-    /// place ("Watch here anyway"). One: each has a connection of its own.
+    /// place ("Watch here anyway"). One, whichever: each has a connection of
+    /// its own, and "anyway" may take any other browser's.
     pub fn end(&self, feed: i64) {
         let mut map = self.map();
         if let Some(v) = map
@@ -266,8 +267,23 @@ impl MovieViewers {
         Some(rider)
     }
 
-    /// A connection among `conns` that is one of `device`'s movie viewers.
-    pub(super) fn only_mine(&self, conns: &[Conn], device: &str) -> Option<i64> {
+    /// Ends the viewer whose rider is `rider`, saying another viewer took
+    /// its place: exactly that one, though another device may watch the
+    /// same movie.
+    pub(super) fn end_rider(&self, rider: i64) {
+        let mut map = self.map();
+        if let Some(v) = map
+            .values_mut()
+            .find(|v| v.ended.is_none() && v.rider == rider)
+        {
+            self.finish(v, Ended::TakenOver);
+        }
+    }
+
+    /// One of `device`'s movie viewers holding a connection among `conns`:
+    /// the connection's feed, and the viewer's rider, which names it alone
+    /// (another device may watch the same movie, on the same feed).
+    pub(super) fn only_mine(&self, conns: &[Conn], device: &str) -> Option<(i64, i64)> {
         let map = self.map();
         let mine = |rider: i64| {
             map.values()
@@ -275,8 +291,9 @@ impl MovieViewers {
         };
         conns
             .iter()
-            .find(|c| c.riders.len() == 1 && mine(c.riders[0].id))
-            .map(|c| c.feed)
+            .filter(|c| c.riders.len() == 1)
+            .map(|c| (c.feed, c.riders[0].id))
+            .find(|&(_, r)| mine(r))
     }
 
     /// Lets go of viewers nobody reads, and forgets ended ones.
@@ -554,6 +571,7 @@ async fn start(
     };
     let rider = s.viewers.rider_id();
     let id = new_id();
+    let (turn_tx, mut turn) = tokio_watch::channel(0);
     // Counted among the service's connections while it opens.
     s.vod.map().insert(
         id.clone(),
@@ -563,25 +581,32 @@ async fn start(
             rider,
             mode,
             up: None,
-            turn: tokio_watch::channel(0).0,
+            turn: turn_tx,
             reading: true,
             idle_since: Instant::now(),
             ended: None,
         },
     );
     // On a task of its own, so that a browser giving up on the answer
-    // leaves a viewer the reaper lets go, not one opening for ever.
+    // leaves a viewer the reaper lets go, not one opening for ever; and
+    // given up at once when the viewer is stopped or taken over meanwhile,
+    // so that the one replacing it never meets it at the provider.
     let opening = tokio::spawn({
         let s = Arc::clone(&s);
         let id = id.clone();
         async move {
-            let opened = match up.open(0, None).await {
-                Ok(span) if span.beyond => Err(Failure::NotVideo),
-                Ok(_) => Ok(()),
-                Err(f) => Err(f),
+            let opened = tokio::select! {
+                o = up.open(0, None) => Some(match o {
+                    Ok(span) if span.beyond => Err(Failure::NotVideo),
+                    Ok(_) => Ok(()),
+                    Err(f) => Err(f),
+                }),
+                _ = superseded(&mut turn, 0) => None,
             };
             let mut map = s.vod.map();
-            if let (Some(v), Ok(())) = (map.get_mut(&id).filter(|v| v.ended.is_none()), &opened) {
+            if let (Some(v), Some(Ok(()))) =
+                (map.get_mut(&id).filter(|v| v.ended.is_none()), &opened)
+            {
                 v.up = Some(up);
                 v.reading = false;
                 v.idle_since = Instant::now();
@@ -590,7 +615,7 @@ async fn start(
             map.remove(&id);
             s.vod.release(up);
             // `None`: taken over, or stopped, while it opened.
-            Err(opened.err())
+            Err(opened.and_then(Result::err))
         }
     });
     match opening.await {
@@ -694,6 +719,11 @@ async fn stream(
     Path(id): Path<String>,
     req: Request,
 ) -> Response {
+    // Answering a HEAD would ask the provider for the file, and end the
+    // reading the page has: nothing a player needs.
+    if req.method() == Method::HEAD {
+        return (StatusCode::METHOD_NOT_ALLOWED, [(header::ALLOW, "GET")]).into_response();
+    }
     if watch::from_another_site(req.headers()) {
         return plain(
             StatusCode::FORBIDDEN,
@@ -753,7 +783,18 @@ async fn stream(
     let server = Arc::clone(&s);
     let reader_id = id.clone();
     tokio::spawn(async move {
-        match up.open(first, last).await {
+        let mut turn = turn;
+        // A newer request (or a stop) while the provider answers: this one
+        // is given up at once, its request dropped before the next is sent.
+        let opened = tokio::select! {
+            o = up.open(first, last) => o.map_err(Some),
+            _ = superseded(&mut turn, mine) => Err(None),
+        };
+        match opened {
+            Err(None) => {
+                give_back(&server, &reader_id, up);
+                let _ = answer.send(Err(None));
+            }
             Ok(span) if !span.beyond => {
                 let _ = answer.send(Ok(span));
                 let up = pass_on(up, &tx, turn, mine).await;
@@ -763,7 +804,7 @@ async fn stream(
                 give_back(&server, &reader_id, up);
                 let _ = answer.send(Ok(span));
             }
-            Err(f) => {
+            Err(Some(f)) => {
                 // The provider will not give the file any more: the viewer
                 // has ended, and its page is told why.
                 let mut map = server.vod.map();
@@ -777,13 +818,20 @@ async fn stream(
                 }
                 drop(map);
                 server.vod.returned.notify_waiters();
-                let _ = answer.send(Err(f));
+                let _ = answer.send(Err(Some(f)));
             }
         }
     });
     let span = match answered.await {
         Ok(Ok(span)) => span,
-        Ok(Err(f)) => return feed_refusal(f),
+        Ok(Err(Some(f))) => return feed_refusal(f),
+        Ok(Err(None)) => {
+            return plain(
+                StatusCode::CONFLICT,
+                "movie",
+                "A newer request took this stream.",
+            )
+        }
         Err(_) => return feed_refusal(Failure::Unreachable),
     };
     if span.beyond {
@@ -806,14 +854,12 @@ async fn stream(
     if let Some(n) = span.length {
         headers.insert(header::CONTENT_LENGTH, n.into());
     }
-    if let Some(n) = span.length.filter(|&n| partial && n > 0) {
-        let total = span
-            .total
-            .map_or_else(|| "*".to_string(), |t| t.to_string());
-        let v = format!("bytes {}-{}/{total}", span.first, span.first + n - 1);
-        if let Ok(v) = v.parse() {
-            headers.insert(header::CONTENT_RANGE, v);
-        }
+    if let Some(v) = span
+        .content_range()
+        .filter(|_| partial)
+        .and_then(|v| v.parse().ok())
+    {
+        headers.insert(header::CONTENT_RANGE, v);
     }
     let status = if partial {
         StatusCode::PARTIAL_CONTENT
@@ -845,6 +891,16 @@ fn give_back(s: &Server, id: &str, mut up: HttpUpstream) {
     }
     drop(map);
     s.vod.returned.notify_waiters();
+}
+
+/// Waits until a newer reading (or a stop) than `mine` has come, or the
+/// viewer is gone.
+async fn superseded(turn: &mut tokio_watch::Receiver<u64>, mine: u64) {
+    while *turn.borrow_and_update() == mine {
+        if turn.changed().await.is_err() {
+            return;
+        }
+    }
 }
 
 /// The open response, to the browser, until it ends, the browser leaves, or
