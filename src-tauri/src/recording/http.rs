@@ -3367,6 +3367,29 @@ pub(crate) mod tests {
         assert_eq!(body["audioIndex"], 0);
         assert_eq!(body["converting"], false);
         assert_eq!(s.own_conns().len(), 1);
+
+        // A browser that plays AC-3 is sent it as it is; a sound the file
+        // does not have is refused; one chosen stays chosen.
+        let replace = Some(serde_json::json!({
+            "movieId": 9_120_051, "replaces": viewer_id(&body), "can": {"ac3": true}
+        }));
+        let (st, body) = call(&s, from_page("POST", "/api/vod/watch", Some(&cookie), replace)).await;
+        assert_eq!(st, StatusCode::OK, "{body}");
+        let stream = body["stream"].as_str().unwrap().to_string();
+        let get = |q: &str| from_page("GET", &format!("{stream}{q}"), Some(&cookie), None);
+        let (st, body) = call(&s, get("?audio=2")).await;
+        assert_eq!(st, StatusCode::BAD_REQUEST, "{body}");
+        let sound = |ts: &[u8]| {
+            let mut t = crate::recording::tsprobe::Tables::new();
+            t.feed(ts).expect("a PMT").audio[0].codec
+        };
+        use crate::recording::tsprobe::Audio;
+        let r = router(s.clone()).oneshot(get("?from=15&audio=1")).await.unwrap();
+        assert_eq!(r.status(), StatusCode::OK);
+        assert_eq!(sound(&read_all(r.into_body()).await), Audio::Ac3);
+        let r = router(s.clone()).oneshot(get("?from=15")).await.unwrap();
+        assert_eq!(r.status(), StatusCode::OK);
+        assert_eq!(sound(&read_all(r.into_body()).await), Audio::Ac3, "still the second sound");
     }
 
     #[allow(clippy::await_holding_lock)]
@@ -3459,6 +3482,32 @@ pub(crate) mod tests {
             StatusCode::NOT_FOUND
         );
         assert_eq!(call(&s, subs("?after=later")).await.0, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            call(&s, from_page("GET", &format!("/api/vod/subtitles/{viewer}/0"), None, None))
+                .await
+                .0,
+            StatusCode::UNAUTHORIZED,
+            "signed in only"
+        );
+        // Subtitles that are pictures are listed, and never served.
+        let pictures = s.vod.add_for_test("app", 9_120_061, -61);
+        s.vod.set_subtitles_for_test(
+            &pictures,
+            vec![crate::recording::vodmux::SubtitleStream {
+                index: 3,
+                codec: "hdmv_pgs_subtitle".into(),
+                lang: Some("eng".into()),
+                title: None,
+                text: false,
+            }],
+        );
+        let (st, body) = call(
+            &s,
+            req("GET", &format!("/api/vod/subtitles/{pictures}/0"), HOME, false, Some(APP)),
+        )
+        .await;
+        assert_eq!(st, StatusCode::NOT_FOUND, "{body}");
+        assert!(body["error"].as_str().unwrap().contains("pictures"), "{body}");
         let mut r = subs("");
         r.headers_mut()
             .insert("sec-fetch-site", HeaderValue::from_static("cross-site"));
