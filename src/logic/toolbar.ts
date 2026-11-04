@@ -106,11 +106,12 @@ export function statusLine(sync: SyncStatusDto, now: number): StatusLine {
       action: "retry",
     };
   }
+  // At rest the title bar says only when the catalogue was synced: its size is
+  // the rail's All channels count, and the space goes to the recording badge.
   return {
     tone: "idle",
     text: restingText(sync.lastSynced, now),
-    detail:
-      sync.channelsTotal > 0 ? `${sync.channelsTotal.toLocaleString()} channels` : "",
+    detail: "",
     spinning: false,
     action: null,
   };

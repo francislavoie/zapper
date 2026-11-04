@@ -113,12 +113,9 @@ test("the resting line is never blank — it is the bar's whole content when idl
   assert.ok(fresh.text.startsWith("Synced "));
 });
 
-test("the resting detail names the catalogue size only once there is one", () => {
+test("at rest the status says only when it synced, not the catalogue's size", () => {
   assert.equal(statusLine(sync({ channelsTotal: 0 }), 0).detail, "");
-  assert.equal(
-    statusLine(sync({ channelsTotal: 60000 }), 0).detail,
-    `${(60000).toLocaleString()} channels`,
-  );
+  assert.equal(statusLine(sync({ channelsTotal: 60000 }), 0).detail, "");
 });
 
 // ---------------------------------------------------------- relative time
