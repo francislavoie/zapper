@@ -1,0 +1,168 @@
+//! When to write down how far into a title the player is.
+//!
+//! The player reports its position many times a second; the database should
+//! hear about it rarely, but never lose more than a few seconds of it. The
+//! saver watches those reports and says when a write is due.
+
+/// How much play passes between writes.
+pub const SAVE_EVERY_SECS: f64 = 10.0;
+/// Past this fraction of a title it counts as started ("in progress").
+pub const STARTED_FRACTION: f64 = 0.01;
+/// Past this fraction it counts as watched.
+pub const WATCHED_FRACTION: f64 = 0.92;
+
+/// Whether `position` is far enough in to call the title watched. Unknown
+/// length never is: there is nothing to take a fraction of.
+pub fn is_finished(position: f64, duration: Option<f64>) -> bool {
+    match duration {
+        Some(d) if d > 0.0 => position >= d * WATCHED_FRACTION,
+        _ => false,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ProgressWrite {
+    pub id: i64,
+    pub position: f64,
+    pub duration: Option<f64>,
+}
+
+#[derive(Debug, Default)]
+pub struct ProgressSaver {
+    id: Option<i64>,
+    position: Option<f64>,
+    duration: Option<f64>,
+    /// The position has moved since the last write.
+    dirty: bool,
+    playing: bool,
+    last_seen: Option<f64>,
+    /// Seconds played since the last write. Counted from the clock between
+    /// reports while playing, so a long pause does not make the next report
+    /// look overdue.
+    played: f64,
+}
+
+impl ProgressSaver {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// One report from the player: which title (if any), where, how long it
+    /// is, whether it is playing, and the clock in seconds. Returns a write
+    /// when one is due: every [`SAVE_EVERY_SECS`] of play, once when playback
+    /// pauses, and once when the title changes (for the one just left).
+    pub fn observe(
+        &mut self,
+        id: Option<i64>,
+        position: Option<f64>,
+        duration: Option<f64>,
+        playing: bool,
+        now: f64,
+    ) -> Option<ProgressWrite> {
+        let mut out = None;
+        if id != self.id {
+            out = self.flush();
+            *self = Self {
+                id,
+                ..Self::default()
+            };
+        } else if self.playing {
+            if let Some(t) = self.last_seen {
+                self.played += (now - t).max(0.0);
+            }
+        }
+        self.last_seen = Some(now);
+        if let Some(p) = position {
+            if self.position != Some(p) {
+                self.dirty = true;
+            }
+            self.position = Some(p);
+        }
+        if duration.is_some() {
+            self.duration = duration;
+        }
+        let was_playing = self.playing;
+        self.playing = playing;
+        if out.is_some() {
+            return out;
+        }
+        if playing && self.played >= SAVE_EVERY_SECS {
+            self.played = 0.0;
+            return self.flush();
+        }
+        if was_playing && !playing {
+            return self.flush();
+        }
+        None
+    }
+
+    /// The last position not yet written, for when playback stops or ends.
+    pub fn flush(&mut self) -> Option<ProgressWrite> {
+        if !self.dirty {
+            return None;
+        }
+        self.dirty = false;
+        Some(ProgressWrite {
+            id: self.id?,
+            position: self.position?,
+            duration: self.duration,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn progress_is_saved_every_ten_seconds_of_play() {
+        let mut s = ProgressSaver::new();
+        let mut at = Vec::new();
+        for t in 0..=25 {
+            if s.observe(Some(1), Some(t as f64), Some(100.0), true, t as f64)
+                .is_some()
+            {
+                at.push(t);
+            }
+        }
+        assert_eq!(at, [10, 20]);
+    }
+
+    #[test]
+    fn a_pause_saves_once_and_a_new_title_saves_the_last_one() {
+        let mut s = ProgressSaver::new();
+        assert!(s
+            .observe(Some(1), Some(5.0), Some(100.0), true, 0.0)
+            .is_none());
+        let w = s
+            .observe(Some(1), Some(6.0), Some(100.0), false, 1.0)
+            .unwrap();
+        assert_eq!((w.id, w.position), (1, 6.0));
+        assert!(s
+            .observe(Some(1), Some(6.0), Some(100.0), false, 2.0)
+            .is_none());
+        assert!(s.flush().is_none());
+
+        s.observe(Some(1), Some(7.0), Some(100.0), true, 3.0);
+        let w = s
+            .observe(Some(2), Some(0.0), Some(50.0), true, 4.0)
+            .unwrap();
+        assert_eq!((w.id, w.position, w.duration), (1, 7.0, Some(100.0)));
+    }
+
+    #[test]
+    fn stopping_flushes_what_was_not_yet_saved() {
+        let mut s = ProgressSaver::new();
+        s.observe(Some(3), Some(4.0), None, true, 0.0);
+        s.observe(Some(3), Some(5.0), None, true, 1.0);
+        assert_eq!(s.flush().map(|w| (w.id, w.position)), Some((3, 5.0)));
+        assert!(s.flush().is_none());
+    }
+
+    #[test]
+    fn ninety_two_percent_is_watched() {
+        assert!(!is_finished(91.9, Some(100.0)));
+        assert!(is_finished(92.0, Some(100.0)));
+        assert!(!is_finished(5000.0, None));
+    }
+}
