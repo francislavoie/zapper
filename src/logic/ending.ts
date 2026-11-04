@@ -197,7 +197,7 @@ export function endedActions(
 }
 
 /** Where a retried movie picks up: the place the player had reached, or
- *  `null` (the title's own remembered place) when there was none. */
+ *  `null` (from the start) when there was none. */
 export function retryStart(p: Pick<PlayerStateDto, "onDemand">): number | null {
   const at = p.onDemand?.position ?? 0;
   return at > 0 ? at : null;

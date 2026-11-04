@@ -90,7 +90,7 @@ export const api = {
   togglePause: () => invoke<void>("toggle_pause"),
   seekRelative: (seconds: number) => invoke<void>("seek_relative", { seconds }),
   seekLive: () => invoke<void>("seek_live"),
-  /** Plays a movie, from `start` seconds or, with `null`, where it was left. */
+  /** Plays a movie, from `start` seconds or, with `null`, from the start. */
   playMovie: (movieId: number, start: number | null) =>
     invoke<void>("play_movie", { movieId, start }),
   /** To an absolute position in a movie, in seconds. */

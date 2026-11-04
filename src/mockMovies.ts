@@ -457,11 +457,11 @@ export function createMockMovies(host: MoviePlayerHost) {
       };
     },
 
-    /** Opens the film from `start`, or from where it was left. */
+    /** Opens the film from `start`, or from the start, as the app does. */
     playMovie: async (movieId: number, start: number | null): Promise<void> => {
       if (!inRange(movieId)) throw new Error("no such movie");
       const mine = host.open();
-      const from = Math.max(0, Math.min(MOCK_DURATION, start ?? positions.get(movieId) ?? 0));
+      const from = Math.max(0, Math.min(MOCK_DURATION, start ?? 0));
       host.patch({
         state: "opening",
         streamId: null,

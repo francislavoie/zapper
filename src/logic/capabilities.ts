@@ -48,7 +48,7 @@ export interface Capabilities {
    *  sign out. */
   signOut: boolean;
   /** Movies from the provider's on-demand catalogue. Whether there are any to
- *  show is the account's, and the movies summary says. */
+   *  show is the account's, and the movies summary says. */
   onDemand: boolean;
   /** Shows subtitles that are pictures (DVB, Blu-ray, DVD), not only text:
    *  mpv does; a browser's player is given text alone. */
