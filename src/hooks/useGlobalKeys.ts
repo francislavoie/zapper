@@ -15,7 +15,9 @@ import { exitFullscreen, toggleFullscreen } from "../fullscreen";
 import { fullscreenNow, refreshFullscreen } from "./useFullscreen";
 import { blocksPlainKey, shortcutModifier } from "../logic/keys";
 import { ALL_CATEGORIES, railItemKind } from "../logic/railItems";
+import { playingKind } from "../logic/movies";
 import { playerRecord } from "../logic/recordings";
+import { VOD_SKIP_SECONDS } from "../logic/vodTransport";
 import { IS_MAC } from "../platform";
 import { run } from "../store";
 import type { State } from "../store";
@@ -172,6 +174,7 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
 
       // The rest only mean anything with a stream open.
       if (state.player.state === "stopped") return;
+      const movie = playingKind(state.player) === "movie";
 
       // Theater: the picture filling the window, without going fullscreen
       // (that is F). YouTube's key for the same idea, so the hand already
@@ -186,7 +189,7 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
       // Record what is on: the programme the guide says is on now, on the
       // channel playing. Already recorded, it says so rather than stopping
       // it (the menus' Stop recording does that).
-      if ((e.key === "r" || e.key === "R") && !e.altKey) {
+      if ((e.key === "r" || e.key === "R") && !e.altKey && !movie) {
         e.preventDefault();
         void recordFromPlayer(
           dispatch,
@@ -195,6 +198,7 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
         return;
       }
 
+      const skip = movie ? VOD_SKIP_SECONDS : 5;
       switch (e.key) {
         case " ":
           e.preventDefault();
@@ -202,14 +206,16 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
           break;
         case "ArrowLeft":
           e.preventDefault();
-          void run(dispatch, "seek", backend.seekRelative(-5));
+          void run(dispatch, "seek", backend.seekRelative(-skip));
           break;
         case "ArrowRight":
           e.preventDefault();
-          void run(dispatch, "seek", backend.seekRelative(5));
+          void run(dispatch, "seek", backend.seekRelative(skip));
           break;
         case "l":
         case "L":
+          // A movie has no live edge.
+          if (movie) break;
           e.preventDefault();
           void run(dispatch, "seek to live", backend.seekLive());
           break;
@@ -224,6 +230,8 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
     state.categoryId,
     state.paletteOpen,
     state.player.state,
+    state.player.onDemand?.kind,
+    state.player.streamId,
     state.query,
     state.settings.guideHours,
     state.settingsOpen,

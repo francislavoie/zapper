@@ -41,7 +41,9 @@ import type { MouseEvent, RefObject } from "react";
 import { backend } from "../backend";
 import { duration, liveState } from "../logic/format";
 import { SKIP_SECONDS } from "../logic/gestures";
+import { playingKind } from "../logic/movies";
 import { hasAudioChoice, selectedLabel } from "../logic/tracks";
+import { VOD_SKIP_SECONDS, vodLabel } from "../logic/vodTransport";
 import { run, useApp, useDispatch } from "../store";
 import { useSleepLeft } from "../hooks/useSleep";
 import {
@@ -58,6 +60,7 @@ import {
   Stop,
 } from "./icons";
 import { Scrubber } from "./Scrubber";
+import { VodScrubber } from "./VodScrubber";
 import { VolumeControl } from "./VolumeControl";
 
 export interface TransportBarProps {
@@ -124,6 +127,11 @@ export function TransportBar({
   // must not second-guess it from behindLive, which sawtooths by seconds
   // during ordinary playback — that is precisely the flicker.
   const live = liveState(player.atLiveEdge, player.behindLive);
+  // A movie has a start and an end instead of a live edge: its own seek bar,
+  // longer skips, a position readout, and no Live button.
+  const movie = playingKind(player) === "movie" ? player.onDemand : null;
+  const skip = movie ? VOD_SKIP_SECONDS : SKIP_SECONDS;
+  const seekBy = (by: number) => void run(dispatch, "seek", backend.seekRelative(by));
 
   /** One place decides what setting a volume means. Reaching for the slider
    *  while muted means "let me hear this", so it unmutes rather than moving a
@@ -135,13 +143,17 @@ export function TransportBar({
 
   return (
     <>
-      <Scrubber
-        player={player}
-        channel={nowChannel}
-        onPin={onPin}
-        compact={compact}
-        hintWithin={hintWithin}
-      />
+      {movie ? (
+        <VodScrubber onDemand={movie} onPin={onPin} compact={compact} />
+      ) : (
+        <Scrubber
+          player={player}
+          channel={nowChannel}
+          onPin={onPin}
+          compact={compact}
+          hintWithin={hintWithin}
+        />
+      )}
 
       <div
         className="ctl-row"
@@ -197,39 +209,48 @@ export function TransportBar({
 
         <button
           className="ctl icon"
-          data-tip={`Back ${SKIP_SECONDS} seconds (Left)`}
-          aria-label={`Back ${SKIP_SECONDS} seconds`}
-          onClick={() => void run(dispatch, "seek", backend.seekRelative(-SKIP_SECONDS))}
+          data-tip={`Back ${skip} seconds (Left)`}
+          aria-label={`Back ${skip} seconds`}
+          onClick={() => seekBy(-skip)}
         >
-          <SkipBack className="i" seconds={SKIP_SECONDS} />
+          <SkipBack className="i" seconds={skip} />
         </button>
         <button
           className="ctl icon"
-          data-tip={`Forward ${SKIP_SECONDS} seconds (Right)`}
-          aria-label={`Forward ${SKIP_SECONDS} seconds`}
-          onClick={() => void run(dispatch, "seek", backend.seekRelative(SKIP_SECONDS))}
+          data-tip={`Forward ${skip} seconds (Right)`}
+          aria-label={`Forward ${skip} seconds`}
+          onClick={() => seekBy(skip)}
         >
-          <SkipForward className="i" seconds={SKIP_SECONDS} />
+          <SkipForward className="i" seconds={skip} />
         </button>
 
-        {/* One control, not a lamp beside a button: the word is the button,
-            and the dot is its state. At the live edge there is nowhere to
-            jump to, so it stops being clickable rather than lying. */}
-        <button
-          className={`ctl live ${live.live ? "at-edge" : ""}`}
-          data-tip={live.canJump ? `${live.label} — click to jump to live (L)` : live.label}
-          aria-label={live.label}
-          disabled={!live.canJump}
-          onClick={() => void run(dispatch, "live", backend.seekLive())}
-        >
-          <span className="live-dot" aria-hidden="true" />
-          Live
-        </button>
-
-        {compact ? null : (
-          <span className="time" data-tip="Buffered scrollback">
-            {duration(player.bufferedBack)}
+        {movie ? (
+          <span className="time vod-time" aria-label="Position">
+            {vodLabel(movie, compact)}
           </span>
+        ) : (
+          <>
+            {/* One control, not a lamp beside a button: the word is the
+                button, and the dot is its state. At the live edge there is
+                nowhere to jump to, so it stops being clickable rather than
+                lying. */}
+            <button
+              className={`ctl live ${live.live ? "at-edge" : ""}`}
+              data-tip={live.canJump ? `${live.label} — click to jump to live (L)` : live.label}
+              aria-label={live.label}
+              disabled={!live.canJump}
+              onClick={() => void run(dispatch, "live", backend.seekLive())}
+            >
+              <span className="live-dot" aria-hidden="true" />
+              Live
+            </button>
+
+            {compact ? null : (
+              <span className="time" data-tip="Buffered scrollback">
+                {duration(player.bufferedBack)}
+              </span>
+            )}
+          </>
         )}
 
         <span className="spring" />
