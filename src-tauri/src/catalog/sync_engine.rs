@@ -42,6 +42,9 @@ impl Mirror for AppMirror {
     }
 
     fn reindex(&self) -> Result<usize> {
+        // Movies too: a tuner or Tvheadend write soft-deletes the movies of
+        // the account it replaced, and the movie index must not keep them.
+        db::with_write_db(index::rebuild_movies)?;
         db::with_write_db(index::rebuild)
     }
 }
@@ -262,15 +265,33 @@ fn land_channels(
 /// request URL and so the account's username and password. They leave this
 /// function scrubbed, because this phase's failure is read by people and
 /// logs both.
-async fn step_movies(client: &XtreamClient) -> Result<String> {
+///
+/// The scrubbed error keeps the HTTP status it carried, so a 401 or 403 is
+/// still a refusal and still gets the account's message.
+///
+/// `from` is the catalogue this pass is filling. The channels phase records
+/// it as it lands; if that phase failed on an account switch the mirror
+/// still holds the old account's catalogue, and landing the new account's
+/// movies under it would mix the two. So the phase waits for a pass whose
+/// channels landed.
+async fn step_movies(client: &XtreamClient, from: &str) -> Result<String> {
     let fetched = async {
         let cats = client.vod_categories().await?;
         let streams = client.vod_streams().await?;
         Ok::<_, anyhow::Error>((cats, streams))
     }
     .await
-    .map_err(|e| anyhow::anyhow!("fetching movies: {}", scrub(&format!("{e:#}"))))?;
+    .map_err(|e| {
+        let why = format!("fetching movies: {}", scrub(&format!("{e:#}")));
+        match http_status(&e) {
+            Some(code) => anyhow::Error::new(HttpRefusal(code)).context(why),
+            None => anyhow::anyhow!(why),
+        }
+    })?;
     let (cats, streams) = fetched;
+    if db::with_write_db(|conn| origin::changed(conn, from))? {
+        anyhow::bail!("the channels have not been refreshed for this account yet; movies wait for them");
+    }
     let movies: Vec<_> = streams.iter().map(vod_sync::NewMovie::from).collect();
     let stats = db::with_write_db(|conn| vod_sync::land_movies(conn, &cats, &movies, now()))?;
     let indexed = db::with_write_db(index::rebuild_movies)?;
@@ -445,7 +466,7 @@ pub async fn run_once<S: StatusSink>(app: &S) -> Result<Option<PassOutcome>> {
             (SyncPhase::Categories, Box::pin(step_categories(&client, switched))),
             (SyncPhase::Channels, Box::pin(step_channels(&client, &from))),
             (SyncPhase::Epg, Box::pin(step_epg(&client))),
-            (SyncPhase::Movies, Box::pin(step_movies(&client))),
+            (SyncPhase::Movies, Box::pin(step_movies(&client, &from))),
         ],
     )
     .await;
@@ -596,11 +617,15 @@ async fn load_playlist(src: &M3uSource) -> Result<PlaylistStats> {
 fn write_single(conn: &rusqlite::Connection, location: &str) -> Result<PlaylistStats> {
     let mut w = PlaylistWriter::begin(conn)?;
     w.set_origin(origin::of_playlist(location));
-    w.push(crate::m3u::Entry {
+    // Never classified: whatever its address ends in, the one URL an account
+    // names is its channel.
+    let e = crate::m3u::Entry {
         name: crate::m3u::parse::name_from_url(location),
         url: location.to_owned(),
         ..Default::default()
-    })?;
+    };
+    let identity = crate::m3u::ids::identity(&e);
+    w.push_identified(e, &identity)?;
     w.finish(&crate::m3u::Header::default())
 }
 
@@ -1204,7 +1229,7 @@ mod tests {
         land_channels(c, &chans, from).unwrap();
     }
 
-    /// One playlist pass: the write, then the origin, as `step_m3u_playlist`.
+    /// One playlist pass: the write, which records the origin itself, as `step_m3u_playlist`.
     fn playlist_pass(c: &rusqlite::Connection, location: &str) {
         let mut w = PlaylistWriter::begin(c).unwrap();
         let fixture = include_str!("../../tests/fixtures/sample.m3u");
@@ -1503,7 +1528,7 @@ mod tests {
         let rec = Recorder::default();
         let outcome = run_steps(
             &rec,
-            vec![(SyncPhase::Movies, Box::pin(step_movies(&client)))],
+            vec![(SyncPhase::Movies, Box::pin(step_movies(&client, "xtream:0000000000000001")))],
         )
         .await;
         assert_eq!(outcome, PassOutcome::Failed);
@@ -1511,6 +1536,60 @@ mod tests {
         assert!(shown.contains("503"), "{shown}");
         assert!(!shown.contains("hunter2-secret"), "{shown}");
         assert!(!shown.contains("viewer-name"), "{shown}");
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn a_movies_phase_the_server_forbids_is_a_refusal() {
+        let _guard = status::test_lock();
+        db::install_test_db();
+        let server = crate::test_http::serve(|_, _| crate::test_http::Reply::new(403, "no"));
+        let client = XtreamClient::new(crate::xtream::Credentials {
+            host: server.base.clone(),
+            username: "viewer-name".into(),
+            password: "hunter2-secret".into(),
+        })
+        .unwrap();
+        let rec = Recorder::default();
+        let outcome = run_steps(
+            &rec,
+            vec![(SyncPhase::Movies, Box::pin(step_movies(&client, "xtream:0000000000000001")))],
+        )
+        .await;
+        assert_eq!(outcome, PassOutcome::Refused);
+        let shown = rec.messages().join("\n");
+        assert!(shown.contains("refused this account"), "{shown}");
+        assert!(!shown.contains("hunter2-secret"), "{shown}");
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn movies_wait_for_the_channels_of_an_account_just_switched_to() {
+        let _guard = status::test_lock();
+        db::install_test_db();
+        let server = crate::test_http::serve(|_, _| crate::test_http::Reply::ok("[]"));
+        let client = XtreamClient::new(crate::xtream::Credentials {
+            host: server.base.clone(),
+            username: "u".into(),
+            password: "p".into(),
+        })
+        .unwrap();
+        let before = db::with_write_db(|c| origin::recorded(c)).unwrap();
+        db::with_write_db(|c| origin::record(c, "xtream:00000000000000aa")).unwrap();
+        let err = step_movies(&client, "xtream:00000000000000bb").await;
+        if let Some(b) = before {
+            db::with_write_db(|c| origin::record(c, &b)).unwrap();
+        }
+        let err = err.unwrap_err().to_string();
+        assert!(err.contains("movies wait"), "{err}");
+    }
+
+    #[test]
+    fn a_single_stream_account_stays_a_channel_whatever_its_address_ends_in() {
+        let c = crate::catalog::open_in_memory().unwrap();
+        let s = write_single(&c, "http://cdn.example/clips/feed.mp4").unwrap();
+        assert_eq!((s.channels.inserted, s.movies.inserted), (1, 0));
+        assert_eq!(live_movies(&c), 0);
     }
 
     #[allow(clippy::await_holding_lock)]
