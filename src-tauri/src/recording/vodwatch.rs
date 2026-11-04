@@ -211,6 +211,9 @@ fn plan_for(info: &MediaInfo, audio: Option<usize>, can: &Can) -> Result<VodPlan
 
 /// A track's cues kept at most.
 const MAX_CUES: usize = 2000;
+/// A viewer's cues kept at most, all tracks together: a file with many
+/// tracks keeps less of each.
+const MAX_CUES_TOTAL: usize = 8000;
 /// Cues that ended this long before the newest began are let go: a page's
 /// player is never that far behind what its remux has read.
 const CUES_BEHIND: f64 = 600.0;
@@ -238,6 +241,18 @@ impl Cues {
         let q = self.tracks.entry(cue.track).or_default();
         q.push_back(cue);
         while q.len() > MAX_CUES || q.front().is_some_and(|c| c.end < newest - CUES_BEHIND) {
+            q.pop_front();
+        }
+        // Over the viewer's share: the earliest cue of any track goes first.
+        while self.tracks.values().map(VecDeque::len).sum::<usize>() > MAX_CUES_TOTAL {
+            let Some(q) = self
+                .tracks
+                .values_mut()
+                .filter(|q| !q.is_empty())
+                .min_by(|a, b| a[0].start.total_cmp(&b[0].start))
+            else {
+                break;
+            };
             q.pop_front();
         }
     }
@@ -280,8 +295,10 @@ struct MovieViewer {
     from: f64,
     audio: Option<usize>,
     can: Can,
-    /// The file's subtitle tracks, as the watch answer lists them.
+    /// The file's subtitle tracks, as the watch answer lists them, and how
+    /// many sounds it has.
     subtitles: Vec<SubtitleStream>,
+    sounds: usize,
     cues: Cues,
     /// Bumped by each reading; an older one stops when it sees a newer.
     turn: tokio_watch::Sender<u64>,
@@ -477,6 +494,14 @@ impl MovieViewers {
     }
 
     #[cfg(test)]
+    /// Viewer `id`'s file holds subtitle tracks `subs`.
+    pub(super) fn set_subtitles_for_test(&self, id: &str, subs: Vec<SubtitleStream>) {
+        if let Some(v) = self.map().get_mut(id) {
+            v.subtitles = subs;
+        }
+    }
+
+    #[cfg(test)]
     /// A viewer of `movie_id` for `device` holding no file, as the rules see
     /// one.
     pub(super) fn add_for_test(&self, device: &str, movie_id: i64, rider: i64) -> String {
@@ -493,6 +518,7 @@ impl MovieViewers {
                 audio: None,
                 can: Can::default(),
                 subtitles: Vec::new(),
+                sounds: 0,
                 cues: Cues::default(),
                 turn: tokio_watch::channel(0).0,
                 reading: false,
@@ -767,6 +793,7 @@ async fn start(
             audio: req.audio,
             can,
             subtitles: Vec::new(),
+            sounds: 0,
             cues: Cues::default(),
             turn: turn_tx,
             reading: true,
@@ -815,6 +842,7 @@ async fn start(
                 if let Some(up) = up.take() {
                     if let Some(m) = media {
                         v.subtitles = m.subtitles.clone();
+                        v.sounds = m.audio.len();
                     }
                     v.up = Some(up);
                     v.reading = false;
@@ -1026,16 +1054,26 @@ async fn stream(
             if v.ended.is_some() {
                 return plain(StatusCode::GONE, "feed", "This stream has ended.");
             }
+            // Refused before it ends the reading there is.
+            if v.mode == VodMode::Remux && asked.audio.is_some_and(|a| a >= v.sounds) {
+                return plain(
+                    StatusCode::BAD_REQUEST,
+                    "movie",
+                    "audio: the index of one of the movie's sounds.",
+                );
+            }
             let next = v.turn.borrow().wrapping_add(1);
             v.turn.send_replace(next);
             if let Some(up) = v.up.take() {
                 v.reading = true;
                 let remuxing = (v.mode == VodMode::Remux).then(|| {
-                    // The subtitles the page reads are this remux's.
+                    // The subtitles the page reads are this remux's, and the
+                    // sound chosen stays chosen.
                     v.cues = Cues::new(next);
+                    v.audio = asked.audio.or(v.audio);
                     RemuxAsk {
                         from: asked.from.unwrap_or(v.from),
-                        audio: asked.audio.or(v.audio),
+                        audio: v.audio,
                         can: v.can,
                     }
                 });
@@ -1167,7 +1205,12 @@ enum Began {
     NotPlayable(String),
     /// It ended before its output started.
     Failed,
+    /// Its first keyframe took longer than [`START_WAIT`].
+    TooSlow,
 }
+
+/// How long a remux has to reach its first keyframe.
+const START_WAIT: Duration = Duration::from_secs(60);
 
 /// A remux's answer: MPEG-TS from the film's keyframe at or before `from`,
 /// once the remuxer has found it, named in `X-Start`.
@@ -1194,6 +1237,13 @@ async fn remux_stream(
         Ok(Began::Feed(f)) => return feed_refusal(f),
         Ok(Began::NotPlayable(why)) => {
             return plain(StatusCode::UNPROCESSABLE_ENTITY, "notPlayable", why)
+        }
+        Ok(Began::TooSlow) => {
+            return plain(
+                StatusCode::GATEWAY_TIMEOUT,
+                "feed",
+                "The movie took too long to start from there.",
+            )
         }
         Ok(Began::Failed) | Err(_) => {
             return plain(
@@ -1244,10 +1294,15 @@ async fn remux(
         mut start,
         cues,
     } = vod;
+    let mut too_slow = false;
     let at = tokio::select! {
         at = &mut start => at.ok(),
         _ = superseded(&mut turn, mine) => None,
         _ = tx.closed() => None,
+        _ = tokio::time::sleep(START_WAIT) => {
+            too_slow = true;
+            None
+        }
     };
     let mut answer = Some(answer);
     if let Some(at) = at {
@@ -1289,6 +1344,7 @@ async fn remux(
     let began = match refused.lock().unwrap_or_else(|e| e.into_inner()).take() {
         Some(why) => Began::NotPlayable(why),
         None if *turn.borrow() != mine => Began::Superseded,
+        None if too_slow => Began::TooSlow,
         None => Began::Failed,
     };
     give_back(&s, &id, up);
@@ -1824,6 +1880,20 @@ mod tests {
             c.push(cue(5, 700.0 + i as f64 / 10.0, "busy"));
         }
         assert_eq!(c.tracks[&5].len(), MAX_CUES);
+
+        // All tracks together: the earliest cues go first, whichever track.
+        let mut c = Cues::new(4);
+        let tracks = MAX_CUES_TOTAL / MAX_CUES + 2;
+        for i in 0..MAX_CUES {
+            for t in 0..tracks {
+                c.push(cue(t, i as f64 / 10.0, "many"));
+            }
+        }
+        let kept: usize = c.tracks.values().map(VecDeque::len).sum();
+        assert_eq!(kept, MAX_CUES_TOTAL);
+        let earliest = c.tracks.values().map(|q| q[0].start).fold(f64::MAX, f64::min);
+        let latest = c.tracks.values().map(|q| q[q.len() - 1].start).fold(0.0, f64::max);
+        assert!(earliest > 0.0 && latest == (MAX_CUES - 1) as f64 / 10.0, "{earliest} {latest}");
     }
 
     #[test]
