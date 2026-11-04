@@ -195,3 +195,12 @@ export function endedActions(
       return { primary: "retry", note: null, dismiss: true };
   }
 }
+
+/** What "Retry" / "Watch here anyway" plays again: the movie the player has
+ *  open (a movie has no stream id), else the channel with one. */
+export function retryTarget(
+  p: Pick<PlayerStateDto, "streamId" | "onDemand">,
+): "movie" | "channel" | "none" {
+  if (p.onDemand?.kind === "movie") return "movie";
+  return p.streamId !== null ? "channel" : "none";
+}

@@ -37,6 +37,7 @@ export function MovieSheet({ id }: { id: number }) {
     };
   }, []);
 
+  const [brokenBackdrop, setBrokenBackdrop] = useState<string | null>(null);
   const [similar, setSimilar] = useState<{ id: number; items: MovieDto[] } | null>(null);
   useEffect(() => {
     let cancelled = false;
@@ -62,7 +63,8 @@ export function MovieSheet({ id }: { id: number }) {
   if (!movie) return null;
   const d = details.status === "ready" ? details.data : null;
   const playing = playingKind(player) === "movie" && player.onDemand?.id === id;
-  const backdrop = d?.backdropUrls[0] ?? null;
+  const first = d?.backdropUrls[0] ?? null;
+  const backdrop = first !== null && first !== brokenBackdrop ? first : null;
   const languages = d ? languagesLine(d) : "";
   const people = d ? peopleLine(d) : "";
 
@@ -76,7 +78,12 @@ export function MovieSheet({ id }: { id: number }) {
     >
       <div className="movie-sheet-backdrop" aria-hidden>
         {backdrop ? (
-          <img src={backdrop} alt="" decoding="async" />
+          <img
+            src={backdrop}
+            alt=""
+            decoding="async"
+            onError={() => setBrokenBackdrop(backdrop)}
+          />
         ) : (
           <Poster url={movie.posterUrl} name={movie.cleanName} className="movie-sheet-blur" />
         )}
