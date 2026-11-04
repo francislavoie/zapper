@@ -230,8 +230,10 @@ mod tests {
         serde_json::from_str(v).unwrap()
     }
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn details_are_read_once_and_kept_for_a_week() {
+        let _catalogue = db::movie_catalogue();
         seed(9601);
         let calls = Arc::new(AtomicUsize::new(0));
         let n = calls.clone();
@@ -252,8 +254,10 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn a_failed_refetch_shows_what_was_kept() {
+        let _catalogue = db::movie_catalogue();
         seed(9602);
         let calls = Arc::new(AtomicUsize::new(0));
         let n = calls.clone();
@@ -273,8 +277,10 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn a_failed_first_fetch_names_no_password() {
+        let _catalogue = db::movie_catalogue();
         seed(9603);
         let s = serve(|_, _| Reply::new(500, "boom"));
         let src = source(&s.base);
@@ -284,8 +290,10 @@ mod tests {
         assert!(text.contains("could not be fetched"), "{text}");
     }
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn a_playlist_movie_has_no_details_to_fetch() {
+        let _catalogue = db::movie_catalogue();
         seed(9604);
         let src =
             Source::M3u(crate::source::M3uSource::new(crate::m3u::M3uAccount::default()).unwrap());

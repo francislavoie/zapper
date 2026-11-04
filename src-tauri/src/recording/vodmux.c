@@ -54,9 +54,10 @@ typedef int (*zv_write_fn)(void *opaque, const uint8_t *buf, int size);
 typedef int64_t (*zv_seek_fn)(void *opaque, int64_t pos);
 typedef int64_t (*zv_size_fn)(void *opaque);
 /* One stream of the file: kind 0 audio (`n` its channels), 1 text subtitles,
- * 2 bitmap subtitles; `index` is its number in the file. */
+ * 2 bitmap subtitles; `index` is its number in the file, `title` its own name
+ * ("" without). */
 typedef void (*zv_stream_fn)(void *opaque, int kind, int index, const char *codec, const char *lang,
-                             int n);
+                             const char *title, int n);
 /* Called once with the streams listed: duration in seconds (negative when
  * unknown) and the video's codec ("" without). Sets the audio stream to keep
  * (-1 for none) and whether to encode it; returns non-zero to refuse. */
@@ -513,8 +514,8 @@ static int encode_packet(encoder *e, AVFormatContext *out, AVPacket *pkt) {
     return r == AVERROR(EAGAIN) || r == AVERROR_EOF ? 0 : r;
 }
 
-static void lang_of(const AVStream *st, char *dst, size_t n) {
-    AVDictionaryEntry *l = av_dict_get(st->metadata, "language", NULL, 0);
+static void tag_of(const AVStream *st, const char *key, char *dst, size_t n) {
+    AVDictionaryEntry *l = av_dict_get(st->metadata, key, NULL, 0);
     snprintf(dst, n, "%s", l && l->value ? l->value : "");
 }
 
@@ -577,17 +578,18 @@ int zv_run(zv_read_fn read, zv_seek_fn seek, zv_size_fn size, zv_write_fn write,
     for (unsigned s = 0; s < in->nb_streams; s++) {
         AVStream *st = in->streams[s];
         AVCodecParameters *cp = st->codecpar;
-        char lang[16];
-        lang_of(st, lang, sizeof lang);
+        char lang[16], title[128];
+        tag_of(st, "language", lang, sizeof lang);
+        tag_of(st, "title", title, sizeof title);
         if (cp->codec_type == AVMEDIA_TYPE_VIDEO && video < 0 && cp->codec_id != AV_CODEC_ID_NONE &&
             !(st->disposition & AV_DISPOSITION_ATTACHED_PIC))
             video = (int)s;
         else if (cp->codec_type == AVMEDIA_TYPE_AUDIO)
-            stream_fn(opaque, 0, (int)s, avcodec_get_name(cp->codec_id), lang,
+            stream_fn(opaque, 0, (int)s, avcodec_get_name(cp->codec_id), lang, title,
                       cp->ch_layout.nb_channels);
         else if (cp->codec_type == AVMEDIA_TYPE_SUBTITLE)
             stream_fn(opaque, is_text_sub(cp->codec_id) ? 1 : 2, (int)s,
-                      avcodec_get_name(cp->codec_id), lang, 0);
+                      avcodec_get_name(cp->codec_id), lang, title, 0);
     }
     double duration = in->duration != AV_NOPTS_VALUE ? (double)in->duration / AV_TIME_BASE : -1;
     if (plan_fn(opaque, duration,
