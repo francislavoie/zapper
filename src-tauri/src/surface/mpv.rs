@@ -435,6 +435,9 @@ pub struct Probe {
     pub demuxer_eof: bool,
     /// Bytes buffered ahead of the playhead.
     pub fw_bytes: Option<i64>,
+    /// The length of the file, when it has one: a movie's, not a live
+    /// stream's, which mpv reports as unknown.
+    pub duration: Option<f64>,
 }
 
 /// `demuxer-cache-state`, the parts of it that are read.
@@ -689,6 +692,9 @@ impl Player {
             cache_end: w.cache_end,
             demuxer_eof: w.eof,
             fw_bytes: w.fw_bytes,
+            duration: self
+                .get_f64("duration")
+                .filter(|d| d.is_finite() && *d > 0.0),
         }
     }
 
