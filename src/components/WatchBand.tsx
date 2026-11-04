@@ -14,7 +14,7 @@
 // moving or resizing the picture is one edit and the rect follows by
 // measurement.
 
-import { useRef, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
+import { useMemo, useRef, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 import { playChannel, showChannelCategory, showChannelInGuide } from "../actions";
 import { endedMessage, startingLine } from "../logic/ending";
 import { chordLabel } from "../logic/keys";
@@ -38,7 +38,6 @@ import {
   isDefaultVideoWidth,
   widthAfterDrag,
 } from "../logic/videoSize";
-import { useMemo } from "react";
 import { useRecordingChannels } from "../hooks/useRecordingChannels";
 import { listedFor, railItemKind } from "../logic/railItems";
 import { categoryNames } from "../logic/searchGroups";

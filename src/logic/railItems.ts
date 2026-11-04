@@ -69,11 +69,12 @@ export function selectionTitle(
 
 export function selectionSubtitle(id: string, count: number): string {
   const channels = `${count.toLocaleString()} ${count === 1 ? "channel" : "channels"}`;
+  // Nothing yet (the first run): the order alone, without a count of zero.
   switch (railItemKind(id)) {
     case "favourites":
-      return `${channels}, most watched first`;
+      return count === 0 ? "most watched first" : `${channels}, most watched first`;
     case "recent":
-      return `${channels}, newest first`;
+      return count === 0 ? "newest first" : `${channels}, newest first`;
     default:
       return channels;
   }

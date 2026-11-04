@@ -247,8 +247,7 @@ select option {
 .settings-side,
 .settings-body,
 .palette-list,
-.guide-body,
-.watch-info {
+.guide-body {
   scrollbar-color: #39414f transparent;
   scrollbar-width: thin;
 }
@@ -4454,16 +4453,6 @@ textarea.field {
   /* Chrome, and chrome is not dragged out of the window. */
   user-select: none;
   -webkit-user-drag: none;
-}
-
-/* The programme name beside a restored channel. Dimmer than the channel: the
-   channel is what a click acts on, the programme is only context. */
-.watch-now {
-  color: var(--dim);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 28ch;
 }
 
 /* Guide mode keeps the picture docked: it is the same .browse grid as the

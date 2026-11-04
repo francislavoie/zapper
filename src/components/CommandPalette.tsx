@@ -91,10 +91,10 @@ export function CommandPalette() {
           mode: state.mode,
           guideHours: state.settings.guideHours,
           listed: listedFor(
-        state.categoryId,
-        state.favourites.status === "ready" ? state.favourites.data : null,
-        state.recent.status === "ready" ? state.recent.data : null,
-      ),
+            state.categoryId,
+            state.favourites.status === "ready" ? state.favourites.data : null,
+            state.recent.status === "ready" ? state.recent.data : null,
+          ),
         });
         return;
       }

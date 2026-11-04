@@ -29,6 +29,8 @@ test("each selection has a title and says how many it holds", () => {
   assert.equal(selectionTitle("uk", CATS), "UK | News");
   assert.equal(selectionTitle("gone", CATS), "Channels");
   assert.equal(selectionSubtitle(FAVOURITES, 18), "18 channels, most watched first");
+  assert.equal(selectionSubtitle(FAVOURITES, 0), "most watched first");
+  assert.equal(selectionSubtitle(RECENT, 0), "newest first");
   assert.equal(selectionSubtitle(RECENT, 1), "1 channel, newest first");
   assert.equal(selectionSubtitle(ALL, 49526), `${(49526).toLocaleString()} channels`);
   assert.equal(selectionEstimate(ALL, CATS, 999), 52);

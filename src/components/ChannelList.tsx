@@ -18,7 +18,7 @@ import { useProgrammeSearch } from "../hooks/useProgrammeSearch";
 import { useSearch } from "../hooks/useSearch";
 import { HOUR, rowNowNext } from "../logic/guide";
 import { favouriteMeta } from "../logic/favourites";
-import { pagedCategory, selectionSubtitle, selectionTitle } from "../logic/railItems";
+import { ALL_CATEGORIES, pagedCategory, railItemKind, selectionSubtitle, selectionTitle } from "../logic/railItems";
 import { centredScrollTop } from "../logic/programmes";
 import { LIST_ROW_HEIGHT, OVERSCAN, computeWindow, stickyIndex } from "../logic/virtual";
 import { loadSession, saveSession } from "../session";
@@ -68,8 +68,14 @@ export function ChannelList() {
     state.categories.status === "ready" ? state.categories.data : [],
   );
 
-  const live = useLiveRows(state.categoryId);
-  const paged = pagedCategory(state.categoryId);
+  // Recordings are not channels, and the list is hidden behind them: it keeps
+  // the last channel selection, so the media keys still have something to
+  // step through.
+  const channelSelection = useRef(ALL_CATEGORIES);
+  if (railItemKind(state.categoryId) !== "recordings") channelSelection.current = state.categoryId;
+  const rowsId = railItemKind(state.categoryId) === "recordings" ? channelSelection.current : state.categoryId;
+  const live = useLiveRows(rowsId);
+  const paged = pagedCategory(rowsId);
   // `/` and Ctrl+P run through the same backend index; the difference is only
   // where the results are shown.
   const results = useSearch(state.query, SEARCH_LIMIT);
@@ -311,7 +317,7 @@ export function ChannelList() {
             showingProgrammes
               ? `${programmeCount.toLocaleString()}${programmes.hasMore ? "+" : ""}`
               : !searching && listedEntries
-                ? selectionSubtitle(state.categoryId, channelCount)
+                ? selectionSubtitle(rowsId, channelCount)
                 : `${channelCount.toLocaleString()}`
           }
           loading={showingProgrammes ? programmes.result.status === "loading" : source.loading}
