@@ -430,7 +430,10 @@ and a film played past most of its length counts as watched, as in the app. Paus
 the film lets its connection go (a recording may be waiting for one) and keeps its place; Play
 watches it again from there. While the page is open it asks after its film every few seconds, which
 keeps the film's place on the service even when the browser holds all it needs for now and reads
-nothing; a closed page's goes within 15 seconds.
+nothing (a page that has asked within the last 90 seconds keeps it: a background tab may ask only
+once a minute); a closed page's goes within 90 seconds. A film that doesn't start within half a
+minute, or stands still for half a minute while playing, is opened again where it was, twice at
+most, before the page says it stopped.
 
 ### Recording what you watch
 
@@ -863,7 +866,7 @@ Watching (the app or a device; a viewer is its device's alone, `404` to anyone e
 | `DELETE /api/watch/{viewer}` | stops it at once (`204`) |
 | `POST /api/vod/watch` | body `{movieId, anyway?, replaces?, audio?, from?, can?}` (`replaces`: a channel's viewer or a movie's; `from`: seconds into the movie to start at, for the remuxer) → `{viewer, stream, mode, duration, audio, audioIndex, converting, notice?}`. A movie always has a connection of its own, asked of the same budget as a channel's and refused the same ways (`404` `movie` for one not in the catalogue). `mode` is `direct` for an MP4 whose details say H.264 and AAC or MP3 sound (the browser plays the file as it is), else `remux` |
 | `GET /api/vod/stream/{viewer}` | `direct`: the file, by the request's `Range` (passed on to the provider; `206` with `Content-Range`, or `200`), `Accept-Ranges: bytes`. A new request ends the one before, so the account sees one connection per viewer. `remux`: `501` for now |
-| `GET /api/vod/watch/{viewer}`, `DELETE /api/vod/watch/{viewer}` | as a channel's viewer's; asking keeps a viewer nobody reads from (its browser holds all it needs) from being let go as idle |
+| `GET /api/vod/watch/{viewer}`, `DELETE /api/vod/watch/{viewer}` | as a channel's viewer's; asking keeps a viewer nobody reads from (its browser holds all it needs) for 90 seconds, where one nobody reads or asks after goes after 15 |
 
 "The app" is the `server-token` from a loopback address; a device's token is refused there
 (`403`). `Device` is `{id, name, userAgent, created, lastUsed?, address?}`; `fingerprint` is the
