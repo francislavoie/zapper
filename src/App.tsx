@@ -18,7 +18,7 @@ import {
   subscribeSync,
 } from "./backend";
 import { paintMockStill } from "./mock";
-import { loadCategories } from "./actions";
+import { loadCategories, loadWatchLists } from "./actions";
 import { errorMessage } from "./logic/async";
 import { useGlobalKeys } from "./hooks/useGlobalKeys";
 import { useMenuCommands } from "./hooks/useMenuCommands";
@@ -280,6 +280,13 @@ export function App() {
   useEffect(() => {
     if (categoriesStatus === "idle") void loadCategories(dispatch);
   }, [categoriesStatus, dispatch]);
+
+  // The rail's counts and the list both read the watch lists, so the app
+  // loads them, not a pane — the reason loadCategories lives here too. Watching
+  // something is the only thing that changes them, bar an imported backup.
+  useEffect(() => {
+    void loadWatchLists(dispatch);
+  }, [dispatch, state.player.streamId, state.activityVersion]);
 
   // And again whenever a sync has rewritten it. Loaded once and kept, the
   // list from before the sync stayed up until a restart — on a first run,
