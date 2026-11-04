@@ -211,6 +211,9 @@ CREATE INDEX IF NOT EXISTS movies_by_category ON movies(category_id, added);
 CREATE INDEX IF NOT EXISTS movies_by_name ON movies(clean_name COLLATE NOCASE);
 CREATE INDEX IF NOT EXISTS movies_by_year ON movies(year);
 CREATE INDEX IF NOT EXISTS movies_by_rating ON movies(rating);
+-- Counting a category's live titles reads this alone, with no table lookups.
+CREATE INDEX IF NOT EXISTS movies_live_by_category ON movies(category_id)
+    WHERE deleted_at IS NULL;
 CREATE TABLE IF NOT EXISTS movie_details (
     movie_id   INTEGER PRIMARY KEY,
     fetched_at INTEGER NOT NULL,
