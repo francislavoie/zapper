@@ -38,7 +38,7 @@ import {
   type WatchRefusal,
 } from "./logic/webPlayback";
 import {
-  STUCK_LIMIT,
+  NOT_STUCK,
   SUBTITLE_POLL_MS,
   bufferedEnd,
   cueTimes,
@@ -51,8 +51,12 @@ import {
   releaseDue,
   seekPlan,
   stallDue,
+  stuckAfterPlay,
+  stuckAgain,
+  stuckTooOften,
   subtitleAfter,
   vodStreamUrl,
+  type Stuck,
   type VodMode,
 } from "./logic/webVod";
 import type { OnDemandDto, PlayerOptionsDto, StreamEnding, TrackDto } from "./types";
@@ -143,9 +147,9 @@ interface Session {
   reopens: number[];
   /** When the playing film's place last moved (logic/webVod.ts `movedAt`). */
   moved: { at: number; position: number } | null;
-  /** Opened again in a row for not starting or standing still, with no
-   *  playing in between. */
-  stuck: number;
+  /** Opened again in a row for not starting or standing still, with not
+   *  enough playing in between to say it got over it. */
+  stuck: Stuck;
   /** The subtitle cues put on the element's track for this reading. */
   cues: { lastEnd: number | null; held: Set<string>; askedAt: number; asking: boolean };
 }
@@ -318,7 +322,7 @@ async function watch(movieId: number, from: number, keep: Keep): Promise<void> {
     lastProgress: null,
     reopens: [],
     moved: null,
-    stuck: 0,
+    stuck: NOT_STUCK,
     cues: { lastEnd: null, held: new Set(), askedAt: 0, asking: false },
   };
   session = s;
@@ -607,9 +611,13 @@ export async function stop(): Promise<void> {
   if (viewer) await forget(viewer);
 }
 
-async function forget(viewer: string) {
+/** Lets the service's viewer go. `keepalive`: sent even as the page goes. */
+async function forget(viewer: string, keepalive = false) {
   try {
-    await fetch(`/api/vod/watch/${encodeURIComponent(viewer)}`, requestInit("DELETE"));
+    await fetch(`/api/vod/watch/${encodeURIComponent(viewer)}`, {
+      ...requestInit("DELETE"),
+      keepalive,
+    });
   } catch {
     // The service lets an unread viewer go by itself.
   }
@@ -666,14 +674,17 @@ async function viewerStatus(viewer: string): Promise<ViewerStatus | null> {
 
 /** Tells the service how far the film got: it keeps the place to resume
  *  from, and past most of the film marks it watched. `final`: whatever the
- *  timing, as the film is left. */
-function report(s: Session, final = false) {
+ *  timing, as the film is left; `keepalive`: sent even as the page goes. */
+function report(s: Session, final = false, keepalive = false) {
   if (!final && !progressDue(s.lastProgress, Date.now(), s.position, s.pausedAt !== null)) return;
   if (s.position < 1 && s.lastProgress === null) return;
   if (final && s.lastProgress?.position === s.position) return;
   s.lastProgress = { at: Date.now(), position: s.position };
   const body = { position: s.position, duration: durationOf(s) };
-  void fetch(`/api/vod/movies/${s.movieId}/progress`, requestInit("PUT", body)).catch(() => {
+  void fetch(`/api/vod/movies/${s.movieId}/progress`, {
+    ...requestInit("PUT", body),
+    keepalive,
+  }).catch(() => {
     // The next report says it again.
   });
 }
@@ -707,8 +718,11 @@ function tick() {
     return;
   }
   const moved = movedAt(s.moved, now, s.position, el.paused);
-  // Playing again after being stuck: the count starts afresh.
-  if (moved !== s.moved && s.moved !== null && !el.paused) s.stuck = 0;
+  // Playing again after being stuck: the count starts afresh once it has
+  // played a while past where it stuck.
+  if (moved !== s.moved && s.moved !== null && !el.paused) {
+    s.stuck = stuckAfterPlay(s.stuck, s.moved.position, moved.position);
+  }
   s.moved = moved;
   if (stallDue(moved, now)) {
     stuck(s);
@@ -726,8 +740,8 @@ function tick() {
  *  opened again (`broke`), a few times in a row at most before the picture
  *  says it stopped, which lets its viewer go. */
 function stuck(s: Session) {
-  s.stuck += 1;
-  if (s.stuck > STUCK_LIMIT) {
+  s.stuck = stuckAgain(s.stuck);
+  if (stuckTooOften(s.stuck)) {
     fail(s.movieId, s.position, s.duration, endedBy("network"),
       "The movie stopped coming from the recording service.");
     return;
@@ -738,15 +752,28 @@ function stuck(s: Session) {
   void broke(s, s.reading);
 }
 
-/** Paused for long: the connection goes, the place stays. Playing again
- *  watches the film anew from there. */
-function release(s: Session) {
-  report(s, true);
+/** Paused for long, or the page going: the connection goes, the place
+ *  stays. Playing again watches the film anew from there. `leaving`: the
+ *  page is being closed or put away, and what is sent must outlive it. */
+function release(s: Session, leaving = false) {
+  report(s, true, leaving);
   s.released = true;
   closeReading(s);
-  void forget(s.viewer);
+  void forget(s.viewer, leaving);
   noticeFeed.set({ recording: null, silent: null });
   patch({ state: "paused", bufferedBack: 0 });
+}
+
+// A closed tab would otherwise hold the film's connection until the service
+// gives up on a page that stopped asking after it, which a recording due
+// meanwhile waits for. Let go as the page goes; a page restored from the
+// browser's back-forward cache watches again when played, as after a long
+// pause.
+if (typeof window !== "undefined") {
+  window.addEventListener("pagehide", () => {
+    const s = session;
+    if (s && !s.released) release(s, true);
+  });
 }
 
 /** What the service says about this viewer: a recording it is in the way

@@ -110,6 +110,43 @@ export const STALL_LIMIT_MS = 30_000;
  *  opened again before the picture says it stopped. */
 export const STUCK_LIMIT = 2;
 
+/** How much play, in seconds of the film, ends a run of being stuck: a
+ *  reopened film that plays a moment and sticks again is still stuck. */
+export const UNSTUCK_AFTER_S = 10;
+
+/** The largest move of the film's place between two looks that counts as
+ *  playing; more is a seek. */
+const PLAY_STEP_MAX_S = 2;
+
+/** How often in a row the film has stuck, and how much it has played since
+ *  it last did. */
+export interface Stuck {
+  count: number;
+  played: number;
+}
+
+export const NOT_STUCK: Stuck = { count: 0, played: 0 };
+
+/** The film stuck once more: its count up, its play since then none. */
+export function stuckAgain(st: Stuck): Stuck {
+  return { count: st.count + 1, played: 0 };
+}
+
+/** Whether a film stuck this often in a row is given up on. */
+export function stuckTooOften(st: Stuck): boolean {
+  return st.count > STUCK_LIMIT;
+}
+
+/** After the playing film's place moved from `from` to `to`: the play
+ *  counted, and the run of being stuck over once it comes to
+ *  `UNSTUCK_AFTER_S`. A seek, or going back, is not play. */
+export function stuckAfterPlay(st: Stuck, from: number, to: number): Stuck {
+  const step = to - from;
+  if (st.count === 0 || !(step > 0 && step <= PLAY_STEP_MAX_S)) return st;
+  const played = st.played + step;
+  return played >= UNSTUCK_AFTER_S ? NOT_STUCK : { count: st.count, played };
+}
+
 /** When the film's place last moved: `prev`, while it stands still and
  *  plays; now, when it moved or is paused (a pause is not a stall). */
 export function movedAt(
