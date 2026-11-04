@@ -19,7 +19,7 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
   channels from several categories mix, the category is named too.
 - Recordings is part of Live TV, not a window: pick it in the rail, or from the menu, the
   command palette or the title-bar badge. What you can do with a recording (open its folder,
-  cancel, stop, delete, change its backup) is beside the picture.
+  cancel, stop, delete, change its backup channel) is beside the picture.
 - The title bar shows the catalogue's sync status beside Settings.
 
 ### Added

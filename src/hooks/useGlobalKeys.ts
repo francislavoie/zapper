@@ -14,6 +14,7 @@ import { focusSearch, typingInto } from "../focus";
 import { exitFullscreen, toggleFullscreen } from "../fullscreen";
 import { fullscreenNow, refreshFullscreen } from "./useFullscreen";
 import { blocksPlainKey, shortcutModifier } from "../logic/keys";
+import { ALL_CATEGORIES, railItemKind } from "../logic/railItems";
 import { playerRecord } from "../logic/recordings";
 import { IS_MAC } from "../platform";
 import { run } from "../store";
@@ -104,6 +105,11 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
         // The search box only exists in browse mode, so get there first and
         // focus on the next frame, once it is mounted.
         if (state.mode !== "browse") dispatch({ type: "mode", mode: "browse" });
+        // Recordings has no channel search: the list is hidden behind it, so
+        // go to the channels first.
+        if (railItemKind(state.categoryId) === "recordings") {
+          dispatch({ type: "selectCategory", id: ALL_CATEGORIES });
+        }
         requestAnimationFrame(focusSearch);
         return;
       }
@@ -215,6 +221,7 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
   }, [
     dispatch,
     state.mode,
+    state.categoryId,
     state.paletteOpen,
     state.player.state,
     state.query,

@@ -141,56 +141,54 @@ export function RecordingBand({ rec, channel }: { rec: RecordingDto; channel: Ch
   return (
     <>
       <div className="watch-body">
-      <h2 className="watch-title-h" data-tip-overflow="">
-        {active ? <RecDot recording={rec} /> : null}
-        {rec.title}
-        {label ? ` ${label}` : ""}
-      </h2>
-      <p className="watch-cat" data-tip-overflow="">
-        {[rec.channelName, category].filter(Boolean).join(" · ")}
-      </p>
-      <div className="watch-sub">
-        <span className="watch-time">{recordingWhen(rec, now)}</span>
-      </div>
-      {barred ? (
-        <div className="watch-prog-line">
-          <div className="watch-progress">
-            <span
-              style={{
-                width: `${Math.round((rec.state === "recording" ? (recordingRowStatus(rec, now).progress ?? 0) : 1) * 100)}%`,
-              }}
-            />
-          </div>
-          <span className={`watch-left ${rec.waiting ? "bad" : ""}`}>{statusText}</span>
+        <h2 className="watch-title-h" data-tip-overflow="">
+          {active ? <RecDot recording={rec} /> : null}
+          {rec.title}
+          {label ? ` ${label}` : ""}
+        </h2>
+        <p className="watch-cat" data-tip-overflow="">
+          {[rec.channelName, category].filter(Boolean).join(" · ")}
+        </p>
+        <div className="watch-sub">
+          <span className="watch-time">{recordingWhen(rec, now)}</span>
         </div>
-      ) : (
-        <p className={`watch-state ${rec.state === "failed" ? "bad" : ""}`}>{status}</p>
-      )}
-      <p className="watch-facts">
-        {recordingFacts(rec)}
-      </p>
-      {rec.state === "scheduled" || rec.state === "recording" ? <BackupLine rec={rec} /> : null}
-      {rec.conflicts?.length ? (
-        <ul className="rec-conflicts">
-          {rec.conflicts.map((c, i) => (
-            <li key={i} className={`rec-conflict ${conflictLosesProgramme(c) ? "bad" : ""}`}>
-              {conflictText(c)}
-            </li>
-          ))}
-        </ul>
-      ) : null}
-      {rec.notes.length > 0 ? (
-        <button className="link rec-notes-toggle" onClick={() => setNotes(!notes)}>
-          {notes ? "Hide notes" : `${rec.notes.length} ${rec.notes.length === 1 ? "note" : "notes"}`}
-        </button>
-      ) : null}
-      {notes ? (
-        <ul className="rec-notes">
-          {rec.notes.map((n, i) => (
-            <li key={i}>{n}</li>
-          ))}
-        </ul>
-      ) : null}
+        {barred ? (
+          <div className="watch-prog-line">
+            <div className="watch-progress">
+              <span
+                style={{
+                  width: `${Math.round((rec.state === "recording" ? (recordingRowStatus(rec, now).progress ?? 0) : 1) * 100)}%`,
+                }}
+              />
+            </div>
+            <span className={`watch-left ${rec.waiting ? "bad" : ""}`}>{statusText}</span>
+          </div>
+        ) : (
+          <p className={`watch-state ${rec.state === "failed" ? "bad" : ""}`}>{status}</p>
+        )}
+        <p className="watch-facts">{recordingFacts(rec)}</p>
+        {rec.state === "scheduled" || rec.state === "recording" ? <BackupLine rec={rec} /> : null}
+        {rec.conflicts?.length ? (
+          <ul className="rec-conflicts">
+            {rec.conflicts.map((c, i) => (
+              <li key={i} className={`rec-conflict ${conflictLosesProgramme(c) ? "bad" : ""}`}>
+                {conflictText(c)}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        {rec.notes.length > 0 ? (
+          <button className="link rec-notes-toggle" onClick={() => setNotes(!notes)}>
+            {notes ? "Hide notes" : `${rec.notes.length} ${rec.notes.length === 1 ? "note" : "notes"}`}
+          </button>
+        ) : null}
+        {notes ? (
+          <ul className="rec-notes">
+            {rec.notes.map((n, i) => (
+              <li key={i}>{n}</li>
+            ))}
+          </ul>
+        ) : null}
       </div>
       <div className="watch-actions">
         {rec.state === "scheduled" ? (

@@ -9,7 +9,8 @@
 import { useMemo } from "react";
 import { useChannelPages, type RowSource } from "./useChannelPages";
 import { listedFor, pagedCategory, railItemKind, selectionEstimate, type RailItemKind } from "../logic/railItems";
-import { useApp } from "../store";
+import { loadWatchLists } from "../actions";
+import { useApp, useDispatch } from "../store";
 import type { ChannelDto } from "../types";
 
 export interface LiveRows extends RowSource {
@@ -21,6 +22,7 @@ export interface LiveRows extends RowSource {
 const NOOP = () => {};
 
 export function useLiveRows(selectionId: string): LiveRows {
+  const dispatch = useDispatch();
   const { categories, sync, favourites, recent, catalogueRev } = useApp();
   const kind = railItemKind(selectionId);
   const paged = pagedCategory(selectionId);
@@ -51,7 +53,7 @@ export function useLiveRows(selectionId: string): LiveRows {
     ensure: NOOP,
     error: list?.status === "error" ? list.message : null,
     loading: list ? list.status === "loading" || list.status === "idle" : false,
-    retry: NOOP,
+    retry: () => void loadWatchLists(dispatch),
     kind,
     listed,
   };

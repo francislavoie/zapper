@@ -103,6 +103,10 @@ export function RecordingsView() {
             Nothing recorded or scheduled. Right-click a programme in the guide, or in the
             programme search results, to record it.
           </p>
+        ) : sections.length === 0 ? (
+          <p className="pane-note">
+            {filter === "scheduled" ? "Nothing scheduled." : "Nothing recorded yet."}
+          </p>
         ) : (
           sections.map((s) => (
             <section key={s.id}>

@@ -265,17 +265,6 @@ export function CategoryRail() {
           </div>
         ) : null}
 
-        {/* No category rows: nothing matched, pinned or not. */}
-        {categories.status === "ready" && !rows.some((r) => r.kind === "category") ? (
-          <div className="pane-note">
-            {categories.data.length === 0
-              ? "No categories yet. Sync has not run."
-              : categoryFilter.trim() !== ""
-                ? `No category matches “${categoryFilter}”.`
-                : "Every category is hidden."}
-          </div>
-        ) : null}
-
         <div className="rail-spacer" style={{ height: win.totalHeight }}>
           {rows.slice(win.start, win.end).map((r, i) => {
             const index = win.start + i;
@@ -363,6 +352,17 @@ export function CategoryRail() {
             );
           })}
         </div>
+
+        {/* No category rows: nothing matched, pinned or not. */}
+        {categories.status === "ready" && !rows.some((r) => r.kind === "category") ? (
+          <div className="pane-note">
+            {categories.data.length === 0
+              ? "No categories yet. Sync has not run."
+              : categoryFilter.trim() !== ""
+                ? `No category matches “${categoryFilter}”.`
+                : "Every category is hidden."}
+          </div>
+        ) : null}
       </div>
 
       {categoryMenu ? (
