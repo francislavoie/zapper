@@ -13,13 +13,13 @@ import { ACTIONS, availableActions } from "../logic/palette.ts";
 const ids = (actions) => actions.map((a) => a.id);
 
 test("the app's window can do everything but sign out", () => {
-  for (const [k, v] of Object.entries(DESKTOP)) assert.equal(v, k !== "signOut" && k !== "onDemand", k);
+  for (const [k, v] of Object.entries(DESKTOP)) assert.equal(v, k !== "signOut", k);
   assert.deepEqual(settingsSections(DESKTOP), [...SETTINGS_SECTIONS]);
 });
 
-test("Movies and Shows stay out of the title bar until there is something in them", () => {
-  assert.equal(DESKTOP.onDemand, false);
-  assert.equal(BROWSER.onDemand, false);
+test("Movies are on offer in the app and in a browser alike", () => {
+  assert.equal(DESKTOP.onDemand, true);
+  assert.equal(BROWSER.onDemand, true);
 });
 
 test("a browser keeps the guide, recordings, the account, refreshing and watching, and nothing of the computer's", () => {

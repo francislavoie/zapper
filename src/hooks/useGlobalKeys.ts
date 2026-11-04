@@ -14,6 +14,7 @@ import { focusSearch, typingInto } from "../focus";
 import { exitFullscreen, toggleFullscreen } from "../fullscreen";
 import { fullscreenNow, refreshFullscreen } from "./useFullscreen";
 import { blocksPlainKey, shortcutModifier } from "../logic/keys";
+import { moviesAvailable } from "../logic/movies";
 import { ALL_CATEGORIES, railItemKind } from "../logic/railItems";
 import { playingKind } from "../logic/movies";
 import { playerRecord } from "../logic/recordings";
@@ -60,6 +61,9 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
         } else if (state.categoryOptions) {
           // The rail's options menu: also a menu, also opened last.
           dispatch({ type: "categoryOptions", menu: null });
+        } else if (state.movies.menu) {
+          // The Movies list's sort or years menu.
+          dispatch({ type: "movies/menu", menu: null });
         } else if (state.videoMenu) {
           // The picture's menu: opened last, like the others. A submenu
           // inside it that has focus closes itself first (see SubMenu).
@@ -86,6 +90,9 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
             .catch((err: unknown) =>
               dispatch({ type: "toast", text: `fullscreen: ${String(err)}` }),
             );
+        } else if (state.section === "movies" && state.movies.query !== "") {
+          // A search belongs to the tab it was typed on.
+          dispatch({ type: "movies/query", text: "" });
         } else if (state.query !== "") {
           dispatch({ type: "query", text: "" });
         } else if (state.mode === "guide") {
@@ -108,11 +115,20 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
         // focus on the next frame, once it is mounted.
         if (state.mode !== "browse") dispatch({ type: "mode", mode: "browse" });
         // Recordings has no channel search: the list is hidden behind it, so
-        // go to the channels first.
-        if (railItemKind(state.categoryId) === "recordings") {
+        // go to the channels first. The Movies tab has a search of its own,
+        // which is the one this reaches while that tab shows.
+        if (state.section !== "movies" && railItemKind(state.categoryId) === "recordings") {
           dispatch({ type: "selectCategory", id: ALL_CATEGORIES });
         }
         requestAnimationFrame(focusSearch);
+        return;
+      }
+
+      // The Movies tab, where there is one. Not a toggle: Live TV's way back
+      // is its tab, and the guide's G.
+      if ((e.key === "m" || e.key === "M") && capabilities.onDemand && moviesAvailable(state.movies.summary)) {
+        e.preventDefault();
+        dispatch({ type: "section", section: "movies" });
         return;
       }
 
@@ -233,6 +249,10 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
     state.player.onDemand?.kind,
     state.player.streamId,
     state.query,
+    state.section,
+    state.movies.menu,
+    state.movies.query,
+    state.movies.summary,
     state.settings.guideHours,
     state.settingsOpen,
     state.menuOpen,

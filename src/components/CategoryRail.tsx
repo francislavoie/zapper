@@ -473,7 +473,7 @@ function FixedIcon({ id }: { id: string }) {
 }
 
 /** The row's name, with the filter's match picked out. */
-function Matched({ row }: { row: RailRow }) {
+export function Matched({ row }: { row: RailRow }) {
   if (!row.match) return <>{row.name}</>;
   const [from, to] = row.match;
   return (

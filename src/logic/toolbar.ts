@@ -135,8 +135,12 @@ export const SECTION_LABEL: Record<Section, string> = {
   shows: "Shows",
 };
 
-/** The tabs to draw: Live TV always, Movies and Shows only where the
- *  provider's on-demand catalogue is there to fill them. */
-export function titleTabs(caps: Pick<Capabilities, "onDemand">): Section[] {
-  return caps.onDemand ? ["live", "movies", "shows"] : ["live"];
+/** The sections beyond Live TV that the app has. Shows joins them later. */
+export const ON_DEMAND_SECTIONS: readonly Section[] = ["movies"];
+
+/** The tabs to draw: Live TV always, and Movies where the app can show them
+ *  and the account has some (the movies summary's `available`). */
+export function titleTabs(caps: Pick<Capabilities, "onDemand">, moviesAvailable = true): Section[] {
+  if (!caps.onDemand) return ["live"];
+  return ["live", ...ON_DEMAND_SECTIONS.filter((s) => s !== "movies" || moviesAvailable)];
 }
