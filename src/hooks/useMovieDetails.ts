@@ -25,6 +25,12 @@ export function useMovieDetails(movie: MovieDto | null, delayMs: number): Async<
     setResult(null);
     let cancelled = false;
     const timer = window.setTimeout(() => {
+      // Another view (the sheet) may have got it while this one waited.
+      const got = recallDetails(cache, id);
+      if (got !== undefined) {
+        setResult({ id, value: ready(got) });
+        return;
+      }
       setResult({ id, value: loading() });
       backend
         .movieDetails(id)

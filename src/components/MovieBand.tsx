@@ -117,7 +117,12 @@ export function MovieActions({
   return (
     <>
       {playing ? null : (
-        <button className="ctl movie-play" onClick={() => void playMovie(dispatch, movie)}>
+        <button className="ctl movie-play" onClick={() => {
+            // Play takes the window over; the sheet would only be under it.
+            dispatch({ type: "movies/sheet", id: null });
+            void playMovie(dispatch, movie);
+          }}
+        >
           <Play className="i" /> Play
         </button>
       )}
@@ -136,26 +141,32 @@ export function MovieActions({
           Details
         </button>
       ) : null}
-      {playing ? (
-        <span className="watch-actions-end">
-          <button
-            className="ctl icon"
-            aria-label="Full screen"
-            data-tip="Full screen (F)"
-            onClick={() => dispatch({ type: "mode", mode: "watch" })}
-          >
-            <Fullscreen className="i" />
-          </button>
-          <button
-            className="ctl icon"
-            aria-label="Stop"
-            data-tip="Stop"
-            onClick={() => void run(dispatch, "stop", backend.stop())}
-          >
-            <Stop className="i" />
-          </button>
-        </span>
-      ) : null}
+      {playing ? <PlayingEnd /> : null}
     </>
+  );
+}
+
+/** Full screen and Stop, at the end of the actions of what is playing. */
+export function PlayingEnd() {
+  const dispatch = useDispatch();
+  return (
+    <span className="watch-actions-end">
+      <button
+        className="ctl icon"
+        aria-label="Full screen"
+        data-tip="Full screen (F)"
+        onClick={() => dispatch({ type: "mode", mode: "watch" })}
+      >
+        <Fullscreen className="i" />
+      </button>
+      <button
+        className="ctl icon"
+        aria-label="Stop"
+        data-tip="Stop"
+        onClick={() => void run(dispatch, "stop", backend.stop())}
+      >
+        <Stop className="i" />
+      </button>
+    </span>
   );
 }
