@@ -2016,8 +2016,9 @@ select option {
 }
 
 /* The list is one focus stop with the keys moving the selection inside it;
-   the outline would ring the whole pane. The selected row says where it is. */
-.movies-viewport:focus-visible {
+   the outline would ring the whole pane once a row is selected, and that row says
+   where the keys are; until then the ring is all there is. */
+.movies-viewport.has-sel:focus-visible {
   outline: none;
 }
 

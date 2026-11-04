@@ -10,6 +10,7 @@ import {
   NO_ACCOUNT_MESSAGE,
   SECTION_LABEL,
   titleTabs,
+  modeForSection,
 } from "../logic/toolbar.ts";
 import { readFileSync } from "node:fs";
 import {
@@ -202,9 +203,17 @@ test("the toolbar is tall enough for its controls and their edge inset", () => {
 });
 
 test("the title bar's tabs: Live TV always, Movies with on-demand and movies to show", () => {
-  assert.deepEqual(titleTabs({ onDemand: false }), ["live"]);
-  assert.deepEqual(titleTabs({ onDemand: true }), ["live", "movies"]);
-  assert.deepEqual(titleTabs({ onDemand: true }).map((s) => SECTION_LABEL[s]), ["Live TV", "Movies"]);
+  assert.deepEqual(titleTabs({ onDemand: false }, true), ["live"]);
+  assert.deepEqual(titleTabs({ onDemand: true }, true), ["live", "movies"]);
+  assert.deepEqual(titleTabs({ onDemand: true }, true).map((s) => SECTION_LABEL[s]), ["Live TV", "Movies"]);
   // An account without movies has no tab for them, whatever the app can do.
   assert.deepEqual(titleTabs({ onDemand: true }, false), ["live"]);
+});
+
+test("a section change leaves the guide when it is not Live TV's, and the player always", () => {
+  assert.equal(modeForSection("guide", "movies"), "browse");
+  assert.equal(modeForSection("guide", "live"), "guide");
+  assert.equal(modeForSection("watch", "movies"), "browse");
+  assert.equal(modeForSection("watch", "live"), "browse");
+  assert.equal(modeForSection("browse", "movies"), "browse");
 });
