@@ -47,6 +47,8 @@ export interface Capabilities {
   /** Signed in to the recording service with its password, and so able to
    *  sign out. */
   signOut: boolean;
+  /** Movies and Shows from the provider's on-demand catalogue. */
+  onDemand: boolean;
 }
 
 /** The app's window, and the mock that stands in for it. */
@@ -63,6 +65,7 @@ export const DESKTOP: Capabilities = {
   localService: true,
   networkAdmin: true,
   signOut: false,
+  onDemand: false,
 };
 
 /** A browser signed in to the recording service. Browsing, the guide,
@@ -83,6 +86,7 @@ export const BROWSER: Capabilities = {
   localService: false,
   networkAdmin: false,
   signOut: true,
+  onDemand: false,
 };
 
 export type Capability = keyof Capabilities;

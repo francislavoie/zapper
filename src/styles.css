@@ -321,12 +321,17 @@ select option {
   z-index: 1;
 }
 
-/* The lead carries the status line as well as the hamburger, so it is the one
-   part of the bar allowed to give ground when the window is narrow. */
+/* The lead carries the tabs as well as the hamburger. */
 .tb-lead {
+  gap: 0.5rem;
+}
+
+/* The tail carries the status line, so it is the one part of the bar allowed
+   to give ground when the window is narrow; the buttons after it keep their
+   size. */
+.tb-tail {
   flex: 0 1 auto;
   min-width: 0;
-  gap: 0.5rem;
 }
 
 /* A Mac's traffic lights: AppKit draws them over the bar's top-left corner
@@ -456,6 +461,37 @@ select option {
   background: currentColor;
 }
 
+/* -------------------------------------------------------- toolbar: the tabs */
+
+/* Live TV, Movies, Shows. The selected one is underlined in the accent, the
+   underline sitting on the bar's own bottom rule. */
+.tb-tabs {
+  display: flex;
+  align-items: stretch;
+  align-self: stretch;
+  gap: 0.25rem;
+}
+
+.tb-tab {
+  padding: 0 0.625rem;
+  /* The bar's padding ring leaves the buttons 26px; the tab runs to the
+     rule so its underline meets it. */
+  margin-bottom: calc(1px - var(--edge-inset));
+  border-bottom: 2px solid transparent;
+  font-size: 0.75rem;
+  color: var(--dim);
+  white-space: nowrap;
+}
+
+.tb-tab:hover {
+  color: var(--text);
+}
+
+.tb-tab.on {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
 /* ---------------------------------------------------- toolbar: the status */
 
 /* Part of the drag surface: pressing the words moves the window, so they must
@@ -477,6 +513,15 @@ select option {
 
 .tb-status.bad {
   color: var(--bad);
+}
+
+/* At the right, beside the recording badge and the gear: it drags, and it
+   gives way before anything else does. */
+.tb-tail .tb-status {
+  flex: 0 1 auto;
+  max-width: 22rem;
+  justify-content: flex-end;
+  margin-right: 0.5rem;
 }
 
 .tb-status-text,
@@ -5226,6 +5271,14 @@ textarea.field {
 
   .tb-rec .rec-dot {
     margin-right: 0;
+  }
+}
+
+/* Below this the title and the status's detail make room for the tabs. */
+@media (max-width: 52rem) {
+  .tb-title,
+  .tb-status-detail {
+    display: none;
   }
 }
 
