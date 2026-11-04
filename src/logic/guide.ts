@@ -54,7 +54,7 @@ export function rowNowNext(
 
 /** Dense enough that a screen shows twenty-odd channels, tall enough that a
  *  programme title and its time both fit. */
-export const GUIDE_ROW_HEIGHT = 34;
+export const GUIDE_ROW_HEIGHT = 44;
 export const HALF_HOUR = 1800;
 export const MIN_GUIDE_HOURS = 1;
 export const MAX_GUIDE_HOURS = 6;

@@ -2118,21 +2118,42 @@ select option {
   overflow: hidden;
 }
 
-.guide-num {
+.guide-logo {
   flex: 0 0 auto;
-  width: 2.625rem;
-  text-align: right;
+  width: 1.375rem;
+  height: 1.375rem;
+  object-fit: contain;
+  border-radius: 0.125rem;
+  background: var(--bg-3);
+}
+
+/* The name over its category. */
+.guide-title {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.guide-num {
   font-size: 0.6875rem;
   font-variant-numeric: tabular-nums;
   color: var(--dimmer);
 }
 
 .guide-name {
-  flex: 1 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 0.75rem;
+}
+
+.guide-cat {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.6875rem;
+  color: var(--dim);
 }
 
 .guide-arch {

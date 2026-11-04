@@ -13,6 +13,7 @@ import { useClock } from "../hooks/useClock";
 import type { ProgrammeSearch } from "../hooks/useProgrammeSearch";
 import { airingTag, airingWhen, hitTip } from "../logic/programmes";
 import { categoryNames, categoryOf } from "../logic/searchGroups";
+import { listedFor } from "../logic/railItems";
 import { useApp, useDispatch } from "../store";
 import { markKey, marks } from "../logic/recordings";
 import { programmeMenuProps, type ProgrammeMenuOpener } from "../programmeMenu";
@@ -36,6 +37,11 @@ export function ProgrammeResults({ search, query }: { search: ProgrammeSearch; q
       categoryId: state.categoryId,
       mode: state.mode,
       guideHours: state.settings.guideHours,
+      listed: listedFor(
+        state.categoryId,
+        state.favourites.status === "ready" ? state.favourites.data : null,
+        state.recent.status === "ready" ? state.recent.data : null,
+      ),
     });
 
   const recorded = useMemo(() => marks(state.recordings ?? []), [state.recordings]);

@@ -226,7 +226,7 @@ test("the guide virtualizes on the same arithmetic as the channel list", () => {
   assert.ok(w.end - w.start < 50);
   const deep = computeWindow(500_000, 800, GUIDE_ROW_HEIGHT, total, 8);
   assert.equal(deep.offsetY, deep.start * GUIDE_ROW_HEIGHT);
-  assert.ok(deep.start > 14_000);
+  assert.ok(deep.start > 500_000 / GUIDE_ROW_HEIGHT - 50);
 });
 
 // ------------------------------------------------------- scrolling in time

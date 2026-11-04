@@ -116,6 +116,7 @@ test("ordinary chrome is not on the allowlist, by class or by ancestor", () => {
     "watch-video-empty",
     "watch-when",
     "guide-name",
+    "guide-cat",
     "guide-num",
     "prog-title",
     "prog-time",

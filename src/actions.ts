@@ -6,7 +6,8 @@ import { backend, capabilities, signOut } from "./backend";
 import { toggleFullscreen } from "./fullscreen";
 import { errorMessage, failed, loading, ready } from "./logic/async";
 import { anchorFor, catchupMinutes } from "./logic/guide";
-import { focusCategory, guideOffsetFor, hitAction, inGuideReach } from "./logic/programmes";
+import { focusTarget } from "./logic/railItems";
+import { guideOffsetFor, hitAction, inGuideReach } from "./logic/programmes";
 import type { ActionId } from "./logic/palette";
 import type { SleepRequest } from "./logic/sleep";
 import { refreshFullscreen } from "./hooks/useFullscreen";
@@ -218,6 +219,8 @@ export interface HitContext {
   /** Where a catch-up that fails to open should leave the user. */
   mode: Mode;
   guideHours: number;
+  /** The stream ids of the favourites or recent list on screen, else null. */
+  listed: readonly number[] | null;
 }
 
 /** Chooses a programme search result: tunes to it if it is on, plays it from
@@ -241,19 +244,22 @@ export async function openProgrammeHit(
 
   const now = Math.floor(Date.now() / 1000);
   const anchor = anchorFor(now);
-  const categoryId = focusCategory(ctx.categoryId, hit.channel.categoryId, ALL_CATEGORIES);
+  const target = focusTarget(ctx.categoryId, hit.channel, ctx.listed);
+  const categoryId = target.categoryId;
   // The row is looked up rather than paged to: the guide lists a category a
   // screenful at a time and the channel may be thousands of rows down. Not
   // finding it still opens the guide at the right time, which is most of
   // the answer.
-  let index: number | null = null;
-  try {
-    index = await backend.channelIndex(
-      categoryId === ALL_CATEGORIES ? null : categoryId,
-      hit.channel.streamId,
-    );
-  } catch {
-    index = null;
+  let index = target.index;
+  if (target.lookUp) {
+    try {
+      index = await backend.channelIndex(
+        categoryId === ALL_CATEGORIES ? null : categoryId,
+        hit.channel.streamId,
+      );
+    } catch {
+      index = null;
+    }
   }
   dispatch({
     type: "guideFocus",
