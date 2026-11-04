@@ -444,7 +444,19 @@ export function recordingsRailCount(recs: readonly Pick<RecordingDto, "state">[]
   return [now && `${now} now`, next && `${next} next`].filter(Boolean).join(" · ");
 }
 
-/** The selected recording, or none once it is no longer in the list. */
+/** The selected recording, or none once it is no longer in the list. A list
+ *  that could not be fetched says nothing about it, so the choice stays. */
 export function keepSelected(recs: readonly { id: number }[] | null, id: number | null): number | null {
-  return id !== null && recs?.some((r) => r.id === id) ? id : null;
+  if (recs === null) return id;
+  return id !== null && recs.some((r) => r.id === id) ? id : null;
+}
+
+/** The band's line under a recording: how much it records either side of the
+ *  programme, and the folder its files go to. */
+export function recordingFacts(r: Pick<RecordingDto, "padBefore" | "padAfter" | "folder">): string {
+  const padding =
+    r.padBefore === 0 && r.padAfter === 0
+      ? "No padding"
+      : `Padding ${padMinutes(r.padBefore)} min before, ${padMinutes(r.padAfter)} after`;
+  return `${padding} · Folder ${r.folder}`;
 }

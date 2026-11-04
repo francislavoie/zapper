@@ -79,7 +79,6 @@ test("selection comes back only where it is the point", () => {
     ".app .measured",
     ".app .watch-state",
     ".app .crashed-why",
-    ".app .watch-col.facts dd",
     ".app [data-selectable]",
   ];
   assert.deepEqual(new Set(selectableSelectors), new Set(expected));
@@ -113,8 +112,9 @@ test("ordinary chrome is not on the allowlist, by class or by ancestor", () => {
     "row-now",
     "badge",
     "watch-title",
+    "watch-cat",
+    "watch-facts",
     "watch-video-empty",
-    "watch-when",
     "guide-name",
     "guide-cat",
     "guide-num",

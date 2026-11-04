@@ -71,16 +71,12 @@ export const VIDEO_LIST_MIN = 12;
 /** What has to stay beside the picture for the information in it to read,
  *  in rem: the picture grows until the panel would be narrower than this.
  *
- *  The panel's columns wrap into one as it narrows, so what has to fit is
- *  its widest column at the width it was designed for: the facts column at
- *  its full 18.75rem basis, the width at which the measured line ("1920×1080
- *  · 59.94 fps · hevc") is never cut short — the one line in the panel that
- *  must not be. Plus the panel's 1rem of padding either side, and a little
- *  over for its border and for a name or programme title longer than the
- *  line it sits beside. At this width the name keeps its Full screen and
- *  Stop buttons on its own line and the now/next titles take a line each.
- *  The picture is big by then: in a maximised 1920×1080 window the list's
- *  strip below runs out first, with the picture about 94rem wide. */
+ *  The panel is one column, so what has to fit is its widest line: the
+ *  measured one ("1920×1080 · 59.94 fps · hevc") at about 18.75rem, the one
+ *  line in the panel that should not wrap. Plus the panel's 1rem of padding
+ *  either side, and a little over for its border and for the actions along
+ *  its foot. The picture is big by then: in a maximised 1920×1080 window the
+ *  list's strip below runs out first, with the picture about 94rem wide. */
 export const VIDEO_INFO_MIN = 22;
 
 /** The resize handle between the panel and the picture, in rem. Mirrors

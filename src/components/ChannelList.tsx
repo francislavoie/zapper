@@ -19,6 +19,7 @@ import { useSearch } from "../hooks/useSearch";
 import { HOUR, rowNowNext } from "../logic/guide";
 import { favouriteMeta } from "../logic/favourites";
 import { pagedCategory, selectionSubtitle, selectionTitle } from "../logic/railItems";
+import { centredScrollTop } from "../logic/programmes";
 import { LIST_ROW_HEIGHT, OVERSCAN, computeWindow, stickyIndex } from "../logic/virtual";
 import { loadSession, saveSession } from "../session";
 import { useApp, useDispatch } from "../store";
@@ -148,10 +149,34 @@ export function ChannelList() {
 
   const win = computeWindow(scrollTop, height, LIST_ROW_HEIGHT, source.total, OVERSCAN);
 
+  // Sent here to a channel by the band's "Show its category": scroll its row
+  // to the middle. After the reset above, which runs on the same category
+  // change. It waits for a measured height, and for the row to exist — a
+  // category's length is only a floor until its pages load, so a row past
+  // the estimate has its page asked for first. Applied once per request, so
+  // scrolling away afterwards is not fought.
+  const focus = state.guideFocus;
+  const appliedFocus = useRef<number | null>(null);
+
   const { ensure } = source;
   useEffect(() => {
     if (win.end > win.start) ensure(win.start, win.end);
   }, [ensure, win.start, win.end]);
+
+  useEffect(() => {
+    if (!focus || focus.index === null || appliedFocus.current === focus.seq) return;
+    const el = viewportRef.current;
+    if (!el || height <= 0) return;
+    if (source.total <= focus.index) {
+      ensure(focus.index, focus.index + 1);
+      return;
+    }
+    appliedFocus.current = focus.seq;
+    const top = centredScrollTop(focus.index, LIST_ROW_HEIGHT, height);
+    restoreTo.current = 0;
+    el.scrollTo({ top });
+    setScrollTop(top);
+  }, [focus, height, source.total, ensure]);
 
   // Read through a ref so both callbacks keep a stable identity. They are
   // handed to a memoised row, and a callback that changed whenever playback
@@ -264,6 +289,7 @@ export function ChannelList() {
         onMenu={listedEntries ? onMenu : undefined}
         top={top}
         selected={state.player.streamId === c.streamId}
+        focused={focus?.streamId === c.streamId}
         pending={state.pendingStreamId === c.streamId}
         onPlay={onPlay}
         onOpenFull={onOpenFull}

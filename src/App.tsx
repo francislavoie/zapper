@@ -81,6 +81,9 @@ export function App() {
   const guiding = state.mode === "guide";
   // Recordings has no grid, so it only ever shows in the list view.
   const recordingsShown = railItemKind(state.categoryId) === "recordings" && !guiding;
+  // The band is the playing channel, and the selected recording where
+  // Recordings shows: a browser has no picture but still has recordings.
+  const bandShown = capabilities.playback || recordingsShown;
 
   // The stacked layout is a preference, not a mode: it applies while watching,
   // and only when the window has the room. Too small a window falls back to
@@ -450,7 +453,7 @@ export function App() {
             view takes the whole width. */}
         <Activity mode={browsing || guiding ? "visible" : "hidden"}>
           <div
-            className={`browse ${state.railCollapsed ? "rail-collapsed" : ""} ${capabilities.playback ? "" : "no-band"}`}
+            className={`browse ${state.railCollapsed ? "rail-collapsed" : ""} ${bandShown ? "" : "no-band"}`}
             data-view={guiding ? "guide" : "list"}
           >
             {/* First in the DOM as well as on screen: the band owns the top of
@@ -459,7 +462,7 @@ export function App() {
                 the band is where the hole for the picture is. Where nothing
                 plays (a browser, for now) there is no picture to show, and
                 the list and the guide take its room. */}
-            {capabilities.playback ? <WatchBand videoRef={dockRef} /> : null}
+            {bandShown ? <WatchBand videoRef={dockRef} picture={capabilities.playback} /> : null}
             <Activity mode={state.railCollapsed ? "hidden" : "visible"}>
               <Rail />
             </Activity>

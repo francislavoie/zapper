@@ -246,21 +246,9 @@ export async function openProgrammeHit(
   const anchor = anchorFor(now);
   const target = focusTarget(ctx.categoryId, hit.channel, ctx.listed);
   const categoryId = target.categoryId;
-  // The row is looked up rather than paged to: the guide lists a category a
-  // screenful at a time and the channel may be thousands of rows down. Not
-  // finding it still opens the guide at the right time, which is most of
-  // the answer.
-  let index = target.index;
-  if (target.lookUp) {
-    try {
-      index = await backend.channelIndex(
-        categoryId === ALL_CATEGORIES ? null : categoryId,
-        hit.channel.streamId,
-      );
-    } catch {
-      index = null;
-    }
-  }
+  // Not finding the row still opens the guide at the right time, which is
+  // most of the answer.
+  const index = target.lookUp ? await rowIn(categoryId, hit.channel.streamId) : target.index;
   dispatch({
     type: "guideFocus",
     categoryId,
@@ -276,6 +264,45 @@ export async function openProgrammeHit(
       text: `The guide shows two days ahead; ${hit.programme.title} is later than that`,
     });
   }
+}
+
+/** Where a channel's row is in a category, or null when that cannot be
+ *  found: the row is looked up rather than paged to, and not finding it
+ *  still lands on the right list. */
+async function rowIn(categoryId: string, streamId: number): Promise<number | null> {
+  try {
+    return await backend.channelIndex(categoryId === ALL_CATEGORIES ? null : categoryId, streamId);
+  } catch {
+    return null;
+  }
+}
+
+/** Shows the channel's own category in the list, with its row in the middle
+ *  and marked. */
+export async function showChannelCategory(dispatch: Dispatch<Action>, channel: ChannelDto): Promise<void> {
+  if (channel.categoryId === null) return;
+  const index = await rowIn(channel.categoryId, channel.streamId);
+  dispatch({ type: "focusChannel", categoryId: channel.categoryId, streamId: channel.streamId, index });
+}
+
+/** Opens the guide at now on the channel's row: in the favourites or recent
+ *  list when it is in the one on screen, otherwise in its category. */
+export async function showChannelInGuide(
+  dispatch: Dispatch<Action>,
+  channel: ChannelDto,
+  ctx: { categoryId: string; listed: readonly number[] | null },
+): Promise<void> {
+  const anchor = anchorFor(Math.floor(Date.now() / 1000));
+  const target = focusTarget(ctx.categoryId, channel, ctx.listed);
+  const index = target.lookUp ? await rowIn(target.categoryId, channel.streamId) : target.index;
+  dispatch({
+    type: "guideFocus",
+    categoryId: target.categoryId,
+    streamId: channel.streamId,
+    index,
+    offset: 0,
+    anchor,
+  });
 }
 
 /** Fetches the category list into the store.
