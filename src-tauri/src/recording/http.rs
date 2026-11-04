@@ -2815,7 +2815,9 @@ pub(crate) mod tests {
     // ------------------------------------------------------- watching movies
 
     /// Movie `id` in the catalogue as `container`, its kept details saying
-    /// H.264 video and AAC sound. The caller holds [`movie_catalogue`];
+    /// H.264 video and AAC sound and a 90-minute runtime (which a watch does
+    /// not go by: the file says what it holds). The caller holds
+    /// [`movie_catalogue`];
     /// written afresh before each use all the same, as a sync elsewhere in
     /// the tests may land a catalogue without its movies.
     fn seed_movie(id: i64, container: &str) {
@@ -2837,11 +2839,64 @@ pub(crate) mod tests {
         .unwrap();
     }
 
-    /// Every movie's file is the fake provider's.
-    fn movies_from(s: &Shared, base: &str) {
-        let url = format!("{base}/movie/secret-user/secret-pass/1.mp4");
-        s.vod
-            .set_playables(Arc::new(move |_| Ok(crate::source::Playable::plain(url.clone()))));
+    /// A 10 s MP4 of about a megabyte, its index first: H.264 video (a
+    /// keyframe a second) and English AAC sound, and, `subtitled`, English
+    /// `mov_text` subtitles with a cue from 1 to 3 s. Made once each, with
+    /// the ffmpeg command; `None` without one.
+    fn mp4(subtitled: bool) -> Option<Arc<Vec<u8>>> {
+        static PLAIN: std::sync::OnceLock<Option<Arc<Vec<u8>>>> = std::sync::OnceLock::new();
+        static SUBTITLED: std::sync::OnceLock<Option<Arc<Vec<u8>>>> = std::sync::OnceLock::new();
+        let made = if subtitled { &SUBTITLED } else { &PLAIN };
+        made.get_or_init(|| {
+            let dir = std::env::temp_dir().join(format!(
+                "zapper-mp4-{}-{subtitled}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&dir).ok()?;
+            let srt = dir.join("subs.srt");
+            std::fs::write(&srt, "1\n00:00:01,000 --> 00:00:03,000\nAt the quay\n\n").ok()?;
+            let out = dir.join("film.mp4");
+            let mut ffmpeg = std::process::Command::new("ffmpeg");
+            ffmpeg
+                .args(["-hide_banner", "-loglevel", "error", "-y"])
+                .args(["-f", "lavfi", "-i", "testsrc2=size=320x180:rate=25"])
+                .args(["-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000"]);
+            if subtitled {
+                ffmpeg.arg("-i").arg(&srt);
+            }
+            ffmpeg.args(["-t", "10", "-map", "0:v", "-map", "1:a"]);
+            if subtitled {
+                ffmpeg
+                    .args(["-map", "2:s", "-c:s", "mov_text"])
+                    .args(["-metadata:s:s:0", "language=eng"]);
+            }
+            let made = ffmpeg
+                .args(["-c:v", "libx264", "-g", "25", "-pix_fmt", "yuv420p", "-b:v", "800k"])
+                .args(["-c:a", "aac", "-metadata:s:a:0", "language=eng"])
+                .args(["-movflags", "+faststart"])
+                .arg(&out)
+                .status()
+                .ok()?
+                .success();
+            let bytes = made.then(|| std::fs::read(&out).ok()).flatten();
+            let _ = std::fs::remove_dir_all(&dir);
+            bytes.map(Arc::new)
+        })
+        .clone()
+    }
+
+    /// Every movie's file is a plain [`mp4`] at the fake provider; the
+    /// provider's address and counts, and the file. `None` without the
+    /// ffmpeg command, said so.
+    async fn mp4s_from(
+        s: &Shared,
+    ) -> Option<(String, Arc<crate::recording::upstream::fake::Counts>, Arc<Vec<u8>>)> {
+        let Some(film) = mp4(false) else {
+            eprintln!("skipped: no ffmpeg command to make a fixture with");
+            return None;
+        };
+        let (base, counts) = films_from(s, &film, "").await;
+        Some((base, counts, film))
     }
 
     fn movie_body(id: i64) -> Option<serde_json::Value> {
@@ -2860,9 +2915,9 @@ pub(crate) mod tests {
         .and_then(Result::ok)
     }
 
-    fn with_range(mut r: Request, range: &'static str) -> Request {
+    fn with_range(mut r: Request, range: &str) -> Request {
         r.headers_mut()
-            .insert(header::RANGE, HeaderValue::from_static(range));
+            .insert(header::RANGE, HeaderValue::from_str(range).unwrap());
         r
     }
 
@@ -2874,8 +2929,18 @@ pub(crate) mod tests {
         let _catalogue = movie_catalogue();
         let s = server("vod-watch");
         enable(&s, true).await;
-        let (base, counts) = fake::serve().await;
-        movies_from(&s, &base);
+        let Some((base, counts, film)) = mp4s_from(&s).await else {
+            return;
+        };
+        // Movie 9_120_002 is no film at all: a megabyte of a pattern.
+        let (junk, junk_counts) = fake::serve().await;
+        let film_url = format!("{base}/movie/secret-user/secret-pass/1.mp4");
+        let junk_url = format!("{junk}/movie/secret-user/secret-pass/2.mkv");
+        s.vod.set_playables(Arc::new(move |id| {
+            let url = if id == 9_120_002 { &junk_url } else { &film_url };
+            Ok(crate::source::Playable::plain(url.clone()))
+        }));
+        let size = film.len();
         let cookie = browser_login(&s).await;
         let (st, _) = call(&s, from_page("POST", "/api/vod/watch", None, movie_body(9_120_001))).await;
         assert_eq!(st, StatusCode::UNAUTHORIZED);
@@ -2884,12 +2949,16 @@ pub(crate) mod tests {
         let (st, body) =
             call(&s, from_page("POST", "/api/vod/watch", Some(&cookie), movie_body(9_120_001))).await;
         assert_eq!(st, StatusCode::OK, "{body}");
+        // An MP4 a browser plays, without subtitles: as it is, as its file
+        // (read at the watch) says, not as the details do.
         assert_eq!(body["mode"], "direct");
-        assert_eq!(body["duration"], 5400);
+        assert_eq!(body["duration"], 10);
         assert_eq!(body["audio"][0]["codec"], "aac");
         assert_eq!(body["audio"][0]["lang"], "eng");
         assert_eq!(body["audioIndex"], 0);
         assert_eq!(body["converting"], false);
+        assert_eq!(body["subtitles"], serde_json::json!([]));
+        let asked = counts.requests.load(Ordering::SeqCst);
         for leak in ["127.0.0.1", "secret-user", "secret-pass", base.as_str()] {
             assert!(!body.to_string().contains(leak), "{leak} reached the browser: {body}");
         }
@@ -2913,32 +2982,44 @@ pub(crate) mod tests {
         let get = |range| with_range(from_page("GET", &stream, Some(&cookie), None), range);
         let first = router(s.clone()).oneshot(get("bytes=0-")).await.unwrap();
         assert_eq!(first.status(), StatusCode::PARTIAL_CONTENT);
-        assert_eq!(first.headers()[header::CONTENT_RANGE], "bytes 0-999999/1000000");
-        assert_eq!(first.headers()[header::CONTENT_LENGTH], "1000000");
+        assert_eq!(
+            first.headers()[header::CONTENT_RANGE],
+            format!("bytes 0-{}/{size}", size - 1).as_str()
+        );
+        assert_eq!(first.headers()[header::CONTENT_LENGTH], size.to_string().as_str());
         assert_eq!(first.headers()[header::ACCEPT_RANGES], "bytes");
         assert_eq!(first.headers()[header::CONTENT_TYPE], "video/mp4");
         let mut first = first.into_body().into_data_stream();
         let piece = next_piece(&mut first).await.unwrap();
-        assert_eq!(piece[..100], (0..100).map(fake::byte).collect::<Vec<_>>()[..]);
+        assert_eq!(piece[..100], film[..100]);
 
         // ...and, while that one streams, seeks.
-        let second = router(s.clone()).oneshot(get("bytes=500000-")).await.unwrap();
+        let half = size / 2;
+        let second = router(s.clone())
+            .oneshot(with_range(
+                from_page("GET", &stream, Some(&cookie), None),
+                &format!("bytes={half}-"),
+            ))
+            .await
+            .unwrap();
         assert_eq!(second.status(), StatusCode::PARTIAL_CONTENT);
-        assert_eq!(second.headers()[header::CONTENT_RANGE], "bytes 500000-999999/1000000");
-        assert_eq!(second.headers()[header::CONTENT_LENGTH], "500000");
+        assert_eq!(
+            second.headers()[header::CONTENT_RANGE],
+            format!("bytes {half}-{}/{size}", size - 1).as_str()
+        );
+        assert_eq!(second.headers()[header::CONTENT_LENGTH], (size - half).to_string().as_str());
         // The first has ended, short of its length.
         let mut had = piece.len();
         while let Some(p) = next_piece(&mut first).await {
             had += p.len();
         }
-        assert!(had < fake::SIZE, "the first reading stopped");
+        assert!(had < size, "the first reading stopped");
         let mut second = second.into_body().into_data_stream();
         let mut got = Vec::new();
         while let Some(p) = next_piece(&mut second).await {
             got.extend_from_slice(&p);
         }
-        assert_eq!(got.len(), 500_000);
-        assert!(got.iter().enumerate().all(|(i, &b)| b == fake::byte(500_000 + i)));
+        assert_eq!(got[..], film[half..]);
         assert_eq!(
             counts.most_open.load(Ordering::SeqCst),
             1,
@@ -2946,8 +3027,8 @@ pub(crate) mod tests {
         );
         assert_eq!(
             counts.requests.load(Ordering::SeqCst),
-            2,
-            "the first reading took the response opened for the viewer"
+            asked + 2,
+            "one request a reading"
         );
 
         // A request a newer one supersedes while the provider is still
@@ -2959,13 +3040,16 @@ pub(crate) mod tests {
         assert_eq!(older.unwrap().status(), StatusCode::CONFLICT);
         let newer = newer.unwrap();
         assert_eq!(newer.status(), StatusCode::PARTIAL_CONTENT);
-        assert_eq!(newer.headers()[header::CONTENT_RANGE], "bytes 200000-999999/1000000");
+        assert_eq!(
+            newer.headers()[header::CONTENT_RANGE],
+            format!("bytes 200000-{}/{size}", size - 1).as_str()
+        );
         drop(newer);
 
-        // A Matroska file is the remuxer's, which reads it at the watch to
-        // learn what it holds: this one is no film, and says so. It
-        // replaced the first viewer, which let its file go.
-        seed_movie(9_120_002, "mkv");
+        // Every file is read at the watch, to learn what it holds: this one
+        // is no film, and says so. It replaced the first viewer, which let
+        // its file go.
+        seed_movie(9_120_002, "mp4");
         let viewer = viewer_id(&body);
         let replace = Some(serde_json::json!({"movieId": 9_120_002, "replaces": viewer}));
         let (st, body) = call(&s, from_page("POST", "/api/vod/watch", Some(&cookie), replace)).await;
@@ -2978,9 +3062,10 @@ pub(crate) mod tests {
         assert_eq!(st, StatusCode::NOT_FOUND, "the first viewer is gone");
         assert!(s.own_conns().is_empty());
         until("the provider sees no connection", || {
-            counts.open.load(Ordering::SeqCst) == 0
+            counts.open.load(Ordering::SeqCst) == 0 && junk_counts.open.load(Ordering::SeqCst) == 0
         })
         .await;
+        assert_eq!(junk_counts.most_open.load(Ordering::SeqCst), 1);
 
         // Stopped: its connection is given up.
         let (st, body) =
@@ -3008,8 +3093,9 @@ pub(crate) mod tests {
         enable(&s, true).await;
         let (feeds, _) = feed_server().await;
         feeds_from(&s, &feeds);
-        let (base, _) = crate::recording::upstream::fake::serve().await;
-        movies_from(&s, &base);
+        if mp4s_from(&s).await.is_none() {
+            return;
+        }
         let cookie = browser_login(&s).await;
         let post = |uri: &str, body| from_page("POST", uri, Some(&cookie), body);
         for ch in 1..crate::recording::watch::PER_DEVICE as i64 {
@@ -3044,8 +3130,9 @@ pub(crate) mod tests {
         enable(&s, true).await;
         let (feeds, _) = feed_server().await;
         feeds_from(&s, &feeds);
-        let (base, _) = crate::recording::upstream::fake::serve().await;
-        movies_from(&s, &base);
+        if mp4s_from(&s).await.is_none() {
+            return;
+        }
         let cookie = browser_login(&s).await;
         seed_movie(9_120_021, "mp4");
         // Another device holds the account's one connection.
@@ -3110,8 +3197,9 @@ pub(crate) mod tests {
         let full = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let s = server_with("vod-same", Box::new(FullWhen(Arc::clone(&full))));
         enable(&s, true).await;
-        let (base, _) = crate::recording::upstream::fake::serve().await;
-        movies_from(&s, &base);
+        if mp4s_from(&s).await.is_none() {
+            return;
+        }
         let cookie = browser_login(&s).await;
         let app = |body| {
             let mut r = req_body("POST", "/api/vod/watch", HOME, false, Some(APP), body);
@@ -3390,6 +3478,64 @@ pub(crate) mod tests {
         let r = router(s.clone()).oneshot(get("?from=15")).await.unwrap();
         assert_eq!(r.status(), StatusCode::OK);
         assert_eq!(sound(&read_all(r.into_body()).await), Audio::Ac3, "still the second sound");
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn an_mp4_with_text_subtitles_is_remuxed_to_show_them() {
+        use std::sync::atomic::Ordering;
+        let Some(film) = mp4(true) else {
+            eprintln!("skipped: no ffmpeg command to make a fixture with");
+            return;
+        };
+        let _catalogue = movie_catalogue();
+        let s = server("vod-mp4-subs");
+        enable(&s, true).await;
+        let (_, counts) = films_from(&s, &film, "").await;
+        let cookie = browser_login(&s).await;
+        // Its details, like every provider's, list no subtitles: the file
+        // does.
+        seed_movie(9_120_071, "mp4");
+        let (st, body) =
+            call(&s, from_page("POST", "/api/vod/watch", Some(&cookie), movie_body(9_120_071))).await;
+        assert_eq!(st, StatusCode::OK, "{body}");
+        assert_eq!(body["mode"], "remux", "{body}");
+        assert_eq!(body["converting"], false, "AAC as it is");
+        assert_eq!(body["duration"], 10);
+        assert_eq!(
+            body["subtitles"],
+            serde_json::json!([{"index": 0, "language": "eng", "title": null, "text": true}])
+        );
+        let viewer = viewer_id(&body);
+        let stream = body["stream"].as_str().unwrap().to_string();
+        let r = router(s.clone())
+            .oneshot(from_page("GET", &format!("{stream}?from=0"), Some(&cookie), None))
+            .await
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::OK);
+        assert!(is_ts(&read_all(r.into_body()).await));
+        let subs = || {
+            from_page("GET", &format!("/api/vod/subtitles/{viewer}/0"), Some(&cookie), None)
+        };
+        let mut cues = Vec::new();
+        for _ in 0..50 {
+            let (st, _, doc) = call_raw(&s, subs()).await;
+            assert_eq!(st, StatusCode::OK);
+            cues = vtt_cues(&String::from_utf8(doc).unwrap());
+            if !cues.is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert_eq!(cues.len(), 1, "{cues:?}");
+        assert!((cues[0].0 - 1.0).abs() < 0.1 && (cues[0].1 - 3.0).abs() < 0.1, "{cues:?}");
+        assert_eq!(cues[0].2, "At the quay");
+        assert_eq!(
+            counts.most_open.load(Ordering::SeqCst),
+            1,
+            "the file read once at a time, on one connection"
+        );
+        assert_eq!(s.own_conns().len(), 1);
     }
 
     #[allow(clippy::await_holding_lock)]

@@ -418,12 +418,13 @@ to sixteen browsers at most.
 A movie plays in the page on a connection of its own (nobody else is at the same place
 in a film), asked of the same count as a channel's, with the same "Watch here anyway", the same
 card for a recording that needs the connection, and the same limits: movies and channels count
-together. The account sees one connection per movie being watched. An MP4 whose details say H.264
-video, AAC or MP3 sound and no text subtitles plays as it is: the browser's own player asks for the
-parts it needs, which the service fetches from the provider. Anything else is converted on the way:
-the service reads the file once when Play is pressed, to learn its length,
-its sound tracks and its subtitles, then remuxes it to MPEG-TS from wherever the page asks,
-starting at the keyframe at or just before that time. The video is never re-encoded (a film whose
+together. The account sees one connection per movie being watched. When Play is pressed, the
+service reads the start of the file, on that connection, to learn its length, its sound tracks
+and its subtitles (a provider's details don't list subtitles, so the file is what tells). An MP4
+with H.264 video, AAC or MP3 sound and no text subtitles then plays as it is: the browser's own
+player asks for the parts it needs, which the service fetches from the provider. Anything else
+is converted on the way: remuxed to MPEG-TS from wherever the page asks, starting at the keyframe
+at or just before that time. The video is never re-encoded (a film whose
 video no browser plays, such as MPEG-2, says so), and sound the browser cannot play is converted
 to AAC, as a channel's is. Seeking within what the page holds is instant; further on (or back), or
 choosing another sound track, the conversion starts again from that time, the provider's response
@@ -874,7 +875,7 @@ Watching (the app or a device; a viewer is its device's alone, `404` to anyone e
 | `GET /api/stream/{viewer}?audio=` | the stream, `video/mp2t`, for as long as it is read; `audio` switches to another track (from live). Refused when the browser says the request came from another site |
 | `GET /api/watch/{viewer}` | `{ended?, takenOver, notice?}`: why it stopped, and the recording it is in the way of (`{recordingId, title, channel, streamId, from, start, waiting}`) |
 | `DELETE /api/watch/{viewer}` | stops it at once (`204`) |
-| `POST /api/vod/watch` | body `{movieId, anyway?, replaces?, audio?, from?, can?}` (`replaces`: a channel's viewer or a movie's; `from`: seconds into the movie to start at, for the remuxer) → `{viewer, stream, mode, duration, audio, audioIndex, converting, subtitles, notice?}`. A movie always has a connection of its own, asked of the same budget as a channel's and refused the same ways (`404` `movie` for one not in the catalogue). `mode` is `direct` for an MP4 whose details say H.264 and AAC or MP3 sound and which has no text subtitles (the browser plays the file as it is), else `remux`. `subtitles` lists the file's subtitle tracks, `[{index, language?, title?, text}]`, `text: false` for pictures |
+| `POST /api/vod/watch` | body `{movieId, anyway?, replaces?, audio?, from?, can?}` (`replaces`: a channel's viewer or a movie's; `from`: seconds into the movie to start at, for the remuxer) → `{viewer, stream, mode, duration, audio, audioIndex, converting, subtitles, notice?}`. A movie always has a connection of its own, asked of the same budget as a channel's and refused the same ways (`404` `movie` for one not in the catalogue). The file is read once before the answer, on the movie's connection, to learn what it holds: `duration`, `audio` and `subtitles` are the file's. `mode` is `direct` for an MP4 with H.264 video, AAC or MP3 sound and no text subtitles (the browser plays the file as it is), else `remux`, which is also the mode for any `audio` but the first. `subtitles` lists the file's subtitle tracks, `[{index, language?, title?, text}]`, `text: false` for pictures |
 | `GET /api/vod/stream/{viewer}?from=&audio=` | `direct`: the file, by the request's `Range` (passed on to the provider; `206` with `Content-Range`, or `200`), `Accept-Ranges: bytes`. A new request ends the one before, so the account sees one connection per viewer. `remux`: MPEG-TS (`video/mp2t`) from the keyframe at or before `from` (seconds into the movie), with the sound `audio` names; the keyframe it found is in the `X-Start` header (seconds). `HEAD` is refused (`405`). Refused when the browser says the request came from another site |
 | `GET /api/vod/subtitles/{viewer}/{index}?after=` | one text subtitle track of a remuxed movie as WebVTT (`text/vtt`), in the movie's time: the cues read so far that end after `after` seconds. `404` for a track that is pictures, `410` once the viewer has ended |
 | `GET /api/vod/watch/{viewer}`, `DELETE /api/vod/watch/{viewer}` | as a channel's viewer's; asking keeps a viewer nobody reads from (its browser holds all it needs) for 90 seconds, where one nobody reads or asks after goes after 15 |
