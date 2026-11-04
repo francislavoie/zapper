@@ -53,9 +53,10 @@
 //! **Limits** are live's, counted together: a device's
 //! [`watch::PER_DEVICE`] viewers and [`watch::STARTS_PER_MINUTE`] starts,
 //! and the service's [`watch::MAX_VIEWERS`], channels and movies alike. A
-//! viewer nobody has read from, and whose page has not asked after it
-//! (`GET /api/vod/watch/{viewer}`), for [`IDLE`] is let go. A browser that
-//! holds all it needs for now reads nothing, but its page still asks.
+//! viewer nobody has read from for [`IDLE`] is let go, unless its page has
+//! asked after it (`GET /api/vod/watch/{viewer}`) within [`ASKED_IDLE`]: a
+//! browser that holds all it needs for now reads nothing, but its page still
+//! asks.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
@@ -209,6 +210,12 @@ fn plan_for(info: &MediaInfo, audio: Option<usize>, can: &Can) -> Result<VodPlan
     })
 }
 
+/// A viewer nobody reads from, but whose page has asked after it
+/// (`GET /api/vod/watch/{viewer}`) within this long, is kept: the browser
+/// holds all it needs for now, and a page in a background tab may ask only
+/// about once a minute. Others go after [`IDLE`].
+const ASKED_IDLE: Duration = Duration::from_secs(90);
+
 // -------------------------------------------------------------- subtitles
 
 /// A track's cues kept at most.
@@ -307,6 +314,8 @@ struct MovieViewer {
     /// A reading (or the first opening) has the file.
     reading: bool,
     idle_since: Instant,
+    /// When its page last asked after it.
+    asked_at: Option<Instant>,
     ended: Option<(Ended, Instant)>,
 }
 
@@ -416,16 +425,16 @@ impl MovieViewers {
 
     /// Viewer `id` of `device`, as its page asks after it: its movie, its
     /// rider and why it ended. A page that asks is still open, so its viewer
-    /// counts as read from: a browser that holds all it needs for now (a
-    /// short film read to its end, a file read well ahead) keeps its place,
-    /// and a closed page's goes after [`IDLE`].
+    /// is kept for [`ASKED_IDLE`] even when nothing reads from it: a browser
+    /// that holds all it needs for now (a short film read to its end, a file
+    /// read well ahead) keeps its place.
     fn asked(&self, device: &str, id: &str) -> Option<(i64, i64, Option<Ended>)> {
         let mut map = self.map();
         let v = map
             .get_mut(id)
             .filter(|v| v.device == device && !matches!(v.ended, Some((Ended::Stopped, _))))?;
         if v.ended.is_none() {
-            v.idle_since = Instant::now();
+            v.asked_at = Some(Instant::now());
         }
         Some((v.movie_id, v.rider, v.ended.map(|(why, _)| why)))
     }
@@ -481,7 +490,10 @@ impl MovieViewers {
                 _ if v.reading => false,
                 Some((Ended::Stopped, _)) => true,
                 Some((_, at)) => at.elapsed() >= KEEP_ENDED,
-                None => v.idle_since.elapsed() >= IDLE,
+                None => {
+                    v.idle_since.elapsed() >= IDLE
+                        && v.asked_at.is_none_or(|a| a.elapsed() >= ASKED_IDLE)
+                }
             })
             .map(|(id, _)| id.clone())
             .collect();
@@ -541,6 +553,7 @@ impl MovieViewers {
                 turn: tokio_watch::channel(0).0,
                 reading: false,
                 idle_since: Instant::now(),
+                asked_at: None,
                 ended: None,
             },
         );
@@ -816,6 +829,7 @@ async fn start(
             turn: turn_tx,
             reading: true,
             idle_since: Instant::now(),
+            asked_at: None,
             ended: None,
         },
     );
@@ -1912,19 +1926,32 @@ mod tests {
     fn a_viewer_its_page_asks_after_is_not_let_go_as_idle() {
         let vod = MovieViewers::default();
         let asked = vod.add_for_test("dev", 9, 1);
+        let slow = vod.add_for_test("dev", 7, 3);
+        let gone = vod.add_for_test("dev", 6, 4);
         let quiet = vod.add_for_test("dev", 8, 2);
-        // Both browsers hold all they need, and read nothing for a while.
-        for v in vod.map().values_mut() {
-            v.idle_since = Instant::now() - IDLE - Duration::from_secs(1);
-        }
         assert_eq!(
             vod.asked("dev", &asked).map(|(m, r, e)| (m, r, e.is_none())),
             Some((9, 1, true))
         );
         assert_eq!(vod.asked("other", &quiet), None, "another device's");
+        let ago = |secs: u64| Instant::now().checked_sub(Duration::from_secs(secs));
+        {
+            let mut map = vod.map();
+            // Every browser holds all it needs, and reads nothing for a while.
+            for v in map.values_mut() {
+                v.idle_since = ago(IDLE.as_secs() + 1).unwrap();
+            }
+            // A background tab's page asks about once a minute; a closed
+            // page's last ask is longer ago than that.
+            map.get_mut(&slow).unwrap().asked_at = ago(60);
+            map.get_mut(&gone).unwrap().asked_at = ago(ASKED_IDLE.as_secs() + 1);
+        }
         vod.reap();
-        assert!(vod.asked("dev", &asked).is_some(), "its page is still there");
-        assert!(vod.asked("dev", &quiet).is_none(), "a closed page's goes");
+        let map = vod.map();
+        assert!(map.contains_key(&asked), "its page is still there");
+        assert!(map.contains_key(&slow), "a background tab's is kept");
+        assert!(!map.contains_key(&gone), "a page that stopped asking goes");
+        assert!(!map.contains_key(&quiet), "one never asked after goes");
     }
 
     #[test]
