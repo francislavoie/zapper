@@ -23,8 +23,11 @@
  *
  * Timestamps are rebased so the output starts at 0: a player given a
  * stream that begins an hour in would wait an hour on its own timeline, and
- * the page needs a start it can add the requested time to. The base is the
- * first kept keyframe's decode time, so no timestamp is negative. A movie
+ * the page needs a clock that begins at the picture it is given. The base
+ * is the first kept keyframe's decode time, so no timestamp is negative.
+ * That keyframe is at or before the requested time (up to a GOP early), so
+ * `start` is told where in the file, in seconds, the output's zero is, before
+ * the first byte is written; the page adds it to the output's time. A movie
  * does not jump around the way a live feed does, so a single offset is all
  * it takes; a packet that would still go backwards on its stream is
  * dropped. Subtitle cues are on the same timeline.
@@ -59,6 +62,9 @@ typedef void (*zv_stream_fn)(void *opaque, int kind, int index, const char *code
  * (-1 for none) and whether to encode it; returns non-zero to refuse. */
 typedef int (*zv_plan_fn)(void *opaque, double duration, const char *video, int *audio,
                           int *encode);
+/* Called once, before the first output byte: the second of the file (as the
+ * caller's `from` counts it) at which the output's zero lies. */
+typedef void (*zv_start_fn)(void *opaque, double secs);
 typedef void (*zv_cue_fn)(void *opaque, int track, int64_t start_us, int64_t end_us,
                           const char *text);
 
@@ -163,16 +169,19 @@ static size_t ass_text(const char *ass, char *out, size_t len, size_t cap) {
     if (commas < 8)
         p = ass;
     int open[3] = {0, 0, 0};
+    int drawing = 0; /* \p1 and up: the text is a vector path, not words */
     const char tag[3] = {'b', 'i', 'u'};
     for (; *p; p++) {
         char s[8];
         if (*p == '{') {
             const char *e = strchr(p, '}');
             if (!e)
-                break;
+                break; /* an override block never closed: nothing after it is words */
             for (const char *q = p; q + 2 < e; q++) {
                 if (*q != '\\')
                     continue;
+                if (q[1] == 'p' && q[2] >= '0' && q[2] <= '9')
+                    drawing = atoi(q + 2) > 0;
                 for (int t = 0; t < 3; t++) {
                     int on = q[2] == '1';
                     if (q[1] == tag[t] && (q[2] == '0' || on) && on != open[t]) {
@@ -183,6 +192,8 @@ static size_t ass_text(const char *ass, char *out, size_t len, size_t cap) {
                 }
             }
             p = e;
+        } else if (drawing) {
+            continue;
         } else if (*p == '\\' && (p[1] == 'N' || p[1] == 'n')) {
             if (len > 0 && out[len - 1] != '\n')
                 len = add(out, len, cap, "\n");
@@ -511,7 +522,8 @@ static void lang_of(const AVStream *st, char *dst, size_t n) {
  * fails (an AVERROR, said in `err`; the output refusing is AVERROR_EXIT).
  * `from` is where to start, in seconds. */
 int zv_run(zv_read_fn read, zv_seek_fn seek, zv_size_fn size, zv_write_fn write,
-           zv_stream_fn stream_fn, zv_plan_fn plan_fn, zv_cue_fn cue_fn, void *opaque, double from,
+           zv_stream_fn stream_fn, zv_plan_fn plan_fn, zv_start_fn start_fn, zv_cue_fn cue_fn,
+           void *opaque, double from,
            char *err, size_t errlen) {
     io x = {read, write, seek, size, opaque};
     if (av_log_get_level() > AV_LOG_FATAL)
@@ -719,12 +731,15 @@ int zv_run(zv_read_fn read, zv_seek_fn seek, zv_size_fn size, zv_write_fn write,
         int64_t at = av_rescale_q(pkt->pts != AV_NOPTS_VALUE ? pkt->pts : pkt->dts, tb, US);
         if (!started) {
             /* With a picture, its first keyframe; audio alone, its first packet. */
-            if (video >= 0 ? !(s == video && (pkt->flags & AV_PKT_FLAG_KEY)) : at < from_us) {
+            int64_t file_at = at - (in->start_time != AV_NOPTS_VALUE ? in->start_time : 0);
+            if (video >= 0 ? !(s == video && (pkt->flags & AV_PKT_FLAG_KEY)) : file_at < from_us) {
                 av_packet_unref(pkt);
                 continue;
             }
             base = av_rescale_q(pkt->dts != AV_NOPTS_VALUE ? pkt->dts : pkt->pts, tb, US);
             started = 1;
+            start_fn(opaque, (double)(base - (in->start_time != AV_NOPTS_VALUE ? in->start_time : 0)) /
+                                 AV_TIME_BASE);
             start_cues(&cq, base);
         }
         /* Audio a little ahead of the first keyframe would land before zero. */

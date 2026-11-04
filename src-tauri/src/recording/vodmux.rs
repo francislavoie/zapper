@@ -105,6 +105,12 @@ pub struct Vodmux {
     /// MPEG-TS, from the output's zero. Dropping it makes the remuxer stop
     /// at its next write.
     pub output: mpsc::Receiver<Bytes>,
+    /// Where in the file, in seconds, the output's zero is: the keyframe at or
+    /// before the requested time (up to a GOP early), which the output starts
+    /// on. Sent before the first output byte; the page's clock, seek bar and
+    /// resume position add it to the output's time. It never comes (the
+    /// receiver errors) if the remuxer ends before the output starts.
+    pub start: oneshot::Receiver<f64>,
     /// The file's text subtitles as the file is read: every track at once,
     /// each cue sent as it is decoded (a track's cues come in order, a few
     /// seconds ahead of the picture they belong to). Closes when the remuxer
@@ -120,6 +126,7 @@ type SeekFn = extern "C" fn(*mut c_void, i64) -> i64;
 type SizeFn = extern "C" fn(*mut c_void) -> i64;
 type StreamFn = extern "C" fn(*mut c_void, c_int, c_int, *const c_char, *const c_char, c_int);
 type PlanFn = extern "C" fn(*mut c_void, f64, *const c_char, *mut c_int, *mut c_int) -> c_int;
+type StartFn = extern "C" fn(*mut c_void, f64);
 type CueFn = extern "C" fn(*mut c_void, c_int, i64, i64, *const c_char);
 
 /// `zv_run`'s result for a plan that said no.
@@ -134,6 +141,7 @@ extern "C" {
         write: WriteFn,
         stream: StreamFn,
         plan: PlanFn,
+        start: StartFn,
         cue: CueFn,
         opaque: *mut c_void,
         from: f64,
@@ -152,6 +160,7 @@ struct State {
     cues: mpsc::UnboundedSender<Cue>,
     plan: Option<Plan>,
     info: Option<oneshot::Sender<Result<MediaInfo, String>>>,
+    start: Option<oneshot::Sender<f64>>,
     audio: Vec<AudioStream>,
     subtitles: Vec<SubtitleStream>,
 }
@@ -161,6 +170,16 @@ struct State {
 /// used by that thread alone.
 unsafe fn state<'a>(opaque: *mut c_void) -> &'a mut State {
     &mut *(opaque as *mut State)
+}
+
+/// Runs a callback's Rust side, answering `or` should it panic: a panic must
+/// not unwind into C (and out of an `extern "C"` function, which aborts the
+/// whole service).
+fn guard<T>(or: T, f: impl FnOnce() -> T) -> T {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or_else(|_| {
+        tracing::warn!("a movie remuxer's callback panicked");
+        or
+    })
 }
 
 fn text(p: *const c_char) -> String {
@@ -173,36 +192,54 @@ fn some(s: String) -> Option<String> {
 }
 
 extern "C" fn read_cb(opaque: *mut c_void, buf: *mut u8, size: c_int) -> c_int {
-    // SAFETY: see `state`; `buf` holds `size` bytes.
-    let (s, buf) = unsafe { (state(opaque), std::slice::from_raw_parts_mut(buf, size.max(0) as usize)) };
-    match s.input.read(buf) {
-        Ok(n) => n as c_int,
-        Err(_) => -1,
-    }
+    guard(-1, || {
+        // SAFETY: see `state`; `buf` holds `size` bytes.
+        let (s, buf) = unsafe {
+            (
+                state(opaque),
+                std::slice::from_raw_parts_mut(buf, size.max(0) as usize),
+            )
+        };
+        match s.input.read(buf) {
+            Ok(n) => n as c_int,
+            Err(_) => -1,
+        }
+    })
 }
 
 extern "C" fn write_cb(opaque: *mut c_void, buf: *const u8, size: c_int) -> c_int {
-    // SAFETY: see `state`; `buf` holds `size` bytes.
-    let (s, data) = unsafe { (state(opaque), std::slice::from_raw_parts(buf, size.max(0) as usize)) };
-    match s.output.blocking_send(Bytes::copy_from_slice(data)) {
-        Ok(()) => 0,
-        Err(_) => -1,
-    }
+    guard(-1, || {
+        // SAFETY: see `state`; `buf` holds `size` bytes.
+        let (s, data) = unsafe {
+            (
+                state(opaque),
+                std::slice::from_raw_parts(buf, size.max(0) as usize),
+            )
+        };
+        match s.output.blocking_send(Bytes::copy_from_slice(data)) {
+            Ok(()) => 0,
+            Err(_) => -1,
+        }
+    })
 }
 
 extern "C" fn seek_cb(opaque: *mut c_void, pos: i64) -> i64 {
-    // SAFETY: see `state`.
-    let s = unsafe { state(opaque) };
-    match u64::try_from(pos).ok().map(|p| s.input.seek(p)) {
-        Some(Ok(())) => pos,
-        _ => -1,
-    }
+    guard(-1, || {
+        // SAFETY: see `state`.
+        let s = unsafe { state(opaque) };
+        match u64::try_from(pos).ok().map(|p| s.input.seek(p)) {
+            Some(Ok(())) => pos,
+            _ => -1,
+        }
+    })
 }
 
 extern "C" fn size_cb(opaque: *mut c_void) -> i64 {
-    // SAFETY: see `state`.
-    let s = unsafe { state(opaque) };
-    s.input.size().and_then(|n| i64::try_from(n).ok()).unwrap_or(-1)
+    guard(-1, || {
+        // SAFETY: see `state`.
+        let s = unsafe { state(opaque) };
+        s.input.size().and_then(|n| i64::try_from(n).ok()).unwrap_or(-1)
+    })
 }
 
 extern "C" fn stream_cb(
@@ -213,24 +250,26 @@ extern "C" fn stream_cb(
     lang: *const c_char,
     n: c_int,
 ) {
-    // SAFETY: see `state`.
-    let s = unsafe { state(opaque) };
-    let (index, codec, lang) = (index as usize, text(codec), some(text(lang)));
-    if kind == 0 {
-        s.audio.push(AudioStream {
-            index,
-            codec,
-            lang,
-            channels: u32::try_from(n).ok().filter(|&n| n > 0),
-        });
-    } else {
-        s.subtitles.push(SubtitleStream {
-            index,
-            codec,
-            lang,
-            text: kind == 1,
-        });
-    }
+    guard((), || {
+        // SAFETY: see `state`.
+        let s = unsafe { state(opaque) };
+        let (index, codec, lang) = (index as usize, text(codec), some(text(lang)));
+        if kind == 0 {
+            s.audio.push(AudioStream {
+                index,
+                codec,
+                lang,
+                channels: u32::try_from(n).ok().filter(|&n| n > 0),
+            });
+        } else {
+            s.subtitles.push(SubtitleStream {
+                index,
+                codec,
+                lang,
+                text: kind == 1,
+            });
+        }
+    })
 }
 
 extern "C" fn plan_cb(
@@ -251,10 +290,12 @@ extern "C" fn plan_cb(
     let (Some(plan), Some(tx)) = (s.plan.take(), s.info.take()) else {
         return REFUSED;
     };
-    match plan(&info) {
+    let decided = guard(Err("the plan failed".to_string()), || plan(&info));
+    match decided {
         Ok(p) => {
             // Before the first byte of output, which only now can start.
             let _ = tx.send(Ok(info));
+            // SAFETY: as above.
             unsafe {
                 *audio = p.audio.map_or(-1, |a| a as c_int);
                 *encode = c_int::from(p.encode);
@@ -268,15 +309,27 @@ extern "C" fn plan_cb(
     }
 }
 
+extern "C" fn start_cb(opaque: *mut c_void, secs: f64) {
+    guard((), || {
+        // SAFETY: see `state`.
+        let s = unsafe { state(opaque) };
+        if let Some(tx) = s.start.take() {
+            let _ = tx.send(secs);
+        }
+    })
+}
+
 extern "C" fn cue_cb(opaque: *mut c_void, track: c_int, start: i64, end: i64, body: *const c_char) {
-    // SAFETY: see `state`.
-    let s = unsafe { state(opaque) };
-    let _ = s.cues.send(Cue {
-        track: track as usize,
-        start: start as f64 / 1e6,
-        end: end as f64 / 1e6,
-        text: text(body),
-    });
+    guard((), || {
+        // SAFETY: see `state`.
+        let s = unsafe { state(opaque) };
+        let _ = s.cues.send(Cue {
+            track: track as usize,
+            start: start as f64 / 1e6,
+            end: end as f64 / 1e6,
+            text: text(body),
+        });
+    })
 }
 
 /// Starts the remuxer on a thread of its own. It opens `input`, reports what
@@ -294,12 +347,14 @@ pub fn spawn(
     let (out_tx, out_rx) = mpsc::channel(QUEUE);
     let (cue_tx, cue_rx) = mpsc::unbounded_channel();
     let (info_tx, info_rx) = oneshot::channel();
+    let (start_tx, start_rx) = oneshot::channel();
     let mut state = State {
         input,
         output: out_tx,
         cues: cue_tx,
         plan: Some(Box::new(plan)),
         info: Some(info_tx),
+        start: Some(start_tx),
         audio: Vec::new(),
         subtitles: Vec::new(),
     };
@@ -316,6 +371,7 @@ pub fn spawn(
                 write_cb,
                 stream_cb,
                 plan_cb,
+                start_cb,
                 cue_cb,
                 &mut state as *mut State as *mut c_void,
                 from.max(0.0),
@@ -347,6 +403,7 @@ pub fn spawn(
         info_rx,
         Vodmux {
             output: out_rx,
+            start: start_rx,
             cues: cue_rx,
         },
     )
@@ -551,7 +608,8 @@ mod tests {
             return;
         };
         let (input, seeks) = mem(&file);
-        let (info, mut vod) = spawn(input, 10.0, |info| {
+        // Between keyframes (one a second): the output starts on the one before.
+        let (info, mut vod) = spawn(input, 10.5, |info| {
             Ok(VodPlan {
                 audio: info.audio.first().map(|a| a.index),
                 encode: false,
@@ -560,6 +618,8 @@ mod tests {
         let info = info.await.unwrap().expect("it opens");
         assert_eq!(info.audio[0].codec, "aac");
         assert_eq!(info.subtitles[0].codec, "mov_text");
+        let start = vod.start.await.expect("the start is reported");
+        assert!(start <= 10.5 && start > 9.4, "the output's zero is at {start} s");
         let out = all(&mut vod.output).await;
         let past_half = seeks
             .lock()
@@ -584,9 +644,10 @@ mod tests {
             .count();
         assert!((240..=290).contains(&video), "{video} pictures");
 
-        // The cue at 12 s is 2 s into what was sent (a keyframe a second).
+        // The cue at 12 s is as far into the output as the output's zero is
+        // from it.
         let cue = vod.cues.recv().await.expect("the later cue");
-        assert!((cue.start - 2.0).abs() < 1.1, "starts at {}", cue.start);
+        assert!((cue.start - (12.0 - start)).abs() < 0.1, "starts at {}", cue.start);
         assert!(vod.cues.recv().await.is_none(), "the cue before the start is not sent");
     }
 
@@ -612,6 +673,68 @@ mod tests {
         let why = info.await.unwrap().unwrap_err();
         assert!(why.contains("reading the file"), "{why}");
         assert!(all(&mut vod.output).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_panicking_plan_is_an_error_not_an_abort() {
+        let Some(file) = fixture(false, false) else {
+            eprintln!("skipped: no ffmpeg command to make a fixture with");
+            return;
+        };
+        let (input, _) = mem(&file);
+        let (info, mut vod) = spawn(input, 0.0, |_| panic!("plan bug"));
+        assert!(info.await.unwrap().is_err());
+        assert!(all(&mut vod.output).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn drawing_commands_and_override_blocks_are_not_subtitle_text() {
+        static N: AtomicUsize = AtomicUsize::new(1000);
+        let dir = std::env::temp_dir().join(format!(
+            "zapper-vodmux-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ass = dir.join("subs.ass");
+        let events = [
+            r"Dialogue: 0,0:00:01.00,0:00:03.00,Default,,0,0,0,,Seen{\p1}m 0 0 l 10 0 10 10{\p0} here",
+            r"Dialogue: 0,0:00:04.00,0:00:06.00,Default,,0,0,0,,{\p1}m 0 0 l 5 5",
+            r"Dialogue: 0,0:00:07.00,0:00:09.00,Default,,0,0,0,,{\pos(5,5)\b1}Bold{\b0} and {\i1}plain{\unclosed",
+        ];
+        std::fs::write(
+            &ass,
+            format!(
+                "[Script Info]\nScriptType: v4.00+\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize\nStyle: Default,Arial,20\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n{}\n",
+                events.join("\n")
+            ),
+        )
+        .unwrap();
+        let out = dir.join("movie.mkv");
+        let made = std::process::Command::new("ffmpeg")
+            .args(["-hide_banner", "-loglevel", "error", "-y"])
+            .args(["-f", "lavfi", "-i", "testsrc2=size=160x90:rate=25"])
+            .arg("-i")
+            .arg(&ass)
+            .args(["-t", "10", "-map", "0:v", "-map", "1:s"])
+            .args(["-c:v", "libx264", "-g", "25", "-pix_fmt", "yuv420p", "-c:s", "ass"])
+            .arg(&out)
+            .status();
+        let file = made.ok().filter(|s| s.success()).and_then(|_| std::fs::read(&out).ok());
+        let _ = std::fs::remove_dir_all(&dir);
+        let Some(file) = file else {
+            eprintln!("skipped: no ffmpeg command to make a fixture with");
+            return;
+        };
+        let (input, _) = mem(&file);
+        let (info, mut vod) = spawn(input, 0.0, |_| Ok(VodPlan { audio: None, encode: false }));
+        assert_eq!(info.await.unwrap().unwrap().subtitles[0].codec, "ass");
+        let _ = all(&mut vod.output).await;
+        let mut texts = Vec::new();
+        while let Some(c) = vod.cues.recv().await {
+            texts.push(c.text);
+        }
+        assert_eq!(texts, ["Seen here", "<b>Bold</b> and <i>plain</i>"], "{texts:?}");
     }
 
     #[tokio::test]
