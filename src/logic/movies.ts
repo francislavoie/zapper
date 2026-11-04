@@ -219,3 +219,35 @@ export function playingKind(
 /** How long a title stays selected before its details are fetched: a
  *  held arrow key crosses rows without asking the provider about each. */
 export const DETAILS_DELAY_MS = 400;
+
+/** Remembers `d` as the answer for `id`, forgetting the oldest answers past
+ *  `max`. A Map keeps its keys in the order they were set, so the first key
+ *  is the oldest. Changes and returns `cache`. */
+export function rememberDetails(
+  cache: Map<number, MovieDetailsDto>,
+  id: number,
+  d: MovieDetailsDto,
+  max: number,
+): Map<number, MovieDetailsDto> {
+  cache.delete(id);
+  cache.set(id, d);
+  while (cache.size > max) {
+    const oldest = cache.keys().next();
+    if (oldest.done) break;
+    cache.delete(oldest.value);
+  }
+  return cache;
+}
+
+/** What was remembered for `id`; asking makes it the newest. */
+export function recallDetails(
+  cache: Map<number, MovieDetailsDto>,
+  id: number,
+): MovieDetailsDto | undefined {
+  const d = cache.get(id);
+  if (d !== undefined) {
+    cache.delete(id);
+    cache.set(id, d);
+  }
+  return d;
+}
