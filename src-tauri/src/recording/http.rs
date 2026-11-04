@@ -2158,6 +2158,59 @@ pub(crate) mod tests {
         }
     }
 
+    #[test]
+    fn a_failed_details_fetch_does_not_tell_the_page_where_the_provider_is() {
+        use crate::catalog::{db, vod_sync};
+        let provider = crate::test_http::serve(|_, _| crate::test_http::Reply::new(500, "nope"));
+        with_account("vodfail", async {
+            crate::catalog::credentials::save(&crate::xtream::Credentials {
+                host: provider.base.clone(),
+                username: "viewer".into(),
+                password: "vod-secret-41".into(),
+            })
+            .unwrap();
+            db::install_test_db();
+            db::with_db(|c| {
+                vod_sync::land_movies(
+                    c,
+                    &[crate::xtream::Category {
+                        category_id: "vod-9101".into(),
+                        category_name: "Web Films Two".into(),
+                    }],
+                    &[vod_sync::NewMovie {
+                        movie_id: 9_101_001,
+                        category_id: Some("vod-9101".into()),
+                        name: "Harbour Fog".into(),
+                        ..Default::default()
+                    }],
+                    now(),
+                )?;
+                Ok(())
+            })
+            .unwrap();
+            let s = server("vod-fail");
+            enable(&s, true).await;
+            let token = browser_login(&s).await;
+            let get = |uri: &str| from_page("GET", uri, Some(&token), None);
+            let (st, _, body) = call_raw(&s, get("/api/vod/movies/9101001")).await;
+            assert_eq!(st, StatusCode::BAD_GATEWAY);
+            let text = String::from_utf8(body).unwrap();
+            for leak in [provider.base.as_str(), "127.0.0.1", "player_api", "vod-secret-41"] {
+                assert!(!text.contains(leak), "{leak} reached the browser: {text}");
+            }
+            // An unknown id is a 404 for every read of one, and a bad duration is refused.
+            let (st, _) = call(&s, get("/api/vod/movies/9199999/similar?limit=5")).await;
+            assert_eq!(st, StatusCode::NOT_FOUND);
+            let bad = serde_json::json!({"position": 5, "duration": 0});
+            let (st, _) = call(
+                &s,
+                from_page("PUT", "/api/vod/movies/9101001/progress", Some(&token), Some(bad)),
+            )
+            .await;
+            assert_eq!(st, StatusCode::BAD_REQUEST);
+        });
+    }
+
     // ------------------------------------------------------------- account
 
     /// Runs `f` on a current-thread runtime in a config directory of its
