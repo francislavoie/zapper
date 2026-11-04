@@ -7,7 +7,7 @@
 use anyhow::{Context, Result};
 use std::fmt;
 
-use crate::xtream::{Category, Channel, UserInfo};
+use crate::xtream::{Category, Channel, UserInfo, VodInfo, VodStream};
 
 /// Some servers reject default agents; VLC's is widely accepted.
 const USER_AGENT: &str = "VLC/3.0.20 LibVLC/3.0.20";
@@ -78,6 +78,17 @@ impl XtreamClient {
         format!(
             "{}/live/{}/{}/{}.ts",
             self.creds.host, self.creds.username, self.creds.password, stream_id
+        )
+    }
+
+    /// Where a movie plays. Carries the credentials like [`live_url`]
+    /// does, so it is never logged.
+    ///
+    /// [`live_url`]: XtreamClient::live_url
+    pub fn movie_url(&self, stream_id: i64, ext: &str) -> String {
+        format!(
+            "{}/movie/{}/{}/{}.{}",
+            self.creds.host, self.creds.username, self.creds.password, stream_id, ext
         )
     }
 
@@ -162,6 +173,49 @@ impl XtreamClient {
             .await
             .context("parsing channels")
     }
+
+    pub async fn vod_categories(&self) -> Result<Vec<Category>> {
+        self.http
+            .get(self.api_url(Some("get_vod_categories")))
+            .timeout(API_TOTAL)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await
+            .context("parsing movie categories")
+    }
+
+    /// Every movie, in one call: the list is tens of megabytes on a big
+    /// catalogue, hence the long deadline. Details come per title through
+    /// [`vod_info`](Self::vod_info), never in bulk.
+    pub async fn vod_streams(&self) -> Result<Vec<VodStream>> {
+        self.http
+            .get(self.api_url(Some("get_vod_streams")))
+            .timeout(API_TOTAL)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await
+            .context("parsing movies")
+    }
+
+    pub async fn vod_info(&self, vod_id: i64) -> Result<VodInfo> {
+        self.http
+            .get(format!(
+                "{}&vod_id={vod_id}",
+                self.api_url(Some("get_vod_info"))
+            ))
+            // One title's details, asked while someone waits.
+            .timeout(std::time::Duration::from_secs(20))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await
+            .context("parsing movie details")
+    }
 }
 
 /// Minimal percent-encoding for query values; avoids a dependency.
@@ -226,5 +280,33 @@ mod tests {
             "password leaked into Debug output: {s}"
         );
         assert!(s.contains("<redacted>"), "redaction marker missing: {s}");
+    }
+
+    #[test]
+    fn movie_url_names_the_container() {
+        let c = XtreamClient::new(creds()).unwrap();
+        assert_eq!(
+            c.movie_url(77, "mkv"),
+            "http://example.com/movie/u/p/77.mkv"
+        );
+    }
+
+    #[tokio::test]
+    async fn vod_calls_ask_the_right_actions() {
+        let s = crate::test_http::serve(|_, _| crate::test_http::Reply::ok("[]"));
+        let mut cr = creds();
+        cr.host = s.base.clone();
+        let c = XtreamClient::new(cr).unwrap();
+        assert!(c.vod_categories().await.unwrap().is_empty());
+        assert!(c.vod_streams().await.unwrap().is_empty());
+        // `[]` is a server's "nothing" for a title.
+        assert!(c.vod_info(5).await.unwrap().info.plot.is_none());
+        let seen = s.requests();
+        let actions: Vec<_> = seen.iter().map(|r| r.query("action").unwrap()).collect();
+        assert_eq!(
+            actions,
+            ["get_vod_categories", "get_vod_streams", "get_vod_info"]
+        );
+        assert_eq!(seen[2].query("vod_id"), Some("5"));
     }
 }
