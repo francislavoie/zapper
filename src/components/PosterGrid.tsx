@@ -21,8 +21,9 @@ export interface PosterGridProps {
   rowAt: (index: number) => MovieDto | undefined;
   selectedId: number | null;
   now: number;
-  onSelect: (m: MovieDto) => void;
-  onOpen: (m: MovieDto) => void;
+  onSelect: (m: MovieDto, index: number) => void;
+  onOpen: (m: MovieDto, index: number) => void;
+  idPrefix: string;
 }
 
 export function PosterGrid({
@@ -34,6 +35,7 @@ export function PosterGrid({
   now,
   onSelect,
   onOpen,
+  idPrefix,
 }: PosterGridProps) {
   const { columns, cardWidth, rowHeight } = geometry;
   const cards = [];
@@ -49,6 +51,8 @@ export function PosterGrid({
           <Card
             key={m.movieId}
             movie={m}
+            index={i}
+            idPrefix={idPrefix}
             left={left}
             top={top}
             width={cardWidth}
@@ -68,6 +72,8 @@ export function PosterGrid({
 
 const Card = memo(function Card({
   movie,
+  index,
+  idPrefix,
   left,
   top,
   width,
@@ -77,13 +83,15 @@ const Card = memo(function Card({
   onOpen,
 }: {
   movie: MovieDto;
+  index: number;
+  idPrefix: string;
   left: number;
   top: number;
   width: number;
   selected: boolean;
   now: number;
-  onSelect: (m: MovieDto) => void;
-  onOpen: (m: MovieDto) => void;
+  onSelect: (m: MovieDto, index: number) => void;
+  onOpen: (m: MovieDto, index: number) => void;
 }) {
   const badges = movieBadges(movie, now);
   const facts = [
@@ -94,12 +102,12 @@ const Card = memo(function Card({
   return (
     <div
       className={`poster-card ${selected ? "sel" : ""}`}
-      id={`movie-${movie.movieId}`}
+      id={`${idPrefix}-${movie.movieId}`}
       role="option"
       aria-selected={selected}
       style={{ left, top, width }}
-      onClick={() => onSelect(movie)}
-      onDoubleClick={() => onOpen(movie)}
+      onClick={() => onSelect(movie, index)}
+      onDoubleClick={() => onOpen(movie, index)}
     >
       <div className="poster-art" style={{ height: Math.round(width * 1.5) }}>
         <Poster url={movie.posterUrl} name={movie.cleanName} className="poster poster-img" />

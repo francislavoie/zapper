@@ -11,17 +11,22 @@ import { Poster } from "./Poster";
 export interface MovieRowProps {
   movie: MovieDto;
   top: number;
+  index: number;
+  /** Unique to the list showing it, so two lists on one page share no ids. */
+  idPrefix: string;
   selected: boolean;
   /** Unix seconds, for the NEW badge; moves on slowly, so rows keep their
    *  memoised render between its ticks. */
   now: number;
-  onSelect: (m: MovieDto) => void;
-  onOpen: (m: MovieDto) => void;
+  onSelect: (m: MovieDto, index: number) => void;
+  onOpen: (m: MovieDto, index: number) => void;
 }
 
 export const MovieRow = memo(function MovieRow({
   movie,
   top,
+  index,
+  idPrefix,
   selected,
   now,
   onSelect,
@@ -34,12 +39,12 @@ export const MovieRow = memo(function MovieRow({
     // clicked (and a focused row that scrolls out of the window would drop it).
     <div
       className={`row movie-row ${selected ? "sel" : ""}`}
-      id={`movie-${movie.movieId}`}
+      id={`${idPrefix}-${movie.movieId}`}
       role="option"
       aria-selected={selected}
       style={{ top, height: LIST_ROW_HEIGHT }}
-      onClick={() => onSelect(movie)}
-      onDoubleClick={() => onOpen(movie)}
+      onClick={() => onSelect(movie, index)}
+      onDoubleClick={() => onOpen(movie, index)}
     >
       <Poster url={movie.posterUrl} name={movie.cleanName} className="poster row-poster" />
       <span className="row-name">

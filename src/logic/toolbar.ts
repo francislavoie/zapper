@@ -140,7 +140,15 @@ export const ON_DEMAND_SECTIONS: readonly Section[] = ["movies"];
 
 /** The tabs to draw: Live TV always, and Movies where the app can show them
  *  and the account has some (the movies summary's `available`). */
-export function titleTabs(caps: Pick<Capabilities, "onDemand">, moviesAvailable = true): Section[] {
+export function titleTabs(caps: Pick<Capabilities, "onDemand">, moviesAvailable: boolean): Section[] {
   if (!caps.onDemand) return ["live"];
   return ["live", ...ON_DEMAND_SECTIONS.filter((s) => s !== "movies" || moviesAvailable)];
+}
+
+/** The view that goes with a section. The guide is Live TV's alone, and the
+ *  player is left for the section's own list. */
+export function modeForSection(mode: string, section: Section): string {
+  if (mode === "watch") return "browse";
+  if (mode === "guide" && section !== "live") return "browse";
+  return mode;
 }
