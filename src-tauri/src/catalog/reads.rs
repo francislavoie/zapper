@@ -233,7 +233,12 @@ pub fn movies_note(kind: Option<Kind>, total: u32) -> Option<String> {
 
 /// How many movies there are, and whether the interface should offer them.
 pub fn movies_summary() -> Result<MoviesSummaryDto> {
-    let counts = db::with_db(|c| vod_store::movie_counts(c, now()))?;
+    let (counts, origin) = db::with_db(|c| {
+        Ok((
+            vod_store::movie_counts(c, now())?,
+            crate::catalog::vod_sync::movies_origin(c)?,
+        ))
+    })?;
     let kind = crate::catalog::credentials::load_account_stored()
         .ok()
         .flatten()
@@ -246,6 +251,7 @@ pub fn movies_summary() -> Result<MoviesSummaryDto> {
         favourites: counts.favourites,
         recent: counts.recent,
         watched: counts.watched,
+        origin,
     })
 }
 

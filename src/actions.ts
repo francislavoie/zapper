@@ -11,6 +11,8 @@ import { guideOffsetFor, hitAction, inGuideReach } from "./logic/programmes";
 import type { ActionId } from "./logic/palette";
 import type { SleepRequest } from "./logic/sleep";
 import { refreshFullscreen } from "./hooks/useFullscreen";
+import { clearMovieDetails } from "./hooks/useMovieDetails";
+import { clearDeadPosters } from "./deadPosters";
 import { windowControls } from "./window";
 import { ALL_CATEGORIES, run, type Action, type Mode } from "./store";
 import type {
@@ -409,12 +411,24 @@ export function setMovieWatched(
   return markMovie(dispatch, movie, "watched", { watched });
 }
 
+/** Which catalogue the last summary's movies came from; `null` before one. */
+let moviesOrigin: string | null = null;
+
 /** The rail's counts, and whether the account has movies at all. `quiet`
- *  re-reads without first saying "Loading", as `loadCategories` does. */
+ *  re-reads without first saying "Loading", as `loadCategories` does. When
+ *  the movies are another account's, the details and the pictures that
+ *  failed to load, kept by id and address, are forgotten (the store resets
+ *  the rest). */
 export async function loadMoviesSummary(dispatch: Dispatch<Action>, quiet = false): Promise<void> {
   if (!quiet) dispatch({ type: "movies/summary", value: loading() });
   try {
-    dispatch({ type: "movies/summary", value: ready(await backend.moviesSummary()) });
+    const summary = await backend.moviesSummary();
+    if (moviesOrigin !== null && moviesOrigin !== summary.origin) {
+      clearMovieDetails();
+      clearDeadPosters();
+    }
+    moviesOrigin = summary.origin;
+    dispatch({ type: "movies/summary", value: ready(summary) });
   } catch (e) {
     dispatch({ type: "movies/summary", value: failed(errorMessage(e)) });
   }

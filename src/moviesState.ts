@@ -8,7 +8,12 @@
 import type { Async } from "./logic/async.ts";
 import { idle } from "./logic/async.ts";
 import type { CategorySort } from "./logic/categoryOrder.ts";
-import { MOVIE_RECENT, type MoviesView, type YearRange } from "./logic/movies.ts";
+import {
+  MOVIE_RECENT,
+  moviesOriginChanged,
+  type MoviesView,
+  type YearRange,
+} from "./logic/movies.ts";
 import type {
   MarksDto,
   MovieDto,
@@ -122,6 +127,21 @@ export function moviesReducer(s: MoviesState, a: MoviesAction): MoviesState {
       // with `available`, and a dropped connection is not the account
       // losing its movies.
       if (a.value.status !== "ready" && s.summary.status === "ready") return s;
+      // Another account's movies: nothing kept of the old ones applies,
+      // though the ids may be the same.
+      if (moviesOriginChanged(s.summary, a.value)) {
+        return {
+          ...s,
+          summary: a.value,
+          selection: MOVIE_RECENT,
+          query: "",
+          selected: null,
+          sheetId: null,
+          marks: {},
+          menu: null,
+          revision: s.revision + 1,
+        };
+      }
       return { ...s, summary: a.value };
     case "movies/categories":
       if (a.value.status === "loading" && s.categories.status === "ready") return s;
@@ -141,6 +161,7 @@ export function moviesReducer(s: MoviesState, a: MoviesAction): MoviesState {
         revision: s.revision + 1,
       };
     case "movies/catalogue":
-      return { ...s, revision: s.revision + 1 };
+      // The lists read again, with the marks as the service has them now.
+      return { ...s, marks: {}, revision: s.revision + 1 };
   }
 }

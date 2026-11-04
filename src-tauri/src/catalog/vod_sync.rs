@@ -56,6 +56,23 @@ impl From<&VodStream> for NewMovie {
 /// The catalogue the mirror's movies were last landed from, in `meta`.
 const MOVIES_ORIGIN: &str = "movies_origin";
 
+/// Which catalogue the mirror's movies are from, for the interface: a hash
+/// of the origin (itself a hash, never an address or an account), empty
+/// before any movies were landed. When it changes, the titles are another
+/// account's, whatever ids they share with the ones shown so far.
+pub fn movies_origin(conn: &Connection) -> Result<String> {
+    let landed: Option<String> = conn
+        .query_row(
+            "SELECT value FROM meta WHERE key = ?1",
+            [MOVIES_ORIGIN],
+            |r| r.get(0),
+        )
+        .optional()?;
+    Ok(landed.map_or_else(String::new, |o| {
+        format!("{:016x}", ids::fnv1a(o.as_bytes()))
+    }))
+}
+
 fn plausible_year(y: &i32) -> bool {
     (1900..=2099).contains(y)
 }
@@ -501,6 +518,23 @@ mod tests {
         set_origin(&c, "B");
         land_movies(&c, &cats, &movies, 200).unwrap();
         assert_eq!((details(&c), runtime(&c, 2)), (0, None));
+    }
+
+    #[test]
+    fn the_interface_is_told_when_the_movies_are_another_accounts() {
+        let c = open_in_memory().unwrap();
+        assert_eq!(movies_origin(&c).unwrap(), "", "none landed yet");
+        let (cats, movies) = three();
+        set_origin(&c, "xtream:00000000000000aa");
+        land_movies(&c, &cats, &movies, 100).unwrap();
+        let a = movies_origin(&c).unwrap();
+        assert_eq!(a.len(), 16);
+        assert!(!a.contains("xtream") && !a.contains("aa"), "{a}");
+        land_movies(&c, &cats, &movies, 150).unwrap();
+        assert_eq!(movies_origin(&c).unwrap(), a, "the same account's sync");
+        set_origin(&c, "xtream:00000000000000bb");
+        land_movies(&c, &cats, &movies, 200).unwrap();
+        assert_ne!(movies_origin(&c).unwrap(), a);
     }
 
     #[test]

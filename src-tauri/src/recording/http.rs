@@ -2044,6 +2044,8 @@ pub(crate) mod tests {
         let (st, sum) = call(&s, get("/api/vod/summary")).await;
         assert_eq!(st, StatusCode::OK);
         assert!(sum["total"].as_u64().unwrap() >= 2, "{sum}");
+        // Which catalogue the movies are from, as a hash the page compares.
+        assert!(sum["origin"].is_string(), "{sum}");
         let (_, cats) = call(&s, get("/api/vod/categories")).await;
         assert!(cats.as_array().unwrap().iter().any(|c| c["id"] == "vod-9100"));
 
