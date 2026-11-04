@@ -137,12 +137,16 @@ mod tests {
 
     #[test]
     fn movie_search_is_its_own_index() {
+        let channels = Slot::new();
+        channels.rebuild(&db()).unwrap();
         let slot = Slot::new();
         let n = slot.rebuild_from(vec![(10, "First Film".into()), (11, "Second Film".into())]);
         assert_eq!(n, 2);
         let mut found = slot.query("film", 10);
         found.sort();
         assert_eq!(found, vec![10, 11]);
+        assert_eq!(channels.query("northwindone", 10), vec![1]);
+        assert!(channels.query("film", 10).is_empty());
     }
 
     // The free functions over `INDEX` are covered end-to-end by the `search`
