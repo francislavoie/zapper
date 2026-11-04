@@ -94,11 +94,19 @@ pub struct MovieWriter<'t> {
     categories: Vec<(String, String)>,
     category_ids: HashSet<String>,
     stats: SyncStats,
+    /// Whether an empty list is believed. See [`Self::accept_empty`].
+    empty_ok: bool,
 }
 
 impl<'t> MovieWriter<'t> {
     pub fn begin(tx: &'t rusqlite::Transaction<'_>) -> Result<Self> {
-        let conn: &Connection = tx;
+        Self::begin_on(tx)
+    }
+
+    /// As [`begin`](Self::begin), for a writer that holds the transaction's
+    /// connection rather than the transaction itself: everything written
+    /// through it is inside the transaction all the same.
+    pub fn begin_on(conn: &'t Connection) -> Result<Self> {
         let existing: HashSet<i64> = {
             let mut s = conn.prepare("SELECT movie_id FROM movies WHERE deleted_at IS NULL")?;
             let ids = s.query_map([], |r| r.get(0))?.collect::<Result<_, _>>()?;
@@ -111,7 +119,20 @@ impl<'t> MovieWriter<'t> {
             categories: Vec::new(),
             category_ids: HashSet::new(),
             stats: SyncStats::default(),
+            empty_ok: false,
         })
+    }
+
+    /// How many distinct movies have been written so far.
+    pub fn seen(&self) -> usize {
+        self.seen.len()
+    }
+
+    /// Believes an empty list. A playlist that still has its channels but no
+    /// movies any more is a provider that dropped them, where a server that
+    /// answers with an empty movie list is more likely having a bad minute.
+    pub fn accept_empty(&mut self) {
+        self.empty_ok = true;
     }
 
     /// Names the categories as the source lists them, for a source that has
@@ -222,6 +243,7 @@ impl<'t> MovieWriter<'t> {
             seen,
             categories,
             mut stats,
+            empty_ok,
             ..
         } = self;
         // Which catalogue the mirror's movies came from is kept apart from
@@ -239,7 +261,7 @@ impl<'t> MovieWriter<'t> {
         // A different account's list may well be empty, and then the old
         // one's titles must go; the same account's empty answer is a bad
         // minute and changes nothing.
-        if seen.is_empty() && !existing.is_empty() && !switched {
+        if seen.is_empty() && !existing.is_empty() && !switched && !empty_ok {
             return Err(anyhow!(
                 "the movie list was empty; keeping the {} already here",
                 existing.len()

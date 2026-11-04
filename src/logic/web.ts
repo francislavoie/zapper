@@ -67,7 +67,7 @@ export const SYNC_BURST_MS = 20_000;
  *  refresh that someone else started. `burstUntil` is when the "just after"
  *  ends, on the clock `now` is read from. */
 export function syncPollMs(s: SyncStatusDto | null, now = 0, burstUntil = 0): number {
-  if (s && (s.phase === "categories" || s.phase === "channels" || s.phase === "epg")) {
+  if (s && (s.phase === "categories" || s.phase === "channels" || s.phase === "epg" || s.phase === "movies")) {
     return 2_000;
   }
   if (now < burstUntil) return 1_000;
