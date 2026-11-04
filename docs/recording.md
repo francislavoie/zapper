@@ -289,6 +289,9 @@ What a browser can do there:
 - browse the categories and channels, the guide, the favourites and what was watched
   recently, and search channels (`a|b`
   matches either) and programmes;
+- browse movies (the **Movies** tab, there only when the account has some: not for HDHomeRun,
+  Tvheadend or a playlist without movie entries): categories, favourites, watched, search,
+  details and posters, and play them ([Movies in the browser](#movies-in-the-browser));
 - watch live TV: choosing a channel plays it in the page, with the same picture band, player,
   transport, volume, fullscreen and audio tracks as the app ([Watching in the
   browser](#watching-in-the-browser));
@@ -398,7 +401,7 @@ answering, and decides from them, never from a channel's name:
   FFmpeg); AAC and the sound the browser does play go as they are. Another audio track goes through
   the same remuxer, which keeps only the chosen one. A zapper-server whose FFmpeg has no AAC
   encoder plays such a channel without its sound, and the page says so.
-- Subtitles are not shown in the browser.
+- Subtitles on a channel are not shown in the browser.
 
 **The player.** Volume and mute are the page's own, never the computer's; the compressor is the
 browser's own. Fullscreen is the browser's. Rewinding is what the browser holds: up to the last two
@@ -409,6 +412,39 @@ Source Extensions (an iPhone or iPad before iOS 17.1) says it cannot play live T
 
 **Limits.** A device may hold three streams at once and start forty a minute; the service streams
 to sixteen browsers at most.
+
+### Movies in the browser
+
+A movie plays in the page on a connection of its own (nobody else is at the same place
+in a film), asked of the same count as a channel's, with the same "Watch here anyway", the same
+card for a recording that needs the connection, and the same limits: movies and channels count
+together. The account sees one connection per movie being watched. When Play is pressed, the
+service reads the start of the file, on that connection, to learn its length, its sound tracks
+and its subtitles (a provider's details don't list subtitles, so the file is what tells). An MP4
+with H.264 video, AAC or MP3 sound and no text subtitles then plays as it is: the browser's own
+player asks for the parts it needs, which the service fetches from the provider. Anything else
+is converted on the way: remuxed to MPEG-TS from wherever the page asks, starting at the keyframe
+at or just before that time. The video is never re-encoded (a film whose
+video no browser plays, such as MPEG-2, says so), and sound the browser cannot play is converted
+to AAC, as a channel's is. Seeking within what the page holds is instant; further on (or back), or
+choosing another sound track, the conversion starts again from that time, the provider's response
+for the one before closed before the next is asked for. Text subtitle tracks (SubRip, ASS, WebVTT, MP4 text) are shown in
+the browser, taken from that same read of the file, never a second connection, so a movie that has
+them is converted even when its picture and sound would play as they are. Subtitles stored as
+pictures (DVD, Blu-ray, DVB) can't be shown in a browser: the player's menu lists them and says so.
+The page reports how far the film got every ten seconds and when it is paused, so the place is kept
+and a film played past most of its length counts as watched, as in the app. Paused for a minute,
+the film lets its connection go (a recording may be waiting for one) and keeps its place; Play
+watches it again from there. While the page is open it asks after its film every few seconds, which
+keeps the film's place on the service even when the browser holds all it needs for now and reads
+nothing (a page that has asked within the last 90 seconds keeps it: a background tab may ask only
+once a minute); a closed page's goes within 90 seconds. A film that doesn't start within half a
+minute, or stands still for half a minute while playing, is opened again where it was, twice at
+most, before the page says it stopped.
+
+Posters and backdrops reach the page through the service (`/api/poster/movie/{id}`,
+`/api/backdrop/movie/{id}/{n}`), fetched like a channel's logo, so the provider's address and login
+never reach a browser; the film itself is named by the viewer the page was given.
 
 ### Recording what you watch
 
@@ -821,6 +857,12 @@ The catalogue, for the web interface (the app or a device); channels come as the
 | `GET /api/recent?limit=` | the channels watched most recently, newest first |
 | `GET /api/sync` | `{phase, message, channelsTotal, lastSynced}`; `POST /api/sync` asks for a refresh (`202`) |
 | `GET /api/logo/{id}` | the channel's logo, fetched by the service |
+| `GET /api/vod/summary`, `GET /api/vod/categories` | `MoviesSummaryDto` (whether there are movies, and how many); the movie categories with their counts |
+| `GET /api/vod/movies?list=&category=&sort=&from=&to=&offset=&limit=` | a page of movies, `{total, items}`: `list` is `favourites`, `recent`, `watched` or `category` (which needs `category`, else `400`); `sort` is `added`, `az`, `year` or `rating`; `from`/`to` bound the year; `limit` at most 1000 |
+| `GET /api/vod/movies/search?q=&limit=` | movies by name, best match first |
+| `GET /api/vod/movies/{id}`, `GET /api/vod/movies/{id}/similar?limit=` | a movie's details (asked of the provider the first time it is opened in a week, then kept); movies like it. `404` for one not in the catalogue |
+| `PUT /api/vod/movies/{id}/marks`, `PUT /api/vod/movies/{id}/progress` | `{favourite?, watched?}` and `{position, duration?}` (seconds); both answer the movie's marks. Past 92 % counts as watched |
+| `GET /api/poster/movie/{id}`, `GET /api/backdrop/movie/{id}/{n}` | the picture, fetched by the service like a logo (up to 4 MB); `posterUrl` and `backdropUrls` always point here, never at the provider |
 | `GET /api/account` | the provider account as the app's `AccountDto`, with no secret in it (`hasPassword`, `tvheadendHasPassword`; addresses with `<redacted>` in place of a login, flagged `playlistRedacted`, `epgRedacted`, `hdhomerunEpgRedacted`) and an empty `path` |
 | `PUT /api/account` | saves a form and makes its kind the one in use: `{kind: "xtream", host, username, password}`, `{kind: "m3u", playlist, epgUrls, userAgent}`, `{kind: "hdhomerun", device, epgUrls}` or `{kind: "tvheadend", url, username, password}`. An empty password, or `null` for `playlist` or `epgUrls`, keeps what is on file. Asks for a sync; returns the same as `GET`. `400 {"error"}` with what is wrong, never with what was sent |
 | `POST /api/account/test` | the same body, tested as typed and not saved (`{result}`, or `400 {"error"}`); with no body, the account on file |
@@ -833,6 +875,10 @@ Watching (the app or a device; a viewer is its device's alone, `404` to anyone e
 | `GET /api/stream/{viewer}?audio=` | the stream, `video/mp2t`, for as long as it is read; `audio` switches to another track (from live). Refused when the browser says the request came from another site |
 | `GET /api/watch/{viewer}` | `{ended?, takenOver, notice?}`: why it stopped, and the recording it is in the way of (`{recordingId, title, channel, streamId, from, start, waiting}`) |
 | `DELETE /api/watch/{viewer}` | stops it at once (`204`) |
+| `POST /api/vod/watch` | body `{movieId, anyway?, replaces?, audio?, from?, can?}` (`replaces`: a channel's viewer or a movie's; `from`: seconds into the movie to start at, for the remuxer) → `{viewer, stream, mode, duration, audio, audioIndex, converting, subtitles, notice?}`. A movie always has a connection of its own, asked of the same budget as a channel's and refused the same ways (`404` `movie` for one not in the catalogue). The file is read once before the answer, on the movie's connection, to learn what it holds: `duration`, `audio` and `subtitles` are the file's. `mode` is `direct` for an MP4 with H.264 video, AAC or MP3 sound and no text subtitles (the browser plays the file as it is), else `remux`, which is also the mode for any `audio` but the first. `subtitles` lists the file's subtitle tracks, `[{index, language?, title?, text}]`, `text: false` for pictures |
+| `GET /api/vod/stream/{viewer}?from=&audio=` | `direct`: the file, by the request's `Range` (passed on to the provider; `206` with `Content-Range`, or `200`), `Accept-Ranges: bytes`. A new request ends the one before, so the account sees one connection per viewer. `remux`: MPEG-TS (`video/mp2t`) from the keyframe at or before `from` (seconds into the movie), with the sound `audio` names; the keyframe it found is in the `X-Start` header (seconds). `HEAD` is refused (`405`). Refused when the browser says the request came from another site |
+| `GET /api/vod/subtitles/{viewer}/{index}?after=` | one text subtitle track of a remuxed movie as WebVTT (`text/vtt`), in the movie's time: the cues read so far that end after `after` seconds. `404` for a track that is pictures, `410` once the viewer has ended |
+| `GET /api/vod/watch/{viewer}`, `DELETE /api/vod/watch/{viewer}` | as a channel's viewer's; asking keeps a viewer nobody reads from (its browser holds all it needs) for 90 seconds, where one nobody reads or asks after goes after 15 |
 
 "The app" is the `server-token` from a loopback address; a device's token is refused there
 (`403`). `Device` is `{id, name, userAgent, created, lastUsed?, address?}`; `fingerprint` is the
@@ -871,7 +917,7 @@ watch](#recording-what-you-watch)).
 ## Not yet
 
 - In the browser: rewinding further than the browser holds (a buffer kept by the service), the
-  provider's archive, subtitles, and MPEG-2 video (it would need re-encoding).
+  provider's archive, subtitles on a channel, subtitles stored as pictures, and MPEG-2 video (it would need re-encoding).
 - Waking the computer from suspend to record
   (on Windows, a task per recording with a wake timer).
 - Series rules ("record every episode").

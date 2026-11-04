@@ -12,9 +12,9 @@
 // Retry (see logic/ending.ts). A reconnect the backend is making by itself
 // can be cancelled.
 
-import { playChannel } from "../actions";
+import { playChannel, playMovie } from "../actions";
 import { backend } from "../backend";
-import { endedActions, endedMessage, reconnectMessage } from "../logic/ending";
+import { endedActions, endedMessage, reconnectMessage, retryStart, retryTarget } from "../logic/ending";
 import { run, useApp, useDispatch } from "../store";
 
 export interface StreamEndedProps {
@@ -26,13 +26,22 @@ export interface StreamEndedProps {
 }
 
 export function StreamEnded({ compact = false, onDismissed }: StreamEndedProps) {
-  const { player, nowChannel } = useApp();
+  const { player, nowChannel, movies } = useApp();
   const dispatch = useDispatch();
   const message = reconnectMessage(player) ?? endedMessage(player);
   const actions = endedActions(player);
   if (!message || !actions) return null;
 
   const retry = () => {
+    const target = retryTarget(player);
+    if (target === "none") return;
+    if (target === "movie") {
+      // The title the store knows, so the band and the marks follow; else by id.
+      const id = player.onDemand?.id ?? -1;
+      if (movies.playing?.movieId === id) void playMovie(dispatch, movies.playing, retryStart(player));
+      else void run(dispatch, "retry", backend.playMovie(id, retryStart(player)));
+      return;
+    }
     const id = player.streamId;
     if (id === null) return;
     // Through the same path as picking the channel, so the band paints its
@@ -64,7 +73,7 @@ export function StreamEnded({ compact = false, onDismissed }: StreamEndedProps) 
             Cancel
           </button>
         ) : (
-          <button className="ctl retry" onClick={retry} disabled={player.streamId === null}>
+          <button className="ctl retry" onClick={retry} disabled={retryTarget(player) === "none"}>
             {actions.primary === "watchHere" ? "Watch here anyway" : "Retry"}
           </button>
         )}

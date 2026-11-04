@@ -15,6 +15,7 @@ pub mod account;
 pub mod catchup;
 pub mod fetch;
 pub mod ids;
+pub mod kind;
 pub mod parse;
 pub mod redact;
 

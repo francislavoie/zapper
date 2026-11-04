@@ -11,6 +11,7 @@ import { auditLightSurfaces, auditOverVideo } from "./audit";
 import { alternatives } from "./logic/searchQuery";
 import { patternFor, place, validatePattern } from "./logic/naming";
 import { parsePort, passwordProblem } from "./logic/network";
+import { createMockMovies } from "./mockMovies";
 import type {
   AccountCandidateDto,
   AccountDto,
@@ -631,6 +632,7 @@ const playerEmitter = new Emitter<PlayerStateDto>({
   joiningLive: false,
   ending: null,
   reconnect: null,
+  onDemand: null,
 });
 
 const optionsEmitter = new Emitter<PlayerOptionsDto>({
@@ -925,6 +927,7 @@ async function openStream(
     liveJump: null,
     joiningLive: false,
     reconnect: null,
+    onDemand: null,
   });
   patchOptions({ audio: [], subtitles: [] });
   await delay(700);
@@ -1490,6 +1493,14 @@ const mockRecordingApi = {
   },
 };
 
+/** The movie catalogue and what plays one, which share the player below. */
+const mockMovies = createMockMovies({
+  state: () => playerEmitter.last,
+  patch: patchPlayer,
+  open: () => ++openSeq,
+  current: () => openSeq,
+});
+
 export const mockApi = {
   categories: async () => {
     await delay(120);
@@ -1713,6 +1724,7 @@ export const mockApi = {
       liveJump: null,
       joiningLive: false,
       reconnect: null,
+      onDemand: null,
     });
     patchOptions({ audio: [], subtitles: [] });
   },
@@ -1741,6 +1753,7 @@ export const mockApi = {
 
   seekRelative: async (seconds: number) => {
     const p = playerEmitter.last;
+    if (p.onDemand) return mockMovies.seekRelative(seconds);
     const behindLive = Math.max(
       0,
       Math.min(p.bufferedBack, p.behindLive - seconds),
@@ -2032,6 +2045,16 @@ export const mockApi = {
     await delay(40);
     return recentRows(limit);
   },
+
+  moviesSummary: mockMovies.moviesSummary,
+  movieCategories: mockMovies.movieCategories,
+  movies: mockMovies.movies,
+  searchMovies: mockMovies.searchMovies,
+  movieDetails: mockMovies.movieDetails,
+  similarMovies: mockMovies.similarMovies,
+  setMovieMarks: mockMovies.setMovieMarks,
+  playMovie: mockMovies.playMovie,
+  seekTo: mockMovies.seekTo,
 
   forgetActivity: async (streamId: number) => {
     await delay(20);

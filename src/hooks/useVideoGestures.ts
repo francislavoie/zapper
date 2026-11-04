@@ -21,9 +21,17 @@ export interface VideoGestureOptions {
   onFullscreen: () => void;
   /** Touching the picture is not idle; keeps the controls up. */
   onActivity: () => void;
+  /** Seconds a side zone seeks by; a movie's is longer than a channel's. */
+  step?: number;
 }
 
-export function useVideoGestures({ atLiveEdge, muted, onFullscreen, onActivity }: VideoGestureOptions) {
+export function useVideoGestures({
+  atLiveEdge,
+  muted,
+  onFullscreen,
+  onActivity,
+  step = SKIP_SECONDS,
+}: VideoGestureOptions) {
   const dispatch = useDispatch();
 
   // The gestures change things nothing on screen is showing, so each one
@@ -45,7 +53,7 @@ export function useVideoGestures({ atLiveEdge, muted, onFullscreen, onActivity }
 
   /** A double-click at `clientX` over a picture whose box is `box`. */
   const doubleClick = (clientX: number, box: { left: number; width: number }) => {
-    const action = zoneAction(zoneAt(clientX, box.left, box.width), atLiveEdge);
+    const action = zoneAction(zoneAt(clientX, box.left, box.width), atLiveEdge, step);
     // Forward at the live edge has nowhere to go. Saying nothing is better
     // than a bubble promising five seconds that do not exist.
     if (!action) return;
@@ -54,7 +62,7 @@ export function useVideoGestures({ atLiveEdge, muted, onFullscreen, onActivity }
       return;
     }
     onActivity();
-    flash({ kind: action.zone, label: `${SKIP_SECONDS} seconds`, seconds: SKIP_SECONDS });
+    flash({ kind: action.zone, label: `${step} seconds`, seconds: step });
     void run(dispatch, "seek", backend.seekRelative(action.by));
   };
 

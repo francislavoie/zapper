@@ -21,13 +21,16 @@ use tauri::{AppHandle, Emitter};
 use crate::catalog::activity::{self, Accumulator};
 use crate::catalog::credentials;
 use crate::catalog::store;
+use crate::catalog::vod_progress::{ProgressSaver, ProgressWrite};
+use crate::catalog::vod_store::{self, ItemKind};
 use crate::connections::{self, Limit, Verdict};
 use crate::ipc::ending::{self, Clues, Ending, EndingKind, Flow, How};
 use crate::ipc::live_start::{Join, Settle};
 use crate::ipc::tracks;
 use crate::ipc::types::{
     events, AspectMode, ChannelQualityDto, ConnectionsDto, DeinterlaceMode, LiveJumpDto,
-    LiveStart, PlaybackState, PlayerOptionsDto, PlayerStateDto, ReconnectDto,
+    LiveStart, OnDemandDto, OnDemandKind, PlaybackState, PlayerOptionsDto, PlayerStateDto,
+    ReconnectDto,
 };
 use crate::recording::client::{Client, PlayerWatch, Watching};
 use crate::surface::mpv::{self, Player, Probe, Signal};
@@ -266,17 +269,32 @@ impl Machine {
         None
     }
 
-    /// A live channel is opening. A catch-up programme sets `live` false
-    /// straight after.
-    fn opening(&mut self, stream_id: i64) {
-        self.dto.at_live_edge = true;
-        self.following_live = true;
+    /// A channel or a movie is opening. A catch-up programme sets `live`
+    /// false straight after, and so does a movie.
+    fn opening(&mut self, what: Opened) {
+        let movie = matches!(what, Opened::Movie(_));
+        // Nothing about a title is "live", and nothing keeps it near an edge.
+        self.dto.at_live_edge = !movie;
+        self.following_live = !movie;
         self.last_live_nudge = None;
         self.drift_secs = 0.0;
         self.last_pos = None;
         self.last_tick_at = None;
         self.dto.state = PlaybackState::Opening;
-        self.dto.stream_id = Some(stream_id);
+        self.dto.stream_id = match what {
+            Opened::Channel(id) => Some(id),
+            Opened::Movie(_) => None,
+        };
+        self.dto.on_demand = match what {
+            Opened::Channel(_) => None,
+            Opened::Movie(id) => Some(OnDemandDto {
+                kind: OnDemandKind::Movie,
+                id,
+                position: 0.0,
+                duration: None,
+                buffered_to: None,
+            }),
+        };
         self.dto.error = None;
         self.dto.ending = None;
         self.live = true;
@@ -319,7 +337,18 @@ impl Machine {
         // Staying put means nothing skips ahead by itself — neither the
         // catch-up after the burst nor the one after a long stall. Asking
         // for live (`seek_live`) turns following back on.
-        self.following_live = !(self.live && mode == LiveStart::Stay);
+        self.following_live = self.dto.on_demand.is_none() && !(self.live && mode == LiveStart::Stay);
+    }
+
+    /// The viewer asked for live: stay at the edge from now on. A movie
+    /// has none.
+    fn follow_live(&mut self) -> Result<(), String> {
+        if self.dto.on_demand.is_some() {
+            return Err("a movie has no live edge".into());
+        }
+        self.following_live = true;
+        self.last_live_nudge = None;
+        Ok(())
     }
 
     /// First frame decoded. The only honest "it works" edge: `file-loaded`
@@ -428,6 +457,7 @@ impl Machine {
         self.dto.joining_live = false;
         self.dto.state = PlaybackState::Stopped;
         self.dto.stream_id = None;
+        self.dto.on_demand = None;
         self.dto.error = None;
         self.dto.ending = None;
         self.dto.behind_live = 0.0;
@@ -468,7 +498,15 @@ impl Machine {
         }
         self.dto.at_live_edge = true;
         self.following_live = false;
-        if how == How::Eof && self.shown && !self.live {
+        // A movie is over only when it got to its end: an EOF anywhere else
+        // is the provider dropping the connection, which must keep the
+        // place to resume from and not mark it watched. A length of zero
+        // says nothing of where the end is.
+        let at_end = self.dto.on_demand.is_none_or(|o| {
+            o.duration
+                .is_some_and(|d| d > 0.0 && d - o.position <= MOVIE_END_SLACK_SECS)
+        });
+        if how == How::Eof && self.shown && !self.live && at_end {
             self.stopped();
             return;
         }
@@ -602,11 +640,26 @@ impl Machine {
             }
         }
         if playing {
-            self.dto.behind_live = round_tenth(p.behind_live);
-            self.dto.at_live_edge = live_edge_with_hysteresis(
-                self.dto.at_live_edge,
-                self.dto.behind_live,
-            );
+            if let Some(od) = self.dto.on_demand.as_mut() {
+                // Whole seconds: a title's clock does not need to be
+                // re-rendered for every tenth, and the saved place is whole
+                // seconds too.
+                if let Some(t) = p.time_pos {
+                    od.position = t.max(0.0).round();
+                }
+                if p.duration.is_some() {
+                    od.duration = p.duration.map(f64::round);
+                }
+                od.buffered_to = p.cache_end.map(f64::round);
+                self.dto.behind_live = 0.0;
+                self.dto.at_live_edge = false;
+            } else {
+                self.dto.behind_live = round_tenth(p.behind_live);
+                self.dto.at_live_edge = live_edge_with_hysteresis(
+                    self.dto.at_live_edge,
+                    self.dto.behind_live,
+                );
+            }
             self.dto.buffered_back = round_tenth(p.buffered_back);
             self.set_paused(p.paused);
         }
@@ -647,6 +700,24 @@ fn round_tenth(v: f64) -> f64 {
     (v * 10.0).round() / 10.0
 }
 
+/// What the player has open.
+///
+/// A movie is not a stream id: every list, the watch-time ledger, a
+/// channel's quality, favourites, Record and the handover to the recording
+/// service are all about channels, and a movie's id is from another table
+/// that may well hold the same number. Keeping the two apart here is what
+/// stops a movie being mistaken for the channel with that id anywhere
+/// downstream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Opened {
+    Channel(i64),
+    Movie(i64),
+}
+
+/// How close to a movie's length its position has to be for an end of file
+/// to be its end rather than a dropped connection.
+const MOVIE_END_SLACK_SECS: f64 = 10.0;
+
 static STATE: LazyLock<Mutex<Machine>> = LazyLock::new(|| Mutex::new(Machine::new()));
 
 /// Watch time earned by whatever is on, for auto-favourites.
@@ -656,6 +727,32 @@ static STATE: LazyLock<Mutex<Machine>> = LazyLock::new(|| Mutex::new(Machine::ne
 /// The policy — what counts, and when it is worth a write — is
 /// [`crate::catalog::activity::Accumulator`], and is pure.
 static WATCHED: LazyLock<Mutex<Accumulator>> = LazyLock::new(|| Mutex::new(Accumulator::new()));
+
+/// How far into a movie the viewer is, for resuming and for "watched".
+/// Driven from the heartbeat like [`WATCHED`]; the policy is
+/// [`ProgressSaver`]'s.
+static PROGRESS: LazyLock<Mutex<ProgressSaver>> = LazyLock::new(|| Mutex::new(ProgressSaver::new()));
+
+/// The clock in seconds, with its fraction: the saver counts play from the
+/// gaps between heartbeats, which whole seconds would quantise.
+fn clock_secs() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0.0, |d| d.as_secs_f64())
+}
+
+/// Writes a movie's place, off the main thread and for the same reasons as
+/// [`persist`].
+fn persist_progress(w: ProgressWrite) {
+    tauri::async_runtime::spawn_blocking(move || {
+        let r = crate::catalog::db::with_db(|c| {
+            vod_store::record_progress(c, ItemKind::Movie, w.id, w.position, w.duration, activity::now_secs())
+        });
+        if let Err(e) = r {
+            tracing::warn!("could not record how far into a movie playback got: {e}");
+        }
+    });
+}
 
 /// Writes earned watch time, off the main thread.
 ///
@@ -771,7 +868,7 @@ static THROUGH_SERVICE: AtomicBool = AtomicBool::new(false);
 
 /// What was last opened, so that a reconnect can open it again. Kept here,
 /// in memory only: the URL carries the account.
-static LAST_OPEN: Mutex<Option<(i64, Playable, bool, Via)>> = Mutex::new(None);
+static LAST_OPEN: Mutex<Option<(Opened, Playable, bool, Via)>> = Mutex::new(None);
 
 /// Whether a reconnect decided under `token` is still wanted.
 fn still_wanted(token: u64) -> bool {
@@ -800,7 +897,7 @@ fn spawn_reconnect(app: &AppHandle, due: Due, token: u64, stream_id: i64) {
             .lock()
             .ok()
             .and_then(|l| l.clone())
-            .filter(|(id, ..)| *id == stream_id)
+            .filter(|(id, ..)| *id == Opened::Channel(stream_id))
             .and_then(|(_, _, live, via)| match via {
                 Via::Service { .. } => Some(live),
                 Via::Direct => None,
@@ -814,7 +911,7 @@ fn spawn_reconnect(app: &AppHandle, due: Due, token: u64, stream_id: i64) {
                     .lock()
                     .map(|m| m.reconnects + 1)
                     .unwrap_or(1);
-                if let Err(e) = open_as(&app, stream_id, target, live, Some(attempt), via, None).await {
+                if let Err(e) = open_as(&app, Opened::Channel(stream_id), target, live, Some(attempt), via, None, None).await {
                     tracing::warn!("reconnect could not be sent: {e}");
                 }
                 return;
@@ -824,7 +921,7 @@ fn spawn_reconnect(app: &AppHandle, due: Due, token: u64, stream_id: i64) {
             match direct_target(stream_id) {
                 Ok(t) => {
                     if let Ok(mut last) = LAST_OPEN.lock() {
-                        *last = Some((stream_id, t, live, Via::Direct));
+                        *last = Some((Opened::Channel(stream_id), t, live, Via::Direct));
                     }
                 }
                 Err(e) => {
@@ -857,7 +954,7 @@ fn spawn_reconnect(app: &AppHandle, due: Due, token: u64, stream_id: i64) {
             .lock()
             .ok()
             .and_then(|l| l.clone())
-            .filter(|(id, ..)| *id == stream_id);
+            .filter(|(id, ..)| *id == Opened::Channel(stream_id));
         match (verdict, target) {
             (Verdict::Go, Some((id, target, live, via))) => {
                 let attempt = {
@@ -867,7 +964,7 @@ fn spawn_reconnect(app: &AppHandle, due: Due, token: u64, stream_id: i64) {
                     }
                     m.reconnects + 1
                 };
-                if let Err(e) = open_as(&app, id, target, live, Some(attempt), via, None).await {
+                if let Err(e) = open_as(&app, id, target, live, Some(attempt), via, None, None).await {
                     tracing::warn!("reconnect could not be sent: {e}");
                 }
             }
@@ -986,6 +1083,7 @@ fn tick(app: &AppHandle, p: &Player) {
     let earned;
     let loaded;
     let newly_failed;
+    let progress;
     let ledger;
     let due;
     let holding;
@@ -1001,6 +1099,7 @@ fn tick(app: &AppHandle, p: &Player) {
             o.subtitles = subtitles;
         });
     }
+    let mut finished = None;
     let payload = {
         let mut m = STATE.lock().expect("player state mutex poisoned");
         let was_failed = m.dto.state == PlaybackState::Failed;
@@ -1028,7 +1127,13 @@ fn tick(app: &AppHandle, p: &Player) {
                     replaced,
                 } => {
                     if !replaced {
+                        let title = m.dto.on_demand.filter(|_| m.shown);
                         m.ended();
+                        // Played to its end: where it got to is the whole of
+                        // it, which is what marks it watched.
+                        if m.dto.state == PlaybackState::Stopped {
+                            finished = title;
+                        }
                     }
                 }
                 // Evidence for why it might end; see `ipc::ending`. Only while
@@ -1178,10 +1283,36 @@ fn tick(app: &AppHandle, p: &Player) {
             activity::now_secs(),
         );
 
+        // How far into a movie, for resuming. Nothing is reported before a
+        // picture is up: the position a title opens at is not where the
+        // viewer got to.
+        progress = {
+            let mut saver = PROGRESS.lock().expect("progress mutex poisoned");
+            match finished {
+                Some(od) => {
+                    let end = od.duration.unwrap_or(od.position);
+                    saver
+                        .observe(Some(od.id), Some(end), od.duration, false, clock_secs())
+                        .or_else(|| saver.flush())
+                }
+                None => {
+                    let shown = matches!(m.dto.state, PlaybackState::Playing | PlaybackState::Paused);
+                    let od = m.dto.on_demand;
+                    saver.observe(
+                        od.map(|o| o.id),
+                        od.filter(|_| shown).map(|o| o.position),
+                        od.and_then(|o| o.duration),
+                        m.dto.state == PlaybackState::Playing,
+                        clock_secs(),
+                    )
+                }
+            }
+        };
+
         // Nothing loaded is not a reading of zero buffer, it is no reading:
         // recording it would fill the graph with a flat line drawn while
         // there was nothing to draw.
-        loaded = m.dto.stream_id.is_some();
+        loaded = m.dto.stream_id.is_some() || m.dto.on_demand.is_some();
 
         m.changed()
     };
@@ -1197,6 +1328,9 @@ fn tick(app: &AppHandle, p: &Player) {
     }
     if let Some(e) = earned {
         persist(e);
+    }
+    if let Some(w) = progress {
+        persist_progress(w);
     }
     if let Some(l) = ledger {
         // Read here, on the main thread where the player lives; written
@@ -1346,7 +1480,7 @@ pub async fn play(app: AppHandle, stream_id: i64) -> Result<(), String> {
     // a second connection to the same channel.
     if crate::ipc::handover::captured(stream_id) {
         if let Some((target, via)) = through_service_target(stream_id).await {
-            return open_as(&app, stream_id, target, true, None, via, None).await;
+            return open_as(&app, Opened::Channel(stream_id), target, true, None, via, None, None).await;
         }
     }
     play_direct(&app, stream_id).await
@@ -1366,6 +1500,29 @@ fn direct_target(stream_id: i64) -> Result<Playable, String> {
             .live(stream_id)
             .map_err(|e| crate::catalog::sync_engine::scrub(&e.to_string()))?,
     })
+}
+
+/// Where the provider serves a movie.
+///
+/// Under a harness (`ZAPPER_FIXTURE_BASE`) it is a file on the fixture
+/// server, `ZAPPER_FIXTURE_MOVIE` of it (default `movie.mp4`).
+fn movie_target(movie_id: i64) -> Result<Playable, String> {
+    if let Ok(base) = std::env::var("ZAPPER_FIXTURE_BASE") {
+        let name = std::env::var("ZAPPER_FIXTURE_MOVIE").unwrap_or_else(|_| "movie.mp4".into());
+        return Ok(Playable::plain(format!("{}/{name}", base.trim_end_matches('/'))));
+    }
+    source()?
+        .movie(movie_id)
+        .map_err(|e| crate::catalog::sync_engine::scrub(&e.to_string()))
+}
+
+/// Plays a movie, from `start` seconds in when given. On the player's own
+/// connection, like a live channel and under the same budget: never through
+/// the recording service, which has nothing to do with a title.
+#[tauri::command]
+pub async fn play_movie(app: AppHandle, movie_id: i64, start: Option<f64>) -> Result<(), String> {
+    let target = movie_target(movie_id)?;
+    open_as(&app, Opened::Movie(movie_id), target, false, None, Via::Direct, None, start).await
 }
 
 /// The player's current place on the recording service's connection, if
@@ -1430,7 +1587,7 @@ pub fn now_playing() -> Option<NowPlaying> {
         .flatten()
     })?;
     let last = LAST_OPEN.lock().ok()?.clone()?;
-    (last.0 == open).then_some(NowPlaying {
+    (last.0 == Opened::Channel(open)).then_some(NowPlaying {
         stream_id: open,
         live: last.2,
         through_service: matches!(last.3, Via::Service { .. }),
@@ -1454,7 +1611,7 @@ pub async fn move_to_service(app: &AppHandle, client: &Client, stream_id: i64) -
     .await
     .ok();
     commit(app, |m| {
-        m.opening(stream_id);
+        m.opening(Opened::Channel(stream_id));
         m.starting(live_start_mode());
     });
     on_player(app, |p| p.command("stop", &[]).map_err(|e| e.to_string())).await?;
@@ -1483,7 +1640,7 @@ pub async fn move_to_service(app: &AppHandle, client: &Client, stream_id: i64) -
     match answer {
         Ok(w) => {
             let (target, via) = service_target(client, &w);
-            open_as(app, stream_id, target, true, None, via, tracks).await
+            open_as(app, Opened::Channel(stream_id), target, true, None, via, tracks, None).await
         }
         Err(r) => {
             tracing::warn!("the player could not move onto the recording service: {}", r.error);
@@ -1601,24 +1758,29 @@ fn live_start_mode() -> LiveStart {
 
 /// Shared by live and catchup: state first, then the one connection.
 async fn open(app: &AppHandle, stream_id: i64, target: Playable, live: bool) -> Result<(), String> {
-    open_as(app, stream_id, target, live, None, Via::Direct, None).await
+    open_as(app, Opened::Channel(stream_id), target, live, None, Via::Direct, None, None).await
 }
 
 /// [`open`], as automatic reconnect number `reconnect` when it is one,
 /// from where `via` says, with the audio and subtitle tracks `tracks`
 /// (mpv's `aid` and `sid`) rather than mpv's own choice when given: the same
 /// channel, moved onto another connection.
+///
+/// `start` is where in a movie to begin, in seconds; mpv is told on every
+/// open, so a channel opened after a resumed movie starts at its beginning.
+#[allow(clippy::too_many_arguments)]
 async fn open_as(
     app: &AppHandle,
-    stream_id: i64,
+    what: Opened,
     target: Playable,
     live: bool,
     reconnect: Option<u32>,
     via: Via,
     tracks: Option<(String, String)>,
+    start: Option<f64>,
 ) -> Result<(), String> {
     let left = LAST_OPEN.lock().ok().and_then(|mut last| {
-        let before = last.replace((stream_id, target.clone(), live, via.clone()));
+        let before = last.replace((what, target.clone(), live, via.clone()));
         match before {
             Some((_, _, _, Via::Service { viewer, .. })) if !matches!(&via, Via::Service { viewer: v, .. } if *v == viewer) => {
                 Some(viewer)
@@ -1650,7 +1812,7 @@ async fn open_as(
     let mut join = false;
     commit(app, |m| {
         was_holding = m.joining;
-        m.opening(stream_id);
+        m.opening(what);
         m.live = live;
         m.starting(mode);
         join = m.joining;
@@ -1670,6 +1832,7 @@ async fn open_as(
     });
     let r = on_player(app, move |p| {
         apply_http_headers(p, &target, &via);
+        apply_start(p, start);
         match &tracks {
             Some((aid, sid)) => {
                 for (key, value) in [("aid", aid), ("sid", sid)] {
@@ -1704,6 +1867,11 @@ async fn open_as(
 #[tauri::command]
 pub async fn stop(app: AppHandle) -> Result<(), String> {
     crate::surface::trickplay::clear();
+    // Where a movie got to, before the title is forgotten.
+    let place = PROGRESS.lock().ok().and_then(|mut p| p.flush());
+    if let Some(w) = place {
+        persist_progress(w);
+    }
     let r = on_player(&app, |p| p.command("stop", &[]).map_err(|e| e.to_string())).await;
     commit(&app, |m| m.stopped());
     // Its place on the recording service's connection, given back now.
@@ -1739,19 +1907,56 @@ pub async fn seek_relative(app: AppHandle, seconds: f64) -> Result<(), String> {
     // Rewinding is a deliberate choice to be behind, so stop chasing the edge.
     // Seeking forward is the viewer catching up themselves and leaves the mode
     // alone; the automatic follow will finish the job if they stop short.
-    if seconds < 0.0 {
-        STATE
-            .lock()
-            .expect("player state mutex poisoned")
-            .following_live = false;
-    }
+    let movie = {
+        let mut m = STATE.lock().expect("player state mutex poisoned");
+        if seconds < 0.0 {
+            m.following_live = false;
+        }
+        m.dto.on_demand.is_some()
+    };
     on_player(&app, move |p| {
         let probe = p.probe();
-        let by = clamp_seek(seconds, probe.buffered_back, probe.behind_live);
+        // A movie is read from a file that can be asked for any part of it:
+        // the buffered window is a live stream's limit, not its.
+        let by = if movie {
+            seconds
+        } else {
+            clamp_seek(seconds, probe.buffered_back, probe.behind_live)
+        };
         if by.abs() < 0.05 {
             return Ok(());
         }
         p.command("seek", &[&format!("{by:.3}"), "relative"])
+            .map_err(|e| e.to_string())
+    })
+    .await
+}
+
+/// Where in a movie to seek to, for a place `seconds` from its start:
+/// inside the file, which ends where `duration` says when it says.
+fn clamp_to_title(seconds: f64, duration: Option<f64>) -> f64 {
+    let at = seconds.max(0.0);
+    duration.map_or(at, |d| at.min(d))
+}
+
+/// Seeks a movie to `seconds` from its start.
+#[tauri::command]
+pub async fn seek_to(app: AppHandle, seconds: f64) -> Result<(), String> {
+    if !seconds.is_finite() {
+        return Err("that is not a time".into());
+    }
+    let movie = STATE
+        .lock()
+        .expect("player state mutex poisoned")
+        .dto
+        .on_demand
+        .is_some();
+    if !movie {
+        return Err("seeking to a time is for movies".into());
+    }
+    on_player(&app, move |p| {
+        let at = clamp_to_title(seconds, p.get_f64("duration").filter(|d| d.is_finite() && *d > 0.0));
+        p.command("seek", &[&format!("{at:.3}"), "absolute"])
             .map_err(|e| e.to_string())
     })
     .await
@@ -1851,9 +2056,7 @@ const MIN_REPORTED_JUMP: f64 = 1.0;
 pub async fn seek_live(app: AppHandle) -> Result<(), String> {
     // Asking for live means staying there, not visiting once.
     {
-        let mut m = STATE.lock().expect("player state mutex poisoned");
-        m.following_live = true;
-        m.last_live_nudge = None;
+        STATE.lock().expect("player state mutex poisoned").follow_live()?;
     }
     let by = on_player(&app, |p| {
         let probe = p.probe();
@@ -2060,6 +2263,19 @@ fn commit_options(app: &AppHandle, f: impl FnOnce(&mut PlayerOptionsDto)) -> Pla
     now
 }
 
+/// Where mpv starts the file it is about to open. Set by every open, since
+/// the option outlives the file: a channel opened after a resumed movie must
+/// not begin where the movie did.
+fn apply_start(p: &Player, start: Option<f64>) {
+    let value = match start.filter(|s| s.is_finite() && *s > 0.0) {
+        Some(secs) => format!("{secs:.1}"),
+        None => "none".to_owned(),
+    };
+    if let Err(e) = p.set_property("start", &value) {
+        tracing::warn!("could not set where to start: {e}");
+    }
+}
+
 /// A track picked on one channel is not a choice for the next.
 ///
 /// `aid` and `sid` are options as well as properties: setting one switches
@@ -2248,7 +2464,7 @@ mod tests {
         let mut m = Machine::new();
         assert_eq!(m.dto.state, PlaybackState::Stopped);
 
-        m.opening(498_338);
+        m.opening(Opened::Channel(498_338));
         assert_eq!(m.dto.state, PlaybackState::Opening);
         assert_eq!(m.dto.stream_id, Some(498_338));
 
@@ -2261,7 +2477,7 @@ mod tests {
     #[test]
     fn opening_fails_with_a_message() {
         let mut m = Machine::new();
-        m.opening(1);
+        m.opening(Opened::Channel(1));
         m.failed("connection refused");
         assert_eq!(m.dto.state, PlaybackState::Failed);
         assert_eq!(m.dto.error.as_deref(), Some("connection refused"));
@@ -2270,7 +2486,7 @@ mod tests {
     #[test]
     fn an_open_that_never_decodes_fails_on_the_deadline() {
         let mut m = Machine::new();
-        m.opening(1);
+        m.opening(Opened::Channel(1));
         m.opened_at = Some(Instant::now() - FIRST_FRAME_DEADLINE - Duration::from_secs(1));
         m.check_deadline();
         assert_eq!(m.dto.state, PlaybackState::Failed);
@@ -2280,17 +2496,159 @@ mod tests {
     #[test]
     fn the_deadline_does_not_fire_on_a_playing_stream() {
         let mut m = Machine::new();
-        m.opening(1);
+        m.opening(Opened::Channel(1));
         m.playing();
         m.opened_at = Some(Instant::now() - Duration::from_secs(600));
         m.check_deadline();
         assert_eq!(m.dto.state, PlaybackState::Playing);
     }
 
+    fn a_playing_movie(id: i64) -> Machine {
+        let mut m = Machine::new();
+        m.opening(Opened::Movie(id));
+        m.live = false;
+        m.starting(LiveStart::CatchUp);
+        m.playing();
+        m
+    }
+
+    #[test]
+    fn a_movie_open_reports_no_channel() {
+        let mut m = Machine::new();
+        m.opening(Opened::Movie(7));
+        assert_eq!(m.dto.stream_id, None);
+        assert_eq!(
+            m.dto.on_demand.as_ref().map(|o| (o.kind, o.id)),
+            Some((OnDemandKind::Movie, 7))
+        );
+        m.opening(Opened::Channel(7));
+        assert_eq!((m.dto.stream_id, m.dto.on_demand.is_none()), (Some(7), true));
+    }
+
+    #[test]
+    fn a_movie_reports_its_place_in_whole_seconds() {
+        let mut m = a_playing_movie(1);
+        m.apply(&Probe {
+            time_pos: Some(12.6),
+            duration: Some(5400.4),
+            cache_end: Some(80.2),
+            ..Probe::default()
+        });
+        let od = m.dto.on_demand.unwrap();
+        assert_eq!(od.position, 13.0);
+        assert_eq!(od.duration, Some(5400.0));
+        assert_eq!(od.buffered_to, Some(80.0));
+        assert!(!m.dto.at_live_edge);
+        assert!(!m.following_live, "nothing chases an edge in a film");
+    }
+
+    #[test]
+    fn a_movie_earns_nothing_for_a_channel() {
+        let mut m = a_playing_movie(7);
+        assert!(m.ledger(Instant::now() + Duration::from_secs(10)).is_none());
+        let mut watched = Accumulator::new();
+        let mut earned = None;
+        for t in 0..120 {
+            earned = earned.or(watched.observe(m.dto.stream_id, true, 1.0, t));
+        }
+        assert!(earned.is_none());
+    }
+
+    #[test]
+    fn a_movie_that_plays_to_its_end_stops_rather_than_failing() {
+        let mut m = a_playing_movie(7);
+        m.shown = true;
+        m.apply(&Probe {
+            time_pos: Some(119.6),
+            duration: Some(120.0),
+            ..Probe::default()
+        });
+        m.ended_with(How::Eof);
+        assert_eq!(m.dto.state, PlaybackState::Stopped);
+        assert!(m.dto.ending.is_none());
+    }
+
+    #[test]
+    fn a_movie_is_never_reconnected() {
+        let network = Ending {
+            kind: EndingKind::Network,
+            status: None,
+            limit: false,
+            slots: None,
+        };
+        let mut live = Machine::new();
+        live.opening(Opened::Channel(7));
+        live.plan_reconnect(network, false);
+        assert!(live.reconnect_due.is_some(), "a channel would be");
+        let mut m = a_playing_movie(7);
+        m.plan_reconnect(network, false);
+        assert!(m.reconnect_due.is_none());
+    }
+
+    #[test]
+    fn an_end_of_file_in_the_middle_of_a_movie_is_a_failure_that_keeps_its_place() {
+        let mut m = a_playing_movie(7);
+        m.shown = true;
+        m.apply(&Probe {
+            time_pos: Some(1200.0),
+            duration: Some(5400.0),
+            ..Probe::default()
+        });
+        m.ended_with(How::Eof);
+        assert_eq!(m.dto.state, PlaybackState::Failed);
+        assert!(m.dto.ending.is_some());
+        assert!(m.reconnect_due.is_none());
+        let od = m.dto.on_demand.unwrap();
+        assert_eq!((od.id, od.position), (7, 1200.0));
+    }
+
+    #[test]
+    fn an_end_of_file_with_no_known_length_is_a_failure() {
+        let mut m = a_playing_movie(7);
+        m.shown = true;
+        if let Some(od) = m.dto.on_demand.as_mut() {
+            od.position = 0.0;
+            od.duration = Some(0.0);
+        }
+        m.ended_with(How::Eof);
+        assert_eq!(m.dto.state, PlaybackState::Failed);
+    }
+
+    #[test]
+    fn an_end_of_file_at_the_end_of_a_movie_stops_it() {
+        let mut m = a_playing_movie(7);
+        m.shown = true;
+        m.apply(&Probe {
+            time_pos: Some(5395.0),
+            duration: Some(5400.0),
+            ..Probe::default()
+        });
+        m.ended_with(How::Eof);
+        assert_eq!(m.dto.state, PlaybackState::Stopped);
+    }
+
+    #[test]
+    fn a_movie_has_no_live_edge_to_seek_to() {
+        let mut m = a_playing_movie(7);
+        assert!(m.follow_live().is_err());
+        assert!(!m.following_live, "catch-up must not be armed for a film");
+        m.opening(Opened::Channel(1));
+        m.following_live = false;
+        assert!(m.follow_live().is_ok() && m.following_live);
+    }
+
+    #[test]
+    fn a_seek_to_stays_inside_the_title() {
+        assert_eq!(clamp_to_title(-5.0, Some(100.0)), 0.0);
+        assert_eq!(clamp_to_title(500.0, Some(100.0)), 100.0);
+        assert_eq!(clamp_to_title(42.0, Some(100.0)), 42.0);
+        assert_eq!(clamp_to_title(500.0, None), 500.0);
+    }
+
     #[test]
     fn a_zap_clears_the_previous_streams_measurements() {
         let mut m = Machine::new();
-        m.opening(1);
+        m.opening(Opened::Channel(1));
         m.playing();
         m.apply(&Probe {
             width: Some(1920),
@@ -2299,7 +2657,7 @@ mod tests {
             ..Probe::default()
         });
         assert_eq!(m.dto.width, Some(1920));
-        m.opening(2);
+        m.opening(Opened::Channel(2));
         assert_eq!(
             m.dto.width, None,
             "channel names lie; stale numbers lie too"
@@ -2310,7 +2668,7 @@ mod tests {
     #[test]
     fn an_automatic_catch_up_is_reported_with_its_distance() {
         let mut m = Machine::new();
-        m.opening(1);
+        m.opening(Opened::Channel(1));
         m.playing();
         assert_eq!(m.dto.live_jump, None, "nothing has jumped yet");
         m.drift_secs = 3.0;
@@ -2324,7 +2682,7 @@ mod tests {
     #[test]
     fn a_jump_the_viewer_asked_for_is_reported_too() {
         let mut m = Machine::new();
-        m.opening(1);
+        m.opening(Opened::Channel(1));
         m.playing();
         m.drift_secs = 4.0;
         m.jumped_to_live(11.96);
@@ -2340,7 +2698,7 @@ mod tests {
     #[test]
     fn a_tiny_jump_the_viewer_asked_for_is_not_news() {
         let mut m = Machine::new();
-        m.opening(1);
+        m.opening(Opened::Channel(1));
         m.playing();
         m.jumped_to_live(0.6);
         assert_eq!(m.dto.live_jump, None, "under a second is not worth a notice");
@@ -2357,7 +2715,7 @@ mod tests {
     #[test]
     fn a_second_jump_of_the_same_size_is_still_news() {
         let mut m = Machine::new();
-        m.opening(1);
+        m.opening(Opened::Channel(1));
         m.playing();
         m.caught_up(6.0);
         let first = m.changed().and_then(|d| d.live_jump).expect("first jump");
@@ -2370,10 +2728,10 @@ mod tests {
     #[test]
     fn a_jump_belongs_to_the_stream_it_happened_on() {
         let mut m = Machine::new();
-        m.opening(1);
+        m.opening(Opened::Channel(1));
         m.playing();
         m.caught_up(9.0);
-        m.opening(2);
+        m.opening(Opened::Channel(2));
         assert_eq!(m.dto.live_jump, None, "a zap starts with no news");
         m.playing();
         m.caught_up(4.0);
@@ -2381,7 +2739,7 @@ mod tests {
         assert_eq!(m.dto.live_jump, None);
         // Counted across the session, so a jump on the next stream cannot
         // repeat a number the frontend has already announced.
-        m.opening(3);
+        m.opening(Opened::Channel(3));
         m.playing();
         m.caught_up(4.0);
         assert_eq!(m.dto.live_jump.map(|j| j.seq), Some(3));
@@ -2390,7 +2748,7 @@ mod tests {
     /// A live channel opened to start at live, as `open` sets it up.
     fn held(id: i64) -> Machine {
         let mut m = Machine::new();
-        m.opening(id);
+        m.opening(Opened::Channel(id));
         m.starting(LiveStart::Wait);
         m
     }
@@ -2398,7 +2756,7 @@ mod tests {
     #[test]
     fn catching_up_plays_at_once_and_jumps_after_the_burst() {
         let mut m = Machine::new();
-        m.opening(1);
+        m.opening(Opened::Channel(1));
         m.starting(LiveStart::CatchUp);
         assert!(!m.joining, "no hold");
         assert!(m.following_live, "the catch-up after the burst runs");
@@ -2410,7 +2768,7 @@ mod tests {
     #[test]
     fn staying_put_never_skips_ahead_by_itself() {
         let mut m = Machine::new();
-        m.opening(1);
+        m.opening(Opened::Channel(1));
         m.starting(LiveStart::Stay);
         assert!(!m.joining);
         assert!(!m.following_live, "neither after the burst nor after a stall");
@@ -2431,7 +2789,7 @@ mod tests {
     fn a_catch_up_programme_starts_where_it_was_asked_whatever_the_setting() {
         for mode in [LiveStart::Stay, LiveStart::CatchUp, LiveStart::Wait] {
             let mut m = Machine::new();
-            m.opening(1);
+            m.opening(Opened::Channel(1));
             m.live = false;
             m.starting(mode);
             assert!(!m.joining, "{mode:?}");
@@ -2519,7 +2877,7 @@ mod tests {
     fn a_zap_forgets_the_last_hold() {
         let mut m = held(1);
         m.playing();
-        m.opening(2);
+        m.opening(Opened::Channel(2));
         assert!(!m.joining && m.join.is_none() && !m.dto.joining_live);
     }
 
@@ -2532,7 +2890,7 @@ mod tests {
     #[test]
     fn the_network_failing_is_reconnected_after_a_wait() {
         let mut m = Machine::new();
-        m.opening(7);
+        m.opening(Opened::Channel(7));
         m.playing();
         network_failure(&mut m);
         assert_eq!(m.dto.state, PlaybackState::Failed);
@@ -2553,7 +2911,7 @@ mod tests {
             (Some("HTTP error 503 Service Unavailable"), How::Error(-13)),
         ] {
             let mut m = Machine::new();
-            m.opening(7);
+            m.opening(Opened::Channel(7));
             m.playing();
             if let Some(l) = line {
                 m.clues.observe(l);
@@ -2566,7 +2924,7 @@ mod tests {
     #[test]
     fn a_catch_up_programme_is_not_reconnected() {
         let mut m = Machine::new();
-        m.opening(7);
+        m.opening(Opened::Channel(7));
         m.live = false;
         m.playing();
         network_failure(&mut m);
@@ -2576,7 +2934,7 @@ mod tests {
     #[test]
     fn a_failure_that_never_reached_the_provider_says_so() {
         let mut m = Machine::new();
-        m.opening(7);
+        m.opening(Opened::Channel(7));
         m.clues.observe("tcp: Failed to resolve hostname nowhere.invalid: Name or service not known");
         m.ended_with(How::Error(-13));
         assert!(m.reconnect_due.unwrap().unreached);
@@ -2585,11 +2943,11 @@ mod tests {
     #[test]
     fn a_reconnect_that_is_refused_stops_there() {
         let mut m = Machine::new();
-        m.opening(7);
+        m.opening(Opened::Channel(7));
         m.playing();
         network_failure(&mut m);
         // The reconnect, as `open_as` makes it.
-        m.opening(7);
+        m.opening(Opened::Channel(7));
         m.reconnects = 1;
         m.clues.observe("HTTP error 509 Max Connections Reached");
         m.ended_with(How::Error(-13));
@@ -2601,7 +2959,7 @@ mod tests {
     #[test]
     fn the_allowance_runs_out() {
         let mut m = Machine::new();
-        m.opening(7);
+        m.opening(Opened::Channel(7));
         m.reconnects = 4;
         network_failure(&mut m);
         assert!(m.reconnect_due.is_none(), "four is all");
@@ -2612,7 +2970,7 @@ mod tests {
     #[test]
     fn an_account_that_cannot_be_asked_costs_an_attempt() {
         let mut m = Machine::new();
-        m.opening(7);
+        m.opening(Opened::Channel(7));
         m.playing();
         network_failure(&mut m);
         m.reconnect_due = None;
@@ -2624,7 +2982,7 @@ mod tests {
     #[test]
     fn a_full_account_is_said_and_not_reconnected() {
         let mut m = Machine::new();
-        m.opening(7);
+        m.opening(Opened::Channel(7));
         m.playing();
         network_failure(&mut m);
         m.in_use(connections::Slots { max: 1, active: 1 });
@@ -2638,7 +2996,7 @@ mod tests {
     #[test]
     fn a_picture_ends_the_reconnecting() {
         let mut m = Machine::new();
-        m.opening(7);
+        m.opening(Opened::Channel(7));
         m.reconnects = 1;
         m.dto.reconnect = Some(ReconnectDto { attempt: 1, of: 4, checking: false });
         m.playing();
@@ -2649,11 +3007,11 @@ mod tests {
     #[test]
     fn a_zap_or_a_stop_makes_a_waiting_reconnect_stale() {
         let mut m = Machine::new();
-        m.opening(7);
+        m.opening(Opened::Channel(7));
         m.playing();
         network_failure(&mut m);
         let token = m.reconnect_token;
-        m.opening(8);
+        m.opening(Opened::Channel(8));
         assert_ne!(m.reconnect_token, token);
         assert!(m.dto.reconnect.is_none());
         let token = m.reconnect_token;
@@ -2665,7 +3023,7 @@ mod tests {
     fn a_stall_is_reconnected_but_a_takeover_is_not() {
         // Data for ten seconds, then quiet until mpv's timeout reads the end.
         let mut m = Machine::new();
-        m.opening(7);
+        m.opening(Opened::Channel(7));
         m.playing();
         for i in 1..=72 {
             let t = f64::from(i) * 0.25;
@@ -2677,7 +3035,7 @@ mod tests {
 
         // The provider closing it: the end is read the moment data stops.
         let mut m = Machine::new();
-        m.opening(7);
+        m.opening(Opened::Channel(7));
         m.playing();
         for i in 1..=72 {
             let t = f64::from(i) * 0.25;
@@ -2691,7 +3049,7 @@ mod tests {
     #[test]
     fn quality_is_not_taken_before_a_frame_exists() {
         let mut m = Machine::new();
-        m.opening(1);
+        m.opening(Opened::Channel(1));
         m.apply(&Probe {
             width: Some(1920),
             ..Probe::default()
@@ -2704,7 +3062,7 @@ mod tests {
         let mut m = Machine::new();
         assert!(m.changed().is_some(), "the first snapshot is always news");
         assert!(m.changed().is_none());
-        m.opening(7);
+        m.opening(Opened::Channel(7));
         assert!(m.changed().is_some());
     }
 
@@ -2713,9 +3071,9 @@ mod tests {
         // Guards the zap race: mpv reports the *previous* file ending after
         // the next one has already been asked for.
         let mut m = Machine::new();
-        m.opening(1);
+        m.opening(Opened::Channel(1));
         m.playing();
-        m.opening(2);
+        m.opening(Opened::Channel(2));
         m.ended();
         assert_eq!(
             m.dto.state,
@@ -2727,7 +3085,7 @@ mod tests {
     #[test]
     fn a_live_stream_that_ends_mid_play_says_so_and_keeps_its_channel() {
         let mut m = Machine::new();
-        m.opening(42);
+        m.opening(Opened::Channel(42));
         m.playing();
         m.ended();
         assert_eq!(m.dto.state, PlaybackState::Failed);
@@ -2739,7 +3097,7 @@ mod tests {
     #[test]
     fn a_catch_up_programme_that_reaches_its_end_just_stops() {
         let mut m = Machine::new();
-        m.opening(42);
+        m.opening(Opened::Channel(42));
         m.live = false;
         m.playing();
         m.ended();
@@ -2750,7 +3108,7 @@ mod tests {
     #[test]
     fn a_refusal_carries_the_status_mpv_logged() {
         let mut m = Machine::new();
-        m.opening(42);
+        m.opening(Opened::Channel(42));
         m.clues.observe("http: HTTP error 509 Max Connections Reached");
         m.ended_with(How::Error(-13));
         assert_eq!(m.dto.state, PlaybackState::Failed);
@@ -2762,7 +3120,7 @@ mod tests {
     #[test]
     fn a_channel_held_for_live_is_measured_once_it_moves() {
         let mut m = Machine::new();
-        m.opening(7);
+        m.opening(Opened::Channel(7));
         m.joining = true;
         let t0 = Instant::now();
         m.playing();
@@ -2777,7 +3135,7 @@ mod tests {
     #[test]
     fn a_channel_that_loads_is_noted_once_then_measured_after_a_while() {
         let mut m = Machine::new();
-        m.opening(7);
+        m.opening(Opened::Channel(7));
         let t0 = Instant::now();
         assert_eq!(m.ledger(t0), None, "opening is not loading");
         m.playing();
@@ -2795,7 +3153,7 @@ mod tests {
     #[test]
     fn a_genuine_failure_to_load_is_noted_with_its_reason() {
         let mut m = Machine::new();
-        m.opening(9);
+        m.opening(Opened::Channel(9));
         m.clues.observe("http: HTTP error 404 Not Found");
         m.ended_with(How::Error(-13));
         assert_eq!(
@@ -2804,7 +3162,7 @@ mod tests {
         );
         assert_eq!(m.ledger(Instant::now()), None, "once per open");
         // Retrying is a new open, with its own outcome.
-        m.opening(9);
+        m.opening(Opened::Channel(9));
         m.playing();
         assert_eq!(m.ledger(Instant::now()), Some(Ledger::Loaded(9)));
     }
@@ -2812,11 +3170,11 @@ mod tests {
     #[test]
     fn the_account_limit_and_the_network_are_not_held_against_a_channel() {
         let mut m = Machine::new();
-        m.opening(1);
+        m.opening(Opened::Channel(1));
         m.clues.observe("http: HTTP error 509 Max Connections Reached");
         m.ended_with(How::Error(-13));
         assert_eq!(m.ledger(Instant::now()), None);
-        m.opening(2);
+        m.opening(Opened::Channel(2));
         m.clues.observe("tcp: Connection to tcp://10.0.0.1:80 failed: Connection timed out");
         m.ended_with(How::Error(-13));
         assert_eq!(m.ledger(Instant::now()), None);
@@ -2825,7 +3183,7 @@ mod tests {
     #[test]
     fn a_bare_deadline_waits_for_mpvs_reason() {
         let mut m = Machine::new();
-        m.opening(3);
+        m.opening(Opened::Channel(3));
         m.ended_with(How::Deadline);
         assert_eq!(m.ledger(Instant::now()), None, "mpv may yet say why");
         // mpv's reason arrives, and it is the network: nothing to hold
@@ -2835,7 +3193,7 @@ mod tests {
         assert_eq!(m.ledger(Instant::now() + FAILURE_SETTLE), None);
 
         // Without a reason, the deadline stands once mpv has had its time.
-        m.opening(4);
+        m.opening(Opened::Channel(4));
         m.ended_with(How::Deadline);
         assert_eq!(
             m.ledger(Instant::now() + FAILURE_SETTLE),
@@ -2846,17 +3204,17 @@ mod tests {
     #[test]
     fn a_stream_dropped_mid_play_or_a_catch_up_says_nothing_about_the_channel() {
         let mut m = Machine::new();
-        m.opening(5);
+        m.opening(Opened::Channel(5));
         m.playing();
         assert_eq!(m.ledger(Instant::now()), Some(Ledger::Loaded(5)));
         m.ended();
         assert_eq!(m.ledger(Instant::now() + FAILURE_SETTLE), None);
 
-        m.opening(6);
+        m.opening(Opened::Channel(6));
         m.live = false;
         m.ended_with(How::Error(-13));
         assert_eq!(m.ledger(Instant::now() + FAILURE_SETTLE), None);
-        m.opening(6);
+        m.opening(Opened::Channel(6));
         m.live = false;
         m.playing();
         assert_eq!(m.ledger(Instant::now() + MEASURE_AFTER), None);
@@ -2865,10 +3223,10 @@ mod tests {
     #[test]
     fn a_new_channel_forgets_the_last_ones_ending() {
         let mut m = Machine::new();
-        m.opening(1);
+        m.opening(Opened::Channel(1));
         m.clues.observe("HTTP error 403 Forbidden");
         m.ended_with(How::Error(-13));
-        m.opening(2);
+        m.opening(Opened::Channel(2));
         assert!(m.dto.ending.is_none());
         assert_eq!(m.clues, Clues::default(), "the evidence was about the other stream");
         m.playing();
@@ -2879,7 +3237,7 @@ mod tests {
     #[test]
     fn mpvs_reason_refines_the_deadline_but_nothing_else_is_overwritten() {
         let mut m = Machine::new();
-        m.opening(1);
+        m.opening(Opened::Channel(1));
         m.ended_with(How::Deadline);
         assert_eq!(m.dto.ending.unwrap().kind, ending::EndingKind::NoVideo);
         m.clues.observe("HTTP error 403 Forbidden");
@@ -2893,7 +3251,7 @@ mod tests {
     #[test]
     fn stopping_clears_the_explanation() {
         let mut m = Machine::new();
-        m.opening(1);
+        m.opening(Opened::Channel(1));
         m.playing();
         m.ended();
         m.stopped();

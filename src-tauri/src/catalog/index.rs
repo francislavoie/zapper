@@ -9,7 +9,7 @@ use anyhow::Result;
 use rusqlite::Connection;
 use std::sync::Mutex;
 
-use crate::catalog::{store, SearchIndex};
+use crate::catalog::{store, vod_store, SearchIndex};
 
 /// A `Mutex` and not the `RwLock` a read-mostly index would suggest:
 /// `SearchIndex` holds its matcher in a `RefCell` and scoring mutates it, so
@@ -23,13 +23,17 @@ impl Slot {
 
     /// Repopulates from the catalogue, returning how many names are indexed.
     pub fn rebuild(&self, conn: &Connection) -> Result<usize> {
-        let names = store::channel_names(conn)?;
+        Ok(self.rebuild_from(store::channel_names(conn)?))
+    }
+
+    /// Repopulates from names already in hand, returning how many.
+    pub fn rebuild_from(&self, names: Vec<(i64, String)>) -> usize {
         let n = names.len();
         // A poisoned lock means a previous query panicked mid-scoring. The
         // index is derived state, so rebuilding over it is the recovery.
         let mut guard = self.0.lock().unwrap_or_else(|e| e.into_inner());
         *guard = Some(SearchIndex::new(names));
-        Ok(n)
+        n
     }
 
     /// Ranked best-first. Empty before the first rebuild: search that has not
@@ -55,6 +59,9 @@ impl Default for Slot {
 }
 
 static INDEX: Slot = Slot::new();
+/// Movies get an index of their own: a hundred thousand titles must not slow
+/// the channel filter and the palette, which search the same way.
+static MOVIES: Slot = Slot::new();
 
 pub fn rebuild(conn: &Connection) -> Result<usize> {
     INDEX.rebuild(conn)
@@ -66,6 +73,18 @@ pub fn query(needle: &str, limit: usize) -> Vec<i64> {
 
 pub fn is_built() -> bool {
     INDEX.is_built()
+}
+
+pub fn rebuild_movies(conn: &Connection) -> Result<usize> {
+    Ok(MOVIES.rebuild_from(vod_store::movie_names(conn)?))
+}
+
+pub fn query_movies(needle: &str, limit: usize) -> Vec<i64> {
+    MOVIES.query(needle, limit)
+}
+
+pub fn movies_built() -> bool {
+    MOVIES.is_built()
 }
 
 #[cfg(test)]
@@ -114,6 +133,20 @@ mod tests {
             .unwrap();
         assert_eq!(slot.rebuild(&c).unwrap(), 1);
         assert!(slot.query("northwindone", 10).is_empty());
+    }
+
+    #[test]
+    fn movie_search_is_its_own_index() {
+        let channels = Slot::new();
+        channels.rebuild(&db()).unwrap();
+        let slot = Slot::new();
+        let n = slot.rebuild_from(vec![(10, "First Film".into()), (11, "Second Film".into())]);
+        assert_eq!(n, 2);
+        let mut found = slot.query("film", 10);
+        found.sort();
+        assert_eq!(found, vec![10, 11]);
+        assert_eq!(channels.query("northwindone", 10), vec![1]);
+        assert!(channels.query("film", 10).is_empty());
     }
 
     // The free functions over `INDEX` are covered end-to-end by the `search`

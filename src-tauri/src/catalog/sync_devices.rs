@@ -94,6 +94,7 @@ pub(crate) fn land_lineup(
         });
     }
     let mut w = PlaylistWriter::begin(conn)?;
+    w.set_origin(origin::of_hdhomerun(&d.device_id));
     for (e, identity) in l.entries {
         w.push_identified(e, &identity)?;
     }
@@ -234,7 +235,7 @@ async fn load_tvheadend_playlist<M: Mirror>(src: &TvhSource, mirror: &M) -> Resu
     let m = mirror.clone();
     engine::pump_into(resp, "the channel playlist", None, move |r| {
         m.write(|conn| {
-            let s = land_tvheadend_playlist(conn, r, &tags)?;
+            let s = land_tvheadend_playlist(conn, r, &tags, &from)?;
             origin::record(conn, &from)?;
             Ok(s)
         })
@@ -252,6 +253,7 @@ pub(crate) fn land_tvheadend_playlist(
     conn: &rusqlite::Connection,
     src: Box<dyn Read + Send>,
     tags: &Tags,
+    from: &str,
 ) -> Result<PlaylistStats> {
     let r = fetch::decompressing(src)?;
     let fallback = if tags.by_channel.is_empty() {
@@ -260,13 +262,17 @@ pub(crate) fn land_tvheadend_playlist(
         "Other"
     };
     let mut w = PlaylistWriter::begin(conn)?;
+    w.set_origin(from.to_owned());
     let header = crate::m3u::parse::parse(r, |mut e| {
         let uuid = e.tvg_id.clone();
         let tag = uuid.as_deref().and_then(|u| tags.by_channel.get(u)).cloned();
         e.group = tag.or(e.group.take()).or_else(|| Some(fallback.to_owned()));
         match uuid {
             Some(u) => w.push_identified(e, &crate::tvheadend::identity(&u)),
-            None => w.push(e),
+            None => {
+                let identity = crate::m3u::ids::identity(&e);
+                w.push_identified(e, &identity)
+            }
         }
     })?;
     w.rank_groups(&tags.order);
@@ -716,7 +722,7 @@ mod tests {
         let c = crate::catalog::open_in_memory().unwrap();
         let body = |m3u: String| -> Box<dyn Read + Send> { Box::new(std::io::Cursor::new(m3u.into_bytes())) };
         let base = M3U.replace("{base}", "http://tvh").replace("{query}", "?");
-        land_tvheadend_playlist(&c, body(base.clone()), &Tags::default()).unwrap();
+        land_tvheadend_playlist(&c, body(base.clone()), &Tags::default(), "tvh:test").unwrap();
         let ids = |c: &rusqlite::Connection| -> Vec<i64> {
             let mut s = c.prepare("SELECT stream_id FROM channels ORDER BY stream_id").unwrap();
             let v = s.query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
@@ -726,7 +732,7 @@ mod tests {
         let mut tags = Tags::default();
         tags.by_channel.insert("c0ffee0000000000000000000000c001".into(), "News".into());
         tags.order.push("News".into());
-        let s = land_tvheadend_playlist(&c, body(base.replace("Northwind One HD", "Northwind One")), &tags).unwrap();
+        let s = land_tvheadend_playlist(&c, body(base.replace("Northwind One HD", "Northwind One")), &tags, "tvh:test").unwrap();
         assert_eq!((s.channels.inserted, s.channels.deleted), (0, 0));
         assert_eq!(ids(&c), before);
     }

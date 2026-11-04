@@ -5,7 +5,7 @@
 // list now, shown in the channel list like any category, so there is nothing
 // to switch and nothing to keep alive behind a hidden tree.
 
-import { useRef, type PointerEvent as ReactPointerEvent } from "react";
+import { useRef, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { CategoryRail } from "./CategoryRail";
 import {
   RAIL_WIDTH_DEFAULT,
@@ -34,7 +34,9 @@ export function RailToggle() {
   );
 }
 
-export function Rail() {
+/** The rail column and its grip. What fills it is the section's: Live TV's
+ *  categories unless told otherwise. */
+export function Rail({ children }: { children?: ReactNode }) {
   const { railWidthRem } = useApp();
   const dispatch = useDispatch();
   const railRef = useRef<HTMLElement | null>(null);
@@ -74,7 +76,7 @@ export function Rail() {
 
   return (
     <aside className="rail" ref={railRef}>
-      <CategoryRail />
+      {children ?? <CategoryRail />}
       {/* On the boundary the rail shares with the list. A separator rather than a
           button: it sets a value along an axis. */}
       <span

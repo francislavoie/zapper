@@ -74,7 +74,7 @@ export interface ChannelDto {
   nowPlaying: ProgrammeDto | null;
 }
 
-export type SyncPhase = "idle" | "categories" | "channels" | "epg" | "failed";
+export type SyncPhase = "idle" | "categories" | "channels" | "epg" | "movies" | "failed";
 
 export interface SyncStatusDto {
   phase: SyncPhase;
@@ -128,6 +128,9 @@ export interface PlayerStateDto {
    *  first. `null` otherwise. Only ever after a network failure, never after
    *  the provider ended or refused the stream. */
   reconnect: ReconnectDto | null;
+  /** The movie that is open, with how far in it is; `null` for a live
+   *  channel and when nothing is open. A title has no `streamId`. */
+  onDemand: OnDemandDto | null;
 }
 
 /** Mirrors `ReconnectDto`. */
@@ -804,4 +807,95 @@ export interface NetworkDto extends NetworkSettingsDto {
   error?: string;
   /** Most recently used first. */
   devices: DeviceDto[];
+}
+
+// ------------------------------------------------------------------ movies
+// Mirrors the movie DTOs at the end of `src-tauri/src/ipc/types.rs`.
+
+export interface VodCategoryDto {
+  id: string;
+  name: string;
+  movieCount: number;
+}
+
+export interface MovieDto {
+  movieId: number;
+  name: string;
+  cleanName: string;
+  year: number | null;
+  /** Out of ten. */
+  rating: number | null;
+  posterUrl: string | null;
+  /** Unix seconds. */
+  added: number | null;
+  durationSecs: number | null;
+  categoryId: string | null;
+  favourite: boolean;
+  watched: boolean;
+}
+
+export type MovieSort = "added" | "az" | "year" | "rating";
+export type MovieListKind = "favourites" | "recent" | "watched" | "category";
+
+export interface MovieQueryDto {
+  list: MovieListKind;
+  /** For `list: "category"`. */
+  categoryId: string | null;
+  sort: MovieSort;
+  yearFrom: number | null;
+  yearTo: number | null;
+}
+
+export interface MoviePageDto {
+  /** In the whole list, not just this page. */
+  total: number;
+  items: MovieDto[];
+}
+
+export interface MovieDetailsDto {
+  movie: MovieDto;
+  plot: string | null;
+  genres: string[];
+  director: string | null;
+  cast: string[];
+  releaseDate: string | null;
+  backdropUrls: string[];
+  tmdbId: number | null;
+  audioLanguages: string[];
+  subtitleLanguages: string[];
+  /** Unix seconds; `null` when there are no details to show. */
+  fetchedAt: number | null;
+}
+
+export interface MoviesSummaryDto {
+  /** The tab is shown only when the account has movies. */
+  available: boolean;
+  note: string | null;
+  total: number;
+  favourites: number;
+  recent: number;
+  watched: number;
+  /** Which catalogue the movies are from, as a short hash; empty before any.
+   *  A change means another account's titles. */
+  origin: string;
+}
+
+export interface MarksDto {
+  id: number;
+  favourite: boolean;
+  watched: boolean;
+  position: number | null;
+  duration: number | null;
+}
+
+export type OnDemandKind = "movie";
+
+export interface OnDemandDto {
+  kind: OnDemandKind;
+  id: number;
+  /** Seconds from the start. */
+  position: number;
+  duration: number | null;
+  /** How far the data has been read ahead, seconds from the start. */
+  bufferedTo: number | null;
 }

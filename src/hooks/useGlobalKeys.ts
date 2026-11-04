@@ -14,8 +14,10 @@ import { focusSearch, typingInto } from "../focus";
 import { exitFullscreen, toggleFullscreen } from "../fullscreen";
 import { fullscreenNow, refreshFullscreen } from "./useFullscreen";
 import { blocksPlainKey, shortcutModifier } from "../logic/keys";
+import { moviesAvailable, playingKind } from "../logic/movies";
 import { ALL_CATEGORIES, railItemKind } from "../logic/railItems";
 import { playerRecord } from "../logic/recordings";
+import { VOD_SKIP_SECONDS } from "../logic/vodTransport";
 import { IS_MAC } from "../platform";
 import { run } from "../store";
 import type { State } from "../store";
@@ -58,6 +60,9 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
         } else if (state.categoryOptions) {
           // The rail's options menu: also a menu, also opened last.
           dispatch({ type: "categoryOptions", menu: null });
+        } else if (state.movies.menu) {
+          // The Movies list's sort or years menu.
+          dispatch({ type: "movies/menu", menu: null });
         } else if (state.videoMenu) {
           // The picture's menu: opened last, like the others. A submenu
           // inside it that has focus closes itself first (see SubMenu).
@@ -73,6 +78,15 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
           dispatch({ type: "settings", open: false });
         } else if (state.paletteOpen) {
           dispatch({ type: "palette", open: false });
+        } else if (
+          state.mode === "browse" &&
+          state.section === "movies" &&
+          state.movies.sheetId !== null &&
+          moviesAvailable(state.movies.summary)
+        ) {
+          // A movie's Details, over the rail and the list: the first of the
+          // panes to go (and only while it shows, not behind the player).
+          dispatch({ type: "movies/sheet", id: null });
         } else if (fullscreenNow()) {
           // Fullscreen is the one thing Escape means everywhere else on the
           // desktop, so it is the whole meaning here: leave fullscreen and
@@ -84,7 +98,10 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
             .catch((err: unknown) =>
               dispatch({ type: "toast", text: `fullscreen: ${String(err)}` }),
             );
-        } else if (state.query !== "") {
+        } else if (state.section === "movies" && state.movies.query !== "") {
+          // A search belongs to the tab it was typed on.
+          dispatch({ type: "movies/query", text: "" });
+        } else if (state.section !== "movies" && state.query !== "") {
           dispatch({ type: "query", text: "" });
         } else if (state.mode === "guide") {
           dispatch({ type: "mode", mode: "browse" });
@@ -106,11 +123,20 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
         // focus on the next frame, once it is mounted.
         if (state.mode !== "browse") dispatch({ type: "mode", mode: "browse" });
         // Recordings has no channel search: the list is hidden behind it, so
-        // go to the channels first.
-        if (railItemKind(state.categoryId) === "recordings") {
+        // go to the channels first. The Movies tab has a search of its own,
+        // which is the one this reaches while that tab shows.
+        if (state.section !== "movies" && railItemKind(state.categoryId) === "recordings") {
           dispatch({ type: "selectCategory", id: ALL_CATEGORIES });
         }
         requestAnimationFrame(focusSearch);
+        return;
+      }
+
+      // The Movies tab, where there is one. Not a toggle: Live TV's way back
+      // is its tab, and the guide's G.
+      if ((e.key === "m" || e.key === "M") && capabilities.onDemand && moviesAvailable(state.movies.summary)) {
+        e.preventDefault();
+        dispatch({ type: "section", section: "movies" });
         return;
       }
 
@@ -172,6 +198,7 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
 
       // The rest only mean anything with a stream open.
       if (state.player.state === "stopped") return;
+      const movie = playingKind(state.player) === "movie";
 
       // Theater: the picture filling the window, without going fullscreen
       // (that is F). YouTube's key for the same idea, so the hand already
@@ -186,7 +213,7 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
       // Record what is on: the programme the guide says is on now, on the
       // channel playing. Already recorded, it says so rather than stopping
       // it (the menus' Stop recording does that).
-      if ((e.key === "r" || e.key === "R") && !e.altKey) {
+      if ((e.key === "r" || e.key === "R") && !e.altKey && !movie) {
         e.preventDefault();
         void recordFromPlayer(
           dispatch,
@@ -195,6 +222,7 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
         return;
       }
 
+      const skip = movie ? VOD_SKIP_SECONDS : 5;
       switch (e.key) {
         case " ":
           e.preventDefault();
@@ -202,14 +230,16 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
           break;
         case "ArrowLeft":
           e.preventDefault();
-          void run(dispatch, "seek", backend.seekRelative(-5));
+          void run(dispatch, "seek", backend.seekRelative(-skip));
           break;
         case "ArrowRight":
           e.preventDefault();
-          void run(dispatch, "seek", backend.seekRelative(5));
+          void run(dispatch, "seek", backend.seekRelative(skip));
           break;
         case "l":
         case "L":
+          // A movie has no live edge.
+          if (movie) break;
           e.preventDefault();
           void run(dispatch, "seek to live", backend.seekLive());
           break;
@@ -224,7 +254,14 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
     state.categoryId,
     state.paletteOpen,
     state.player.state,
+    state.player.onDemand?.kind,
+    state.player.streamId,
     state.query,
+    state.section,
+    state.movies.menu,
+    state.movies.sheetId,
+    state.movies.query,
+    state.movies.summary,
     state.settings.guideHours,
     state.settingsOpen,
     state.menuOpen,

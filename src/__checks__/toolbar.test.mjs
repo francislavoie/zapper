@@ -10,6 +10,7 @@ import {
   NO_ACCOUNT_MESSAGE,
   SECTION_LABEL,
   titleTabs,
+  modeForSection,
 } from "../logic/toolbar.ts";
 import { readFileSync } from "node:fs";
 import {
@@ -40,10 +41,11 @@ test("each working phase gets its own sentence, in this app's words", () => {
   assert.equal(statusLine(sync({ phase: "channels" }), 0).text, "Refreshing channels…");
   // "epg" is the wire word. The user-facing word is "guide", everywhere.
   assert.equal(statusLine(sync({ phase: "epg" }), 0).text, "Loading guide…");
+  assert.equal(statusLine(sync({ phase: "movies" }), 0).text, "Refreshing movies…");
 });
 
 test("the spinner turns for exactly the phases that are work", () => {
-  for (const phase of ["categories", "channels", "epg"]) {
+  for (const phase of ["categories", "channels", "epg", "movies"]) {
     assert.ok(isBusy(phase), phase);
     assert.equal(statusLine(sync({ phase }), 0).spinning, true);
     assert.equal(statusLine(sync({ phase }), 0).tone, "busy");
@@ -200,8 +202,18 @@ test("the toolbar is tall enough for its controls and their edge inset", () => {
   assert.ok(TOOLBAR_HEIGHT <= 48, "a title bar this app drew should not be a header");
 });
 
-test("the title bar's tabs: Live TV always, Movies and Shows only with on-demand", () => {
-  assert.deepEqual(titleTabs({ onDemand: false }), ["live"]);
-  assert.deepEqual(titleTabs({ onDemand: true }), ["live", "movies", "shows"]);
-  assert.deepEqual(titleTabs({ onDemand: true }).map((s) => SECTION_LABEL[s]), ["Live TV", "Movies", "Shows"]);
+test("the title bar's tabs: Live TV always, Movies with on-demand and movies to show", () => {
+  assert.deepEqual(titleTabs({ onDemand: false }, true), ["live"]);
+  assert.deepEqual(titleTabs({ onDemand: true }, true), ["live", "movies"]);
+  assert.deepEqual(titleTabs({ onDemand: true }, true).map((s) => SECTION_LABEL[s]), ["Live TV", "Movies"]);
+  // An account without movies has no tab for them, whatever the app can do.
+  assert.deepEqual(titleTabs({ onDemand: true }, false), ["live"]);
+});
+
+test("a section change leaves the guide when it is not Live TV's, and the player always", () => {
+  assert.equal(modeForSection("guide", "movies"), "browse");
+  assert.equal(modeForSection("guide", "live"), "guide");
+  assert.equal(modeForSection("watch", "movies"), "browse");
+  assert.equal(modeForSection("watch", "live"), "browse");
+  assert.equal(modeForSection("browse", "movies"), "browse");
 });

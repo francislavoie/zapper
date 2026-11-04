@@ -48,6 +48,21 @@ impl Video {
             Video::Other => "an unusual format",
         }
     }
+
+    /// Why a browser can't play this video, as a refusal says it; `record`
+    /// when recording it is the other way to have it (a channel).
+    pub fn unplayable(self, record: bool) -> String {
+        format!(
+            "Its video is {}, which {} can’t play. Watch it in the zapper app{}.",
+            self.name(),
+            if self == Video::Hevc {
+                "this browser"
+            } else {
+                "browsers"
+            },
+            if record { ", or record it" } else { "" }
+        )
+    }
 }
 
 /// An audio codec.
@@ -363,17 +378,7 @@ pub fn plan(info: &StreamInfo, can: Can, want: Option<usize>, encoder: bool) -> 
     match info.video {
         Some((_, Video::H264)) => {}
         Some((_, Video::Hevc)) if can.hevc => {}
-        Some((_, v)) => {
-            return Plan::Refuse(format!(
-                "Its video is {}, which {} can’t play. Watch it in the zapper app, or record it.",
-                v.name(),
-                if v == Video::Hevc {
-                    "this browser"
-                } else {
-                    "browsers"
-                }
-            ))
-        }
+        Some((_, v)) => return Plan::Refuse(v.unplayable(true)),
         None if info.audio.is_empty() => {
             return Plan::Refuse(
                 "Its stream has neither video nor sound a browser can play.".into(),

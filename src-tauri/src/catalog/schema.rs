@@ -144,10 +144,8 @@ DROP TABLE IF EXISTS quality;
 /// from the guide's `<episode-num>` (see [`crate::catalog::episode`]) or
 /// SiliconDust's `EpisodeNumber`. NULL when the guide does not say, or says
 /// it in a way that cannot be trusted; recordings then go by date.
-const EPG_EPISODE_COLUMNS: &[(&str, &str, &str)] = &[
-    ("epg", "season", "INTEGER"),
-    ("epg", "episode", "INTEGER"),
-];
+const EPG_EPISODE_COLUMNS: &[(&str, &str, &str)] =
+    &[("epg", "season", "INTEGER"), ("epg", "episode", "INTEGER")];
 
 /// Migration step `backup_lookup`: what choosing a recording's backup feed
 /// needs to stay fast on a large catalogue (`recording::backup`). Channels
@@ -156,6 +154,82 @@ const EPG_EPISODE_COLUMNS: &[(&str, &str, &str)] = &[
 /// a few minutes either side of one start.
 const BACKUP_INDEXES: &str = r#"
 CREATE INDEX IF NOT EXISTS epg_by_start ON epg(start);
+"#;
+
+/// Migration step `vod`: the provider's movies, and who marked which.
+///
+/// `movies` is the mirror of `get_vod_streams` and, like `channels`, is only
+/// ever soft-deleted by a sync, so a title that drops out of the list and
+/// comes back finds its marks again. It is keyed on the provider's id alone
+/// and not on the catalogue: a resync under a different account soft-deletes
+/// whatever that account did not list, the way channels are, and the rows
+/// are never shown while deleted.
+///
+/// `vod_marks` is the opposite and carries the catalogue's `origin` (see
+/// [`crate::catalog::origin`]), because a provider's movie 1234 is not the
+/// next provider's 1234: a favourite or a resume point must not follow the id
+/// to a different film when the account changes. `kind` leaves room for
+/// episodes to share the table; a movie's `item_id` is its `movie_id`.
+/// `position`/`duration` are seconds into the title and its length, as last
+/// played; `played_at` orders "continue watching".
+///
+/// `movie_details` caches `get_vod_info` per title, fetched only when a title
+/// is opened and never for the whole list. `vod_categories` is shared across
+/// kinds for the same reason as `vod_marks`; the primary key is the pair
+/// because two kinds may reuse an id.
+///
+/// The indexes serve the page queries: newest first overall and within a
+/// category, alphabetical, and the year and rating sorts, so that none of
+/// them scans a ~160k-row table.
+const VOD_TABLES: &str = r#"
+CREATE TABLE IF NOT EXISTS vod_categories (
+    kind  TEXT NOT NULL,
+    id    TEXT NOT NULL,
+    name  TEXT NOT NULL,
+    sort  INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (kind, id)
+);
+CREATE TABLE IF NOT EXISTS movies (
+    movie_id        INTEGER PRIMARY KEY,
+    category_id     TEXT,
+    name            TEXT NOT NULL,
+    clean_name      TEXT NOT NULL,
+    year            INTEGER,
+    rating          REAL,
+    poster_url      TEXT,
+    added           INTEGER NOT NULL,
+    container       TEXT,
+    tmdb_id         INTEGER,
+    duration_secs   INTEGER,
+    stream_url      TEXT,
+    http_user_agent TEXT,
+    http_referrer   TEXT,
+    deleted_at      INTEGER
+);
+CREATE INDEX IF NOT EXISTS movies_by_added ON movies(added);
+CREATE INDEX IF NOT EXISTS movies_by_category ON movies(category_id, added);
+CREATE INDEX IF NOT EXISTS movies_by_name ON movies(clean_name COLLATE NOCASE);
+CREATE INDEX IF NOT EXISTS movies_by_year ON movies(year);
+CREATE INDEX IF NOT EXISTS movies_by_rating ON movies(rating);
+-- Counting a category's live titles reads this alone, with no table lookups.
+CREATE INDEX IF NOT EXISTS movies_live_by_category ON movies(category_id)
+    WHERE deleted_at IS NULL;
+CREATE TABLE IF NOT EXISTS movie_details (
+    movie_id   INTEGER PRIMARY KEY,
+    fetched_at INTEGER NOT NULL,
+    info       TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS vod_marks (
+    origin       TEXT NOT NULL,
+    kind         TEXT NOT NULL,
+    item_id      INTEGER NOT NULL,
+    favourite_at INTEGER,
+    watched_at   INTEGER,
+    position     REAL,
+    duration     REAL,
+    played_at    INTEGER,
+    PRIMARY KEY (origin, kind, item_id)
+);
 "#;
 
 fn add_missing_columns(conn: &Connection, columns: &[(&str, &str, &str)]) -> Result<()> {
@@ -184,6 +258,7 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     add_missing_columns(conn, EPG_EPISODE_COLUMNS).context("migrating epg_episode")?;
     conn.execute_batch(BACKUP_INDEXES)
         .context("migrating backup_lookup")?;
+    conn.execute_batch(VOD_TABLES).context("migrating vod")?;
     crate::catalog::guide_search::install(conn)
 }
 
@@ -239,6 +314,10 @@ mod tests {
             "epg_channel_names",
             "epg_fts",
             "channel_quality",
+            "movies",
+            "vod_categories",
+            "movie_details",
+            "vod_marks",
         ] {
             assert!(
                 tables.contains(&t.to_string()),
@@ -271,9 +350,11 @@ mod tests {
         migrate(&c).unwrap();
         migrate(&c).unwrap();
         let (name, url): (String, Option<String>) = c
-            .query_row("SELECT name, stream_url FROM channels WHERE stream_id = 7", [], |r| {
-                Ok((r.get(0)?, r.get(1)?))
-            })
+            .query_row(
+                "SELECT name, stream_url FROM channels WHERE stream_id = 7",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
             .unwrap();
         assert_eq!((name.as_str(), url), ("kept", None));
         for (_, col, _) in ADDED_COLUMNS {
@@ -335,6 +416,29 @@ mod tests {
             )
             .unwrap();
         assert!(plan.contains("epg_by_start"), "{plan}");
+    }
+
+    #[test]
+    fn an_existing_mirror_gains_the_movie_tables_and_keeps_its_channels() {
+        // A mirror as the build before movies left it: every step but `vod`.
+        let c = open_in_memory().unwrap();
+        c.execute_batch(
+            "DROP TABLE movies; DROP TABLE vod_categories;
+             DROP TABLE movie_details; DROP TABLE vod_marks;
+             INSERT INTO channels (stream_id, name) VALUES (7, 'kept');",
+        )
+        .unwrap();
+        migrate(&c).unwrap();
+        migrate(&c).unwrap();
+        let n: i64 = c
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM channels WHERE name = 'kept')
+                      + (SELECT COUNT(*) FROM movies) + (SELECT COUNT(*) FROM vod_marks)",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1);
     }
 
     #[test]

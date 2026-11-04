@@ -87,6 +87,7 @@ const STOPPED: PlayerStateDto = {
   joiningLive: false,
   ending: null,
   reconnect: null,
+  onDemand: null,
 };
 
 const NO_OPTIONS: PlayerOptionsDto = {
@@ -107,7 +108,9 @@ export interface WebNotice {
 }
 export const noticeFeed = new Feed<WebNotice>({ recording: null, silent: null });
 
-function patch(p: Partial<PlayerStateDto>) {
+/** Changes what the player reports, telling listeners only when something
+ *  did change. Shared with a movie (src/webVod.ts). */
+export function patch(p: Partial<PlayerStateDto>) {
   const next = { ...playerFeed.last, ...p };
   const before = playerFeed.last;
   const same = (Object.keys(p) as (keyof PlayerStateDto)[]).every((k) => before[k] === next[k]);
@@ -125,7 +128,7 @@ export const playableHere: boolean = canPlayHere(host);
 let mpegtsLib: Promise<Mpegts> | null = null;
 /** mpegts.js, fetched the first time something plays: a page that only
  *  browses never loads it. */
-const loadMpegts = (): Promise<Mpegts> =>
+export const loadMpegts = (): Promise<Mpegts> =>
   (mpegtsLib ??= import("mpegts.js").then((m) => {
     const lib = (m.default ?? m) as Mpegts;
     lib.LoggingControl.enableAll = false;
@@ -137,6 +140,9 @@ let signedOut: () => void = () => {};
 export function onPlayerSignedOut(f: () => void) {
   signedOut = f;
 }
+
+/** The service said this browser is not signed in (to a movie). */
+export const signedOutNow = () => signedOut();
 
 // ----------------------------------------------------------------- state
 
@@ -195,6 +201,12 @@ let poller: ReturnType<typeof setInterval> | undefined;
 
 // ----------------------------------------------------------- the element
 
+/** The element the picture is drawn in, when the page has one. */
+export const currentVideo = (): HTMLVideoElement | null => video;
+
+/** The aspect chosen, which outlasts what is playing. */
+export const currentAspect = (): AspectMode => aspect;
+
 /** The <video> the picture is drawn in (App.tsx), placed where mpv's picture
  *  would be. */
 export function attachVideo(el: HTMLVideoElement | null) {
@@ -249,8 +261,9 @@ async function watchRequest(
 
 /** Starts channel `streamId`. Resolves once the service has answered; what
  *  happens then (playing, or why not) comes through `playerFeed`, as the
- *  app's player reports through its events. */
-export async function play(streamId: number): Promise<void> {
+ *  app's player reports through its events. `replacing`: a movie's viewer
+ *  this one takes over from (src/webVod.ts), when no channel was on. */
+export async function play(streamId: number, replacing: string | null = null): Promise<void> {
   if (!playableHere) throw new Error(UNSUPPORTED);
   const my = ++seq;
   const old = session;
@@ -276,9 +289,10 @@ export async function play(streamId: number): Promise<void> {
     ending: null,
     reconnect: null,
     joiningLive: false,
+    onDemand: null,
   });
   const lib = loadMpegts();
-  const { status, body } = await watchRequest(streamId, anyway, old?.viewer ?? null, null);
+  const { status, body } = await watchRequest(streamId, anyway, old?.viewer ?? replacing, null);
   if (my !== seq) {
     // Superseded while asking: let the answer's viewer go at once.
     const late = body as Partial<WatchAnswer> | null;
@@ -431,9 +445,13 @@ function release(s: Session | null, forgetViewer: boolean) {
   if (forgetViewer) void forget(s.viewer);
 }
 
-async function forget(viewer: string) {
+/** Lets the service's viewer go. `keepalive`: sent even as the page goes. */
+async function forget(viewer: string, keepalive = false) {
   try {
-    await fetch(`/api/watch/${encodeURIComponent(viewer)}`, requestInit("DELETE"));
+    await fetch(`/api/watch/${encodeURIComponent(viewer)}`, {
+      ...requestInit("DELETE"),
+      keepalive,
+    });
   } catch {
     // The service lets an unread viewer go by itself.
   }
@@ -457,6 +475,19 @@ async function viewerStatus(s: Session): Promise<ViewerStatus | null> {
   } catch {
     return null;
   }
+}
+
+/** Gives the channel up for a movie: its stream goes at once, and its
+ *  viewer is returned for the movie's watch to replace (and so let go).
+ *  `null` when no channel was on. */
+export function takeLive(): string | null {
+  seq++;
+  const s = session;
+  session = null;
+  lastFailure = null;
+  release(s, false);
+  stopTimers();
+  return s && !s.suspended ? s.viewer : null;
 }
 
 export async function stop(): Promise<void> {
@@ -525,8 +556,10 @@ function tick() {
   });
 }
 
-/** Paused too long: the stream goes, the frame stays. */
-function suspend(s: Session) {
+/** Paused too long, or the page going: the stream goes, the frame stays.
+ *  `leaving`: the page is being closed or put away, and letting the
+ *  viewer go must outlive it. */
+function suspend(s: Session, leaving = false) {
   s.suspended = true;
   try {
     s.player?.destroy();
@@ -534,8 +567,19 @@ function suspend(s: Session) {
     // Gone already.
   }
   s.player = null;
-  void forget(s.viewer);
+  void forget(s.viewer, leaving);
   patch({ state: "paused", bufferedBack: 0, behindLive: 0, atLiveEdge: true });
+}
+
+// A closed tab would otherwise hold its channel's connection until the
+// service notices nobody reads it. Let go as the page goes; a page restored
+// from the browser's back-forward cache starts the channel again when
+// played, as after a long pause.
+if (typeof window !== "undefined") {
+  window.addEventListener("pagehide", () => {
+    const s = session;
+    if (s && !s.suspended) suspend(s, true);
+  });
 }
 
 /** What the service says about this viewer: a recording it is in the way

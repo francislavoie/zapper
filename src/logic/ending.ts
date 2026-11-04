@@ -195,3 +195,19 @@ export function endedActions(
       return { primary: "retry", note: null, dismiss: true };
   }
 }
+
+/** Where a retried movie picks up: the place the player had reached, or
+ *  `null` (from the start) when there was none. */
+export function retryStart(p: Pick<PlayerStateDto, "onDemand">): number | null {
+  const at = p.onDemand?.position ?? 0;
+  return at > 0 ? at : null;
+}
+
+/** What "Retry" / "Watch here anyway" plays again: the movie the player has
+ *  open (a movie has no stream id), else the channel with one. */
+export function retryTarget(
+  p: Pick<PlayerStateDto, "streamId" | "onDemand">,
+): "movie" | "channel" | "none" {
+  if (p.onDemand?.kind === "movie") return "movie";
+  return p.streamId !== null ? "channel" : "none";
+}
