@@ -62,7 +62,7 @@ test("only movies/ actions are the movies reducer's", () => {
 });
 
 test("a summary that was ready stays ready through a failed or repeated refresh", () => {
-  const ready = { status: "ready", data: { available: true, note: null, total: 5, favourites: 0, recent: 5, watched: 0 } };
+  const ready = { status: "ready", data: { available: true, note: null, total: 5, favourites: 0, recent: 5, watched: 0, origin: "a1" } };
   let s = moviesReducer(initialMovies("list"), { type: "movies/summary", value: ready });
   s = moviesReducer(s, { type: "movies/summary", value: { status: "loading" } });
   s = moviesReducer(s, { type: "movies/summary", value: { status: "error", message: "offline" } });
@@ -71,4 +71,48 @@ test("a summary that was ready stays ready through a failed or repeated refresh"
   const gone = { status: "ready", data: { ...ready.data, available: false } };
   s = moviesReducer(s, { type: "movies/summary", value: gone });
   assert.equal(s.summary, gone);
+});
+
+const summary = (origin) => ({
+  status: "ready",
+  data: { available: true, note: null, total: 5, favourites: 0, recent: 5, watched: 0, origin },
+});
+const browsing = () => {
+  let s = moviesReducer(initialMovies("list"), { type: "movies/summary", value: summary("a1") });
+  s = moviesReducer(s, { type: "movies/select", id: "c7" });
+  s = moviesReducer(s, { type: "movies/selectMovie", movie: movie(1) });
+  s = moviesReducer(s, { type: "movies/sheet", id: 1 });
+  s = moviesReducer(s, { type: "movies/marked", marks: marks(1, { favourite: true }) });
+  return s;
+};
+test("another account's movies leave nothing of the old ones in view", () => {
+  const before = browsing();
+  const s = moviesReducer(before, { type: "movies/summary", value: summary("b2") });
+  assert.equal(s.summary.data.origin, "b2");
+  assert.deepEqual(s.marks, {});
+  assert.equal(s.selected, null);
+  assert.equal(s.sheetId, null);
+  assert.equal(s.selection, MOVIE_RECENT);
+  assert.equal(s.revision, before.revision + 1);
+});
+test("the same account's refreshed summary keeps what is open", () => {
+  const before = browsing();
+  const s = moviesReducer(before, { type: "movies/summary", value: summary("a1") });
+  assert.equal(s.selected, before.selected);
+  assert.equal(s.selection, "c7");
+  assert.equal(s.marks[1].favourite, true);
+  assert.equal(s.revision, before.revision);
+});
+test("the first summary is no change of account", () => {
+  let s = moviesReducer(initialMovies("list"), { type: "movies/selectMovie", movie: movie(1) });
+  s = moviesReducer(s, { type: "movies/summary", value: { status: "loading" } });
+  s = moviesReducer(s, { type: "movies/summary", value: summary("a1") });
+  assert.equal(s.selected.movieId, 1);
+});
+test("a catalogue refresh forgets the marks kept this session and reads the lists again", () => {
+  const before = browsing();
+  const s = moviesReducer(before, { type: "movies/catalogue" });
+  assert.deepEqual(s.marks, {});
+  assert.equal(s.revision, before.revision + 1);
+  assert.equal(s.selected, before.selected, "the open title stays open");
 });

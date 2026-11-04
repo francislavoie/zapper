@@ -14,6 +14,11 @@ import type { MovieDetailsDto, MovieDto } from "../types";
 const KEPT = 200;
 const cache = new Map<number, MovieDetailsDto>();
 
+/** Forgets every title's details: the movies are another account's now. */
+export function clearMovieDetails(): void {
+  cache.clear();
+}
+
 export function useMovieDetails(movie: MovieDto | null, delayMs: number): Async<MovieDetailsDto> {
   const id = movie?.movieId ?? null;
   const [result, setResult] = useState<{ id: number; value: Async<MovieDetailsDto> } | null>(null);

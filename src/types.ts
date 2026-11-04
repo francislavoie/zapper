@@ -875,6 +875,9 @@ export interface MoviesSummaryDto {
   favourites: number;
   recent: number;
   watched: number;
+  /** Which catalogue the movies are from, as a short hash; empty before any.
+   *  A change means another account's titles. */
+  origin: string;
 }
 
 export interface MarksDto {

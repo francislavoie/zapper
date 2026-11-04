@@ -1024,6 +1024,11 @@ pub struct MoviesSummaryDto {
     pub favourites: u32,
     pub recent: u32,
     pub watched: u32,
+    /// Which catalogue the movies are from, as a short hash (never an
+    /// address or an account); empty before any. When it changes, they are
+    /// another account's titles, and nothing the interface kept of the old
+    /// ones (marks, details, the open title) applies.
+    pub origin: String,
 }
 
 /// A title's marks after a change.
