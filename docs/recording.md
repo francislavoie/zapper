@@ -410,6 +410,22 @@ Source Extensions (an iPhone or iPad before iOS 17.1) says it cannot play live T
 **Limits.** A device may hold three streams at once and start forty a minute; the service streams
 to sixteen browsers at most.
 
+**Movies.** A movie plays in the page on a connection of its own (nobody else is at the same place
+in a film), asked of the same count as a channel's, with the same "Watch here anyway", the same
+card for a recording that needs the connection, and the same limits: movies and channels count
+together. The account sees one connection per movie being watched. An MP4 whose details say H.264
+video, AAC or MP3 sound and no subtitles plays as it is: the browser's own player asks for the
+parts it needs, which the service fetches from the provider. Anything else is converted on the way
+(`recording::vodmux`): the service reads the file once when Play is pressed, to learn its length,
+its sound tracks and its subtitles, then remuxes it to MPEG-TS from wherever the page asks,
+starting at the keyframe at or just before that time. The video is never re-encoded (a film whose
+video no browser plays, such as MPEG-2, says so), and sound the browser cannot play is converted
+to AAC, as a channel's is. Seeking within what the page holds is instant; further on (or back), or
+choosing another sound track, the conversion starts again from that time, the provider's response
+for the one before closed before the next is asked for. Subtitles are shown for text tracks
+(SubRip, ASS, WebVTT, MP4 text), taken from that same read of the file, never a second connection;
+subtitles stored as pictures (DVD, Blu-ray, DVB) are listed but cannot be shown in a browser.
+
 ### Recording what you watch
 
 **Record from the player.** Right-click the picture and choose **Record “…”**, use the **Record**

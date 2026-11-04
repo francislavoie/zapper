@@ -41,6 +41,8 @@ pub struct SubtitleStream {
     /// FFmpeg's name for the codec: `subrip`, `ass`, `hdmv_pgs_subtitle`, …
     pub codec: String,
     pub lang: Option<String>,
+    /// Its name in the file ("Forced", "SDH", …), when it has one.
+    pub title: Option<String>,
     /// Text (`subrip`, `ass`, `ssa`, `mov_text`, `webvtt`), which comes out as
     /// cues; a bitmap track (DVD, Blu-ray, DVB) does not.
     pub text: bool,
@@ -124,7 +126,15 @@ type ReadFn = extern "C" fn(*mut c_void, *mut u8, c_int) -> c_int;
 type WriteFn = extern "C" fn(*mut c_void, *const u8, c_int) -> c_int;
 type SeekFn = extern "C" fn(*mut c_void, i64) -> i64;
 type SizeFn = extern "C" fn(*mut c_void) -> i64;
-type StreamFn = extern "C" fn(*mut c_void, c_int, c_int, *const c_char, *const c_char, c_int);
+type StreamFn = extern "C" fn(
+    *mut c_void,
+    c_int,
+    c_int,
+    *const c_char,
+    *const c_char,
+    *const c_char,
+    c_int,
+);
 type PlanFn = extern "C" fn(*mut c_void, f64, *const c_char, *mut c_int, *mut c_int) -> c_int;
 type StartFn = extern "C" fn(*mut c_void, f64);
 type CueFn = extern "C" fn(*mut c_void, c_int, i64, i64, *const c_char);
@@ -248,6 +258,7 @@ extern "C" fn stream_cb(
     index: c_int,
     codec: *const c_char,
     lang: *const c_char,
+    title: *const c_char,
     n: c_int,
 ) {
     guard((), || {
@@ -266,6 +277,7 @@ extern "C" fn stream_cb(
                 index,
                 codec,
                 lang,
+                title: some(text(title)),
                 text: kind == 1,
             });
         }
