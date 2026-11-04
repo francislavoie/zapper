@@ -39,9 +39,10 @@ import { saveStacked } from "./stacked";
 import { saveCategoryHidden, saveCategoryPins, saveCategorySort } from "./categoryPrefs";
 import { AboutModal } from "./components/AboutModal";
 import { ProgrammeMenu } from "./components/ProgrammeMenu";
-import { RecordingsModal } from "./components/RecordingsModal";
+import { RecordingsView } from "./components/RecordingsView";
 import { RecordingsWatcher } from "./components/RecordingsWatcher";
 import { Rail } from "./components/Rail";
+import { railItemKind } from "./logic/railItems";
 import { ChannelList } from "./components/ChannelList";
 import { CommandPalette } from "./components/CommandPalette";
 import { GuideGrid } from "./components/GuideGrid";
@@ -78,6 +79,8 @@ export function App() {
   }, []);
   const browsing = state.mode === "browse";
   const guiding = state.mode === "guide";
+  // Recordings has no grid, so it only ever shows in the list view.
+  const recordingsShown = railItemKind(state.categoryId) === "recordings" && !guiding;
 
   // The stacked layout is a preference, not a mode: it applies while watching,
   // and only when the window has the room. Too small a window falls back to
@@ -460,8 +463,11 @@ export function App() {
             <Activity mode={state.railCollapsed ? "hidden" : "visible"}>
               <Rail />
             </Activity>
-            <Activity mode={guiding ? "hidden" : "visible"}>
+            <Activity mode={guiding || recordingsShown ? "hidden" : "visible"}>
               <ChannelList />
+            </Activity>
+            <Activity mode={recordingsShown ? "visible" : "hidden"}>
+              <RecordingsView />
             </Activity>
             <Activity mode={guiding ? "visible" : "hidden"}>
               <GuideGrid besideRail />
@@ -513,7 +519,6 @@ export function App() {
       </Boundary>
       <Boundary what="About">{state.aboutOpen ? <AboutModal /> : null}</Boundary>
       <Boundary what="Recordings">
-        {state.recordingsOpen ? <RecordingsModal /> : null}
         <ProgrammeMenu />
         <RecordingsWatcher />
       </Boundary>

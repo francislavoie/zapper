@@ -5839,67 +5839,138 @@ textarea.field {
   color: #ffc9c9;
 }
 
-/* The Recordings dialog: a scrolling list of rows grouped by state. */
-.about.recordings {
-  width: min(42rem, 100%);
-  max-height: min(36rem, 100%);
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
+/* The Recordings pane: the list pane's head, then one scrolling list of
+   two-line rows under group heads. Its columns are shared with the header
+   above them, as the channel rows' are. */
+.rec-pane {
+  --rec-cols: 1.25rem 1.5rem minmax(0, 1.6fr) 11rem minmax(0, 1.1fr);
 }
 
-.rec-list {
+.rec-pane .rec-cols,
+.rec-item {
+  grid-template-columns: var(--rec-cols);
+}
+
+.rec-free {
+  flex: 0 0 auto;
+  font-size: 0.6875rem;
+  color: var(--dimmer);
+  font-variant-numeric: tabular-nums;
+}
+
+.rec-scroll {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
 }
 
-.rec-group h4 {
-  margin: 0.5rem 0 0.25rem;
-  font-size: 0.625rem;
+.rec-group-head {
+  margin: 0;
+  padding: 0.5rem 0.625rem 0.25rem;
+  font-size: 0.6875rem;
+  font-weight: 400;
   color: var(--dimmer);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-}
-
-.rec-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.75rem;
-  padding: 0.5rem 0;
   border-bottom: 1px solid var(--line);
 }
 
-.rec-main {
-  flex: 1 1 auto;
+.rec-item {
+  display: grid;
+  column-gap: 0.625rem;
+  align-items: center;
+  width: 100%;
+  height: 2.5rem;
+  padding: 0 0.625rem;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+}
+
+.rec-item:hover {
+  background: var(--bg-2);
+}
+
+.rec-item.sel {
+  background: var(--accent-dim);
+}
+
+.rec-item .rec-dot {
+  margin-right: 0;
+}
+
+.rec-clock {
+  font-size: 0.8125rem;
+  color: var(--dim);
+  line-height: 1;
+}
+
+.rec-text {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
+}
+
+.rec-title,
+.rec-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .rec-title {
   font-size: 0.8125rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .rec-sub {
-  display: flex;
-  gap: 0.625rem;
-  margin-top: 0.125rem;
   font-size: 0.6875rem;
-  color: var(--dim);
-  font-variant-numeric: tabular-nums;
+  color: var(--dimmer);
 }
 
-.rec-chan {
+.rec-when {
+  font-size: 0.75rem;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.rec-status {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  font-size: 0.75rem;
+  color: var(--dim);
+}
+
+.rec-status-text {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 12rem;
+}
+
+.rec-status.warn {
+  color: #e0a34a;
 }
 
 .rec-status.bad {
   color: var(--bad);
+}
+
+.rec-status.good {
+  color: var(--dim);
+}
+
+.rec-progress {
+  flex: 0 0 4.375rem;
+  height: 0.25rem;
+  border-radius: 0.125rem;
+  background: var(--track);
+  overflow: hidden;
+}
+
+.rec-progress > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
 }
 
 /* The backup channel under a scheduled or recording row, and its picker. */
@@ -6013,12 +6084,6 @@ textarea.field {
   padding-left: 1rem;
   font-size: 0.6875rem;
   color: var(--dim);
-}
-
-.rec-actions {
-  display: flex;
-  gap: 0.375rem;
-  flex: 0 0 auto;
 }
 
 /* ---------------------------------------------------------------- web access

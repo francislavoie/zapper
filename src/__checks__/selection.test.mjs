@@ -125,6 +125,8 @@ test("ordinary chrome is not on the allowlist, by class or by ancestor", () => {
     "list-title",
     "list-count",
     "sticky-head",
+    "rec-title",
+    "rec-sub",
   ];
   for (const cls of chrome) {
     const hit = selectableSelectors.find((s) =>

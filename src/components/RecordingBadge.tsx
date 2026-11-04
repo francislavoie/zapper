@@ -25,7 +25,7 @@ export function RecordingBadge({ onMouseDown }: { onMouseDown?: (e: ReactMouseEv
     <button
       className={`tb-rec ${ind.tone}`}
       onMouseDown={onMouseDown}
-      onClick={() => dispatch({ type: "recordingsDialog", open: true })}
+      onClick={() => dispatch({ type: "showRecordings" })}
       data-tip={ind.tip}
       aria-label={`${ind.label}: ${ind.tip}`}
     >

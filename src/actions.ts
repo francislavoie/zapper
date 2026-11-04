@@ -155,7 +155,7 @@ const HANDLERS: Record<ActionId, (ctx: ActionContext) => void> = {
   sleepOff: ({ dispatch }) => setSleep(dispatch, null),
   sync: ({ dispatch }) => void run(dispatch, "sync", backend.syncNow()),
   record: ({ dispatch, record }) => void recordFromPlayer(dispatch, record ?? null),
-  recordings: ({ dispatch }) => dispatch({ type: "recordingsDialog", open: true }),
+  recordings: ({ dispatch }) => dispatch({ type: "showRecordings" }),
   settings: ({ dispatch }) => dispatch({ type: "settings", open: true }),
   updates: ({ dispatch }) => {
     dispatch({ type: "updateDialog", open: true });

@@ -65,8 +65,6 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
           dispatch({ type: "menu", open: false });
         } else if (state.aboutOpen) {
           dispatch({ type: "about", open: false });
-        } else if (state.recordingsOpen) {
-          dispatch({ type: "recordingsDialog", open: false });
         } else if (state.updateOpen) {
           // Above settings: the settings pane's "Check now" opens it there.
           dispatch({ type: "updateDialog", open: false });
@@ -227,7 +225,6 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
     state.updateOpen,
     state.favouriteMenu,
     state.programmeMenu,
-    state.recordingsOpen,
     state.categoryMenu,
     state.categoryOptions,
     state.videoMenu,
