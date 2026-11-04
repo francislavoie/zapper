@@ -21,6 +21,7 @@ import { hintLabel } from "../logic/keys";
 import { airingTag, airingWhen } from "../logic/programmes";
 import { IS_MAC } from "../platform";
 import { categoryNames, categoryOf } from "../logic/searchGroups";
+import { listedFor } from "../logic/railItems";
 import { useApp, useDispatch } from "../store";
 import { usePlayerRecord } from "../hooks/usePlayerRecord";
 
@@ -89,6 +90,11 @@ export function CommandPalette() {
           categoryId: state.categoryId,
           mode: state.mode,
           guideHours: state.settings.guideHours,
+          listed: listedFor(
+        state.categoryId,
+        state.favourites.status === "ready" ? state.favourites.data : null,
+        state.recent.status === "ready" ? state.recent.data : null,
+      ),
         });
         return;
       }
