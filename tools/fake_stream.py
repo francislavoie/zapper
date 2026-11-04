@@ -32,6 +32,17 @@ streams open right now plus --other-devices.
 
   tools/fake_stream.py --max-connections 1 --other-devices 1   # the one slot is taken elsewhere
 
+Made-up movies, for the on-demand side (needs movie.mp4 and movie.mkv from
+make_fixtures.sh):
+
+  tools/fake_stream.py --movies 500   # 500 movies over 3 categories
+
+answers player_api.php's get_vod_categories, get_vod_streams (optionally
+&category_id=) and get_vod_info&vod_id= for them, and serves
+/movie/<user>/<pass>/<id>.<ext> from the matching fixture (odd ids are mkv,
+even mp4) as a file: Accept-Ranges, and 206 with Content-Range for a Range
+header. A movie being sent counts in active_cons like a live stream.
+
 Then point the player at:  http://127.0.0.1:8788/sample1080.ts
 """
 import argparse
@@ -41,6 +52,7 @@ import socketserver
 import sys
 import threading
 import time
+import urllib.parse
 from http.server import BaseHTTPRequestHandler
 
 FIXTURES = pathlib.Path(
@@ -69,6 +81,8 @@ class Handler(BaseHTTPRequestHandler):
     refuse = None
     after_end = None
     reason = ""
+    # How many made-up movies the API lists; 0 means none.
+    movies = 0
     # Set once a stream has been ended by --end-after, so --after-end knows
     # the slot is now "taken".
     ended = threading.Event()
@@ -84,7 +98,15 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         name = self.path.lstrip("/").split("?")[0]
         if name == "player_api.php":
-            self._user_info()
+            query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+            action = query.get("action", [""])[0]
+            if action in ("get_vod_categories", "get_vod_streams", "get_vod_info"):
+                self._vod_api(action, query)
+            else:
+                self._user_info()
+            return
+        if name.startswith("movie/"):
+            self._movie(name)
             return
         if name in ("", "index"):
             body = "\n".join(p.name for p in sorted(FIXTURES.glob("*.ts")))
@@ -119,6 +141,85 @@ class Handler(BaseHTTPRequestHandler):
             Handler.open_streams += 1
         try:
             self._send(name, path, data, faulty)
+        finally:
+            with Handler.lock:
+                Handler.open_streams -= 1
+
+    def _json(self, value):
+        import json
+        body = json.dumps(value).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _vod_api(self, action, query):
+        if action == "get_vod_categories":
+            self._json([{"category_id": str(i + 1), "category_name": name, "parent_id": 0}
+                        for i, name in enumerate(MOVIE_CATEGORIES)] if Handler.movies else [])
+        elif action == "get_vod_streams":
+            category = query.get("category_id", [""])[0]
+            self._json([_movie_row(i) for i in range(1, Handler.movies + 1)
+                        if not category or category == str(_movie_category(i))])
+        else:
+            try:
+                vod_id = int(query.get("vod_id", [""])[0])
+            except ValueError:
+                vod_id = 0
+            if not 1 <= vod_id <= Handler.movies:
+                self._json({"info": [], "movie_data": []})
+            else:
+                self._json(_movie_info(vod_id))
+
+    def _movie(self, name):
+        """/movie/<user>/<pass>/<id>.<ext>: a fixture as a file, with ranges."""
+        parts = name.split("/")
+        stem, _, ext = parts[-1].partition(".")
+        path = FIXTURES / f"movie.{ext}"
+        if (len(parts) != 4 or not stem.isdigit() or not 1 <= int(stem) <= Handler.movies
+                or ext != _movie_ext(int(stem)) or not path.is_file()):
+            self.send_error(404, "no such movie")
+            return
+        refusal = Handler.refuse
+        if refusal is not None:
+            self._refuse(refusal)
+            return
+        size = path.stat().st_size
+        start, end = 0, size - 1
+        status = 200
+        header = self.headers.get("Range")
+        if header:
+            span = _parse_range(header, size)
+            if span is None:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            start, end = span
+            status = 206
+        self.send_response(status)
+        self.send_header("Content-Type", "video/mp4" if ext == "mp4" else "video/x-matroska")
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Length", str(end - start + 1))
+        if status == 206:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        self.end_headers()
+        with Handler.lock:
+            Handler.open_streams += 1
+        try:
+            with path.open("rb") as f:
+                f.seek(start)
+                left = end - start + 1
+                while left > 0:
+                    part = f.read(min(64 * 1024, left))
+                    if not part:
+                        break
+                    self.wfile.write(part)
+                    left -= len(part)
+        except (BrokenPipeError, ConnectionResetError):
+            self.close_connection = True  # client went away; normal
         finally:
             with Handler.lock:
                 Handler.open_streams -= 1
@@ -257,6 +358,93 @@ class Handler(BaseHTTPRequestHandler):
         print(f"refused {self.path} with {how}", flush=True)
 
 
+MOVIE_CATEGORIES = ["Drama", "Comedy", "Documentary"]
+
+
+def _movie_ext(i):
+    return "mkv" if i % 2 else "mp4"
+
+
+def _movie_category(i):
+    return (i - 1) % len(MOVIE_CATEGORIES) + 1
+
+
+def _movie_year(i):
+    return 1990 + i * 7 % 35
+
+
+def _movie_rating(i):
+    return f"{5.0 + i * 37 % 40 / 10:.1f}"
+
+
+_started = int(time.time())
+
+
+def _movie_added(i):
+    # Spread over the last 60 days, id 1 the newest.
+    return str(_started - (i - 1) * 60 * 86400 // max(Handler.movies, 1))
+
+
+def _movie_row(i):
+    return {
+        "num": i,
+        "name": f"Film {i:04d} ({_movie_year(i)})",
+        "stream_type": "movie",
+        "stream_id": i,
+        "stream_icon": "",
+        "rating": _movie_rating(i),
+        "rating_5based": round(float(_movie_rating(i)) / 2, 1),
+        "added": _movie_added(i),
+        "category_id": str(_movie_category(i)),
+        "container_extension": _movie_ext(i),
+        "custom_sid": "",
+        "direct_source": "",
+    }
+
+
+def _movie_info(i):
+    row = _movie_row(i)
+    audio = "ac3" if _movie_ext(i) == "mkv" else "aac"
+    return {
+        "info": {
+            "movie_image": "",
+            "plot": f"A made-up story for test film {i}, about nothing in particular.",
+            "genre": MOVIE_CATEGORIES[_movie_category(i) - 1],
+            "releasedate": f"{_movie_year(i)}-01-01",
+            "rating": row["rating"],
+            "duration_secs": 120,
+            "duration": "00:02:00",
+            "video": {"codec_name": "h264", "width": 640, "height": 360},
+            "audio": {"codec_name": audio, "channels": 2},
+        },
+        "movie_data": {
+            "stream_id": i,
+            "name": row["name"],
+            "added": row["added"],
+            "category_id": row["category_id"],
+            "container_extension": row["container_extension"],
+        },
+    }
+
+
+def _parse_range(header, size):
+    """The (first, last) byte a `Range: bytes=...` asks for, or None when it
+    can't be satisfied. Only a single range is honoured."""
+    unit, _, spec = header.partition("=")
+    first, _, last = spec.split(",")[0].strip().partition("-")
+    if unit.strip() != "bytes" or not (first or last):
+        return None
+    try:
+        if not first:  # the last N bytes
+            n = int(last)
+            return (max(size - n, 0), size - 1) if n > 0 else None
+        a = int(first)
+        b = min(int(last), size - 1) if last else size - 1
+    except ValueError:
+        return None
+    return (a, b) if a <= b and a < size else None
+
+
 _durations: dict[pathlib.Path, float] = {}
 
 
@@ -320,6 +508,9 @@ def main():
                     help="refuse every stream: an HTTP status, or 'body'")
     ap.add_argument("--reason", default="", metavar="TEXT",
                     help="the reason phrase sent with a refusal, e.g. 'Max Connections Reached'")
+    ap.add_argument("--movies", type=int, default=0, metavar="N",
+                    help="list N made-up movies in the VOD API and serve them from "
+                         "movie.mp4 / movie.mkv, with Range support")
     ap.add_argument("--verbose", action="store_true")
     a = ap.parse_args()
     Handler.burst = a.burst
@@ -329,6 +520,7 @@ def main():
     Handler.fault_once = a.fault_once
     Handler.max_connections = a.max_connections
     Handler.other_devices = a.other_devices
+    Handler.movies = a.movies
 
     Handler.rate = a.rate
     Handler.gap_every = a.gap_every
@@ -347,6 +539,13 @@ def main():
         print(f"no fixtures in {FIXTURES}; run tools/make_fixtures.sh first",
               file=sys.stderr)
         return 1
+
+    if a.movies:
+        missing = [n for n in ("movie.mp4", "movie.mkv") if not (FIXTURES / n).is_file()]
+        if missing:
+            print(f"missing {', '.join(missing)} in {FIXTURES}; run tools/make_fixtures.sh",
+                  file=sys.stderr)
+            return 1
 
     with Server(("127.0.0.1", a.port), Handler) as srv:
         print(f"serving {len(fixtures)} fixture(s) on http://127.0.0.1:{a.port}/")
