@@ -1,6 +1,7 @@
-// The order the category rail draws its rows in: pinned categories first, the
-// rest in whichever sort the viewer chose, and "All channels" above both;
-// hidden categories left out unless the viewer asked to see them.
+// The order the category rail draws its rows in: the rail's own items first,
+// then pinned categories, then the rest in whichever sort the viewer chose;
+// hidden categories left out unless the viewer asked to see them, with a
+// closing hint when the filter matches some that are.
 // Pure; exercised by src/__checks__/categoryOrder.test.mjs.
 //
 // Pins are kept in the order they were made, not sorted. A pin is the viewer
@@ -23,6 +24,8 @@
 //
 // Local rather than in SettingsDto, like the rail's width: which categories
 // one person reaches for on this machine is not a property of the account.
+
+import type { FixedRailItem } from "./railItems.ts";
 
 export type CategorySort = "provider" | "az" | "count";
 
@@ -192,44 +195,103 @@ export function orderCategories<T extends OrderableCategory>(
   return { pinned, rest };
 }
 
+export const HINT_ROW_ID = "*hidden-hint*";
+
 /** One row of the rail as the component draws it. */
 export interface RailRow {
   id: string;
   name: string;
-  count: number;
+  /** Text, already formatted; blank when there is nothing to count. */
+  count: string;
+  kind: "fixed" | "category" | "hint";
   pinned: boolean;
   /** Hidden, and drawn only because hidden categories are being shown. */
   hidden: boolean;
-  /** The last of the pinned block, which carries the divider under it. A
-   *  property of the row rather than a row of its own, because the rail is
-   *  windowed on a fixed row height and a divider row would be a 26-pixel
+  /** The last of the fixed and pinned block, which carries the divider under
+   *  it. A property of the row rather than a row of its own, because the rail
+   *  is windowed on a fixed row height and a divider row would be a 26-pixel
    *  gap — or a second height for the window arithmetic to know about. */
   pinEnd: boolean;
+  /** Where the filter matched in the name, as [start, end), else null. */
+  match: readonly [number, number] | null;
 }
 
-/** Every row of the rail, "All channels" first. It stays row zero whatever is
- *  pinned or however the rest is sorted: it is not a category, it is the way
- *  out of one. */
+/** Where the filter first occurs in a name, trimmed and ignoring case.
+ *  Offsets are into `name`; lower-casing can change a string's length for a
+ *  few scripts, and then no highlight is reported rather than a wrong one. */
+export function matchRange(name: string, filter: string): readonly [number, number] | null {
+  const q = filter.trim().toLowerCase();
+  if (q === "") return null;
+  const lower = name.toLowerCase();
+  if (lower.length !== name.length) return null;
+  const at = lower.indexOf(q);
+  return at < 0 ? null : [at, at + q.length];
+}
+
+/** How many hidden categories the filter matches: the ones the rail is not
+ *  drawing but would be, had they not been hidden. Zero without a filter. */
+export function hiddenMatches(
+  categories: readonly OrderableCategory[],
+  hidden: readonly string[],
+  filter: string,
+): number {
+  const q = filter.trim().toLowerCase();
+  if (q === "" || hidden.length === 0) return 0;
+  const set = new Set(hidden);
+  let n = 0;
+  for (const c of categories) if (set.has(c.id) && c.name.toLowerCase().includes(q)) n++;
+  return n;
+}
+
+export function hiddenHint(n: number): string {
+  return n === 1 ? "1 more in a hidden category" : `${n} more in hidden categories`;
+}
+
+/** Every row of the rail: the fixed items first, whatever is pinned, sorted,
+ *  filtered or hidden (they are not categories, they are the ways into the
+ *  views), then the pinned categories, then the rest, then a hint row when the
+ *  filter matches hidden categories that are not being shown. */
 export function railRows(
-  all: { id: string; name: string; count: number },
+  fixed: readonly FixedRailItem[],
   categories: readonly OrderableCategory[],
   options: CategoryOrderOptions,
 ): RailRow[] {
   const { pinned, rest } = orderCategories(categories, options);
-  const hiddenSet = new Set(options.hidden ?? []);
-  const row = (c: OrderableCategory, isPinned: boolean, pinEnd: boolean): RailRow => ({
+  const hiddenIds = options.hidden ?? [];
+  const hiddenSet = new Set(hiddenIds);
+  const row = (c: OrderableCategory, isPinned: boolean): RailRow => ({
     id: c.id,
     name: c.name,
-    count: c.channelCount,
+    count: c.channelCount ? c.channelCount.toLocaleString() : "",
+    kind: "category",
     pinned: isPinned,
     hidden: hiddenSet.has(c.id),
-    pinEnd,
+    pinEnd: false,
+    match: matchRange(c.name, options.filter),
   });
-  return [
-    { ...all, pinned: false, hidden: false, pinEnd: false },
-    // No divider under the block when there is nothing below it to divide
-    // from: a filter that only matches pins would otherwise end on a rule.
-    ...pinned.map((c, i) => row(c, true, i === pinned.length - 1 && rest.length > 0)),
-    ...rest.map((c) => row(c, false, false)),
+  const rows: RailRow[] = [
+    ...fixed.map(
+      (f): RailRow => ({ ...f, kind: "fixed", pinned: false, hidden: false, pinEnd: false, match: null }),
+    ),
+    ...pinned.map((c) => row(c, true)),
+    ...rest.map((c) => row(c, false)),
   ];
+  const stray = options.showHidden ? 0 : hiddenMatches(categories, hiddenIds, options.filter);
+  if (stray > 0) {
+    rows.push({
+      id: HINT_ROW_ID,
+      name: hiddenHint(stray),
+      count: "",
+      kind: "hint",
+      pinned: false,
+      hidden: false,
+      pinEnd: false,
+      match: null,
+    });
+  }
+  // No divider under the block when there is nothing below it to divide
+  // from: a filter that only matches pins would otherwise end on a rule.
+  const blockEnd = fixed.length + pinned.length - 1;
+  if (blockEnd >= 0 && rows.length > blockEnd + 1) rows[blockEnd]!.pinEnd = true;
+  return rows;
 }

@@ -8,7 +8,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { fixedRailItems } from "../logic/railItems.ts";
 import {
+  HINT_ROW_ID,
+  hiddenHint,
+  hiddenMatches,
+  matchRange,
   CATEGORY_SORTS,
   CATEGORY_SORT_DEFAULT,
   SORT_LABEL,
@@ -35,7 +40,8 @@ const CATS = [
   { id: "doc", name: "Documentaries", channelCount: 60 },
 ];
 
-const ALL = { id: "*all*", name: "All channels", count: 230 };
+const FIXED = fixedRailItems({ favourites: 18, recent: 10, recordings: "", total: 230 });
+const F = FIXED.map((f) => f.id);
 const ids = (xs) => xs.map((x) => x.id);
 const opts = (o) => ({ pins: [], sort: "provider", filter: "", ...o });
 
@@ -46,10 +52,10 @@ test("pins come first, in the order they were pinned", () => {
 });
 
 test("a pinned category is not drawn twice, even if stored twice", () => {
-  const rows = railRows(ALL, CATS, opts({ pins: ["fr", "fr", "s2"] }));
+  const rows = railRows(FIXED, CATS, opts({ pins: ["fr", "fr", "s2"] }));
   const seen = ids(rows);
   assert.equal(new Set(seen).size, seen.length);
-  assert.deepEqual(seen, ["*all*", "fr", "s2", "uk", "s10", "doc"]);
+  assert.deepEqual(seen, [...F, "fr", "s2", "uk", "s10", "doc"]);
 });
 
 test("a pin for a category that no longer exists is skipped, not an error", () => {
@@ -90,33 +96,6 @@ test("the filter hides non-matching pins and floats matching ones", () => {
   assert.deepEqual(ids(rest), ["s2"]);
 });
 
-test("All channels is row zero whatever is pinned, sorted or filtered", () => {
-  for (const sort of CATEGORY_SORTS) {
-    for (const filter of ["", "sports", "no such thing"]) {
-      const rows = railRows(ALL, CATS, opts({ sort, filter, pins: ["doc"] }));
-      assert.equal(rows[0].id, "*all*");
-      assert.equal(rows[0].pinned, false);
-      assert.equal(rows.filter((r) => r.id === "*all*").length, 1);
-    }
-  }
-});
-
-test("the divider sits under the last pin, and only when rows follow it", () => {
-  const rows = railRows(ALL, CATS, opts({ pins: ["doc", "uk"] }));
-  assert.deepEqual(
-    rows.filter((r) => r.pinEnd).map((r) => r.id),
-    ["uk"],
-  );
-  assert.deepEqual(
-    rows.map((r) => r.pinned),
-    [false, true, true, false, false, false],
-  );
-  // Filtered down to pins alone: nothing below to divide from.
-  const only = railRows(ALL, CATS, opts({ pins: ["doc"], filter: "docu" }));
-  assert.equal(only.some((r) => r.pinEnd), false);
-  // No pins: no divider.
-  assert.equal(railRows(ALL, CATS, opts()).some((r) => r.pinEnd), false);
-});
 
 test("pinning appends, unpinning removes, and a no-op is the same array", () => {
   const a = setPinned([], "x", true);
@@ -179,9 +158,9 @@ test("the filter does not bring a hidden category back", () => {
 
 test("shown hidden categories sit where they would be, marked", () => {
   for (const sort of CATEGORY_SORTS) {
-    const plain = railRows(ALL, CATS, opts({ sort, pins: ["uk"] }));
+    const plain = railRows(FIXED, CATS, opts({ sort, pins: ["uk"] }));
     const shown = railRows(
-      ALL,
+      FIXED,
       CATS,
       opts({ sort, pins: ["uk"], hidden: ["uk", "fr"], showHidden: true }),
     );
@@ -195,24 +174,60 @@ test("shown hidden categories sit where they would be, marked", () => {
     assert.equal(shown.find((r) => r.id === "uk").pinned, true);
   }
   // And the filter still applies to them.
-  const filtered = railRows(ALL, CATS, opts({ hidden: ["s2"], showHidden: true, filter: "sports" }));
-  assert.deepEqual(ids(filtered), ["*all*", "s10", "s2"]);
+  const filtered = railRows(FIXED, CATS, opts({ hidden: ["s2"], showHidden: true, filter: "sports" }));
+  assert.deepEqual(ids(filtered), [...F, "s10", "s2"]);
 });
 
 test("hiding the only rows below the pins takes the divider with them", () => {
-  const rows = railRows(ALL, CATS, opts({ pins: ["doc"], hidden: ["uk", "s10", "fr", "s2"] }));
-  assert.deepEqual(ids(rows), ["*all*", "doc"]);
+  const rows = railRows(FIXED, CATS, opts({ pins: ["doc"], hidden: ["uk", "s10", "fr", "s2"] }));
+  assert.deepEqual(ids(rows), [...F, "doc"]);
   assert.equal(rows.some((r) => r.pinEnd), false);
-  // Hiding every pin leaves no pinned block and no divider.
-  const none = railRows(ALL, CATS, opts({ pins: ["doc"], hidden: ["doc"] }));
-  assert.equal(none.some((r) => r.pinned || r.pinEnd), false);
-  assert.equal(none.length, CATS.length);
+  // Hiding every pin leaves no pinned block; the divider falls under the fixed items.
+  const none = railRows(FIXED, CATS, opts({ pins: ["doc"], hidden: ["doc"] }));
+  assert.equal(none.some((r) => r.pinned), false);
+  assert.deepEqual(none.filter((r) => r.pinEnd).map((r) => r.id), ["*all*"]);
+  assert.equal(none.length, F.length + CATS.length - 1);
 });
 
 test("All channels cannot be hidden by a stored id", () => {
-  const rows = railRows(ALL, CATS, opts({ hidden: ["*all*"] }));
-  assert.equal(rows[0].id, "*all*");
-  assert.equal(rows[0].hidden, false);
+  const rows = railRows(FIXED, CATS, opts({ hidden: ["*all*"] }));
+  assert.equal(rows.find((r) => r.id === "*all*").hidden, false);
+});
+
+test("the fixed items lead, in order, whatever is pinned, sorted, filtered or hidden", () => {
+  for (const sort of CATEGORY_SORTS) for (const filter of ["", "sports", "no such thing"]) {
+    const rows = railRows(FIXED, CATS, opts({ sort, filter, pins: ["doc"], hidden: [...F] }));
+    assert.deepEqual(ids(rows.slice(0, F.length)), F);
+    assert.ok(rows.slice(0, F.length).every((r) => r.kind === "fixed" && !r.pinned && !r.hidden && r.match === null));
+  }
+});
+test("the divider closes the fixed and pinned block, only when rows follow it", () => {
+  const rows = railRows(FIXED, CATS, opts({ pins: ["doc", "uk"] }));
+  assert.deepEqual(rows.filter((r) => r.pinEnd).map((r) => r.id), ["uk"]);
+  assert.deepEqual(railRows(FIXED, CATS, opts()).filter((r) => r.pinEnd).map((r) => r.id), ["*all*"]);
+  assert.equal(railRows(FIXED, CATS, opts({ pins: ["doc"], filter: "docu" })).some((r) => r.pinEnd), false);
+  assert.equal(railRows(FIXED, CATS, opts({ filter: "no such thing" })).some((r) => r.pinEnd), false);
+});
+test("a filter marks where each category matched, ignoring case", () => {
+  assert.deepEqual(matchRange("UK | SPORTS ▸ FOOTBALL", "  sports "), [5, 11]);
+  assert.equal(matchRange("UK | News", ""), null);
+  assert.equal(matchRange("UK | News", "xyz"), null);
+  const rows = railRows(FIXED, CATS, opts({ filter: "sports" }));
+  assert.deepEqual(rows.find((r) => r.id === "s2").match, [0, 6]);
+});
+test("matches among hidden categories are counted under the list, not shown", () => {
+  const rows = railRows(FIXED, CATS, opts({ hidden: ["s2"], filter: "sports" }));
+  const last = rows[rows.length - 1];
+  assert.deepEqual([last.id, last.kind, last.name], [HINT_ROW_ID, "hint", "1 more in a hidden category"]);
+  assert.equal(hiddenHint(2), "2 more in hidden categories");
+  assert.equal(railRows(FIXED, CATS, opts({ hidden: ["s2"], filter: "sports", showHidden: true })).some((r) => r.kind === "hint"), false);
+  assert.equal(railRows(FIXED, CATS, opts({ hidden: ["s2"] })).some((r) => r.kind === "hint"), false);
+  assert.equal(hiddenMatches(CATS, ["s2", "gone"], "sports"), 1);
+});
+test("counts are words: a category with no channels says nothing", () => {
+  const rows = railRows(FIXED, [{ id: "z", name: "Zero", channelCount: 0 }, ...CATS], opts());
+  assert.equal(rows.find((r) => r.id === "z").count, "");
+  assert.equal(rows.find((r) => r.id === "fr").count, (120).toLocaleString());
 });
 
 test("hiding and unhiding are set operations; stale ids are kept, not counted", () => {
