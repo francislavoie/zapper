@@ -71,7 +71,7 @@ import { ALL_CATEGORIES, useApp, useDispatch } from "../store";
 import type { ChannelDto, ProgrammeDto, RecordingDto } from "../types";
 import { programmeMenuProps, type ProgrammeMenuOpener } from "../programmeMenu";
 import { RecDot } from "./RecDot";
-import { RailExpand } from "./Rail";
+import { RailToggle } from "./Rail";
 import { ViewSwitch } from "./ViewSwitch";
 
 /** Anything narrower than this cannot hold a legible title. */
@@ -253,7 +253,7 @@ export function GuideGrid({ besideRail = false }: { besideRail?: boolean }) {
           on whatever room the sides leave — see .guide-head. */}
       <header className="guide-head">
         <div className="guide-head-start">
-          {besideRail && state.railCollapsed ? <RailExpand /> : null}
+          {besideRail ? <RailToggle /> : null}
           <div className="guide-head-title">
             <h2 data-tip-overflow="">{categoryName}</h2>
             <span className="guide-window">

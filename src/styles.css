@@ -993,42 +993,9 @@ select option {
 
 /* ------------------------------------------------------------------ rail */
 
-/* Two lists, one column. The bar is the only thing above both of them, so it
-   carries the border and the lists start flush underneath it. */
-.rail-tabs {
-  display: flex;
-  flex: 0 0 auto;
-  /* Shared with the list's heading row, so the two columns' filter boxes
-     line up. */
-  height: var(--pane-head-h);
-  border-bottom: 1px solid var(--line);
-  background: var(--bg-2);
-}
-
-.rail-tab {
-  flex: 1 1 0;
-  padding: 0.375rem 0.5rem;
-  text-align: center;
-  font-size: 0.6875rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--dimmer);
-  border-bottom: 0.125rem solid transparent;
-}
-
-.rail-tab:hover {
-  color: var(--text);
-}
-
-.rail-tab.sel {
-  color: var(--text);
-  border-bottom-color: var(--accent);
-  background: var(--bg-3);
-}
-
-/* Folding the rail away, and bringing it back. The same small square in both
-   places — the end of the rail's tab row, and the start of the heading row
-   that is left once the rail has gone — so it reads as one switch. */
+/* Folding the rail away, and bringing it back: one small square, the first
+   thing in the list's and the guide's heading rows, so it is at the same
+   place whether the rail is there or not. */
 .rail-fold {
   flex: 0 0 auto;
   display: inline-flex;
@@ -1050,16 +1017,6 @@ select option {
   height: 1rem;
 }
 
-/* In the tab row it is a cell of the row rather than a tab: the full height,
-   square, with the tabs' hairline beneath it. */
-.rail-tabs .rail-fold {
-  align-self: stretch;
-  height: auto;
-  width: var(--pane-head-h);
-  border-radius: 0;
-  border-left: 1px solid var(--line);
-}
-
 /* Leading a heading row, it takes the place of the row's left padding so the
    title after it does not drift right by a whole gutter. */
 .list-head .rail-fold {
@@ -1070,50 +1027,6 @@ select option {
    .guide-head), so the same button lands on the same x in both views. */
 .guide-head .rail-fold {
   margin-left: -0.5rem;
-}
-
-/* ------------------------------------------------------------ favourites */
-
-/* Nothing in this pane adds anything: the list is earned from what gets
-   watched. Two lines per row, because the second one is the justification for
-   the first being where it is. */
-.fav-item {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  width: 100%;
-  padding: 0.3125rem 0.625rem;
-  text-align: left;
-  color: var(--dim);
-  border-left: 0.125rem solid transparent;
-}
-
-.fav-item:hover {
-  background: var(--bg-2);
-  color: var(--text);
-}
-
-.fav-item.sel {
-  background: var(--accent-dim);
-  color: var(--text);
-  border-left-color: var(--accent);
-}
-
-.fav-item.pending {
-  border-left-color: var(--dim);
-}
-
-.fav-name {
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.fav-meta {
-  font-size: 0.6875rem;
-  color: var(--dimmer);
-  font-variant-numeric: tabular-nums;
 }
 
 /* ---------------------------------------------------------- context menu */
@@ -1304,6 +1217,43 @@ select option {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Where the filter matched. Colour only: bold would change the width and
+   make the ellipsis jump as the text is typed. */
+.rail-name mark {
+  background: none;
+  color: var(--accent);
+}
+
+/* The rail's own items: a little brighter than categories, an icon where a
+   pin would be, and nothing to pin or hide. */
+.rail-row.fixed .rail-item {
+  color: var(--text);
+}
+
+.rail-fixed-i {
+  flex: 0 0 auto;
+  width: 0.8125rem;
+  text-align: center;
+  font-size: 0.8125rem;
+  line-height: 1;
+  color: var(--dim);
+}
+
+.rail-row.fixed .rec-dot {
+  margin-right: 0;
+}
+
+/* "N more in hidden categories": a row that says what the filter is not
+   showing, and is the way to show it. */
+.rail-row.rail-hint .rail-item {
+  font-style: italic;
+  color: var(--dimmer);
+}
+
+.rail-row.rail-hint:hover .rail-item {
+  color: var(--text);
 }
 
 /* At least as wide as the pin button that replaces it on hover, so a short
@@ -1583,15 +1533,15 @@ select option {
 
 /* ------------------------------------------------------------------ list */
 
-/* The list's heading row: what it shows, how many, and List | Guide. Exactly
-   as tall as the rail's tabs beside it (--pane-head-h), so the search box
-   under it lands on the same line as the rail's filter box. */
+/* The list's heading row: the rail toggle, what it shows, how many, the
+   search box, and List | Guide. Its height is its content's — the search box
+   and the padding around it — as the rail's filter row beside it is, so the
+   two boxes sit on one line and the borders under them join. */
 .list-head {
   display: flex;
   gap: 0.5rem;
   align-items: center;
-  height: var(--pane-head-h);
-  padding: 0 0.375rem 0 0.625rem;
+  padding: 0.5rem 0.5rem 0.5rem 0.625rem;
   border-bottom: 1px solid var(--line);
   background: var(--bg-2);
   flex: 0 0 auto;
@@ -1618,6 +1568,31 @@ select option {
    window: a channel name is a few words. */
 .list-search {
   flex: 0 1 22rem;
+  margin-left: 0.5rem;
+}
+
+/* The columns of a channel row, shared with the header above the list so
+   the labels sit over what they name. */
+.list-cols,
+.row {
+  --list-cols: 2.875rem 1.375rem minmax(0, 1.3fr) minmax(0, 1.2fr) minmax(0, 1fr);
+  display: grid;
+  grid-template-columns: var(--list-cols);
+  column-gap: 0.625rem;
+  align-items: center;
+  padding: 0 0.625rem;
+}
+
+.list-cols {
+  flex: 0 0 auto;
+  height: 1.625rem;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.6875rem;
+  color: var(--dimmer);
+}
+
+.list-cols > :first-child {
+  text-align: right;
 }
 
 .viewport {
@@ -1638,11 +1613,7 @@ select option {
   position: absolute;
   left: 0;
   right: 0;
-  height: var(--row-h);
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0 0.625rem;
+  height: 2.5rem;
   text-align: left;
   /* Layout and paint containment, but not size: the row's height comes from
      the variable and its width from left/right, and size containment on top
@@ -1690,17 +1661,28 @@ select option {
   color: var(--dimmer);
 }
 
+/* The name over its category, in the third column. */
+.row-title {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
 .row-name {
-  flex: 0 0 auto;
-  width: 34%;
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-width: 0;
+}
+
+.row-name-text {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.row-now {
-  flex: 1 1 auto;
-  min-width: 0;
+.row-cat {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1708,11 +1690,62 @@ select option {
   color: var(--dim);
 }
 
+/* What is on: the title, then how far through it is and when it runs. */
+.row-now {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  font-size: 0.75rem;
+  color: var(--dim);
+}
+
+.row-now-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.row-now-line {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.row-prog {
+  flex: 0 0 4.375rem;
+  height: 0.25rem;
+  border-radius: 0.125rem;
+  background: var(--bg-3);
+  overflow: hidden;
+}
+
+.row-prog > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+.row-times {
+  font-size: 0.6875rem;
+  color: var(--dimmer);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 /* Missing EPG is the normal case — 15% coverage — so it is greyed, not
    flagged. */
 .row-now.none {
   color: var(--dimmer);
   font-style: italic;
+}
+
+.row-next {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.75rem;
+  color: var(--dimmer);
 }
 
 .badge {
@@ -1745,7 +1778,8 @@ select option {
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
   cursor: default;
-  padding: 0 0.625rem;
+  display: flex;
+  align-items: center;
 }
 
 .sticky-head {
@@ -1753,7 +1787,8 @@ select option {
   top: 0;
   left: 0;
   right: 0;
-  height: var(--row-h);
+  /* One list row, LIST_ROW_HEIGHT. */
+  height: 2.5rem;
   display: flex;
   align-items: center;
   padding: 0 0.625rem;
@@ -4708,58 +4743,6 @@ textarea.field {
 }
 
 /* ------------------------------------------------ the docked picture */
-
-/* The same logo the channel list draws, at the same size. A favourite is
-   usually also a row in that list, and two sizes for one thing makes the
-   rail look like a different app. */
-.fav-logo {
-  flex: 0 0 auto;
-  width: 1.375rem;
-  height: 1rem;
-  object-fit: contain;
-  border-radius: 0.125rem;
-  background: var(--bg-3);
-}
-
-.fav-logo.blank {
-  background: var(--bg-3);
-}
-
-.fav-text {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  flex: 1 1 auto;
-  gap: 0.0625rem;
-}
-
-/* The two halves sit at opposite ends: what it earned on the left, when it
-   was last on at the right, so a column of rows can be read down either
-   edge rather than through the middle of a sentence. */
-.fav-meta {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 0.5rem;
-}
-
-.fav-ago {
-  flex: 0 0 auto;
-  color: var(--dimmer);
-}
-
-/* A kicker above the channel name rather than a footnote below it: it is
-   the coarsest thing about the row, and it is what a column of favourites
-   groups by when you scan it. */
-.fav-cat {
-  color: var(--dimmer);
-  font-size: 0.5625rem;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 
 /* ------------------------------------------- docked picture's transport */
 

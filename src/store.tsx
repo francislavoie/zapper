@@ -51,11 +51,6 @@ import { ALL_CATEGORIES, RECORDINGS, modeSelection } from "./logic/railItems";
 import { keepSelected } from "./logic/recordings";
 export { ALL_CATEGORIES } from "./logic/railItems";
 
-/** The two halves of the rail. Categories is what the app opens on;
- *  favourites is the list nobody edits — it is earned from what gets
- *  watched, so there is no "add to favourites" anywhere. */
-export type RailTab = "categories" | "favourites";
-
 /** An open context menu over one favourite, and where the pointer was.
  *
  *  In the store rather than inside the component because Escape has to unwind
@@ -64,6 +59,8 @@ export type RailTab = "categories" | "favourites";
 export interface FavouriteMenu {
   streamId: number;
   name: string;
+  /** What it earned its place with, and when: favouriteMeta's line. */
+  meta: string;
   x: number;
   y: number;
 }
@@ -118,11 +115,9 @@ export type { Toast } from "./logic/toasts";
 export interface State {
   mode: Mode;
   categories: Async<CategoryDto[]>;
-  /** ALL_CATEGORIES for the pseudo-entry, else a CategoryDto.id. */
+  /** The selected rail item: ALL_CATEGORIES, FAVOURITES, RECENT, RECORDINGS or a CategoryDto.id. */
   categoryId: string;
   categoryFilter: string;
-  /** Which half of the rail is showing. */
-  railTab: RailTab;
   /** The rail folded away, in the list and the guide alike: one rail serves
    *  both, so one switch hides it from both. */
   railCollapsed: boolean;
@@ -347,7 +342,6 @@ export const initialState: State = {
   // remembered category after a round trip.
   categoryId: loadSession().categoryId ?? ALL_CATEGORIES,
   categoryFilter: "",
-  railTab: loadSession().railTab,
   railCollapsed: loadSession().railCollapsed,
   favouriteMenu: null,
   categoryMenu: null,
@@ -425,7 +419,6 @@ export type Action =
    *  leaving the view or opening the guide. */
   | { type: "focusChannel"; categoryId: string; streamId: number; index: number | null }
   | { type: "categoryFilter"; text: string }
-  | { type: "railTab"; tab: RailTab }
   | { type: "railCollapsed"; collapsed: boolean }
   | { type: "favouriteMenu"; menu: FavouriteMenu | null }
   | { type: "categoryMenu"; menu: CategoryMenu | null }
@@ -592,16 +585,6 @@ export function reducer(state: State, action: Action): State {
     case "stats":
       // Opening it closes the menu it was chosen from; nothing wants both.
       return { ...state, statsOpen: action.open, videoMenu: null };
-    case "railTab":
-      // A menu belongs to the list it was opened over; changing the list
-      // leaves it pointing at a row that is no longer there.
-      return {
-        ...state,
-        railTab: action.tab,
-        favouriteMenu: null,
-        categoryMenu: null,
-        categoryOptions: null,
-      };
     case "railCollapsed":
       // The menus hang off rows that are about to stop being on screen.
       return state.railCollapsed === action.collapsed
