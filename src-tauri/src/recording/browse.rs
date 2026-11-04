@@ -31,7 +31,7 @@ const IDS_MAX: usize = 500;
 /// The most a logo may weigh.
 const LOGO_MAX_BYTES: usize = 1 << 20;
 
-struct Failed(StatusCode, String);
+pub(super) struct Failed(pub(super) StatusCode, pub(super) String);
 
 impl IntoResponse for Failed {
     fn into_response(self) -> Response {
@@ -39,14 +39,14 @@ impl IntoResponse for Failed {
     }
 }
 
-fn bad_request(text: impl Into<String>) -> Failed {
+pub(super) fn bad_request(text: impl Into<String>) -> Failed {
     Failed(StatusCode::BAD_REQUEST, text.into())
 }
 
 /// Runs a catalogue read off the async threads: a guide search over a week
 /// of programmes is not instant, and the service's other requests should not
 /// wait behind it.
-async fn read<T: Send + 'static>(
+pub(super) async fn read<T: Send + 'static>(
     f: impl FnOnce() -> anyhow::Result<T> + Send + 'static,
 ) -> Result<T, Failed> {
     tokio::task::spawn_blocking(f)
@@ -225,20 +225,25 @@ async fn sync_now() -> Response {
 /// image, and not too large; cached by the browser for a day, and a missing
 /// one for an hour (provider logos are missing constantly).
 async fn logo(Path(id): Path<i64>) -> Response {
-    let missing = || {
-        (
-            StatusCode::NOT_FOUND,
-            [(header::CACHE_CONTROL, "private, max-age=3600")],
-        )
-            .into_response()
+    let url = match tokio::task::spawn_blocking(move || reads::logo_url(id)).await {
+        Ok(Ok(url)) => url,
+        _ => None,
     };
-    let Ok(Ok(Some(url))) = tokio::task::spawn_blocking(move || reads::logo_url(id)).await else {
-        return missing();
+    proxy_image(url, LOGO_MAX_BYTES).await
+}
+
+/// The image at the provider's address `url`, as this service answers for
+/// it: the same cache rules and content policy for every kind of picture
+/// (see [`logo`]). `None`, an address that is not http(s) and anything that
+/// is not a small enough image are a 404 the browser remembers for an hour.
+pub(super) async fn proxy_image(url: Option<String>, max_bytes: usize) -> Response {
+    let found = match url {
+        Some(u) if u.starts_with("http://") || u.starts_with("https://") => {
+            fetch_image(&u, max_bytes).await
+        }
+        _ => None,
     };
-    if !(url.starts_with("http://") || url.starts_with("https://")) {
-        return missing();
-    }
-    match fetch_logo(&url).await {
+    match found {
         Some((kind, bytes)) => (
             [
                 (header::CONTENT_TYPE, kind),
@@ -248,7 +253,11 @@ async fn logo(Path(id): Path<i64>) -> Response {
             bytes,
         )
             .into_response(),
-        None => missing(),
+        None => (
+            StatusCode::NOT_FOUND,
+            [(header::CACHE_CONTROL, "private, max-age=3600")],
+        )
+            .into_response(),
     }
 }
 
@@ -264,8 +273,8 @@ fn logo_client() -> &'static reqwest::Client {
 }
 
 /// The image at `url` and its type, or `None` for anything else: an error,
-/// something that is not an image, or more than [`LOGO_MAX_BYTES`].
-async fn fetch_logo(url: &str) -> Option<(String, Vec<u8>)> {
+/// something that is not an image, or more than `max_bytes`.
+pub(super) async fn fetch_image(url: &str, max_bytes: usize) -> Option<(String, Vec<u8>)> {
     let mut resp = logo_client().get(url).send().await.ok()?;
     if !resp.status().is_success() {
         return None;
@@ -276,12 +285,12 @@ async fn fetch_logo(url: &str) -> Option<(String, Vec<u8>)> {
         .and_then(|v| v.to_str().ok())
         .map(|v| v.split(';').next().unwrap_or("").trim().to_ascii_lowercase())
         .filter(|v| v.starts_with("image/"))?;
-    if resp.content_length().is_some_and(|n| n > LOGO_MAX_BYTES as u64) {
+    if resp.content_length().is_some_and(|n| n > max_bytes as u64) {
         return None;
     }
     let mut body = Vec::new();
     while let Some(chunk) = resp.chunk().await.ok()? {
-        if body.len() + chunk.len() > LOGO_MAX_BYTES {
+        if body.len() + chunk.len() > max_bytes {
             return None;
         }
         body.extend_from_slice(&chunk);
