@@ -16,6 +16,7 @@ import { ALL_CATEGORIES, run, type Action, type Mode } from "./store";
 import type {
   ChannelDto,
   FavouriteDto,
+  MovieDto,
   PlayerStateDto,
   ProgrammeDto,
   ProgrammeHitDto,
@@ -352,6 +353,81 @@ export async function forgetChannel(dispatch: Dispatch<Action>, streamId: number
   dispatch({ type: "favouriteMenu", menu: null });
   const ok = await run(dispatch, "forget", backend.forgetActivity(streamId));
   if (ok) await loadWatchLists(dispatch);
+}
+
+// ----------------------------------------------------------------- movies
+
+/** Opens a movie in the player, from `start` seconds or, with `null`, where
+ *  it was left. Like a channel it takes the window over (a movie is watched,
+ *  not glanced at), and a failed open gives the window back. Choosing a movie
+ *  to look at never comes through here: only Play does. */
+export async function playMovie(
+  dispatch: Dispatch<Action>,
+  movie: MovieDto,
+  start: number | null = null,
+): Promise<void> {
+  if (!capabilities.playback) {
+    dispatch({ type: "toast", text: NO_PLAYBACK, kind: "info" });
+    return;
+  }
+  dispatch({ type: "movies/playing", movie });
+  dispatch({ type: "mode", mode: "watch" });
+  const ok = await run(dispatch, `play ${movie.cleanName}`, backend.playMovie(movie.movieId, start));
+  if (!ok) {
+    dispatch({ type: "movies/playing", movie: null });
+    dispatch({ type: "mode", mode: "browse" });
+  }
+}
+
+/** Sets one mark and reports it, then re-reads the counts the rail shows. */
+async function markMovie(
+  dispatch: Dispatch<Action>,
+  movie: MovieDto,
+  what: string,
+  marks: { favourite?: boolean; watched?: boolean },
+): Promise<void> {
+  try {
+    dispatch({ type: "movies/marked", marks: await backend.setMovieMarks(movie.movieId, marks) });
+  } catch (e) {
+    dispatch({ type: "toast", text: `${what}: ${errorMessage(e)}` });
+    return;
+  }
+  await loadMoviesSummary(dispatch, true);
+}
+
+export function toggleMovieFavourite(dispatch: Dispatch<Action>, movie: MovieDto): Promise<void> {
+  return markMovie(dispatch, movie, "favourite", { favourite: !movie.favourite });
+}
+
+export function setMovieWatched(
+  dispatch: Dispatch<Action>,
+  movie: MovieDto,
+  watched: boolean,
+): Promise<void> {
+  return markMovie(dispatch, movie, "watched", { watched });
+}
+
+/** The rail's counts, and whether the account has movies at all. `quiet`
+ *  re-reads without first saying "Loading", as `loadCategories` does. */
+export async function loadMoviesSummary(dispatch: Dispatch<Action>, quiet = false): Promise<void> {
+  if (!quiet) dispatch({ type: "movies/summary", value: loading() });
+  try {
+    dispatch({ type: "movies/summary", value: ready(await backend.moviesSummary()) });
+  } catch (e) {
+    dispatch({ type: "movies/summary", value: failed(errorMessage(e)) });
+  }
+}
+
+export async function loadMovieCategories(
+  dispatch: Dispatch<Action>,
+  quiet = false,
+): Promise<void> {
+  if (!quiet) dispatch({ type: "movies/categories", value: loading() });
+  try {
+    dispatch({ type: "movies/categories", value: ready(await backend.movieCategories()) });
+  } catch (e) {
+    dispatch({ type: "movies/categories", value: failed(errorMessage(e)) });
+  }
 }
 
 // ------------------------------------------------------------- recording

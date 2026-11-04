@@ -11,14 +11,8 @@ import { auditLightSurfaces, auditOverVideo } from "./audit";
 import { alternatives } from "./logic/searchQuery";
 import { patternFor, place, validatePattern } from "./logic/naming";
 import { parsePort, passwordProblem } from "./logic/network";
+import { createMockMovies } from "./mockMovies";
 import type {
-  MarksDto,
-  MovieDetailsDto,
-  MovieDto,
-  MoviePageDto,
-  MovieQueryDto,
-  MoviesSummaryDto,
-  VodCategoryDto,
   AccountCandidateDto,
   AccountDto,
   ActivityRowDto,
@@ -933,6 +927,7 @@ async function openStream(
     liveJump: null,
     joiningLive: false,
     reconnect: null,
+    onDemand: null,
   });
   patchOptions({ audio: [], subtitles: [] });
   await delay(700);
@@ -1498,7 +1493,13 @@ const mockRecordingApi = {
   },
 };
 
-const notYet = <T>(): Promise<T> => Promise.reject(new Error("not yet"));
+/** The movie catalogue and what plays one, which share the player below. */
+const mockMovies = createMockMovies({
+  state: () => playerEmitter.last,
+  patch: patchPlayer,
+  open: () => ++openSeq,
+  current: () => openSeq,
+});
 
 export const mockApi = {
   categories: async () => {
@@ -1723,6 +1724,7 @@ export const mockApi = {
       liveJump: null,
       joiningLive: false,
       reconnect: null,
+      onDemand: null,
     });
     patchOptions({ audio: [], subtitles: [] });
   },
@@ -1751,6 +1753,7 @@ export const mockApi = {
 
   seekRelative: async (seconds: number) => {
     const p = playerEmitter.last;
+    if (p.onDemand) return mockMovies.seekRelative(seconds);
     const behindLive = Math.max(
       0,
       Math.min(p.bufferedBack, p.behindLive - seconds),
@@ -2043,17 +2046,15 @@ export const mockApi = {
     return recentRows(limit);
   },
 
-  // Movies are filled in with the Movies tab.
-  playMovie: (_movieId: number, _start: number | null) => notYet<void>(),
-  seekTo: (_seconds: number) => notYet<void>(),
-  moviesSummary: () => notYet<MoviesSummaryDto>(),
-  movieCategories: () => notYet<VodCategoryDto[]>(),
-  movies: (_query: MovieQueryDto, _offset: number, _limit: number) => notYet<MoviePageDto>(),
-  searchMovies: (_query: string, _limit: number) => notYet<MovieDto[]>(),
-  movieDetails: (_movieId: number) => notYet<MovieDetailsDto>(),
-  similarMovies: (_movieId: number, _limit: number) => notYet<MovieDto[]>(),
-  setMovieMarks: (_movieId: number, _marks: { favourite?: boolean; watched?: boolean }) =>
-    notYet<MarksDto>(),
+  moviesSummary: mockMovies.moviesSummary,
+  movieCategories: mockMovies.movieCategories,
+  movies: mockMovies.movies,
+  searchMovies: mockMovies.searchMovies,
+  movieDetails: mockMovies.movieDetails,
+  similarMovies: mockMovies.similarMovies,
+  setMovieMarks: mockMovies.setMovieMarks,
+  playMovie: mockMovies.playMovie,
+  seekTo: mockMovies.seekTo,
 
   forgetActivity: async (streamId: number) => {
     await delay(20);

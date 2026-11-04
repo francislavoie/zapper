@@ -18,7 +18,7 @@ import {
   subscribeSync,
 } from "./backend";
 import { paintMockStill } from "./mock";
-import { loadCategories, loadWatchLists } from "./actions";
+import { loadCategories, loadMoviesSummary, loadWatchLists } from "./actions";
 import { errorMessage } from "./logic/async";
 import { useGlobalKeys } from "./hooks/useGlobalKeys";
 import { useMenuCommands } from "./hooks/useMenuCommands";
@@ -300,6 +300,31 @@ export function App() {
   const catalogueRev = state.catalogueRev;
   useEffect(() => {
     if (catalogueRev > 0) void loadCategories(dispatch, true);
+  }, [catalogueRev, dispatch]);
+
+  // A movie is playing that the store does not know — a reloaded window,
+  // where the player kept going — so look it up for its name and marks.
+  const openMovie = state.player.onDemand?.kind === "movie" ? state.player.onDemand.id : null;
+  const knownMovie = state.movies.playing?.movieId ?? null;
+  useEffect(() => {
+    if (openMovie === null || openMovie === knownMovie) return;
+    let live = true;
+    backend
+      .movieDetails(openMovie)
+      .then((d) => live && dispatch({ type: "movies/playing", movie: d.movie }))
+      .catch(() => {
+        // Without its name the player still plays it.
+      });
+    return () => {
+      live = false;
+    };
+  }, [openMovie, knownMovie, dispatch]);
+
+  // Whether the account has movies decides if the Movies tab is shown at
+  // all, so it is asked for at launch and again after a sync (marks refresh
+  // it themselves).
+  useEffect(() => {
+    void loadMoviesSummary(dispatch, catalogueRev > 0);
   }, [catalogueRev, dispatch]);
 
   // Only browse has a slot to dock into. The guide covers the stage with an
