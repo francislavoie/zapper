@@ -212,11 +212,14 @@ export function RadioItem({
   checked,
   label,
   detail,
+  disabled = false,
   onSelect,
 }: {
   checked: boolean;
   label: string;
   detail?: string;
+  /** Listed, and not to be chosen here. */
+  disabled?: boolean;
   onSelect: () => void;
 }) {
   return (
@@ -224,6 +227,8 @@ export function RadioItem({
       className="tb-menu-item"
       role="menuitemradio"
       aria-checked={checked}
+      aria-disabled={disabled || undefined}
+      disabled={disabled}
       onClick={onSelect}
     >
       <span className="ctx-check">{checked ? <Check className="ctx-check-i" /> : null}</span>

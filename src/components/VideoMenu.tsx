@@ -23,6 +23,8 @@ import {
   DEINTERLACE_CHOICES,
   choiceLabel,
   hasAudioChoice,
+  isPictureSubtitle,
+  PICTURE_SUBTITLES_NOTE,
   selectedLabel,
   trackLabel,
 } from "../logic/tracks";
@@ -124,10 +126,14 @@ export function VideoMenu({ menu, onClose }: VideoMenuProps) {
                 checked={t.selected}
                 label={l.label}
                 detail={l.detail}
+                disabled={!capabilities.pictureSubtitles && isPictureSubtitle(t)}
                 onSelect={() => choose("subtitles", backend.setSubtitleTrack(t.id))}
               />
             );
           })}
+          {!capabilities.pictureSubtitles && options.subtitles.some(isPictureSubtitle) ? (
+            <p className="ctx-note">{PICTURE_SUBTITLES_NOTE}</p>
+          ) : null}
         </SubMenu>
       ) : null}
 
