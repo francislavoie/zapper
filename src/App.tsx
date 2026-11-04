@@ -41,6 +41,7 @@ import { saveCategoryHidden, saveCategoryPins, saveCategorySort } from "./catego
 import { AboutModal } from "./components/AboutModal";
 import { ProgrammeMenu } from "./components/ProgrammeMenu";
 import { MoviesList } from "./components/MoviesList";
+import { MovieSheet } from "./components/MovieSheet";
 import { MoviesRail } from "./components/MoviesRail";
 import { RecordingsView } from "./components/RecordingsView";
 import { RecordingsWatcher } from "./components/RecordingsWatcher";
@@ -89,7 +90,7 @@ export function App() {
   const recordingsShown = railItemKind(state.categoryId) === "recordings" && !guiding && !moviesOn;
   // The band is the playing channel, and the selected recording where
   // Recordings shows: a browser has no picture but still has recordings.
-  const bandShown = capabilities.playback || recordingsShown;
+  const bandShown = capabilities.playback || recordingsShown || moviesOn;
 
   // The stacked layout is a preference, not a mode: it applies while watching,
   // and only when the window has the room. Too small a window falls back to
@@ -556,6 +557,10 @@ export function App() {
             <Activity mode={guiding ? "visible" : "hidden"}>
               <GuideGrid besideRail />
             </Activity>
+            {/* Over the rail and the list, under the band. */}
+            {moviesOn && !guiding && state.movies.sheetId !== null ? (
+              <MovieSheet id={state.movies.sheetId} />
+            ) : null}
           </div>
         </Activity>
 

@@ -79,6 +79,15 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
           dispatch({ type: "settings", open: false });
         } else if (state.paletteOpen) {
           dispatch({ type: "palette", open: false });
+        } else if (
+          state.mode === "browse" &&
+          state.section === "movies" &&
+          state.movies.sheetId !== null &&
+          moviesAvailable(state.movies.summary)
+        ) {
+          // A movie's Details, over the rail and the list: the first of the
+          // panes to go (and only while it shows, not behind the player).
+          dispatch({ type: "movies/sheet", id: null });
         } else if (fullscreenNow()) {
           // Fullscreen is the one thing Escape means everywhere else on the
           // desktop, so it is the whole meaning here: leave fullscreen and
@@ -251,6 +260,7 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
     state.query,
     state.section,
     state.movies.menu,
+    state.movies.sheetId,
     state.movies.query,
     state.movies.summary,
     state.settings.guideHours,
