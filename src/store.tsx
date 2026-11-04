@@ -46,7 +46,8 @@ import type { ZapView } from "./logic/zap";
 import { startSleep, type SleepRequest, type SleepTimer } from "./logic/sleep";
 import type { Section } from "./logic/toolbar";
 
-export const ALL_CATEGORIES = "*all*";
+import { ALL_CATEGORIES } from "./logic/railItems";
+export { ALL_CATEGORIES } from "./logic/railItems";
 
 /** The two halves of the rail. Categories is what the app opens on;
  *  favourites is the list nobody edits — it is earned from what gets

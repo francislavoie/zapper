@@ -383,3 +383,16 @@ export function strmReach(strmBase: string, hostChosen: boolean): "fine" | "loca
 /** Minutes from the seconds the service keeps padding in, and back. */
 export const padMinutes = (seconds: number) => Math.round(seconds / 60);
 export const padSeconds = (minutes: number) => Math.max(0, Math.round(minutes)) * 60;
+
+/** The Recordings rail item's count: how many are capturing now and how many
+ *  are still waiting, blank when neither. */
+export function recordingsRailCount(recs: readonly Pick<RecordingDto, "state">[] | null): string {
+  const now = recs?.filter((r) => r.state === "recording").length ?? 0;
+  const next = recs?.filter((r) => r.state === "scheduled").length ?? 0;
+  return [now && `${now} now`, next && `${next} next`].filter(Boolean).join(" · ");
+}
+
+/** The selected recording, or none once it is no longer in the list. */
+export function keepSelected(recs: readonly { id: number }[] | null, id: number | null): number | null {
+  return id !== null && recs?.some((r) => r.id === id) ? id : null;
+}

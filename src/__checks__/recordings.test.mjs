@@ -9,6 +9,8 @@ import {
   backupText,
   bytes,
   canRecord,
+  keepSelected,
+  recordingsRailCount,
   conflictLosesProgramme,
   conflictText,
   episodeLabel,
@@ -354,4 +356,19 @@ test("a conflict says what is lost, and to which recording", () => {
   assert.ok(conflictLosesProgramme(c({ kind: "lostStart" })));
   assert.ok(!conflictLosesProgramme(c({ kind: "cutEnd" })));
   assert.ok(!conflictLosesProgramme(c({ kind: "lateStart" })));
+});
+
+test("the rail says how many record now and how many are coming", () => {
+  const s = (state) => ({ state });
+  assert.equal(recordingsRailCount([s("recording"), s("scheduled"), s("scheduled"), s("done")]), "1 now · 2 next");
+  assert.equal(recordingsRailCount([s("scheduled")]), "1 next");
+  assert.equal(recordingsRailCount([s("recording"), s("finishing")]), "1 now");
+  assert.equal(recordingsRailCount([s("done"), s("failed")]), "");
+  assert.equal(recordingsRailCount(null), "");
+});
+test("a selected recording that is gone is no longer selected", () => {
+  assert.equal(keepSelected([rec({ id: 3 })], 3), 3);
+  assert.equal(keepSelected([rec({ id: 3 })], 4), null);
+  assert.equal(keepSelected(null, 3), null);
+  assert.equal(keepSelected([rec({ id: 3 })], null), null);
 });
