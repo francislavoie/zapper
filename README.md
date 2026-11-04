@@ -58,7 +58,10 @@ Download the package for your system from the
 - Xtream Codes: server URL, username and password. Live channels, categories, guide, catch-up on
   channels that have an archive, and the provider's movies.
 - M3U playlists from a URL or a file, with one or more XMLTV guides. Catch-up from the playlist's
-  `catchup` attributes. Entries whose address has the `/movie/` form are movies.
+  `catchup` attributes. Entries whose address is on demand are movies: a `/movie/` address, a
+  video file (`.mp4`, `.mkv`, `.avi`, `.m4v`, `.mov`, `.wmv`, `.webm`), or a `/series/` one
+  whose name has no season and episode (`S01E02`). A `.ts`, `.m3u8` or `/live/` address is always
+  a channel.
 - HDHomeRun tuners by address. Channels from the tuner's lineup, guide from SiliconDust or your
   own XMLTV; subchannels shown as `5.1`.
 - Tvheadend servers, with or without a login. Categories from its channel tags, guide from its

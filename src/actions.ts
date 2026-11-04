@@ -361,8 +361,8 @@ export async function forgetChannel(dispatch: Dispatch<Action>, streamId: number
 
 // ----------------------------------------------------------------- movies
 
-/** Opens a movie in the player, from `start` seconds or, with `null`, where
- *  it was left. Like a channel it takes the window over (a movie is watched,
+/** Opens a movie in the player, from `start` seconds or, with `null`, from
+ *  the start. Like a channel it takes the window over (a movie is watched,
  *  not glanced at), and a failed open gives the window back. Choosing a movie
  *  to look at never comes through here: only Play does. */
 export async function playMovie(
