@@ -1,15 +1,22 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  OPEN_LIMIT_MS,
   PAUSE_RELEASE_MS,
+  STALL_LIMIT_MS,
+  STUCK_LIMIT,
   PROGRESS_EVERY_MS,
   bufferedEnd,
   cueTimes,
+  movedAt,
+  needsData,
+  openDue,
   parseVtt,
   positionOf,
   progressDue,
   releaseDue,
   seekPlan,
+  stallDue,
   subtitleAfter,
   vodStreamUrl,
 } from "../logic/webVod.ts";
@@ -58,9 +65,38 @@ test("where the picture's data ends, in the film's time", () => {
   assert.equal(bufferedEnd([[0, 30], [40, 80]], 35, 0), 80);
 });
 
-test("subtitles: asked for after the last cue held, else from where the picture is", () => {
+test("subtitles: asked for from a while before the last cue held, else from where the picture is", () => {
   assert.equal(subtitleAfter(null, 754.6), 754.6);
-  assert.equal(subtitleAfter(812.25, 790), 812.25);
+  // A cue decoded later that ends before the last one held is still
+  // fetched; those already held are not added twice.
+  assert.equal(subtitleAfter(812.25, 790), 802.25);
+});
+
+test("a film that doesn't start within half a minute is given up on", () => {
+  assert.equal(OPEN_LIMIT_MS, 30_000);
+  assert.equal(openDue(1_000, 30_999), false);
+  assert.equal(openDue(1_000, 31_000), true);
+});
+
+test("a playing film whose place stands still for half a minute has stalled", () => {
+  assert.equal(STALL_LIMIT_MS, 30_000);
+  const first = movedAt(null, 1_000, 10, false);
+  assert.deepEqual(first, { at: 1_000, position: 10 });
+  // Standing still keeps the time it last moved.
+  assert.equal(movedAt(first, 20_000, 10, false), first);
+  assert.equal(stallDue(movedAt(first, 31_000, 10, false), 31_000), true);
+  assert.equal(stallDue(first, 30_999), false);
+  // Moving, or paused, starts the count again.
+  assert.deepEqual(movedAt(first, 20_000, 10.5, false), { at: 20_000, position: 10.5 });
+  assert.deepEqual(movedAt(first, 40_000, 10, true), { at: 40_000, position: 10 });
+  assert.ok(STUCK_LIMIT >= 1);
+});
+
+test("a film the service let go is watched again only when the element wants more", () => {
+  assert.equal(needsData(4), false, "playing from what it holds");
+  assert.equal(needsData(3), false);
+  assert.equal(needsData(2), true, "waiting for data");
+  assert.equal(needsData(1), true);
 });
 
 test("a cue in the film's time is put on the element's clock, which starts at the remux's start", () => {

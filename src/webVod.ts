@@ -38,14 +38,19 @@ import {
   type WatchRefusal,
 } from "./logic/webPlayback";
 import {
+  STUCK_LIMIT,
   SUBTITLE_POLL_MS,
   bufferedEnd,
   cueTimes,
+  movedAt,
+  needsData,
+  openDue,
   parseVtt,
   positionOf,
   progressDue,
   releaseDue,
   seekPlan,
+  stallDue,
   subtitleAfter,
   vodStreamUrl,
   type VodMode,
@@ -136,6 +141,11 @@ interface Session {
   lastProgress: { at: number; position: number } | null;
   /** Reopened after the stream broke, within the last minute. */
   reopens: number[];
+  /** When the playing film's place last moved (logic/webVod.ts `movedAt`). */
+  moved: { at: number; position: number } | null;
+  /** Opened again in a row for not starting or standing still, with no
+   *  playing in between. */
+  stuck: number;
   /** The subtitle cues put on the element's track for this reading. */
   cues: { lastEnd: number | null; held: Set<string>; askedAt: number; asking: boolean };
 }
@@ -184,10 +194,12 @@ function showPlace(s: Session, bufferedTo: number | null) {
   patch({ onDemand: next });
 }
 
+/** The film's length: a direct file's own once the element knows it (the
+ *  provider's details may be off by minutes), else what the service said. */
 function durationOf(s: Session): number | null {
-  if (s.duration !== null) return s.duration;
   const d = currentVideo()?.duration;
-  return s.mode === "direct" && d !== undefined && Number.isFinite(d) && d > 0 ? d : null;
+  if (s.mode === "direct" && d !== undefined && Number.isFinite(d) && d > 0) return d;
+  return s.duration;
 }
 
 function ranges(el: HTMLVideoElement): [number, number][] {
@@ -305,6 +317,8 @@ async function watch(movieId: number, from: number, keep: Keep): Promise<void> {
     released: false,
     lastProgress: null,
     reopens: [],
+    moved: null,
+    stuck: 0,
     cues: { lastEnd: null, held: new Set(), askedAt: 0, asking: false },
   };
   session = s;
@@ -323,7 +337,7 @@ async function watch(movieId: number, from: number, keep: Keep): Promise<void> {
     if (session !== s) return;
   }
   await openReading(s, from, keep.wantPlay);
-  startTimers();
+  if (session === s) startTimers();
 }
 
 /** Reads the session's stream into the element from `from` seconds into
@@ -340,6 +354,7 @@ async function openReading(s: Session, from: number, wantPlay: boolean) {
   s.wantPlay = wantPlay;
   s.openedAt = Date.now();
   s.pausedAt = null;
+  s.moved = null;
   resetCues(s);
   patch({ state: "opening" });
   const current = () => session === s && s.reading === reading && !s.released;
@@ -468,10 +483,11 @@ function startWhenReady(s: Session, el: HTMLVideoElement) {
 }
 
 /** The element got to the end of what it had: the end of the film, or a
- *  stream that stopped short of it. */
+ *  remux that stopped short of it. A direct file's end is the film's: the
+ *  element knows the file's length. */
 async function ended(s: Session) {
   const d = durationOf(s);
-  if (d === null || s.position >= d - 10) {
+  if (s.mode === "direct" || d === null || s.position >= d - 10) {
     s.position = d ?? s.position;
     await stop();
     await stopPlayer();
@@ -486,9 +502,9 @@ async function ended(s: Session) {
 async function broke(s: Session, reading: number) {
   if (session !== s || s.released || s.reading !== reading) return;
   const refused = s.response?.refused ?? null;
+  // A 409 (an older reading would not let the file go in time) is asked
+  // about and opened again, as any other break.
   if (refused) {
-    // A newer request of this page's own took the stream.
-    if (refused.status === 409) return;
     if (refused.status === 401) signedOutNow();
     if ([400, 401, 404, 422].includes(refused.status)) {
       const r = refusalState(refused.status, refused.body as WatchRefusal | null);
@@ -681,18 +697,45 @@ function tick() {
   const s = session;
   const el = currentVideo();
   if (!s || !el || s.released) return;
+  const now = Date.now();
   if (!s.started) startWhenReady(s, el);
   const base = s.start ?? s.from;
   if (s.started) s.position = positionOf(s.mode, base, el.currentTime);
   showPlace(s, bufferedEnd(ranges(el), el.currentTime, s.mode === "remux" ? base : 0));
-  if (!s.started) return;
+  if (!s.started) {
+    if (openDue(s.openedAt, now)) stuck(s);
+    return;
+  }
+  const moved = movedAt(s.moved, now, s.position, el.paused);
+  // Playing again after being stuck: the count starts afresh.
+  if (moved !== s.moved && s.moved !== null && !el.paused) s.stuck = 0;
+  s.moved = moved;
+  if (stallDue(moved, now)) {
+    stuck(s);
+    return;
+  }
   report(s);
-  const now = Date.now();
   if (s.pausedAt !== null && releaseDue(s.pausedAt, now)) {
     release(s);
     return;
   }
   if (s.pausedAt === null && now - s.cues.askedAt >= SUBTITLE_POLL_MS) void askCues(s);
+}
+
+/** The film would not start, or stood still while playing: asked about and
+ *  opened again (`broke`), a few times in a row at most before the picture
+ *  says it stopped, which lets its viewer go. */
+function stuck(s: Session) {
+  s.stuck += 1;
+  if (s.stuck > STUCK_LIMIT) {
+    fail(s.movieId, s.position, s.duration, endedBy("network"),
+      "The movie stopped coming from the recording service.");
+    return;
+  }
+  // Not again until this has been dealt with: a new reading counts afresh.
+  s.openedAt = Date.now();
+  s.moved = null;
+  void broke(s, s.reading);
 }
 
 /** Paused for long: the connection goes, the place stays. Playing again
@@ -716,7 +759,11 @@ async function poll() {
   const st = await viewerStatus(s.viewer);
   if (session !== s || s.released || !st) return;
   if (st.gone) {
-    await rewatch(s);
+    // Let go while the browser played from what it holds (a hidden tab's
+    // timers, held back): watched again only once it wants more; the
+    // element's next request, refused, says so too.
+    const el = currentVideo();
+    if (!el || needsData(el.readyState)) await rewatch(s);
     return;
   }
   if (st.ended) {

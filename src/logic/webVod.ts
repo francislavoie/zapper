@@ -92,6 +92,47 @@ export function releaseDue(pausedAt: number | null, now: number): boolean {
   return pausedAt !== null && now - pausedAt >= PAUSE_RELEASE_MS;
 }
 
+// ------------------------------------------------------------- stalls
+
+/** How long a film may take to start, from asking for its stream. */
+export const OPEN_LIMIT_MS = 30_000;
+
+/** Whether a film opened at `openedAt` and not started yet has taken too
+ *  long: its stream is asked about, and opened again or given up. */
+export function openDue(openedAt: number, now: number): boolean {
+  return now - openedAt >= OPEN_LIMIT_MS;
+}
+
+/** How long a playing film's place may stand still. */
+export const STALL_LIMIT_MS = 30_000;
+
+/** How many times in a row a film that would not start, or stood still, is
+ *  opened again before the picture says it stopped. */
+export const STUCK_LIMIT = 2;
+
+/** When the film's place last moved: `prev`, while it stands still and
+ *  plays; now, when it moved or is paused (a pause is not a stall). */
+export function movedAt(
+  prev: { at: number; position: number } | null,
+  now: number,
+  position: number,
+  paused: boolean,
+): { at: number; position: number } {
+  if (prev !== null && !paused && Math.abs(position - prev.position) < 0.05) return prev;
+  return { at: now, position };
+}
+
+/** Whether a playing film has stood still too long since `moved`. */
+export function stallDue(moved: { at: number }, now: number): boolean {
+  return now - moved.at >= STALL_LIMIT_MS;
+}
+
+/** Whether an element in `readyState` wants more of the stream than it
+ *  holds: less than enough to play on (`HAVE_FUTURE_DATA`). */
+export function needsData(readyState: number): boolean {
+  return readyState < 3;
+}
+
 // ----------------------------------------------------------- subtitles
 
 /** How often a chosen subtitle track is asked for its newer cues. */
@@ -104,11 +145,16 @@ export interface VodCue {
   text: string;
 }
 
-/** The time to ask for cues ending after: the end of the last one held, or,
- *  with none held (just chosen, or after a seek or a reopen), where the
- *  picture is. */
+/** How far before the end of the last cue held the next ask starts: a cue
+ *  decoded later may end earlier than one held (cues overlap), and those
+ *  held already are not added twice. */
+export const SUBTITLE_OVERLAP_SECONDS = 10;
+
+/** The time to ask for cues ending after: a while before the end of the
+ *  last one held, or, with none held (just chosen, or after a seek or a
+ *  reopen), where the picture is. */
 export function subtitleAfter(lastEnd: number | null, position: number): number {
-  return lastEnd ?? position;
+  return lastEnd === null ? position : lastEnd - SUBTITLE_OVERLAP_SECONDS;
 }
 
 /** A cue's times on the element's clock, which starts `start` seconds into
