@@ -161,15 +161,16 @@ enum Room {
 /// `me`, recording `title`. `waits` counts the waits in a row, for the
 /// back-off.
 async fn room(server: &Arc<Server>, me: Rider, title: &str, waits: &mut u32) -> Room {
-    let own = server.hubs.open_count();
+    // Movies browsers watch included: each holds a connection of its own.
+    let own = server.open_streams();
     let Slots::Full { active, max } = server.budget.check(own).await else {
         return Room::Go;
     };
-    // A browser watching through the service is never cut off (sharing,
-    // rule 5); its page is told this recording waits for it.
+    // A browser watching through the service (a channel or a movie) is
+    // never cut off (sharing, rule 5); its page is told this recording
+    // waits for it.
     let watched = server
-        .hubs
-        .conns()
+        .own_conns()
         .iter()
         .any(|c| c.riders.iter().any(|r| r.stop == i64::MAX));
     let why = format!(
@@ -182,14 +183,15 @@ async fn room(server: &Arc<Server>, me: Rider, title: &str, waits: &mut u32) -> 
     // ago (providers are slow to let go): look again shortly rather than
     // back off, or close another for the same need. A count the service
     // keeps itself (a playlist's setting) is never behind.
-    if server.hubs.closing() || (active > own as i64 && server.hubs.released_lately()) {
+    let released = server.hubs.released_lately() || server.vod.released_recently() > 0;
+    if server.hubs.closing() || (active > own as i64 && released) {
         return Room::Wait {
             at: t + SETTLE_LOOK_SECS,
             why,
             note: false,
         };
     }
-    let own = server.hubs.conns();
+    let own = server.own_conns();
     match sharing::when_full(t, me.stop, &own) {
         Full::Cut(i) => {
             server.end_padding(own[i].feed, title, t);
@@ -750,4 +752,66 @@ fn make_mkv(ts: &Path, log: &Path, out: &Path, clock_track: bool) -> Result<()> 
         return remux::remux(ts, out, None);
     }
     remux::remux(ts, out, Some((&clock::ass_header(), &cues)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::recording::budget::Budget;
+    use crate::recording::config::{self, ServerConfig};
+    use std::sync::Mutex;
+
+    /// A full account that notes how many streams the service said it held.
+    struct Noting(Arc<Mutex<Vec<usize>>>);
+    impl Budget for Noting {
+        fn check(
+            &self,
+            own: usize,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Slots> + Send + '_>> {
+            self.0.lock().unwrap().push(own);
+            Box::pin(async { Slots::Full { active: 2, max: 2 } })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_recording_asks_the_budget_counting_the_movies_browsers_watch() {
+        let d = std::env::temp_dir().join(format!("zapper-capture-{}-budget", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let path = d.join("server.json");
+        config::save_to(&path, &ServerConfig::default()).unwrap();
+        let said = Arc::new(Mutex::new(Vec::new()));
+        let s = Server::new(
+            store::open_in_memory().unwrap(),
+            ServerConfig::default(),
+            path,
+            "token".into(),
+            Box::new(Noting(Arc::clone(&said))),
+        );
+        // A recording on channel 5, its feed slow to answer, and a browser
+        // watching movie 9.
+        let feed = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let t = now();
+        let _rec = s.hubs.open(
+            5,
+            crate::source::Playable::plain(format!("http://{}/5.ts", feed.local_addr().unwrap())),
+            Rider {
+                id: 1,
+                stop: t + 3600,
+                until: t + 3900,
+            },
+        );
+        s.vod.add_for_test("device:a", 9, -1);
+        assert_eq!(s.own_conns().len(), 2);
+
+        let me = Rider {
+            id: 2,
+            stop: t + 3600,
+            until: t + 3900,
+        };
+        let r = room(&s, me, "Evening", &mut 0).await;
+        assert!(matches!(r, Room::Wait { .. }));
+        assert_eq!(*said.lock().unwrap(), vec![2]);
+        let _ = std::fs::remove_dir_all(&d);
+    }
 }
