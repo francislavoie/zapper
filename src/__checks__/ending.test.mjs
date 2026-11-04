@@ -7,7 +7,14 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { endedActions, endedMessage, reconnectMessage, retryTarget, startingLine } from "../logic/ending.ts";
+import { endedActions, endedMessage, reconnectMessage, retryStart, retryTarget, startingLine } from "../logic/ending.ts";
+
+test("a retried movie resumes where the player was", () => {
+  const at = (position) => ({ onDemand: { kind: "movie", id: 3, position, duration: 6540 } });
+  assert.equal(retryStart(at(1200)), 1200);
+  assert.equal(retryStart(at(0)), null);
+  assert.equal(retryStart({ onDemand: null }), null);
+});
 
 test("retry replays a movie by its id and a channel by its stream", () => {
   assert.equal(retryTarget({ streamId: null, onDemand: { kind: "movie", id: 3 } }), "movie");
