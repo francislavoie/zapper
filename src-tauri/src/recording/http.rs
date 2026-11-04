@@ -476,6 +476,7 @@ pub(crate) mod tests {
     use tower::ServiceExt;
 
     use super::*;
+    use crate::catalog::db::movie_catalogue;
     use crate::recording::budget::{Budget, Slots};
     use crate::recording::config::{self, ServerConfig};
     use crate::recording::api::RecordingState;
@@ -1993,15 +1994,6 @@ pub(crate) mod tests {
         );
     }
 
-    /// Held for the whole of every test here that lands or seeds movies:
-    /// the test catalogue is one for the process, and a landing sets aside
-    /// every movie it does not list, another test's included.
-    static MOVIE_CATALOGUE: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    fn movie_catalogue() -> std::sync::MutexGuard<'static, ()> {
-        MOVIE_CATALOGUE.lock().unwrap_or_else(|e| e.into_inner())
-    }
-
     /// Movies 9_100_001.. in one category; the first has the poster at
     /// `poster`, and (in its kept details) one backdrop at `backdrop`. The
     /// second has kept details of a playlist's kind: nothing but a record.
@@ -2036,6 +2028,7 @@ pub(crate) mod tests {
         .unwrap();
     }
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn the_movie_catalogue_is_read_and_marked_without_provider_addresses() {
         let _catalogue = movie_catalogue();
@@ -2134,6 +2127,7 @@ pub(crate) mod tests {
         }
     }
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn posters_and_backdrops_are_fetched_by_the_service() {
         let _catalogue = movie_catalogue();
@@ -2872,6 +2866,7 @@ pub(crate) mod tests {
         r
     }
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn a_new_request_ends_the_one_before() {
         use crate::recording::upstream::fake;
@@ -2967,29 +2962,31 @@ pub(crate) mod tests {
         assert_eq!(newer.headers()[header::CONTENT_RANGE], "bytes 200000-999999/1000000");
         drop(newer);
 
-        // A Matroska file is the remuxer's, which this stream does not run:
-        // said so. It replaces the first viewer, which lets its file go.
+        // A Matroska file is the remuxer's, which reads it at the watch to
+        // learn what it holds: this one is no film, and says so. It
+        // replaced the first viewer, which let its file go.
         seed_movie(9_120_002, "mkv");
         let viewer = viewer_id(&body);
         let replace = Some(serde_json::json!({"movieId": 9_120_002, "replaces": viewer}));
         let (st, body) = call(&s, from_page("POST", "/api/vod/watch", Some(&cookie), replace)).await;
-        assert_eq!(st, StatusCode::OK, "{body}");
-        assert_eq!(body["mode"], "remux");
+        assert_eq!(st, StatusCode::BAD_GATEWAY, "{body}");
+        assert_eq!(body["reason"], "feed");
+        for leak in ["127.0.0.1", "secret-user", "secret-pass", base.as_str()] {
+            assert!(!body.to_string().contains(leak), "{leak} reached the browser: {body}");
+        }
         let (st, _) = call(&s, from_page("GET", &format!("/api/vod/watch/{viewer}"), Some(&cookie), None)).await;
         assert_eq!(st, StatusCode::NOT_FOUND, "the first viewer is gone");
-        assert_eq!(s.own_conns().len(), 1);
-        let stream = body["stream"].as_str().unwrap().to_string();
-        let (st, _) = call(&s, from_page("GET", &stream, Some(&cookie), None)).await;
-        assert_eq!(st, StatusCode::NOT_IMPLEMENTED);
-        let (st, status) = call(
-            &s,
-            from_page("GET", &format!("/api/vod/watch/{}", viewer_id(&body)), Some(&cookie), None),
-        )
+        assert!(s.own_conns().is_empty());
+        until("the provider sees no connection", || {
+            counts.open.load(Ordering::SeqCst) == 0
+        })
         .await;
-        assert_eq!(st, StatusCode::OK);
-        assert_eq!(status["ended"], serde_json::Value::Null);
 
         // Stopped: its connection is given up.
+        let (st, body) =
+            call(&s, from_page("POST", "/api/vod/watch", Some(&cookie), movie_body(9_120_001))).await;
+        assert_eq!(st, StatusCode::OK, "{body}");
+        assert_eq!(s.own_conns().len(), 1);
         let (st, _) = call(
             &s,
             from_page("DELETE", &format!("/api/vod/watch/{}", viewer_id(&body)), Some(&cookie), None),
@@ -3003,6 +3000,7 @@ pub(crate) mod tests {
         .await;
     }
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn a_browser_cannot_watch_more_than_its_share() {
         let _catalogue = movie_catalogue();
@@ -3038,6 +3036,7 @@ pub(crate) mod tests {
         assert_eq!(st, StatusCode::OK, "{body}");
     }
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn a_movie_viewer_holds_one_of_the_accounts_connections_and_anyway_takes_it() {
         let _catalogue = movie_catalogue();
@@ -3104,6 +3103,7 @@ pub(crate) mod tests {
         }
     }
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn a_device_making_room_for_itself_never_ends_another_devices_viewer_of_the_same_movie() {
         let _catalogue = movie_catalogue();
@@ -3147,7 +3147,8 @@ pub(crate) mod tests {
             call(&s, from_page("POST", "/api/vod/watch", Some(&cookie), movie_body(9_120_031))).await;
         assert_eq!(st, StatusCode::OK, "{body}");
         let newer = viewer_id(&body);
-        let (_, st_other) = call(&s, status(&other, false)).await;
+        let (st, st_other) = call(&s, status(&other, false)).await;
+        assert_eq!(st, StatusCode::OK, "{st_other}");
         assert_eq!(st_other["ended"], serde_json::Value::Null, "{st_other}");
         let (_, st_mine) = call(&s, status(&mine, true)).await;
         assert_eq!(st_mine["takenOver"], true, "{st_mine}");
@@ -3156,11 +3157,313 @@ pub(crate) mod tests {
         let replace = Some(serde_json::json!({"movieId": 9_120_031, "replaces": newer}));
         let (st, body) = call(&s, from_page("POST", "/api/vod/watch", Some(&cookie), replace)).await;
         assert_eq!(st, StatusCode::OK, "{body}");
-        let (_, st_other) = call(&s, status(&other, false)).await;
+        let (st, st_other) = call(&s, status(&other, false)).await;
+        assert_eq!(st, StatusCode::OK, "{st_other}");
         assert_eq!(st_other["ended"], serde_json::Value::Null, "{st_other}");
         let (st, _) = call(&s, status(&newer, true)).await;
         assert_eq!(st, StatusCode::NOT_FOUND, "the replaced viewer is gone");
         assert_eq!(s.own_conns().len(), 2);
+    }
+
+    // ------------------------------------------------- converting movies
+
+    /// A 20 s Matroska film for the remuxer: H.264 video (a keyframe a
+    /// second), AAC sound in English and AC-3 in French, and English SubRip
+    /// subtitles named "Forced", with a cue from 1 to 3 s and one from 12 to
+    /// 14 s. Made once, with the ffmpeg command; `None` without one.
+    fn film() -> Option<Arc<Vec<u8>>> {
+        static FILM: std::sync::OnceLock<Option<Arc<Vec<u8>>>> = std::sync::OnceLock::new();
+        FILM.get_or_init(|| {
+            let dir = std::env::temp_dir().join(format!("zapper-film-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).ok()?;
+            let srt = dir.join("subs.srt");
+            std::fs::write(
+                &srt,
+                "1\n00:00:01,000 --> 00:00:03,000\nHello & 1 < 2\n\n\
+                 2\n00:00:12,000 --> 00:00:14,000\n<i>Later</i>\non two lines\n\n",
+            )
+            .ok()?;
+            let out = dir.join("film.mkv");
+            let made = std::process::Command::new("ffmpeg")
+                .args(["-hide_banner", "-loglevel", "error", "-y"])
+                .args(["-f", "lavfi", "-i", "testsrc2=size=320x180:rate=25"])
+                .args(["-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000"])
+                .args(["-f", "lavfi", "-i", "sine=frequency=880:sample_rate=48000"])
+                .arg("-i")
+                .arg(&srt)
+                .args(["-t", "20", "-map", "0:v", "-map", "1:a", "-map", "2:a", "-map", "3:s"])
+                .args(["-c:v", "libx264", "-g", "25", "-pix_fmt", "yuv420p", "-b:v", "300k"])
+                .args(["-c:a:0", "aac", "-c:a:1", "ac3", "-c:s", "srt"])
+                .args(["-metadata:s:a:0", "language=eng", "-metadata:s:a:1", "language=fre"])
+                .args(["-metadata:s:s:0", "language=eng", "-metadata:s:s:0", "title=Forced"])
+                .arg(&out)
+                .status()
+                .ok()?
+                .success();
+            let bytes = made.then(|| std::fs::read(&out).ok()).flatten();
+            let _ = std::fs::remove_dir_all(&dir);
+            bytes.map(Arc::new)
+        })
+        .clone()
+    }
+
+    /// Every movie's file is `film`, at the fake provider, under `path`; the
+    /// provider's counts.
+    async fn films_from(
+        s: &Shared,
+        film: &Arc<Vec<u8>>,
+        path: &str,
+    ) -> (String, Arc<crate::recording::upstream::fake::Counts>) {
+        let (base, counts) = crate::recording::upstream::fake::serve_file(Arc::clone(film)).await;
+        let url = format!("{base}{path}/movie/secret-user/secret-pass/2.mkv");
+        s.vod
+            .set_playables(Arc::new(move |_| Ok(crate::source::Playable::plain(url.clone()))));
+        (base, counts)
+    }
+
+    /// The whole of a streaming answer.
+    async fn read_all(body: Body) -> Vec<u8> {
+        let mut body = body.into_data_stream();
+        let mut got = Vec::new();
+        while let Some(p) = next_piece(&mut body).await {
+            got.extend_from_slice(&p);
+        }
+        got
+    }
+
+    fn x_start(r: &Response) -> f64 {
+        r.headers()["x-start"].to_str().unwrap().parse().unwrap()
+    }
+
+    fn is_ts(b: &[u8]) -> bool {
+        !b.is_empty() && b.len() % 188 == 0 && b.chunks(188).all(|p| p[0] == 0x47)
+    }
+
+    /// A WebVTT file's cues: start, end, text.
+    fn vtt_cues(doc: &str) -> Vec<(f64, f64, String)> {
+        let secs = |t: &str| {
+            let p: Vec<f64> = t.trim().split(':').map(|x| x.parse().unwrap()).collect();
+            p[0] * 3600.0 + p[1] * 60.0 + p[2]
+        };
+        assert!(doc.starts_with("WEBVTT\n\n"), "{doc}");
+        doc["WEBVTT\n\n".len()..]
+            .split("\n\n")
+            .filter(|b| !b.is_empty())
+            .map(|b| {
+                let (times, text) = b.split_once('\n').unwrap();
+                let (a, z) = times.split_once(" --> ").unwrap();
+                (secs(a), secs(z), text.to_string())
+            })
+            .collect()
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn a_seek_reopens_from_the_new_time() {
+        use std::sync::atomic::Ordering;
+        let Some(film) = film() else {
+            eprintln!("skipped: no ffmpeg command to make a fixture with");
+            return;
+        };
+        let _catalogue = movie_catalogue();
+        let s = server("vod-remux");
+        enable(&s, true).await;
+        // Slow enough that the first remux still reads when the seek comes.
+        let (_, counts) = films_from(&s, &film, "/slow").await;
+        let cookie = browser_login(&s).await;
+        seed_movie(9_120_041, "mkv");
+        let (st, body) =
+            call(&s, from_page("POST", "/api/vod/watch", Some(&cookie), movie_body(9_120_041))).await;
+        assert_eq!(st, StatusCode::OK, "{body}");
+        assert_eq!(body["mode"], "remux");
+        let duration = body["duration"].as_i64().unwrap();
+        assert!((19..=21).contains(&duration), "the file's length, not the details': {duration}");
+        let stream = body["stream"].as_str().unwrap().to_string();
+        let get = |q: &str| from_page("GET", &format!("{stream}{q}"), Some(&cookie), None);
+        assert_eq!(call(&s, get("?from=-1")).await.0, StatusCode::BAD_REQUEST);
+        assert_eq!(call(&s, get("?from=soon")).await.0, StatusCode::BAD_REQUEST);
+
+        let first = router(s.clone()).oneshot(get("?from=0")).await.unwrap();
+        assert_eq!(first.status(), StatusCode::OK);
+        assert_eq!(first.headers()[header::CONTENT_TYPE], "video/mp2t");
+        assert!(first.headers().get(header::CONTENT_LENGTH).is_none());
+        assert!(x_start(&first) < 0.5, "starts at {}", x_start(&first));
+        let mut first = first.into_body().into_data_stream();
+        let piece = next_piece(&mut first).await.unwrap();
+        assert_eq!(piece[0], 0x47, "MPEG-TS");
+        let asked = counts.firsts.lock().unwrap().len();
+
+        // Seeking past what the browser holds: from the keyframe at or
+        // before 12 s, said so.
+        let second = router(s.clone()).oneshot(get("?from=12")).await.unwrap();
+        assert_eq!(second.status(), StatusCode::OK);
+        let at = x_start(&second);
+        assert!(at <= 12.0 && at > 10.9, "starts at {at}");
+        // The first has ended.
+        let mut had = piece.len();
+        while let Some(p) = next_piece(&mut first).await {
+            had += p.len();
+        }
+        let got = read_all(second.into_body()).await;
+        assert!(is_ts(&got), "{} bytes", got.len());
+        assert!(had > 0);
+        let firsts = counts.firsts.lock().unwrap().clone();
+        assert!(
+            firsts[asked..].iter().any(|&f| f > film.len() / 2),
+            "the second remux reads from the middle: {firsts:?} of {}",
+            film.len()
+        );
+        assert_eq!(
+            counts.most_open.load(Ordering::SeqCst),
+            1,
+            "never two responses open at once"
+        );
+        assert_eq!(s.own_conns().len(), 1);
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn the_watch_answer_lists_the_films_audio() {
+        let Some(film) = film() else {
+            eprintln!("skipped: no ffmpeg command to make a fixture with");
+            return;
+        };
+        let _catalogue = movie_catalogue();
+        let s = server("vod-tracks");
+        enable(&s, true).await;
+        let (base, _) = films_from(&s, &film, "").await;
+        let cookie = browser_login(&s).await;
+        seed_movie(9_120_051, "mkv");
+        let body = Some(serde_json::json!({"movieId": 9_120_051, "audio": 1}));
+        let (st, body) = call(&s, from_page("POST", "/api/vod/watch", Some(&cookie), body)).await;
+        assert_eq!(st, StatusCode::OK, "{body}");
+        for leak in ["127.0.0.1", "secret-user", "secret-pass", base.as_str()] {
+            assert!(!body.to_string().contains(leak), "{leak} reached the browser: {body}");
+        }
+        let audio: Vec<_> = body["audio"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| (t["index"].as_u64().unwrap(), t["codec"].clone(), t["lang"].clone()))
+            .collect();
+        assert_eq!(
+            audio,
+            [(0, "aac".into(), "eng".into()), (1, "ac3".into(), "fre".into())],
+            "the file's, not the details'"
+        );
+        if crate::recording::livemux::can_encode_aac() {
+            assert_eq!(body["audioIndex"], 1);
+            assert_eq!(body["converting"], true, "no AC-3 in this browser");
+        }
+        assert_eq!(
+            body["subtitles"],
+            serde_json::json!([{"index": 0, "language": "eng", "title": "Forced", "text": true}])
+        );
+
+        // The first sound, unasked, plays as it is.
+        let replace = Some(serde_json::json!({"movieId": 9_120_051, "replaces": viewer_id(&body)}));
+        let (st, body) = call(&s, from_page("POST", "/api/vod/watch", Some(&cookie), replace)).await;
+        assert_eq!(st, StatusCode::OK, "{body}");
+        assert_eq!(body["audioIndex"], 0);
+        assert_eq!(body["converting"], false);
+        assert_eq!(s.own_conns().len(), 1);
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn subtitles_come_from_the_same_read_in_the_films_time() {
+        use std::sync::atomic::Ordering;
+        let Some(film) = film() else {
+            eprintln!("skipped: no ffmpeg command to make a fixture with");
+            return;
+        };
+        let _catalogue = movie_catalogue();
+        let s = server("vod-subs");
+        enable(&s, true).await;
+        let (_, counts) = films_from(&s, &film, "").await;
+        let cookie = browser_login(&s).await;
+        seed_movie(9_120_061, "mkv");
+        let (st, body) =
+            call(&s, from_page("POST", "/api/vod/watch", Some(&cookie), movie_body(9_120_061))).await;
+        assert_eq!(st, StatusCode::OK, "{body}");
+        let viewer = viewer_id(&body);
+        let stream = body["stream"].as_str().unwrap().to_string();
+        let subs = |q: &str| {
+            from_page("GET", &format!("/api/vod/subtitles/{viewer}/0{q}"), Some(&cookie), None)
+        };
+        // Cues come as the remux reads them, and are kept as they come.
+        async fn cues_once(
+            s: &Shared,
+            r: impl Fn() -> Request,
+            want: usize,
+        ) -> Vec<(f64, f64, String)> {
+            for _ in 0..50 {
+                let (st, h, doc) = call_raw(s, r()).await;
+                assert_eq!(st, StatusCode::OK);
+                assert_eq!(h[header::CONTENT_TYPE], "text/vtt; charset=utf-8");
+                let cues = vtt_cues(&String::from_utf8(doc).unwrap());
+                if cues.len() >= want {
+                    return cues;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            panic!("no cues came");
+        }
+        let cues_once = |want, q: &'static str| cues_once(&s, move || subs(q), want);
+
+        // Nothing read yet, nothing to show.
+        assert!(cues_once(0, "").await.is_empty());
+        let r = router(s.clone())
+            .oneshot(from_page("GET", &format!("{stream}?from=0"), Some(&cookie), None))
+            .await
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::OK);
+        assert!(is_ts(&read_all(r.into_body()).await));
+        let cues = cues_once(2, "").await;
+        assert_eq!(cues.len(), 2, "{cues:?}");
+        let close = |(a, z): (f64, f64), (want_a, want_z): (f64, f64)| {
+            (a - want_a).abs() < 0.1 && (z - want_z).abs() < 0.1
+        };
+        assert!(close((cues[0].0, cues[0].1), (1.0, 3.0)), "{cues:?}");
+        assert_eq!(cues[0].2, "Hello &amp; 1 &lt; 2");
+        assert!(close((cues[1].0, cues[1].1), (12.0, 14.0)), "{cues:?}");
+        assert_eq!(cues[1].2, "<i>Later</i>\non two lines");
+        let later = cues_once(1, "?after=5").await;
+        assert_eq!(later.len(), 1, "{later:?}");
+        assert_eq!(later[0].2, cues[1].2);
+
+        // A remux from 12 s: its cues alone, in the film's time.
+        let r = router(s.clone())
+            .oneshot(from_page("GET", &format!("{stream}?from=12"), Some(&cookie), None))
+            .await
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::OK);
+        assert!(x_start(&r) < 12.0);
+        assert!(is_ts(&read_all(r.into_body()).await));
+        let cues = cues_once(1, "").await;
+        assert_eq!(cues.len(), 1, "{cues:?}");
+        assert!(close((cues[0].0, cues[0].1), (12.0, 14.0)), "{cues:?}");
+        assert_eq!(cues[0].2, "<i>Later</i>\non two lines");
+
+        // Its own page's alone, and only the tracks there are.
+        assert_eq!(
+            call(&s, req("GET", &format!("/api/vod/subtitles/{viewer}/0"), HOME, false, Some(APP)))
+                .await
+                .0,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            call(&s, from_page("GET", &format!("/api/vod/subtitles/{viewer}/1"), Some(&cookie), None))
+                .await
+                .0,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(call(&s, subs("?after=later")).await.0, StatusCode::BAD_REQUEST);
+        let mut r = subs("");
+        r.headers_mut()
+            .insert("sec-fetch-site", HeaderValue::from_static("cross-site"));
+        assert_eq!(call(&s, r).await.0, StatusCode::FORBIDDEN);
+        assert_eq!(counts.most_open.load(Ordering::SeqCst), 1);
     }
 
     // ------------------------------------------------- the app's own player

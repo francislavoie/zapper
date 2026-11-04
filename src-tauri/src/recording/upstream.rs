@@ -8,15 +8,22 @@
 //! connection per viewer, never two for a moment, which a provider allowing
 //! one stream would refuse, or settle by ending the older.
 //!
+//! A remuxer's reads can be interrupted ([`HttpUpstream::interrupt_on`]):
+//! one waiting on the provider gives up at once, its request dropped, so a
+//! newer reading never waits on an older one's slow answer.
+//!
 //! The file is asked for with the movie's own user agent and referrer, as
 //! the app's player would ([`Playable`]). Errors are [`Failure`]s, whose
 //! words never carry the address (an Xtream address carries the account).
 
+use std::future::Future;
+use std::pin::Pin;
 use std::time::Duration;
 
 use bytes::{Buf, Bytes};
 use reqwest::header;
 use tokio::runtime::Handle;
+use tokio::sync::watch;
 
 use super::fallback::{Failure, STALL_SECS};
 use super::hub;
@@ -79,6 +86,10 @@ pub struct HttpUpstream {
     /// The open response, while nothing has been read from it, and the
     /// range it was asked for: asking for the same again takes it as it is.
     fresh: Option<(u64, Option<u64>, Span)>,
+    /// A remuxer's reads give up once this says `true`.
+    stop: Option<watch::Receiver<bool>>,
+    /// Why the provider last failed a remuxer's read.
+    failed: Option<Failure>,
 }
 
 impl HttpUpstream {
@@ -94,7 +105,55 @@ impl HttpUpstream {
             want: 0,
             size: None,
             fresh: None,
+            stop: None,
+            failed: None,
         })
+    }
+
+    /// From now on, a remuxer's read (and the request it waits on) gives up
+    /// as soon as `stop` says `true`; `None` for never.
+    pub fn interrupt_on(&mut self, stop: Option<watch::Receiver<bool>>) {
+        self.stop = stop;
+    }
+
+    /// Why the provider failed a remuxer's read, if it did since this was
+    /// last asked. An interrupted read is not a failure.
+    pub fn take_failure(&mut self) -> Option<Failure> {
+        self.failed.take()
+    }
+
+    fn stopped(&self) -> bool {
+        self.stop.as_ref().is_some_and(|s| *s.borrow())
+    }
+
+    /// Runs `op` on the runtime, from the remuxer's thread, until it is done
+    /// or the reading is told to stop.
+    fn wait<T>(
+        &mut self,
+        op: impl for<'a> FnOnce(
+            &'a mut Self,
+        ) -> Pin<Box<dyn Future<Output = Result<T, Failure>> + Send + 'a>>,
+    ) -> std::io::Result<T> {
+        let rt = self.rt.clone();
+        let mut stop = self.stop.take();
+        let done = rt.block_on(async {
+            tokio::select! {
+                r = op(self) => Some(r),
+                _ = until_stopped(&mut stop) => None,
+            }
+        });
+        self.stop = stop;
+        match done {
+            Some(Ok(v)) => Ok(v),
+            Some(Err(f)) => {
+                self.failed = Some(f);
+                Err(io(f))
+            }
+            None => {
+                self.close();
+                Err(interrupted())
+            }
+        }
     }
 
     /// The file's length, once a response has said it.
@@ -259,6 +318,20 @@ fn io(f: Failure) -> std::io::Error {
     std::io::Error::other(f.describe())
 }
 
+fn interrupted() -> std::io::Error {
+    std::io::Error::other("the reading was stopped")
+}
+
+/// Waits until `stop` says `true` (or its sender is gone); never without one.
+async fn until_stopped(stop: &mut Option<watch::Receiver<bool>>) {
+    match stop {
+        Some(s) => {
+            let _ = s.wait_for(|&s| s).await;
+        }
+        None => std::future::pending().await,
+    }
+}
+
 /// The remuxer's side: called on its own thread, never the runtime's, so
 /// the reads may block on the runtime handle.
 impl vodmux::Upstream for HttpUpstream {
@@ -266,7 +339,10 @@ impl vodmux::Upstream for HttpUpstream {
         if buf.is_empty() {
             return Ok(0);
         }
-        let rt = self.rt.clone();
+        if self.stopped() {
+            self.close();
+            return Err(interrupted());
+        }
         loop {
             if self.left.is_empty() {
                 if self.resp.is_none() {
@@ -274,11 +350,11 @@ impl vodmux::Upstream for HttpUpstream {
                         return Ok(0);
                     }
                     let want = self.want;
-                    if rt.block_on(self.open(want, None)).map_err(io)?.beyond {
+                    if self.wait(|u| Box::pin(u.open(want, None)))?.beyond {
                         return Ok(0);
                     }
                 }
-                match rt.block_on(self.next()).map_err(io)? {
+                match self.wait(|u| Box::pin(u.next()))? {
                     Some(b) => self.left = b,
                     None => return Ok(0),
                 }
@@ -317,14 +393,14 @@ impl vodmux::Upstream for HttpUpstream {
     }
 }
 
-/// A provider's file for the tests: 1 MB of a known pattern on
-/// 127.0.0.1, served with ranges, slowly enough that a response is still
-/// going when the next is asked for, and counting the responses open at
-/// once.
+/// A provider's file for the tests: 1 MB of a known pattern (or a file
+/// given) on 127.0.0.1, served with ranges, slowly enough that a response is
+/// still going when the next is asked for, and counting the responses open
+/// at once.
 #[cfg(test)]
 pub(crate) mod fake {
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -341,6 +417,8 @@ pub(crate) mod fake {
         pub requests: AtomicUsize,
         pub open: AtomicUsize,
         pub most_open: AtomicUsize,
+        /// The first byte each request asked for (0 without a range).
+        pub firsts: Mutex<Vec<usize>>,
     }
 
     /// Where it is, and its counts. A request is counted open a moment after
@@ -348,6 +426,13 @@ pub(crate) mod fake {
     /// first) and answered a while later still, so that a client that asked
     /// before dropping the response it had would be seen with two.
     pub async fn serve() -> (String, Arc<Counts>) {
+        serve_file(Arc::new((0..SIZE).map(byte).collect())).await
+    }
+
+    /// As [`serve`], with `file` for the file. A file under `/slow/` comes
+    /// at a tenth of the pace.
+    pub async fn serve_file(file: Arc<Vec<u8>>) -> (String, Arc<Counts>) {
+        let size = file.len();
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", l.local_addr().unwrap());
         let counts = Arc::new(Counts::default());
@@ -355,6 +440,7 @@ pub(crate) mod fake {
         tokio::spawn(async move {
             while let Ok((sock, _)) = l.accept().await {
                 let c = Arc::clone(&c);
+                let file = Arc::clone(&file);
                 tokio::spawn(async move {
                     let (mut rd, mut wr) = sock.into_split();
                     let mut req = Vec::new();
@@ -376,7 +462,11 @@ pub(crate) mod fake {
                         }
                     }
                     let _close = Close(Arc::clone(&c));
-                    tokio::time::sleep(Duration::from_millis(70)).await;
+                    // The client gone is seen at once, here as below.
+                    tokio::select! {
+                        _ = tokio::time::sleep(Duration::from_millis(70)) => {}
+                        _ = rd.read(&mut buf) => return,
+                    }
 
                     let text = String::from_utf8_lossy(&req).to_ascii_lowercase();
                     let range = text
@@ -385,10 +475,20 @@ pub(crate) mod fake {
                         .and_then(|r| r.trim().split_once('-'))
                         .map(|(a, b)| {
                             let a: usize = a.parse().unwrap_or(0);
-                            let b: usize = b.parse().unwrap_or(SIZE - 1);
-                            (a, b.min(SIZE - 1))
+                            let b: usize = b.parse().unwrap_or(size - 1);
+                            (a, b.min(size - 1))
                         });
-                    let (first, last) = range.unwrap_or((0, SIZE - 1));
+                    let (first, last) = range.unwrap_or((0, size - 1));
+                    c.firsts.lock().unwrap().push(first);
+                    if first >= size {
+                        let head = format!(
+                            "HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */{size}\r\nConnection: close\r\n\r\n"
+                        );
+                        let _ = wr.write_all(head.as_bytes()).await;
+                        return;
+                    }
+                    let pause =
+                        Duration::from_millis(if text.contains("/slow/") { 20 } else { 2 });
                     // A file under `/nolength/` is sent without saying its
                     // length: the connection's close ends it.
                     let length = if text.contains("/nolength/") {
@@ -398,10 +498,10 @@ pub(crate) mod fake {
                     };
                     let head = match range {
                         Some(_) => format!(
-                            "HTTP/1.1 206 Partial Content\r\nContent-Type: video/mp4\r\n{length}Content-Range: bytes {first}-{last}/{SIZE}\r\nAccept-Ranges: bytes\r\nConnection: close\r\n\r\n",
+                            "HTTP/1.1 206 Partial Content\r\nContent-Type: video/mp4\r\n{length}Content-Range: bytes {first}-{last}/{size}\r\nAccept-Ranges: bytes\r\nConnection: close\r\n\r\n",
                         ),
                         None => format!(
-                            "HTTP/1.1 200 OK\r\nContent-Type: video/mp4\r\nContent-Length: {SIZE}\r\nAccept-Ranges: bytes\r\nConnection: close\r\n\r\n"
+                            "HTTP/1.1 200 OK\r\nContent-Type: video/mp4\r\nContent-Length: {size}\r\nAccept-Ranges: bytes\r\nConnection: close\r\n\r\n"
                         ),
                     };
                     if wr.write_all(head.as_bytes()).await.is_err() {
@@ -410,14 +510,17 @@ pub(crate) mod fake {
                     let mut at = first;
                     while at <= last {
                         let end = (at + 16 * 1024).min(last + 1);
-                        let piece: Vec<u8> = (at..end).map(byte).collect();
+                        let piece = &file[at..end];
                         // The client gone is seen at once, written to or not.
                         tokio::select! {
-                            r = wr.write_all(&piece) => if r.is_err() { return },
+                            r = wr.write_all(piece) => if r.is_err() { return },
                             _ = rd.read(&mut buf) => return,
                         }
                         at = end;
-                        tokio::time::sleep(Duration::from_millis(2)).await;
+                        tokio::select! {
+                            _ = tokio::time::sleep(pause) => {}
+                            _ = rd.read(&mut buf) => return,
+                        }
                     }
                 });
             }
