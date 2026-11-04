@@ -1317,8 +1317,8 @@ select option {
   opacity: 1;
 }
 
-.rail-row:hover .rail-count,
-.rail-row:has(:focus-visible) .rail-count {
+.rail-row:not(.fixed):hover .rail-count,
+.rail-row:not(.fixed):has(:focus-visible) .rail-count {
   visibility: hidden;
 }
 
@@ -4408,14 +4408,6 @@ textarea.field {
    measured from the stage, so nothing else has to know. */
 .app.fullscreen .stage {
   inset: 0;
-}
-
-/* While a tab switch is pending. With both panes mounted the switch is
-   normally instantaneous and this never shows; it exists for the case where
-   the incoming pane has real work to do, so the rail reads as busy rather
-   than as frozen. */
-.rail.switching {
-  opacity: 0.85;
 }
 
 /* The scrollback preview. The hint was a single line of text; with an image
