@@ -27,6 +27,7 @@ import {
   recordingSections,
   recordingRowStatus,
   visibleSelection,
+  recordingFacts,
   recordingStatus,
   recordingWhen,
   RECORDING_DEFAULTS,
@@ -386,6 +387,13 @@ test("the rail says how many record now and how many are coming", () => {
 test("a selected recording that is gone is no longer selected", () => {
   assert.equal(keepSelected([rec({ id: 3 })], 3), 3);
   assert.equal(keepSelected([rec({ id: 3 })], 4), null);
-  assert.equal(keepSelected(null, 3), null);
+  assert.equal(keepSelected(null, 3), 3, "a service that does not answer leaves the choice");
+  assert.equal(keepSelected(null, null), null);
   assert.equal(keepSelected([rec({ id: 3 })], null), null);
+});
+
+test("the band's line about padding and where the files go", () => {
+  assert.equal(recordingFacts(rec({})), "Padding 1 min before, 5 after · Folder /v/News");
+  assert.equal(recordingFacts(rec({ padBefore: 0, padAfter: 0 })), "No padding · Folder /v/News");
+  assert.equal(recordingFacts(rec({ padBefore: 0, padAfter: 120 })), "Padding 0 min before, 2 after · Folder /v/News");
 });

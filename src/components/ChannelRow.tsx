@@ -22,6 +22,8 @@ export interface ChannelRowProps {
   channel: ChannelDto;
   top: number;
   selected: boolean;
+  /** The row the band's "Show its category" scrolled to: ringed. */
+  focused?: boolean;
   pending: boolean;
   onPlay: (c: ChannelDto) => void;
   /** Double-click: start it if it is not already going, and take the window. */
@@ -49,6 +51,7 @@ export const ChannelRow = memo(function ChannelRow({
   channel,
   top,
   selected,
+  focused,
   pending,
   onPlay,
   onOpenFull,
@@ -79,7 +82,7 @@ export const ChannelRow = memo(function ChannelRow({
 
   return (
     <button
-      className={`row ${selected ? "sel" : ""} ${pending ? "pending" : ""} ${failed ? "failed" : ""}`}
+      className={`row ${selected ? "sel" : ""} ${focused ? "focus" : ""} ${pending ? "pending" : ""} ${failed ? "failed" : ""}`}
       style={style}
       data-tip={failedTip(channel.quality, nowSec) ?? undefined}
       onClick={() => onPlay(channel)}

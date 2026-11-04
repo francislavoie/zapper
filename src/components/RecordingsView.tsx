@@ -53,8 +53,10 @@ export function RecordingsView() {
   const sections = recordings ? recordingSections(recordings, filter) : [];
 
   // A filter that hides the selected row, or a recording that is gone,
-  // leaves nothing selected rather than something out of sight.
-  const kept = visibleSelection(sections, selectedRecordingId);
+  // leaves nothing selected rather than something out of sight. A service
+  // that does not answer for a moment says nothing about either, so the
+  // choice waits for it.
+  const kept = recordings === null ? selectedRecordingId : visibleSelection(sections, selectedRecordingId);
   useEffect(() => {
     if (kept !== selectedRecordingId) dispatch({ type: "selectRecording", id: kept });
   }, [dispatch, kept, selectedRecordingId]);

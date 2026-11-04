@@ -1,14 +1,28 @@
 // The band above the Recordings list: the selected recording, and what can be
-// done to it. Its pieces arrive here as they are needed; BackupLine, the
-// picker for a recording's backup channel, is the first.
+// done to it. Everything the old Recordings window offered per row is here:
+// stop or cancel it, open its folder, delete it, change its backup, read its
+// conflicts and notes.
 
 import { useEffect, useState } from "react";
-import { setRecordingBackup } from "../actions";
-import { backend } from "../backend";
+import { cancelRecording, deleteRecording, setRecordingBackup } from "../actions";
+import { backend, capabilities } from "../backend";
+import { useClock } from "../hooks/useClock";
 import { errorMessage } from "../logic/async";
-import { backupCandidateLabel, backupText } from "../logic/recordings";
-import { useDispatch } from "../store";
-import type { BackupsDto, RecordingDto } from "../types";
+import {
+  backupCandidateLabel,
+  backupText,
+  conflictLosesProgramme,
+  conflictText,
+  episodeLabel,
+  recordingFacts,
+  recordingRowStatus,
+  recordingStatus,
+  recordingWhen,
+} from "../logic/recordings";
+import { categoryNames } from "../logic/searchGroups";
+import { useApp, useDispatch } from "../store";
+import type { BackupsDto, ChannelDto, RecordingDto } from "../types";
+import { RecDot } from "./RecDot";
 
 /** The channel a recording falls back to when its own feed fails, and a
  *  small picker to change it: the service's candidates, best first, and
@@ -97,5 +111,118 @@ export function BackupLine({ rec }: { rec: RecordingDto }) {
         </div>
       ) : null}
     </div>
+  );
+}
+
+/** The selected recording: what it is, how it is going, and what can be done
+ *  with it. Keyed by the recording's id where it is used, so a half-made
+ *  choice (the delete confirmation, the open notes) does not follow the
+ *  selection to another recording. */
+export function RecordingBand({ rec, channel }: { rec: RecordingDto; channel: ChannelDto | null }) {
+  const dispatch = useDispatch();
+  const { categories } = useApp();
+  const now = useClock(5_000);
+  const [confirming, setConfirming] = useState(false);
+  const [notes, setNotes] = useState(false);
+  const label = episodeLabel(rec);
+  const category =
+    channel?.categoryId != null && categories.status === "ready"
+      ? categoryNames(categories.data).get(channel.categoryId)
+      : undefined;
+  const barred = rec.state === "recording" || rec.state === "finishing";
+  const active = barred || rec.state === "scheduled";
+  const status = recordingStatus(rec, now);
+  const statusText = rec.state === "recording" && !rec.waiting ? `recording · ${status}` : status;
+  const openFolder = () =>
+    backend
+      .openRecordingFolder(rec.id)
+      .catch((e: unknown) => dispatch({ type: "toast", text: `Open folder: ${errorMessage(e)}` }));
+
+  return (
+    <>
+      <h2 className="watch-title-h" data-tip-overflow="">
+        {active ? <RecDot recording={rec} /> : null}
+        {rec.title}
+        {label ? ` ${label}` : ""}
+      </h2>
+      <p className="watch-cat" data-tip-overflow="">
+        {[rec.channelName, category].filter(Boolean).join(" · ")}
+      </p>
+      <div className="watch-sub">
+        <span className="watch-time">{recordingWhen(rec, now)}</span>
+      </div>
+      {barred ? (
+        <div className="watch-prog-line">
+          <div className="watch-progress">
+            <span
+              style={{
+                width: `${Math.round((rec.state === "recording" ? (recordingRowStatus(rec, now).progress ?? 0) : 1) * 100)}%`,
+              }}
+            />
+          </div>
+          <span className={`watch-left ${rec.waiting ? "bad" : ""}`}>{statusText}</span>
+        </div>
+      ) : (
+        <p className={`watch-state ${rec.state === "failed" ? "bad" : ""}`}>{status}</p>
+      )}
+      <p className="watch-facts">
+        {recordingFacts(rec)}
+      </p>
+      {rec.state === "scheduled" || rec.state === "recording" ? <BackupLine rec={rec} /> : null}
+      {rec.conflicts?.length ? (
+        <ul className="rec-conflicts">
+          {rec.conflicts.map((c, i) => (
+            <li key={i} className={`rec-conflict ${conflictLosesProgramme(c) ? "bad" : ""}`}>
+              {conflictText(c)}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {rec.notes.length > 0 ? (
+        <button className="link rec-notes-toggle" onClick={() => setNotes(!notes)}>
+          {notes ? "Hide notes" : `${rec.notes.length} ${rec.notes.length === 1 ? "note" : "notes"}`}
+        </button>
+      ) : null}
+      {notes ? (
+        <ul className="rec-notes">
+          {rec.notes.map((n, i) => (
+            <li key={i}>{n}</li>
+          ))}
+        </ul>
+      ) : null}
+      <div className="watch-actions">
+        {rec.state === "scheduled" ? (
+          <button className="ctl" onClick={() => void cancelRecording(dispatch, rec)}>
+            Cancel
+          </button>
+        ) : null}
+        {rec.state === "recording" ? (
+          <button className="ctl" onClick={() => void cancelRecording(dispatch, rec)}>
+            Stop
+          </button>
+        ) : null}
+        {capabilities.localService && (barred || rec.state === "done") ? (
+          <button className="ctl" onClick={() => void openFolder()}>
+            Open folder
+          </button>
+        ) : null}
+        {rec.state === "done" || rec.state === "failed" ? (
+          confirming ? (
+            <button
+              className="ctl danger"
+              onClick={() => void deleteRecording(dispatch, rec)}
+              onBlur={() => setConfirming(false)}
+              autoFocus
+            >
+              {rec.parts.length > 0 ? "Delete the files" : "Remove"}
+            </button>
+          ) : (
+            <button className="ctl" onClick={() => setConfirming(true)}>
+              {rec.state === "done" ? "Delete…" : "Remove"}
+            </button>
+          )
+        ) : null}
+      </div>
+    </>
   );
 }
