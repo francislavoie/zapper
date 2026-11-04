@@ -5,6 +5,8 @@ import {
   PAUSE_RELEASE_MS,
   STALL_LIMIT_MS,
   STUCK_LIMIT,
+  NOT_STUCK,
+  UNSTUCK_AFTER_S,
   PROGRESS_EVERY_MS,
   bufferedEnd,
   cueTimes,
@@ -17,6 +19,9 @@ import {
   releaseDue,
   seekPlan,
   stallDue,
+  stuckAfterPlay,
+  stuckAgain,
+  stuckTooOften,
   subtitleAfter,
   vodStreamUrl,
 } from "../logic/webVod.ts";
@@ -89,7 +94,38 @@ test("a playing film whose place stands still for half a minute has stalled", ()
   // Moving, or paused, starts the count again.
   assert.deepEqual(movedAt(first, 20_000, 10.5, false), { at: 20_000, position: 10.5 });
   assert.deepEqual(movedAt(first, 40_000, 10, true), { at: 40_000, position: 10 });
-  assert.ok(STUCK_LIMIT >= 1);
+});
+
+test("a film stuck three times in a row is given up on; reopened twice, it is not", () => {
+  assert.equal(STUCK_LIMIT, 2);
+  let st = NOT_STUCK;
+  st = stuckAgain(st);
+  assert.equal(stuckTooOften(st), false);
+  st = stuckAgain(st);
+  assert.equal(stuckTooOften(st), false);
+  st = stuckAgain(st);
+  assert.equal(stuckTooOften(st), true);
+});
+
+test("being stuck ends only after ten seconds of play past where it stuck", () => {
+  assert.equal(UNSTUCK_AFTER_S, 10);
+  let st = stuckAgain(NOT_STUCK);
+  // A twitch after a reopen is not playing again.
+  st = stuckAfterPlay(st, 100, 100.25);
+  assert.equal(st.count, 1);
+  for (let t = 100.25; t < 109.5; t += 0.25) st = stuckAfterPlay(st, t, t + 0.25);
+  assert.equal(st.count, 1, `played ${st.played}`);
+  st = stuckAfterPlay(st, 109.5, 110);
+  assert.deepEqual(st, NOT_STUCK);
+  // A seek, forward or back, is not play.
+  st = stuckAgain(NOT_STUCK);
+  st = stuckAfterPlay(st, 100, 400);
+  st = stuckAfterPlay(st, 400, 50);
+  assert.deepEqual(st, { count: 1, played: 0 });
+  // Sticking again starts the count of play over.
+  st = stuckAfterPlay(st, 50, 51);
+  st = stuckAgain(st);
+  assert.deepEqual(st, { count: 2, played: 0 });
 });
 
 test("a film the service let go is watched again only when the element wants more", () => {
