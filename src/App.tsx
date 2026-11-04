@@ -337,6 +337,16 @@ export function App() {
     };
   }, [openMovie, knownMovie, dispatch]);
 
+  // The player letting go of a movie (stopped, or a channel played) leaves
+  // the store with nothing playing, so the next movie the player reports is
+  // looked up. Only on that transition: the store learns of a movie it
+  // starts before the player reports it.
+  const hadMovie = useRef(false);
+  useEffect(() => {
+    if (openMovie === null && hadMovie.current) dispatch({ type: "movies/playing", movie: null });
+    hadMovie.current = openMovie !== null;
+  }, [openMovie, dispatch]);
+
   // Whether the account has movies decides if the Movies tab is shown at
   // all, so it is asked for at launch and again after a sync (marks refresh
   // it themselves).

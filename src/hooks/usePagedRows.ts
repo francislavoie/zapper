@@ -3,7 +3,7 @@
 // says what it holds may have changed. The bookkeeping, and what keeps a late
 // answer out of the wrong list, is in logic/pagedRows.ts.
 
-import { useCallback, useReducer, useRef } from "react";
+import { useCallback, useEffect, useReducer, useRef } from "react";
 import { errorMessage } from "../logic/async";
 import { PageBook } from "../logic/pagedRows";
 import { PAGE_SIZE } from "../logic/virtual";
@@ -21,10 +21,14 @@ export function usePagedRows<T>(
   key: string,
   fetchPage: (offset: number, limit: number) => Promise<{ total: number; items: T[] }>,
   revision: number,
+  /** A cache several lists share, so a second view of the same list (the
+   *  Movies list stacked under the picture) neither fetches again nor starts
+   *  empty. Without one the list has its own. */
+  shared?: PageBook<T>,
 ): PagedRows<T> {
   const [, bump] = useReducer((n: number) => n + 1, 0);
   const held = useRef<PageBook<T> | null>(null);
-  held.current ??= new PageBook<T>();
+  held.current ??= shared ?? new PageBook<T>();
   const book = held.current;
   // The reset happens during render, so another list never shows the last
   // one's rows for a frame, and a refresh does not fetch into a cache that
@@ -49,16 +53,19 @@ export function usePagedRows<T>(
       fetchRef
         .current(page * PAGE_SIZE, PAGE_SIZE)
         .then((r) => {
-          if (b.accept(ticket, page, r.total, r.items)) bump();
+          b.accept(ticket, page, r.total, r.items);
         })
         .catch((e: unknown) => {
-          if (b.fail(ticket, page, errorMessage(e))) bump();
+          b.fail(ticket, page, errorMessage(e));
         });
     }
     // `key` and `revision` are what make this a new function when the list
     // changes, and so what makes the list's window effect ask again for the
     // pages it is showing.
   }, [book, key, revision]);
+
+  // Every answer redraws every list on this book, this one included.
+  useEffect(() => book.subscribe(bump), [book]);
 
   const retry = useCallback(() => {
     book.retry();

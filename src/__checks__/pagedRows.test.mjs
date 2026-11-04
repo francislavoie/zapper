@@ -87,6 +87,22 @@ test("a refresh scrolled far down learns the new length from page 0", () => {
   assert.deepEqual(b.want(4000, 4040), [0, 20]);
 });
 
+test("every list on a book hears an answer, and stops hearing when it leaves", () => {
+  const b = new PageBook();
+  b.sync("a", 0);
+  let heard = 0;
+  const off = b.subscribe(() => heard++);
+  b.begin(b.ticket, 0);
+  b.accept(b.ticket, 0, 10, rows(0, 10));
+  assert.equal(heard, 1);
+  b.begin(b.ticket, 1);
+  b.fail(b.ticket, 1, "x");
+  assert.equal(heard, 2);
+  off();
+  b.accept(b.ticket, 0, 10, rows(0, 10));
+  assert.equal(heard, 2);
+});
+
 test("another list starts empty, not showing the last one's rows", () => {
   const b = new PageBook();
   b.sync("a", 0);

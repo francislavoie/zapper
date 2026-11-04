@@ -93,7 +93,7 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
         } else if (state.section === "movies" && state.movies.query !== "") {
           // A search belongs to the tab it was typed on.
           dispatch({ type: "movies/query", text: "" });
-        } else if (state.query !== "") {
+        } else if (state.section !== "movies" && state.query !== "") {
           dispatch({ type: "query", text: "" });
         } else if (state.mode === "guide") {
           dispatch({ type: "mode", mode: "browse" });

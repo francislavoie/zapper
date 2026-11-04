@@ -27,6 +27,18 @@ export class PageBook<T> {
    *  is known. */
   private staleTotal: number | null = null;
   error: string | null = null;
+  private listeners = new Set<() => void>();
+
+  /** Called whenever an answer changes what the book holds, so every list
+   *  drawing from it redraws. */
+  subscribe(fn: () => void): () => void {
+    this.listeners.add(fn);
+    return () => void this.listeners.delete(fn);
+  }
+
+  private notify(): void {
+    for (const fn of this.listeners) fn();
+  }
 
   /** Moves to `key` at `revision`; true when that reset the book. */
   sync(key: string, revision: number): boolean {
@@ -96,6 +108,7 @@ export class PageBook<T> {
       if (p * PAGE_SIZE >= total) this.stale.delete(p);
     }
     this.error = null;
+    this.notify();
     return true;
   }
 
@@ -105,6 +118,7 @@ export class PageBook<T> {
     this.inflight.delete(page);
     this.failed.add(page);
     this.error = message;
+    this.notify();
     return true;
   }
 

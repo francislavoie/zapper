@@ -11,12 +11,13 @@
 // Enter opens its sheet. Neither plays anything: browsing never touches the
 // picture that is on.
 
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { backend } from "../backend";
 import { searchInputRegistration } from "../focus";
 import { useClock } from "../hooks/useClock";
 import { useMovieSearch } from "../hooks/useMovieSearch";
 import { usePagedRows } from "../hooks/usePagedRows";
+import { PageBook } from "../logic/pagedRows";
 import { movieCursorKey, scrollToShow } from "../logic/movieKeys";
 import {
   MOVIE_SORTS,
@@ -46,6 +47,10 @@ import { SearchField } from "./SearchField";
 /** Grid rows drawn above and below the screen's. */
 const GRID_OVERSCAN = 1;
 const NO_ROWS = () => undefined;
+
+/** The one cache every Movies list draws from: the browse grid's and the one
+ *  stacked under the picture show the same titles. */
+const MOVIE_PAGES = new PageBook<MovieDto>();
 const NOOP = () => {};
 
 const sameRange = (a: YearRange | null, b: YearRange | null) =>
@@ -79,6 +84,7 @@ export function MoviesList({ besideRail = true }: { besideRail?: boolean }) {
     listKey,
     (offset, limit) => backend.movies(query, offset, limit),
     movies.revision,
+    MOVIE_PAGES,
   );
   const found = useMovieSearch(movies.query);
   const foundRows = found.status === "ready" ? found.data : null;
@@ -90,12 +96,22 @@ export function MoviesList({ besideRail = true }: { besideRail?: boolean }) {
 
   // What a mark has said since the page was fetched, over what the page
   // holds: the rows reload on a mark, but not before the answer is back.
+  // The patched row is kept per title, so a marked title is the same object
+  // from one render to the next and its memoised row is not redrawn.
   const marks = movies.marks;
+  const patched = useRef(new Map<number, MovieDto>());
   const rowAt = useCallback(
     (i: number): MovieDto | undefined => {
       const m = searching ? foundRows?.[i] : paged.rowAt(i);
       const k = m ? marks[m.movieId] : undefined;
-      return m && k ? { ...m, favourite: k.favourite, watched: k.watched } : m;
+      if (!m || !k) return m;
+      const had = patched.current.get(m.movieId);
+      if (had && had.favourite === k.favourite && had.watched === k.watched && had.name === m.name && had.added === m.added && had.posterUrl === m.posterUrl) {
+        return had;
+      }
+      const next = { ...m, favourite: k.favourite, watched: k.watched };
+      patched.current.set(m.movieId, next);
+      return next;
     },
     [searching, foundRows, paged.rowAt, marks],
   );
@@ -147,11 +163,15 @@ export function MoviesList({ besideRail = true }: { besideRail?: boolean }) {
 
   const selectedId = movies.selected?.movieId ?? null;
   const onSelect = useCallback(
-    (m: MovieDto) => dispatch({ type: "movies/selectMovie", movie: m }),
+    (m: MovieDto, index: number) => {
+      cursor.current = index;
+      dispatch({ type: "movies/selectMovie", movie: m });
+    },
     [dispatch],
   );
   const onOpen = useCallback(
-    (m: MovieDto) => {
+    (m: MovieDto, index: number) => {
+      cursor.current = index;
       dispatch({ type: "movies/selectMovie", movie: m });
       dispatch({ type: "movies/sheet", id: m.movieId });
     },
@@ -160,14 +180,19 @@ export function MoviesList({ besideRail = true }: { besideRail?: boolean }) {
 
   /** The index the keys move from: the one last moved to while its row is
    *  still on its way, else wherever the selected title is. */
-  const currentIndex = (): number => {
+  const currentIndex = (full = false): number => {
     const c = cursor.current;
     if (c !== null) {
       const at = rowAt(c);
       if (at === undefined || at.movieId === selectedId) return c;
     }
     if (selectedId === null) return -1;
-    for (let i = 0; i < total; i++) if (rowAt(i)?.movieId === selectedId) return i;
+    // Where it was not remembered (selected from elsewhere): the rows on
+    // screen, or on request every loaded one. Never the whole catalogue on
+    // a key press.
+    for (let i = full ? 0 : first; i < (full ? total : last); i++) {
+      if (rowAt(i)?.movieId === selectedId) return i;
+    }
     return -1;
   };
 
@@ -247,12 +272,48 @@ export function MoviesList({ besideRail = true }: { besideRail?: boolean }) {
     saveMoviesView(view);
     dispatch({ type: "movies/view", view });
     // The offsets mean different things in the two views; the selection is
-    // the same title, so keep it in sight.
-    viewportRef.current?.scrollTo({ top: 0 });
-    setScrollTop(0);
+    // the same title, so it is brought into sight once the new view is laid
+    // out (below).
+    refit.current = true;
   };
 
+  const refit = useRef(false);
+  useEffect(() => {
+    if (!refit.current) return;
+    refit.current = false;
+    const el = viewportRef.current;
+    if (!el) return;
+    const at = currentIndex(true);
+    let top = 0;
+    if (at >= 0) {
+      const row = posters ? Math.floor(at / grid.columns) : at;
+      top = scrollToShow(
+        posters ? POSTER_GAP + row * grid.rowHeight : row * LIST_ROW_HEIGHT,
+        rowStep,
+        0,
+        size.height,
+      );
+    }
+    el.scrollTo({ top });
+    setScrollTop(top);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [movies.view]);
+
   // --------------------------------------------------------------- drawing
+
+  // Ids are per list: two lists (the browse grid's, hidden, and the stacked
+  // one) can be in the page at once. The active descendant is named only
+  // while its row is drawn.
+  const idPrefix = `movie${useId()}`;
+  let selectedShown = false;
+  if (selectedId !== null) {
+    for (let i = first; i < last; i++) {
+      if (rowAt(i)?.movieId === selectedId) {
+        selectedShown = true;
+        break;
+      }
+    }
+  }
 
   const rows = [];
   if (!posters) {
@@ -268,6 +329,8 @@ export function MoviesList({ besideRail = true }: { besideRail?: boolean }) {
           key={m.movieId}
           movie={m}
           top={top}
+          index={i}
+          idPrefix={idPrefix}
           selected={m.movieId === selectedId}
           now={now}
           onSelect={onSelect}
@@ -368,11 +431,11 @@ export function MoviesList({ besideRail = true }: { besideRail?: boolean }) {
       ) : null}
 
       <div
-        className={`viewport movies-viewport ${posters ? "posters" : ""}`}
+        className={`viewport movies-viewport ${posters ? "posters" : ""} ${selectedId !== null ? "has-sel" : ""}`}
         ref={viewportRef}
         role="listbox"
         aria-label={heading}
-        aria-activedescendant={selectedId !== null ? `movie-${selectedId}` : undefined}
+        aria-activedescendant={selectedShown ? `${idPrefix}-${selectedId}` : undefined}
         tabIndex={0}
         onKeyDown={onKeyDown}
         onScroll={(e) => {
@@ -391,6 +454,7 @@ export function MoviesList({ besideRail = true }: { besideRail?: boolean }) {
               total={total}
               rowAt={total > 0 ? rowAt : NO_ROWS}
               selectedId={selectedId}
+              idPrefix={idPrefix}
               now={now}
               onSelect={onSelect}
               onOpen={onOpen}
