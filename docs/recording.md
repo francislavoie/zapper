@@ -821,6 +821,12 @@ The catalogue, for the web interface (the app or a device); channels come as the
 | `GET /api/recent?limit=` | the channels watched most recently, newest first |
 | `GET /api/sync` | `{phase, message, channelsTotal, lastSynced}`; `POST /api/sync` asks for a refresh (`202`) |
 | `GET /api/logo/{id}` | the channel's logo, fetched by the service |
+| `GET /api/vod/summary`, `GET /api/vod/categories` | `MoviesSummaryDto` (whether there are movies, and how many); the movie categories with their counts |
+| `GET /api/vod/movies?list=&category=&sort=&from=&to=&offset=&limit=` | a page of movies, `{total, items}`: `list` is `favourites`, `recent`, `watched` or `category` (which needs `category`, else `400`); `sort` is `added`, `az`, `year` or `rating`; `from`/`to` bound the year; `limit` at most 1000 |
+| `GET /api/vod/movies/search?q=&limit=` | movies by name, best match first |
+| `GET /api/vod/movies/{id}`, `GET /api/vod/movies/{id}/similar?limit=` | a movie's details (asked of the provider the first time it is opened in a week, then kept); movies like it. `404` for one not in the catalogue |
+| `PUT /api/vod/movies/{id}/marks`, `PUT /api/vod/movies/{id}/progress` | `{favourite?, watched?}` and `{position, duration?}` (seconds); both answer the movie's marks. Past 92 % counts as watched |
+| `GET /api/poster/movie/{id}`, `GET /api/backdrop/movie/{id}/{n}` | the picture, fetched by the service like a logo (up to 4 MB); `posterUrl` and `backdropUrls` always point here, never at the provider |
 | `GET /api/account` | the provider account as the app's `AccountDto`, with no secret in it (`hasPassword`, `tvheadendHasPassword`; addresses with `<redacted>` in place of a login, flagged `playlistRedacted`, `epgRedacted`, `hdhomerunEpgRedacted`) and an empty `path` |
 | `PUT /api/account` | saves a form and makes its kind the one in use: `{kind: "xtream", host, username, password}`, `{kind: "m3u", playlist, epgUrls, userAgent}`, `{kind: "hdhomerun", device, epgUrls}` or `{kind: "tvheadend", url, username, password}`. An empty password, or `null` for `playlist` or `epgUrls`, keeps what is on file. Asks for a sync; returns the same as `GET`. `400 {"error"}` with what is wrong, never with what was sent |
 | `POST /api/account/test` | the same body, tested as typed and not saved (`{result}`, or `400 {"error"}`); with no body, the account on file |
