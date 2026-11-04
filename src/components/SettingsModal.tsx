@@ -681,7 +681,7 @@ function GuidePage({ s }: { s: SettingsControl }) {
 function DataPage({ s }: { s: SettingsControl }) {
   const { sync } = useApp();
   const dispatch = useDispatch();
-  const syncing = sync.phase === "categories" || sync.phase === "channels" || sync.phase === "epg";
+  const syncing = sync.phase === "categories" || sync.phase === "channels" || sync.phase === "epg" || sync.phase === "movies";
   return (
     <>
       <SettingsGroup heading="Catalogue">
