@@ -1993,6 +1993,15 @@ pub(crate) mod tests {
         );
     }
 
+    /// Held for the whole of every test here that lands or seeds movies:
+    /// the test catalogue is one for the process, and a landing sets aside
+    /// every movie it does not list, another test's included.
+    static MOVIE_CATALOGUE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn movie_catalogue() -> std::sync::MutexGuard<'static, ()> {
+        MOVIE_CATALOGUE.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     /// Movies 9_100_001.. in one category; the first has the poster at
     /// `poster`, and (in its kept details) one backdrop at `backdrop`. The
     /// second has kept details of a playlist's kind: nothing but a record.
@@ -2029,6 +2038,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn the_movie_catalogue_is_read_and_marked_without_provider_addresses() {
+        let _catalogue = movie_catalogue();
         let s = server("vod");
         enable(&s, true).await;
         let poster = "http://provider.example/u/secret-user/p/secret-pass/poster.jpg";
@@ -2126,6 +2136,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn posters_and_backdrops_are_fetched_by_the_service() {
+        let _catalogue = movie_catalogue();
         let provider = crate::test_http::serve(|r, _| match r.route() {
             "/poster.jpg" | "/back.jpg" => {
                 crate::test_http::Reply::ok(b"\xff\xd8 fake".to_vec()).header("Content-Type", "image/jpeg")
@@ -2162,6 +2173,7 @@ pub(crate) mod tests {
     #[test]
     fn a_failed_details_fetch_does_not_tell_the_page_where_the_provider_is() {
         use crate::catalog::{db, vod_sync};
+        let _catalogue = movie_catalogue();
         let provider = crate::test_http::serve(|_, _| crate::test_http::Reply::new(500, "nope"));
         with_account("vodfail", async {
             crate::catalog::credentials::save(&crate::xtream::Credentials {
@@ -2809,8 +2821,9 @@ pub(crate) mod tests {
     // ------------------------------------------------------- watching movies
 
     /// Movie `id` in the catalogue as `container`, its kept details saying
-    /// H.264 video and AAC sound. Written afresh before each use: another
-    /// test's landing of its own movies sets aside every other one.
+    /// H.264 video and AAC sound. The caller holds [`movie_catalogue`];
+    /// written afresh before each use all the same, as a sync elsewhere in
+    /// the tests may land a catalogue without its movies.
     fn seed_movie(id: i64, container: &str) {
         use crate::catalog::{db, vod_store};
         db::install_test_db();
@@ -2863,6 +2876,7 @@ pub(crate) mod tests {
     async fn a_new_request_ends_the_one_before() {
         use crate::recording::upstream::fake;
         use std::sync::atomic::Ordering;
+        let _catalogue = movie_catalogue();
         let s = server("vod-watch");
         enable(&s, true).await;
         let (base, counts) = fake::serve().await;
@@ -2895,6 +2909,10 @@ pub(crate) mod tests {
         r.headers_mut()
             .insert("sec-fetch-site", HeaderValue::from_static("cross-site"));
         assert_eq!(call(&s, r).await.0, StatusCode::FORBIDDEN);
+        // A HEAD asks the provider nothing (counted below).
+        let (st, h, _) = call_raw(&s, from_page("HEAD", &stream, Some(&cookie), None)).await;
+        assert_eq!(st, StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(h[header::ALLOW], "GET");
 
         // The browser's player reads from the start...
         let get = |range| with_range(from_page("GET", &stream, Some(&cookie), None), range);
@@ -2937,6 +2955,18 @@ pub(crate) mod tests {
             "the first reading took the response opened for the viewer"
         );
 
+        // A request a newer one supersedes while the provider is still
+        // answering it is given up at once, not answered late.
+        let (older, newer) = tokio::join!(router(s.clone()).oneshot(get("bytes=100000-")), async {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            router(s.clone()).oneshot(get("bytes=200000-")).await
+        });
+        assert_eq!(older.unwrap().status(), StatusCode::CONFLICT);
+        let newer = newer.unwrap();
+        assert_eq!(newer.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(newer.headers()[header::CONTENT_RANGE], "bytes 200000-999999/1000000");
+        drop(newer);
+
         // A Matroska file is the remuxer's, which this stream does not run:
         // said so. It replaces the first viewer, which lets its file go.
         seed_movie(9_120_002, "mkv");
@@ -2975,6 +3005,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn a_browser_cannot_watch_more_than_its_share() {
+        let _catalogue = movie_catalogue();
         let s = server("vod-share");
         enable(&s, true).await;
         let (feeds, _) = feed_server().await;
@@ -3009,6 +3040,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn a_movie_viewer_holds_one_of_the_accounts_connections_and_anyway_takes_it() {
+        let _catalogue = movie_catalogue();
         let s = server_with("vod-full", Box::new(Full));
         enable(&s, true).await;
         let (feeds, _) = feed_server().await;
@@ -3051,6 +3083,84 @@ pub(crate) mod tests {
         assert_eq!(status["takenOver"], true);
         assert_eq!(s.own_conns().len(), 1);
         assert_eq!(s.own_conns()[0].feed, 8);
+    }
+
+    /// An account with room until `full` is set, then full with two
+    /// connections in use.
+    struct FullWhen(Arc<std::sync::atomic::AtomicBool>);
+    impl Budget for FullWhen {
+        fn check(
+            &self,
+            _own: usize,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Slots> + Send + '_>> {
+            let full = self.0.load(std::sync::atomic::Ordering::SeqCst);
+            Box::pin(async move {
+                if full {
+                    Slots::Full { active: 2, max: 2 }
+                } else {
+                    Slots::Free
+                }
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_device_making_room_for_itself_never_ends_another_devices_viewer_of_the_same_movie() {
+        let _catalogue = movie_catalogue();
+        let full = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let s = server_with("vod-same", Box::new(FullWhen(Arc::clone(&full))));
+        enable(&s, true).await;
+        let (base, _) = crate::recording::upstream::fake::serve().await;
+        movies_from(&s, &base);
+        let cookie = browser_login(&s).await;
+        let app = |body| {
+            let mut r = req_body("POST", "/api/vod/watch", HOME, false, Some(APP), body);
+            r.headers_mut()
+                .insert(header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
+            r
+        };
+        let status = |id: &str, page: bool| {
+            let uri = format!("/api/vod/watch/{id}");
+            if page {
+                from_page("GET", &uri, Some(&cookie), None)
+            } else {
+                req("GET", &uri, HOME, false, Some(APP))
+            }
+        };
+
+        // The app watches movie 9 first, then this browser does: two
+        // connections on the movie's one feed, the app's the older.
+        seed_movie(9_120_031, "mp4");
+        let (st, body) = call(&s, app(movie_body(9_120_031))).await;
+        assert_eq!(st, StatusCode::OK, "{body}");
+        let other = viewer_id(&body);
+        let (st, body) =
+            call(&s, from_page("POST", "/api/vod/watch", Some(&cookie), movie_body(9_120_031))).await;
+        assert_eq!(st, StatusCode::OK, "{body}");
+        let mine = viewer_id(&body);
+        assert_eq!(s.own_conns().len(), 2);
+        full.store(true, std::sync::atomic::Ordering::SeqCst);
+
+        // The browser asks again, its old viewer not named: its own is the
+        // one that makes room, never the app's.
+        let (st, body) =
+            call(&s, from_page("POST", "/api/vod/watch", Some(&cookie), movie_body(9_120_031))).await;
+        assert_eq!(st, StatusCode::OK, "{body}");
+        let newer = viewer_id(&body);
+        let (_, st_other) = call(&s, status(&other, false)).await;
+        assert_eq!(st_other["ended"], serde_json::Value::Null, "{st_other}");
+        let (_, st_mine) = call(&s, status(&mine, true)).await;
+        assert_eq!(st_mine["takenOver"], true, "{st_mine}");
+
+        // And replacing it by name ends only it.
+        let replace = Some(serde_json::json!({"movieId": 9_120_031, "replaces": newer}));
+        let (st, body) = call(&s, from_page("POST", "/api/vod/watch", Some(&cookie), replace)).await;
+        assert_eq!(st, StatusCode::OK, "{body}");
+        let (_, st_other) = call(&s, status(&other, false)).await;
+        assert_eq!(st_other["ended"], serde_json::Value::Null, "{st_other}");
+        let (st, _) = call(&s, status(&newer, true)).await;
+        assert_eq!(st, StatusCode::NOT_FOUND, "the replaced viewer is gone");
+        assert_eq!(s.own_conns().len(), 2);
     }
 
     // ------------------------------------------------- the app's own player
