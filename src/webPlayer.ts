@@ -445,9 +445,13 @@ function release(s: Session | null, forgetViewer: boolean) {
   if (forgetViewer) void forget(s.viewer);
 }
 
-async function forget(viewer: string) {
+/** Lets the service's viewer go. `keepalive`: sent even as the page goes. */
+async function forget(viewer: string, keepalive = false) {
   try {
-    await fetch(`/api/watch/${encodeURIComponent(viewer)}`, requestInit("DELETE"));
+    await fetch(`/api/watch/${encodeURIComponent(viewer)}`, {
+      ...requestInit("DELETE"),
+      keepalive,
+    });
   } catch {
     // The service lets an unread viewer go by itself.
   }
@@ -552,8 +556,10 @@ function tick() {
   });
 }
 
-/** Paused too long: the stream goes, the frame stays. */
-function suspend(s: Session) {
+/** Paused too long, or the page going: the stream goes, the frame stays.
+ *  `leaving`: the page is being closed or put away, and letting the
+ *  viewer go must outlive it. */
+function suspend(s: Session, leaving = false) {
   s.suspended = true;
   try {
     s.player?.destroy();
@@ -561,8 +567,19 @@ function suspend(s: Session) {
     // Gone already.
   }
   s.player = null;
-  void forget(s.viewer);
+  void forget(s.viewer, leaving);
   patch({ state: "paused", bufferedBack: 0, behindLive: 0, atLiveEdge: true });
+}
+
+// A closed tab would otherwise hold its channel's connection until the
+// service notices nobody reads it. Let go as the page goes; a page restored
+// from the browser's back-forward cache starts the channel again when
+// played, as after a long pause.
+if (typeof window !== "undefined") {
+  window.addEventListener("pagehide", () => {
+    const s = session;
+    if (s && !s.suspended) suspend(s, true);
+  });
 }
 
 /** What the service says about this viewer: a recording it is in the way

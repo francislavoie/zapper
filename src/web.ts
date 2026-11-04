@@ -72,6 +72,11 @@ export function onSignedOut(f: () => void): () => void {
 }
 
 function signedOut() {
+  // A movie's player would read on, holding the account's connection, and a
+  // signed-out page's request to let its viewer go is refused. Its reading
+  // and timers are stopped here; the service lets the viewer go once
+  // nothing reads it.
+  void vod.stop();
   for (const f of signedOutListeners) f();
 }
 
