@@ -6,7 +6,7 @@
 //! halfway changes nothing.
 
 use anyhow::{anyhow, Result};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::HashSet;
 
 use crate::catalog::sync::{clean_name, SyncStats};
@@ -52,6 +52,9 @@ impl From<&VodStream> for NewMovie {
         }
     }
 }
+
+/// The catalogue the mirror's movies were last landed from, in `meta`.
+const MOVIES_ORIGIN: &str = "movies_origin";
 
 fn plausible_year(y: &i32) -> bool {
     (1900..=2099).contains(y)
@@ -139,6 +142,17 @@ impl<'t> MovieWriter<'t> {
             }
             None => m.category_id.clone(),
         };
+        // As the Xtream conversion does: a zero is "no date", not 1970.
+        let added = m.added.filter(|a| *a > 0);
+        // What was fetched about a title under another name or film id is
+        // not about this one.
+        self.conn
+            .prepare_cached(
+                "DELETE FROM movie_details WHERE movie_id = ?1 AND EXISTS
+                   (SELECT 1 FROM movies x WHERE x.movie_id = ?1
+                      AND (x.name IS NOT ?2 OR x.tmdb_id IS NOT ?3))",
+            )?
+            .execute(params![m.movie_id, m.name, m.tmdb_id])?;
         let year = m
             .year
             .filter(plausible_year)
@@ -160,6 +174,10 @@ impl<'t> MovieWriter<'t> {
                    -- was first seen stands, so a title does not climb the
                    -- newest-first list every time the list is fetched.
                    added=COALESCE(?8, movies.added),
+                   -- The runtime comes from the details and goes with them.
+                   duration_secs=CASE WHEN movies.name IS excluded.name
+                                       AND movies.tmdb_id IS excluded.tmdb_id
+                                      THEN movies.duration_secs END,
                    container=excluded.container, tmdb_id=excluded.tmdb_id,
                    stream_url=excluded.stream_url,
                    http_user_agent=excluded.http_user_agent,
@@ -173,7 +191,7 @@ impl<'t> MovieWriter<'t> {
                 year,
                 m.rating,
                 m.poster_url,
-                m.added,
+                added,
                 m.container,
                 m.tmdb_id,
                 m.stream_url,
@@ -206,28 +224,53 @@ impl<'t> MovieWriter<'t> {
             mut stats,
             ..
         } = self;
-        if seen.is_empty() && !existing.is_empty() {
+        // Which catalogue the mirror's movies came from is kept apart from
+        // the channels' record, because the channels are written first and
+        // will already have recorded the new one.
+        let origin = crate::catalog::origin::recorded(conn)?.unwrap_or_default();
+        let landed: Option<String> = conn
+            .query_row(
+                "SELECT value FROM meta WHERE key = ?1",
+                [MOVIES_ORIGIN],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let switched = landed.as_deref().is_some_and(|l| l != origin);
+        // A different account's list may well be empty, and then the old
+        // one's titles must go; the same account's empty answer is a bad
+        // minute and changes nothing.
+        if seen.is_empty() && !existing.is_empty() && !switched {
             return Err(anyhow!(
                 "the movie list was empty; keeping the {} already here",
                 existing.len()
             ));
         }
+        if switched {
+            // Details and runtimes are the old account's, and a title the
+            // new one reuses an id for is not the same film.
+            conn.execute("DELETE FROM movie_details", [])?;
+            conn.execute("UPDATE movies SET duration_secs = NULL", [])?;
+        }
+        conn.execute(
+            "INSERT INTO meta (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            params![MOVIES_ORIGIN, origin],
+        )?;
         conn.execute("UPDATE movies SET added = ?1 WHERE added = 0", [now])?;
+        let mut soft_delete =
+            conn.prepare_cached("UPDATE movies SET deleted_at=?1 WHERE movie_id=?2")?;
         for gone in existing.difference(&seen) {
-            conn.execute(
-                "UPDATE movies SET deleted_at=?1 WHERE movie_id=?2",
-                params![now, gone],
-            )?;
+            soft_delete.execute(params![now, gone])?;
             stats.deleted += 1;
         }
         // Derived from what the source says each time, so one it dropped is
         // not a category any more.
         conn.execute("DELETE FROM vod_categories WHERE kind = 'movie'", [])?;
+        let mut insert = conn.prepare_cached(
+            "INSERT INTO vod_categories (kind, id, name, sort) VALUES ('movie', ?1, ?2, ?3)",
+        )?;
         for (i, (id, name)) in categories.iter().enumerate() {
-            conn.execute(
-                "INSERT INTO vod_categories (kind, id, name, sort) VALUES ('movie', ?1, ?2, ?3)",
-                params![id, name, i as i64],
-            )?;
+            insert.execute(params![id, name, i as i64])?;
         }
         Ok((stats, categories.len()))
     }
@@ -360,6 +403,97 @@ mod tests {
         let fresh = open_in_memory().unwrap();
         let s = land_movies(&fresh, &[], &[], 200).unwrap();
         assert_eq!((s.inserted, s.updated, s.deleted), (0, 0, 0));
+    }
+
+    fn set_origin(c: &Connection, o: &str) {
+        c.execute(
+            "INSERT INTO meta (key, value) VALUES ('catalogue_origin', ?1)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [o],
+        )
+        .unwrap();
+    }
+
+    fn live(c: &Connection) -> i64 {
+        c.query_row(
+            "SELECT COUNT(*) FROM movies WHERE deleted_at IS NULL",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_new_account_with_no_movies_empties_the_old_ones() {
+        let c = open_in_memory().unwrap();
+        let (cats, movies) = three();
+        set_origin(&c, "A");
+        land_movies(&c, &cats, &movies, 100).unwrap();
+        // The same account answering nothing is refused...
+        assert!(land_movies(&c, &cats, &[], 150).is_err());
+        assert_eq!(live(&c), 3);
+        // ...a different one's is believed.
+        set_origin(&c, "B");
+        let s = land_movies(&c, &[], &[], 200).unwrap();
+        assert_eq!(s.deleted, 3);
+        assert_eq!(live(&c), 0);
+        let cats: i64 = c
+            .query_row("SELECT COUNT(*) FROM vod_categories", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(cats, 0);
+    }
+
+    #[test]
+    fn details_and_runtimes_do_not_cross_accounts_or_renamed_titles() {
+        let c = open_in_memory().unwrap();
+        let (cats, movies) = three();
+        set_origin(&c, "A");
+        land_movies(&c, &cats, &movies, 100).unwrap();
+        let details = |c: &Connection| -> i64 {
+            c.query_row("SELECT COUNT(*) FROM movie_details", [], |r| r.get(0))
+                .unwrap()
+        };
+        let runtime = |c: &Connection, id: i64| -> Option<i64> {
+            c.query_row(
+                "SELECT duration_secs FROM movies WHERE movie_id = ?1",
+                [id],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        for id in 1..=3 {
+            c.execute("INSERT INTO movie_details VALUES (?1, 1, '{}')", [id])
+                .unwrap();
+        }
+        c.execute("UPDATE movies SET duration_secs = 60", [])
+            .unwrap();
+        // Unchanged titles keep theirs; a renamed one starts over.
+        let mut again = movies.clone();
+        again[0].name = "Another".into();
+        land_movies(&c, &cats, &again, 150).unwrap();
+        assert_eq!(
+            (details(&c), runtime(&c, 1), runtime(&c, 2)),
+            (2, None, Some(60))
+        );
+        // A new account clears the rest.
+        set_origin(&c, "B");
+        land_movies(&c, &cats, &movies, 200).unwrap();
+        assert_eq!((details(&c), runtime(&c, 2)), (0, None));
+    }
+
+    #[test]
+    fn a_zero_date_from_a_playlist_is_no_date() {
+        let c = open_in_memory().unwrap();
+        let (cats, mut movies) = three();
+        movies[0].added = Some(0);
+        land_movies(&c, &cats, &movies, 100).unwrap();
+        land_movies(&c, &cats, &movies, 200).unwrap();
+        let added: i64 = c
+            .query_row("SELECT added FROM movies WHERE movie_id = 1", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(added, 100);
     }
 
     #[test]

@@ -215,8 +215,17 @@ pub fn movies_page(
     now: i64,
 ) -> Result<(u32, Vec<MovieRow>)> {
     let (from, conds, args) = scope(q, now);
+    // Only a list of marks needs the marks to count; joining them for the
+    // others costs several times as much on a large catalogue.
+    let count_from = match q.list {
+        MovieList::Favourites | MovieList::Watched => from,
+        _ => "movies m",
+    };
     let total: u32 = conn.query_row(
-        &format!("SELECT COUNT(*) FROM {from} WHERE {}", conds.join(" AND ")),
+        &format!(
+            "SELECT COUNT(*) FROM {count_from} WHERE {}",
+            conds.join(" AND ")
+        ),
         params_from_iter(args),
         |r| r.get(0),
     )?;
@@ -671,6 +680,35 @@ mod tests {
         assert!(!p.contains("TEMP B-TREE"), "{p}");
         let p = plan(&q(MovieList::Favourites, MovieSort::Az));
         assert!(!p.contains("SCAN m"), "{p}");
+    }
+
+    #[test]
+    fn counting_a_category_reads_the_live_index_and_matches_the_page() {
+        let c = open_in_memory().unwrap();
+        c.execute(
+            "INSERT INTO vod_categories (kind, id, name, sort) VALUES ('movie','c','Cat',0)",
+            [],
+        )
+        .unwrap();
+        for i in 0..5 {
+            add(&c, i, "c", "x", None, None, NOW - i);
+        }
+        c.execute("UPDATE movies SET deleted_at = 1 WHERE movie_id = 4", [])
+            .unwrap();
+        let plan: String = c
+            .query_row(
+                "EXPLAIN QUERY PLAN SELECT COUNT(*) FROM movies m
+                 WHERE m.category_id = 'c' AND m.deleted_at IS NULL",
+                [],
+                |r| r.get(3),
+            )
+            .unwrap();
+        assert!(plan.contains("movies_live_by_category"), "{plan}");
+        assert_eq!(movie_categories(&c).unwrap()[0].movie_count, 4);
+        for list in [cat("c"), MovieList::Recent] {
+            let (total, items) = movies_page(&c, &q(list, MovieSort::Added), 0, 100, NOW).unwrap();
+            assert_eq!((total as usize, items.len()), (4, 4));
+        }
     }
 
     #[test]
