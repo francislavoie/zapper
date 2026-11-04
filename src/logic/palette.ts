@@ -40,6 +40,8 @@ export const ACTION_IDS = [
   "sync",
   "record",
   "recordings",
+  "movies",
+  "liveTv",
   "settings",
   "updates",
   "about",
@@ -78,6 +80,9 @@ export interface ActionConditions {
   /** The programme on now can be recorded (logic/recordings.ts
    *  `playerRecord`). */
   recordable?: boolean;
+  /** The account has movies. Left out, they are assumed to be there; only
+   *  `false` hides the way to them. */
+  movies?: boolean;
   /** The app's window when not given. */
   capabilities?: Capabilities;
 }
@@ -181,6 +186,9 @@ export const ACTIONS: PaletteAction[] = [
   // What the recording service has scheduled and recorded. "record" and
   // "dvr" are what people type looking for it.
   { id: "recordings", label: "Recordings", hint: "record · dvr", group: "data" },
+  // The title bar's tabs, for the keyboard. Both go where the tabs are.
+  { id: "movies", label: "Movies", hint: "M", group: "view", needsCapability: "onDemand" },
+  { id: "liveTv", label: "Live TV", hint: "", group: "view", needsCapability: "onDemand" },
   { id: "settings", label: "Open settings", hint: "⚙", group: "app" },
   // "upgrade" and "version" are what people type looking for this one.
   {
@@ -232,6 +240,7 @@ export function availableActions(
   return ACTIONS.filter(
     (a) =>
       allows(caps, a.needsCapability) &&
+      (conditions.movies !== false || (a.id !== "movies" && a.id !== "liveTv")) &&
       (!a.needsPlayer || (playing && caps.playback)) &&
       (!a.needsPrevious || conditions.hasPrevious === true) &&
       (a.needs === undefined || conditions[a.needs] === true),

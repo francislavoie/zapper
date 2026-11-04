@@ -9,12 +9,19 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   SEEK_ZONE_FRACTION,
+  zoneAction,
   zoneAt,
   zoneAtFraction,
   zoneCentre,
   zoneIsAvailable,
   zoneSeek,
 } from "../logic/gestures.ts";
+import { VOD_SKIP_SECONDS } from "../logic/vodTransport.ts";
+
+test("a movie's side zones seek by its own step", () => {
+  assert.deepEqual(zoneAction("forward", false, VOD_SKIP_SECONDS), { kind: "seek", zone: "forward", by: 10 });
+  assert.deepEqual(zoneAction("back", false, VOD_SKIP_SECONDS), { kind: "seek", zone: "back", by: -10 });
+});
 
 test("the sides seek and the middle goes fullscreen", () => {
   assert.equal(zoneAtFraction(0), "back");

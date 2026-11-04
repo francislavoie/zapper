@@ -9,6 +9,7 @@ import {
   indexOfStream,
   intentOf,
   mediaSessionOf,
+  movieSessionOf,
   playbackOf,
   sessionKey,
   stepFrom,
@@ -38,6 +39,18 @@ test("media controls are off unless turned on, an old config included", () => {
   assert.equal(clampSettings(old).mediaControls, false);
   assert.equal(clampSettings({ ...DEFAULT_SETTINGS, mediaControls: "yes" }).mediaControls, false);
   assert.equal(clampSettings({ ...DEFAULT_SETTINGS, mediaControls: true }).mediaControls, true);
+});
+
+test("a movie's session is its title, with its year and length beneath", () => {
+  const m = { name: "Some Film (2025)", cleanName: "Some Film", year: 2025, durationSecs: 6540 };
+  assert.deepEqual(movieSessionOf(m, "paused"), {
+    title: "Some Film",
+    subtitle: "2025 · 1h 49m",
+    artUrl: null,
+    playback: "paused",
+  });
+  assert.equal(movieSessionOf(m, "stopped"), null);
+  assert.equal(movieSessionOf(null, "playing"), null);
 });
 
 test("the session is the channel, its programme and its logo", () => {

@@ -45,6 +45,7 @@ import { setHidden, setPinned, type CategorySort } from "./logic/categoryOrder";
 import { loadCategoryHidden, loadCategoryPins, loadCategorySort } from "./categoryPrefs";
 import type { ZapView } from "./logic/zap";
 import { startSleep, type SleepRequest, type SleepTimer } from "./logic/sleep";
+import { modeForSection } from "./logic/toolbar";
 import type { Section } from "./logic/toolbar";
 import {
   initialMovies,
@@ -534,6 +535,8 @@ export function reducer(state: State, action: Action): State {
         categoryId: RECORDINGS,
         query: "",
         mode: "browse",
+        // Recordings are Live TV's.
+        section: "live",
         menuOpen: false,
         programmeMenu: null,
       };
@@ -544,6 +547,8 @@ export function reducer(state: State, action: Action): State {
         ...state,
         categoryId: action.categoryId,
         query: "",
+        // A channel's category is on Live TV's rail.
+        section: "live",
         guideFocus: {
           streamId: action.streamId,
           index: action.index,
@@ -556,6 +561,8 @@ export function reducer(state: State, action: Action): State {
       return {
         ...state,
         mode: "guide",
+        // The guide is Live TV's, wherever it was asked for from.
+        section: "live",
         categoryId: action.categoryId,
         guideOffset: clampOffset(action.offset, state.settings.guideHours),
         guideAnchor: action.anchor,
@@ -675,7 +682,8 @@ export function reducer(state: State, action: Action): State {
         ...state,
         section: action.section,
         menuOpen: false,
-        mode: state.mode === "watch" ? "browse" : state.mode,
+        // The guide is Live TV's alone.
+        mode: modeForSection(state.mode, action.section) as Mode,
       };
     case "recordings":
       return {

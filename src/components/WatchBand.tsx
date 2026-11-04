@@ -42,7 +42,9 @@ import { useRecordingChannels } from "../hooks/useRecordingChannels";
 import { listedFor, railItemKind } from "../logic/railItems";
 import { categoryNames } from "../logic/searchGroups";
 import { RecordingBand } from "./RecordingBand";
+import { moviesAvailable, playingKind } from "../logic/movies";
 import { run, useApp, useDispatch } from "../store";
+import { MovieBand, PlayingEnd } from "./MovieBand";
 import { Fullscreen, ResizeHandle, Stop } from "./icons";
 import { MiniControls } from "./MiniControls";
 import { StreamEnded } from "./StreamEnded";
@@ -76,6 +78,15 @@ export function WatchBand({ videoRef, picture }: WatchBandProps) {
       : null;
   const recordingList = useMemo(() => (recording ? [recording] : null), [recording]);
   const recordingChannel = useRecordingChannels(recordingList).get(recording?.streamId ?? -1) ?? null;
+
+  // Which body the band has, first match: the picked recording; in the
+  // Movies tab the selected movie; a movie that is playing; the channel.
+  // Choosing a movie to look at changes this and nothing else — the picture
+  // beside it is whatever was already on.
+  const inMovies = app.section === "movies" && moviesAvailable(app.movies.summary);
+  const selectedMovie = inMovies ? app.movies.selected : null;
+  const movieOpen = playingKind(player) === "movie";
+  const openMovieId = player.onDemand?.kind === "movie" ? player.onDemand.id : null;
 
   const live = player.state !== "stopped";
   const toWatch = () => dispatch({ type: "mode", mode: "watch" });
@@ -158,6 +169,26 @@ export function WatchBand({ videoRef, picture }: WatchBandProps) {
       <div className="watch-info">
         {recording ? (
           <RecordingBand key={recording.id} rec={recording} channel={recordingChannel} />
+        ) : selectedMovie ? (
+          <MovieBand
+            key={selectedMovie.movieId}
+            movie={selectedMovie}
+            playing={movieOpen && openMovieId === selectedMovie.movieId}
+          />
+        ) : movieOpen ? (
+          app.movies.playing ? (
+            <MovieBand key={app.movies.playing.movieId} movie={app.movies.playing} playing />
+          ) : (
+            // Open, but the title could not be looked up: still stoppable.
+            <>
+              <div className="watch-body">
+                <h2 className="watch-title-h">Playing a movie</h2>
+              </div>
+              <div className="watch-actions">
+                <PlayingEnd />
+              </div>
+            </>
+          )
         ) : live && nowChannel ? (
           <Playing
             channel={nowChannel}
@@ -178,7 +209,7 @@ export function WatchBand({ videoRef, picture }: WatchBandProps) {
             onPlay={() => void playChannel(dispatch, nowChannel)}
           />
         ) : (
-          <Idle picture={picture} />
+          <Idle picture={picture} movies={inMovies} />
         )}
       </div>
 
@@ -271,12 +302,16 @@ export function WatchBand({ videoRef, picture }: WatchBandProps) {
 
 /** Nothing playing. The band explains what it is for rather than leaving an
  *  empty frame and letting the user guess. */
-function Idle({ picture }: { picture: boolean }) {
+function Idle({ picture, movies = false }: { picture: boolean; movies?: boolean }) {
   if (!picture) {
     return (
       <div className="watch-idle">
         <h2>Nothing selected</h2>
-        <p>Choose a recording to see what can be done with it.</p>
+        <p>
+          {movies
+            ? "Choose a movie to see its details."
+            : "Choose a recording to see what can be done with it."}
+        </p>
       </div>
     );
   }

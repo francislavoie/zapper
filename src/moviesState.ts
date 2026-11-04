@@ -17,6 +17,13 @@ import type {
   VodCategoryDto,
 } from "./types";
 
+/** The list header's open menu and where it is drawn, in window pixels. */
+export interface MoviesMenu {
+  kind: "sort" | "years";
+  x: number;
+  y: number;
+}
+
 export interface MoviesState {
   /** A MOVIE_* id or a VodCategoryDto.id. */
   selection: string;
@@ -38,6 +45,8 @@ export interface MoviesState {
   playing: MovieDto | null;
   /** The latest marks the service reported for each title this session. */
   marks: Readonly<Record<number, MarksDto>>;
+  /** The sort or years menu, while one is open. */
+  menu: MoviesMenu | null;
   /** Bumped when what a list holds may have changed (a mark, a sync), so
    *  the lists read again. */
   revision: number;
@@ -58,6 +67,7 @@ export function initialMovies(view: MoviesView): MoviesState {
     sheetId: null,
     playing: null,
     marks: {},
+    menu: null,
     revision: 0,
   };
 }
@@ -69,6 +79,7 @@ export type MoviesAction =
   | { type: "movies/years"; range: YearRange | null }
   | { type: "movies/view"; view: MoviesView }
   | { type: "movies/query"; text: string }
+  | { type: "movies/menu"; menu: MoviesMenu | null }
   | { type: "movies/categoryFilter"; text: string }
   | { type: "movies/categorySort"; sort: CategorySort }
   | { type: "movies/summary"; value: Async<MoviesSummaryDto> }
@@ -90,11 +101,13 @@ const patch = (m: MovieDto | null, k: MarksDto): MovieDto | null =>
 export function moviesReducer(s: MoviesState, a: MoviesAction): MoviesState {
   switch (a.type) {
     case "movies/select":
-      return { ...s, selection: a.id, query: "", selected: null, sheetId: null };
+      return { ...s, selection: a.id, query: "", selected: null, sheetId: null, menu: null };
     case "movies/sort":
-      return { ...s, sort: a.sort };
+      return { ...s, sort: a.sort, menu: null };
     case "movies/years":
-      return { ...s, years: a.range };
+      return { ...s, years: a.range, menu: null };
+    case "movies/menu":
+      return { ...s, menu: a.menu };
     case "movies/view":
       return { ...s, view: a.view };
     case "movies/query":
@@ -105,7 +118,10 @@ export function moviesReducer(s: MoviesState, a: MoviesAction): MoviesState {
       return { ...s, categorySort: a.sort };
     case "movies/summary":
       // A summary already showing is not blanked by the fetch that refreshes it.
-      if (a.value.status === "loading" && s.summary.status === "ready") return s;
+      // Nor is it replaced by a refresh that failed: the tab comes and goes
+      // with `available`, and a dropped connection is not the account
+      // losing its movies.
+      if (a.value.status !== "ready" && s.summary.status === "ready") return s;
       return { ...s, summary: a.value };
     case "movies/categories":
       if (a.value.status === "loading" && s.categories.status === "ready") return s;

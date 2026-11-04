@@ -11,6 +11,7 @@ import type {
   MoviesSummaryDto,
   PlayerStateDto,
 } from "../types";
+import type { Async } from "./async.ts";
 import type { FixedRailItem } from "./railItems.ts";
 
 export const MOVIE_FAVOURITES = "*favourites*";
@@ -32,6 +33,12 @@ export function movieRailKind(id: string): MovieRailKind {
   }
 }
 
+/** Whether the account has movies, which is what shows the Movies tab. Only
+ *  an answer says so: until one arrives the tab is not there. */
+export function moviesAvailable(summary: Async<MoviesSummaryDto>): boolean {
+  return summary.status === "ready" && summary.data.available;
+}
+
 const countText = (n: number | null | undefined) => (n ? n.toLocaleString() : "");
 
 /** The rail's own items, in order. A count is blank until there is something
@@ -43,6 +50,10 @@ export function fixedMovieItems(s: MoviesSummaryDto | null): FixedRailItem[] {
     { id: MOVIE_WATCHED, name: "Watched", count: countText(s?.watched) },
   ];
 }
+
+/** The search box's placeholder: what it searches, the syntax in brief, and
+ *  the key that gets there (as logic/searchQuery.ts says it for channels). */
+export const MOVIE_SEARCH_PLACEHOLDER = "Search movies  ·  a|b for either    /";
 
 export const MOVIE_SORTS: readonly MovieSort[] = ["added", "az", "year", "rating"];
 
@@ -208,3 +219,35 @@ export function playingKind(
 /** How long a title stays selected before its details are fetched: a
  *  held arrow key crosses rows without asking the provider about each. */
 export const DETAILS_DELAY_MS = 400;
+
+/** Remembers `d` as the answer for `id`, forgetting the oldest answers past
+ *  `max`. A Map keeps its keys in the order they were set, so the first key
+ *  is the oldest. Changes and returns `cache`. */
+export function rememberDetails(
+  cache: Map<number, MovieDetailsDto>,
+  id: number,
+  d: MovieDetailsDto,
+  max: number,
+): Map<number, MovieDetailsDto> {
+  cache.delete(id);
+  cache.set(id, d);
+  while (cache.size > max) {
+    const oldest = cache.keys().next();
+    if (oldest.done) break;
+    cache.delete(oldest.value);
+  }
+  return cache;
+}
+
+/** What was remembered for `id`; asking makes it the newest. */
+export function recallDetails(
+  cache: Map<number, MovieDetailsDto>,
+  id: number,
+): MovieDetailsDto | undefined {
+  const d = cache.get(id);
+  if (d !== undefined) {
+    cache.delete(id);
+    cache.set(id, d);
+  }
+  return d;
+}

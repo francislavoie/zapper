@@ -11,6 +11,7 @@ import {
   POSTER_MIN_WIDTH,
   fixedMovieItems,
   languagesLine,
+  moviesAvailable,
   movieBadges,
   movieCount,
   movieFacts,
@@ -21,6 +22,8 @@ import {
   peopleLine,
   playingKind,
   posterGrid,
+  recallDetails,
+  rememberDetails,
   runtime,
   yearRanges,
 } from "../logic/movies.ts";
@@ -92,4 +95,33 @@ test("people and languages lines", () => {
   assert.equal(languagesLine({ audioLanguages: ["EN", "FR"], subtitleLanguages: ["EN", "FR"] }), "EN · FR audio · subtitles EN, FR");
   assert.equal(languagesLine({ audioLanguages: [], subtitleLanguages: ["EN"] }), "subtitles EN");
   assert.equal(languagesLine({ audioLanguages: [], subtitleLanguages: [] }), "");
+});
+
+test("the Movies tab shows only once the summary says the account has movies", () => {
+  const data = (available) => ({ available, note: null, total: 1, favourites: 0, recent: 1, watched: 0 });
+  assert.equal(moviesAvailable({ status: "idle" }), false);
+  assert.equal(moviesAvailable({ status: "loading" }), false);
+  assert.equal(moviesAvailable({ status: "error", message: "x" }), false);
+  assert.equal(moviesAvailable({ status: "ready", data: data(false) }), false);
+  assert.equal(moviesAvailable({ status: "ready", data: data(true) }), true);
+});
+
+test("details are remembered by id, the oldest forgotten first", () => {
+  const d = (id) => ({ movie: { movieId: id }, plot: null, genres: [], director: null, cast: [], releaseDate: null, backdropUrls: [], tmdbId: null, audioLanguages: [], subtitleLanguages: [], fetchedAt: null });
+  const one = d(1);
+  assert.equal(recallDetails(rememberDetails(new Map(), 1, one, 2), 1), one);
+  assert.equal(recallDetails(new Map(), 9), undefined);
+  const c = rememberDetails(rememberDetails(rememberDetails(new Map(), 1, d(1), 2), 2, d(2), 2), 3, d(3), 2);
+  assert.equal(recallDetails(c, 1), undefined);
+  assert.deepEqual([...c.keys()], [2, 3]);
+});
+test("recalling details refreshes their age", () => {
+  const d = (id) => ({ movie: { movieId: id } });
+  const c = new Map();
+  rememberDetails(c, 1, d(1), 2);
+  rememberDetails(c, 2, d(2), 2);
+  assert.ok(recallDetails(c, 1));
+  rememberDetails(c, 3, d(3), 2);
+  assert.ok(recallDetails(c, 1), "the one just recalled stays");
+  assert.equal(recallDetails(c, 2), undefined, "the one left alone goes");
 });
