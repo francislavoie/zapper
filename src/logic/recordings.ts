@@ -18,7 +18,7 @@ import type {
   ScheduleRequest,
   WhileRecording,
 } from "../types";
-import { duration, hhmm, timeRange } from "./format.ts";
+import { duration, hhmm, startsIn, timeRange } from "./format.ts";
 import { dayLabel } from "./guide.ts";
 
 /** A recording is found by its channel and its programme's start, which is
@@ -196,7 +196,8 @@ export function recordingStatus(r: RecordingDto, now: number): string {
   switch (r.state) {
     case "scheduled": {
       const from = r.start - r.padBefore;
-      return from > now ? `starts in ${duration(from - now)}` : "starting";
+      const left = from > now ? startsIn(from - now) : null;
+      return left ? `starts in ${left}` : "starting";
     }
     case "recording":
       return r.waiting ? capitalise(r.waiting) : `${size} so far${parts}`;
@@ -240,8 +241,9 @@ export function recordingRowStatus(r: RecordingDto, now: number): RowStatus {
         return { text: `recording · ${duration(Math.max(0, until - now))} left`, tone: "", progress };
       }
       if (conflict) return { text: lowerFirst(conflictText(conflict)), tone: "warn", progress: null };
-      if (from <= now) return { text: "starting", tone: "", progress: null };
-      if (from - now < SOON_SECS) return { text: `starts in ${duration(from - now)}`, tone: "", progress: null };
+      const left = startsIn(from - now);
+      if (left === null) return { text: "starting", tone: "", progress: null };
+      if (from - now < SOON_SECS) return { text: `starts in ${left}`, tone: "", progress: null };
       if (r.backupStreamId != null)
         return { text: `backup: ${r.backupName ?? `channel ${r.backupStreamId}`}`, tone: "", progress: null };
       return { text: "", tone: "", progress: null };

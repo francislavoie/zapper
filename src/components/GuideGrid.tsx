@@ -66,9 +66,9 @@ import {
   type TimeWindow,
 } from "../logic/guide";
 import { centredScrollTop } from "../logic/programmes";
-import { OVERSCAN, computeWindow } from "../logic/virtual";
+import { OVERSCAN, computeWindow, stickyIndex } from "../logic/virtual";
 import { guideSelection, selectionTitle } from "../logic/railItems";
-import { categoryNames } from "../logic/searchGroups";
+import { categoryLine, categoryNames } from "../logic/searchGroups";
 import { useApp, useDispatch } from "../store";
 import type { ChannelDto, ProgrammeDto, RecordingDto } from "../types";
 import { programmeMenuProps, type ProgrammeMenuOpener } from "../programmeMenu";
@@ -240,6 +240,11 @@ export function GuideGrid({ besideRail = false }: { besideRail?: boolean }) {
   );
   const recorded = useMemo(() => recordingMarks(state.recordings ?? []), [state.recordings]);
 
+  // The divider above each row, so a row can leave out a category line the
+  // divider already says.
+  const above = stickyIndex((i) => source.rowAt(i)?.isSeparator, rows.start);
+  let heading: string | null = (above !== null ? source.rowAt(above)?.categoryId : undefined) ?? null;
+
   const nowX = nowLineX(now, win, trackWidth);
   const marks = ticks(win);
   const day = dayLabel(win.from, now);
@@ -346,11 +351,16 @@ export function GuideGrid({ besideRail = false }: { besideRail?: boolean }) {
 
           {visible.map((channel, i) => {
             const index = rows.start + i;
+            if (channel.isSeparator) heading = channel.categoryId;
             return (
               <GuideRow
                 key={channel.streamId}
                 channel={channel}
-                categoryName={showCategory && channel.categoryId ? (names.get(channel.categoryId) ?? null) : null}
+                categoryName={
+                  showCategory && channel.categoryId
+                    ? categoryLine(heading, channel.categoryId, names.get(channel.categoryId) ?? null)
+                    : null
+                }
                 top={index * GUIDE_ROW_HEIGHT}
                 programmes={guide.programmesFor(channel.streamId)}
                 win={win}
