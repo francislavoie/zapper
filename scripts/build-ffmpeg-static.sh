@@ -67,11 +67,11 @@ flags=(
   --disable-avdevice --disable-avfilter --disable-swscale
   --enable-avformat --enable-avcodec --enable-swresample
   --enable-protocol=file,pipe
-  --enable-demuxer=mpegts
+  --enable-demuxer=mpegts,mov,matroska,avi
   --enable-muxer=mpegts,matroska
-  --enable-parser=h264,hevc,mpegvideo,mpeg4video,vc1,av1,mpegaudio,aac,aac_latm,ac3,dca,opus,dvbsub,dvd_nav
+  --enable-parser=h264,hevc,mpegvideo,mpeg4video,vc1,av1,mpegaudio,aac,aac_latm,ac3,dca,opus,flac,vorbis,dvbsub,dvd_nav
   --enable-bsf=aac_adtstoasc,extract_extradata,h264_mp4toannexb,hevc_mp4toannexb,vvc_mp4toannexb,av1_frame_split
-  --enable-decoder=aac,aac_latm,ac3,eac3,mp1,mp1float,mp2,mp2float,mp3,mp3float
+  --enable-decoder=aac,aac_latm,ac3,eac3,mp1,mp1float,mp2,mp2float,mp3,mp3float,dca,opus,flac,vorbis,subrip,ass,ssa,movtext,webvtt
   --enable-encoder=aac
 )
 log=$work/configure.log

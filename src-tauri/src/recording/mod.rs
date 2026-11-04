@@ -16,7 +16,7 @@
 //! The service itself — the store of recordings, the capture loop, the
 //! connections it shares between recordings and browsers watching ([`hub`],
 //! [`watch`]), the remuxers (a capture into Matroska; a live feed for a
-//! browser, [`livemux`], as [`tsprobe`] decides), the HTTP server with its listeners ([`listen`]), who may use it
+//! browser, [`livemux`], as [`tsprobe`] decides; a movie file from any point in it, [`vodmux`]), the HTTP server with its listeners ([`listen`]), who may use it
 //! ([`access`]), the provider account a signed-in browser may change
 //! ([`account`]), its HTTPS certificate ([`tls`]), and the web interface it
 //! serves ([`web`]) with the catalogue API that interface reads ([`browse`]),
@@ -64,6 +64,8 @@ pub mod strm;
 pub mod tls;
 #[cfg(feature = "server")]
 pub mod tsprobe;
+#[cfg(feature = "server")]
+pub mod vodmux;
 #[cfg(feature = "server")]
 pub mod watch;
 #[cfg(feature = "server")]
