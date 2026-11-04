@@ -101,10 +101,17 @@ export function VodScrubber({ onDemand, compact = false, onPin }: VodScrubberPro
           onPin(false);
           setHover(null);
         }}
-        onPointerMove={(e) => setHover(fractionAt(e))}
+        onPointerMove={(e) => {
+          const f = fractionAt(e);
+          setHover(f);
+          if (drag !== null) setDrag(f);
+        }}
         onPointerDown={onPointerDown}
         onPointerUp={onPointerUp}
-        onPointerCancel={() => setDrag(null)}
+        onPointerCancel={() => {
+          setDrag(null);
+          setHover(null);
+        }}
       >
         <div className="vod-track" ref={trackRef}>
           <div className="vod-buffered" style={{ width: `${bufferedFraction(onDemand) * 100}%` }} />
