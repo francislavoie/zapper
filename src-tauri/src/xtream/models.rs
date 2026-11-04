@@ -122,10 +122,42 @@ pub struct Category {
     pub category_name: String,
 }
 
+/// One row of a long list, which may not read: a provider's list of a
+/// hundred thousand movies must not fail for one malformed row.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum Row<T> {
+    Read(T),
+    Unreadable(serde::de::IgnoredAny),
+}
+
+/// The rows of a list that read, and how many did not and were left out.
+#[derive(Debug)]
+pub struct Rows<T> {
+    pub read: Vec<T>,
+    pub skipped: usize,
+}
+
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for Rows<T> {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let rows = Vec::<Row<T>>::deserialize(d)?;
+        let mut read = Vec::with_capacity(rows.len());
+        let mut skipped = 0;
+        for row in rows {
+            match row {
+                Row::Read(t) => read.push(t),
+                Row::Unreadable(_) => skipped += 1,
+            }
+        }
+        Ok(Self { read, skipped })
+    }
+}
+
 /// One movie in `get_vod_streams`. Forgiving like [`Channel`]; a catalogue
-/// holds well over a hundred thousand of these.
+/// holds well over a hundred thousand of these. A row without a usable id
+/// or a name does not read (and is left out of the list: [`Rows`]).
 #[derive(Debug, Clone, Deserialize)]
-#[serde(from = "RawVodStream")]
+#[serde(try_from = "RawVodStream")]
 pub struct VodStream {
     pub stream_id: i64,
     pub name: String,
@@ -146,9 +178,10 @@ pub struct VodStream {
 /// error, so both are read and merged.
 #[derive(Deserialize)]
 struct RawVodStream {
-    #[serde(deserialize_with = "required_i64")]
-    stream_id: i64,
-    name: String,
+    #[serde(default, deserialize_with = "flexible_i64")]
+    stream_id: Option<i64>,
+    #[serde(default)]
+    name: Option<String>,
     #[serde(default, deserialize_with = "flexible_i64")]
     category_id: Option<i64>,
     #[serde(default, deserialize_with = "nonempty_string")]
@@ -169,11 +202,23 @@ struct RawVodStream {
     tmdb_id: Option<i64>,
 }
 
-impl From<RawVodStream> for VodStream {
-    fn from(r: RawVodStream) -> Self {
-        Self {
-            stream_id: r.stream_id,
-            name: r.name,
+impl TryFrom<RawVodStream> for VodStream {
+    type Error = &'static str;
+
+    fn try_from(r: RawVodStream) -> Result<Self, Self::Error> {
+        let stream_id = r
+            .stream_id
+            .filter(|&id| id > 0)
+            .ok_or("a movie without an id")?;
+        let name = r.name.unwrap_or_default();
+        if name.trim().is_empty() {
+            return Err("a movie without a name");
+        }
+        // `0` is a server's "none", and must not hide the other spelling.
+        let tmdb = |t: Option<i64>| t.filter(|&t| t > 0);
+        Ok(Self {
+            stream_id,
+            name,
             category_id: r.category_id,
             stream_icon: r.stream_icon,
             rating: r.rating,
@@ -181,8 +226,8 @@ impl From<RawVodStream> for VodStream {
             added: r.added,
             container_extension: r.container_extension,
             year: r.year,
-            tmdb: r.tmdb.or(r.tmdb_id),
-        }
+            tmdb: tmdb(r.tmdb).or(tmdb(r.tmdb_id)),
+        })
     }
 }
 
@@ -392,7 +437,7 @@ impl<'de> Deserialize<'de> for VodInfoBody {
             duration_secs: r.duration_secs,
             duration: r.duration,
             rating: r.rating,
-            tmdb_id: r.tmdb_id,
+            tmdb_id: r.tmdb_id.filter(|&t| t > 0),
             video: r.video.map(Into::into),
             audio: r.audio.map(Into::into),
         })
@@ -516,6 +561,36 @@ mod tests {
         let v: VodStream =
             serde_json::from_str(r#"{"stream_id":1,"name":"x","tmdb":"","tmdb_id":"8"}"#).unwrap();
         assert_eq!(v.tmdb, Some(8));
+        let zero: VodStream =
+            serde_json::from_str(r#"{"stream_id":1,"name":"x","tmdb":"0","tmdb_id":"8"}"#).unwrap();
+        assert_eq!(zero.tmdb, Some(8), "0 is none");
+        let none: VodStream =
+            serde_json::from_str(r#"{"stream_id":1,"name":"x","tmdb":0}"#).unwrap();
+        assert_eq!(none.tmdb, None);
+    }
+
+    #[test]
+    fn a_malformed_movie_row_is_left_out_and_the_others_read() {
+        let rows: Rows<VodStream> = serde_json::from_str(
+            r#"[{"stream_id":1,"name":"First"},
+                {"stream_id":2,"name":null},
+                {"stream_id":"","name":"No id"},
+                {"stream_id":0,"name":"Zero id"},
+                {"name":"Missing id"},
+                {"stream_id":3,"name":"  "},
+                {"stream_id":4,"name":7},
+                "not a row",
+                {"stream_id":"5","name":"Last","rating":"oops"}]"#,
+        )
+        .unwrap();
+        let ids: Vec<_> = rows.read.iter().map(|v| v.stream_id).collect();
+        assert_eq!(ids, [1, 5]);
+        assert_eq!(rows.skipped, 7);
+        let cats: Rows<Category> = serde_json::from_str(
+            r#"[{"category_id":"1","category_name":"A"},{"category_id":null},{"category_id":"2","category_name":"B"}]"#,
+        )
+        .unwrap();
+        assert_eq!((cats.read.len(), cats.skipped), (2, 1));
     }
 
     #[test]
