@@ -114,3 +114,10 @@ test("an empty list that is refreshed grows to what arrived", () => {
   // The first-run case: nothing before, the categories now count 60000.
   assert.equal(refreshingTotal(60000, null, 0), 60000);
 });
+
+test("the movies phase writes to the mirror, so leaving it is a refresh", () => {
+  const at = 1_700_000_000;
+  assert.equal(syncChangedCatalogue(status("movies", 120, at), status("idle", 120, at)), true);
+  assert.equal(syncChangedCatalogue(status("epg", 120, at), status("movies", 120, at)), true);
+  assert.equal(syncChangedCatalogue(status("idle", 120, at), status("idle", 120, at)), false);
+});

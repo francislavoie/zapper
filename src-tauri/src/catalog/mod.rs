@@ -25,6 +25,10 @@ pub mod sync;
 pub mod sync_devices;
 pub mod sync_engine;
 pub mod sync_lease;
+pub mod vod_details;
+pub mod vod_progress;
+pub mod vod_store;
+pub mod vod_sync;
 
 pub use schema::{migrate, open_at, open_in_memory};
 pub use search::SearchIndex;

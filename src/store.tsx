@@ -46,6 +46,14 @@ import { loadCategoryHidden, loadCategoryPins, loadCategorySort } from "./catego
 import type { ZapView } from "./logic/zap";
 import { startSleep, type SleepRequest, type SleepTimer } from "./logic/sleep";
 import type { Section } from "./logic/toolbar";
+import {
+  initialMovies,
+  isMoviesAction,
+  moviesReducer,
+  type MoviesAction,
+  type MoviesState,
+} from "./moviesState";
+import { loadMoviesView } from "./moviesView";
 
 import { ALL_CATEGORIES, RECORDINGS, modeSelection } from "./logic/railItems";
 import { keepSelected } from "./logic/recordings";
@@ -285,6 +293,8 @@ export interface State {
   recordingsTouchedAt: number;
   /** The menu over a programme in the guide or the programme results. */
   programmeMenu: ProgrammeMenu | null;
+  /** The Movies tab, with a reducer of its own: see moviesState.ts. */
+  movies: MoviesState;
 }
 
 /** An open context menu over a programme: record it, or cancel its
@@ -323,6 +333,7 @@ export const initialPlayer: PlayerStateDto = {
   joiningLive: false,
   ending: null,
   reconnect: null,
+  onDemand: null,
 };
 
 /** Until the backend answers: nothing known, nothing to show. */
@@ -398,9 +409,12 @@ export const initialState: State = {
   recent: idle(),
   recordingsTouchedAt: 0,
   programmeMenu: null,
+  // The List/Posters choice is read before the first render, like zoom.
+  movies: initialMovies(loadMoviesView()),
 };
 
 export type Action =
+  | MoviesAction
   /** A fetch of the recordings: the list, or why there is none. */
   | { type: "recordings"; list: RecordingDto[] | null; error?: string | null }
   /** Something was asked of the recording service (record, stop, …). */
@@ -495,6 +509,7 @@ export type Action =
 let toastSeq = 0;
 
 export function reducer(state: State, action: Action): State {
+  if (isMoviesAction(action)) return { ...state, movies: moviesReducer(state.movies, action) };
   switch (action.type) {
     case "categories":
       return { ...state, categories: action.value };
@@ -693,19 +708,21 @@ export function reducer(state: State, action: Action): State {
         favouriteMenu: null,
         categoryMenu: null,
         categoryOptions: null,
+        // The guide is Live TV's alone.
+        section: action.mode === "guide" ? "live" : state.section,
       };
-    case "sync":
+    case "sync": {
+      // Not for the first status after launch: the placeholder it replaces
+      // describes nothing, and the lists are loading for the first time
+      // anyway.
+      const changed = state.sync !== initialSync && syncChangedCatalogue(state.sync, action.value);
       return {
         ...state,
         sync: action.value,
-        // Not for the first status after launch: the placeholder it replaces
-        // describes nothing, and the lists are loading for the first time
-        // anyway.
-        catalogueRev:
-          state.sync !== initialSync && syncChangedCatalogue(state.sync, action.value)
-            ? state.catalogueRev + 1
-            : state.catalogueRev,
+        catalogueRev: changed ? state.catalogueRev + 1 : state.catalogueRev,
+        movies: changed ? moviesReducer(state.movies, { type: "movies/catalogue" }) : state.movies,
       };
+    }
     case "channelQuality":
       return {
         ...state,

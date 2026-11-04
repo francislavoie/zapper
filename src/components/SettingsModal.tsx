@@ -31,6 +31,7 @@ import {
   subtitlePreview,
   type SettingKey,
 } from "../logic/settings";
+import { isBusy } from "../logic/toolbar.ts";
 import { MAX_GUIDE_HOURS, MIN_GUIDE_HOURS } from "../logic/guide";
 import { chordKeys } from "../logic/keys";
 import { MOUSE_WORDS, shortcutGroups } from "../logic/shortcuts";
@@ -681,7 +682,7 @@ function GuidePage({ s }: { s: SettingsControl }) {
 function DataPage({ s }: { s: SettingsControl }) {
   const { sync } = useApp();
   const dispatch = useDispatch();
-  const syncing = sync.phase === "categories" || sync.phase === "channels" || sync.phase === "epg";
+  const syncing = isBusy(sync.phase);
   return (
     <>
       <SettingsGroup heading="Catalogue">

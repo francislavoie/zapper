@@ -114,6 +114,7 @@ pub enum SyncPhase {
     Categories,
     Channels,
     Epg,
+    Movies,
     Failed,
 }
 
@@ -187,6 +188,14 @@ pub struct PlayerStateDto {
     /// and always after the provider ended or refused the stream, which is
     /// never reconnected without a person asking. See `connections`.
     pub reconnect: Option<ReconnectDto>,
+    /// The movie (or, later, episode) that is open, with how far in it is.
+    /// `None` for a live channel and when nothing is open.
+    ///
+    /// A title is not a channel: it has no `stream_id` to put in that field,
+    /// and the lists that react to `stream_id` (the channel highlight, the
+    /// guide's now line) must not light up for it. What is on is named here
+    /// instead, with its own clock.
+    pub on_demand: Option<OnDemandDto>,
 }
 
 /// One automatic reconnect, in progress or waiting its turn.
@@ -252,6 +261,7 @@ impl Default for PlayerStateDto {
             joining_live: false,
             ending: None,
             reconnect: None,
+            on_demand: None,
         }
     }
 }
@@ -912,4 +922,159 @@ pub enum AccountCandidateDto {
         username: String,
         password: String,
     },
+}
+
+// ------------------------------------------------------------------ movies
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VodCategoryDto {
+    pub id: String,
+    pub name: String,
+    /// Excludes deleted titles.
+    pub movie_count: i64,
+}
+
+/// A movie as a list draws it. `poster_url` is the provider's address, which
+/// only the desktop app may hand to its interface; the recording service
+/// replaces it with one of its own.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MovieDto {
+    pub movie_id: i64,
+    pub name: String,
+    pub clean_name: String,
+    pub year: Option<i32>,
+    /// Out of ten.
+    pub rating: Option<f64>,
+    pub poster_url: Option<String>,
+    /// Unix seconds.
+    pub added: Option<i64>,
+    pub duration_secs: Option<i64>,
+    pub category_id: Option<String>,
+    pub favourite: bool,
+    pub watched: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MovieSort {
+    Added,
+    Az,
+    Year,
+    Rating,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MovieListKind {
+    Favourites,
+    Recent,
+    Watched,
+    Category,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MovieQueryDto {
+    pub list: MovieListKind,
+    /// Which category, for `list: category`.
+    pub category_id: Option<String>,
+    pub sort: MovieSort,
+    pub year_from: Option<i32>,
+    pub year_to: Option<i32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MoviePageDto {
+    /// In the whole list, not just this page.
+    pub total: u32,
+    pub items: Vec<MovieDto>,
+}
+
+/// What opening a movie shows. Fetched from the provider the first time and
+/// kept for a week; see `catalog::vod_details`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MovieDetailsDto {
+    pub movie: MovieDto,
+    pub plot: Option<String>,
+    pub genres: Vec<String>,
+    pub director: Option<String>,
+    pub cast: Vec<String>,
+    pub release_date: Option<String>,
+    pub backdrop_urls: Vec<String>,
+    pub tmdb_id: Option<i64>,
+    pub audio_languages: Vec<String>,
+    pub subtitle_languages: Vec<String>,
+    /// When the details were fetched, Unix seconds; `None` when there are
+    /// none (a playlist's movie, or the provider could not be asked).
+    pub fetched_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MoviesSummaryDto {
+    /// The account has movies; the interface shows the Movies tab only then.
+    pub available: bool,
+    /// Why not, in words, when it does not.
+    pub note: Option<String>,
+    pub total: u32,
+    pub favourites: u32,
+    pub recent: u32,
+    pub watched: u32,
+}
+
+/// A title's marks after a change.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarksDto {
+    pub id: i64,
+    pub favourite: bool,
+    pub watched: bool,
+    pub position: Option<f64>,
+    pub duration: Option<f64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum OnDemandKind {
+    Movie,
+}
+
+/// What is open when it is a title rather than a channel; see
+/// [`PlayerStateDto::on_demand`].
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OnDemandDto {
+    pub kind: OnDemandKind,
+    pub id: i64,
+    /// Seconds from the start.
+    pub position: f64,
+    pub duration: Option<f64>,
+    /// How far the data has been read ahead, in seconds from the start.
+    pub buffered_to: Option<f64>,
+}
+
+#[cfg(test)]
+mod movie_tests {
+    use super::*;
+
+    #[test]
+    fn player_state_reports_no_title_by_default() {
+        let v = serde_json::to_value(PlayerStateDto::default()).unwrap();
+        assert_eq!(v["onDemand"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn a_movie_query_uses_the_wire_names() {
+        let q: MovieQueryDto = serde_json::from_str(
+            r#"{"list":"category","categoryId":"7","sort":"az","yearFrom":null,"yearTo":2000}"#,
+        )
+        .unwrap();
+        assert_eq!(q.list, MovieListKind::Category);
+        assert_eq!(q.sort, MovieSort::Az);
+        assert_eq!(q.year_to, Some(2000));
+    }
 }

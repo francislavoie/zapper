@@ -38,6 +38,11 @@ import type {
   DeviceDto,
   FavouriteDto,
   GuideRowDto,
+  MarksDto,
+  MovieDetailsDto,
+  MovieDto,
+  MoviePageDto,
+  MoviesSummaryDto,
   NetworkDto,
   PlayerOptionsDto,
   PlayerStateDto,
@@ -51,6 +56,7 @@ import type {
   ScheduleRequest,
   SettingsDto,
   SyncStatusDto,
+  VodCategoryDto,
 } from "./types";
 
 // ------------------------------------------------------------- signing out
@@ -256,6 +262,31 @@ export const webBackend: typeof api = {
   recentlyWatched: (limit) => get<FavouriteDto[]>(apiUrl("/api/recent", { limit })),
   forgetActivity: (streamId) =>
     del<unknown>(`/api/favourites/${streamId}`).then(() => undefined),
+
+  // Playing a movie comes with the browser's player for them.
+  playMovie: notHere,
+  seekTo: notHere,
+  moviesSummary: () => get<MoviesSummaryDto>("/api/vod/summary"),
+  movieCategories: () => get<VodCategoryDto[]>("/api/vod/categories"),
+  movies: (query, offset, limit) =>
+    get<MoviePageDto>(
+      apiUrl("/api/vod/movies", {
+        list: query.list,
+        category: query.categoryId,
+        sort: query.sort,
+        from: query.yearFrom,
+        to: query.yearTo,
+        offset,
+        limit,
+      }),
+    ),
+  searchMovies: (query, limit) =>
+    get<MovieDto[]>(apiUrl("/api/vod/movies/search", { q: query, limit })),
+  movieDetails: (movieId) => get<MovieDetailsDto>(`/api/vod/movies/${movieId}`),
+  similarMovies: (movieId, limit) =>
+    get<MovieDto[]>(apiUrl(`/api/vod/movies/${movieId}/similar`, { limit })),
+  setMovieMarks: (movieId, marks) =>
+    put<MarksDto>(`/api/vod/movies/${movieId}/marks`, marks),
 
   activityRows: notHere,
   importActivity: notHere,

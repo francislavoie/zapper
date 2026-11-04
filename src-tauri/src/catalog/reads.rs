@@ -12,9 +12,12 @@ use std::sync::Mutex;
 use anyhow::Result;
 use rusqlite::{Connection, OptionalExtension};
 
-use crate::catalog::{activity, db, guide_search, index, status, store};
+use crate::catalog::credentials::Kind;
+use crate::catalog::{activity, db, guide_search, index, status, store, vod_store};
 use crate::ipc::types::{
-    CategoryDto, ChannelDto, FavouriteDto, GuideRowDto, ProgrammeDto, ProgrammeHitDto,
+    CategoryDto, ChannelDto, FavouriteDto, GuideRowDto, MarksDto, MovieDto, MovieListKind,
+    MoviePageDto, MovieQueryDto, MovieSort, MoviesSummaryDto, ProgrammeDto, ProgrammeHitDto,
+    VodCategoryDto,
 };
 
 fn now() -> i64 {
@@ -179,4 +182,244 @@ pub fn logo_url(stream_id: i64) -> Result<Option<String>> {
             .optional()?
             .flatten())
     })
+}
+
+// ------------------------------------------------------------------ movies
+
+fn movie_dto(r: vod_store::MovieRow) -> MovieDto {
+    MovieDto {
+        movie_id: r.movie_id,
+        name: r.name,
+        clean_name: r.clean_name,
+        year: r.year,
+        rating: r.rating,
+        poster_url: r.poster_url,
+        added: r.added,
+        duration_secs: r.duration_secs,
+        category_id: r.category_id,
+        favourite: r.favourite,
+        watched: r.watched,
+    }
+}
+
+fn marks_dto(id: i64, m: vod_store::Marks) -> MarksDto {
+    MarksDto {
+        id,
+        favourite: m.favourite,
+        watched: m.watched,
+        position: m.position,
+        duration: m.duration,
+    }
+}
+
+/// Why the account has no movies, in words, or `None` when it has some.
+pub fn movies_note(kind: Option<Kind>, total: u32) -> Option<String> {
+    if total > 0 {
+        return None;
+    }
+    Some(
+        match kind {
+            None => "No account yet. Set one in Settings \u{203a} Account.",
+            Some(Kind::HdHomeRun) => "A tuner carries live channels only: it has no movies.",
+            Some(Kind::Tvheadend) => "Tvheadend serves live channels: it has no movies.",
+            Some(Kind::M3u) => {
+                "This playlist has no movies. Entries whose address is a video file (.mp4, .mkv\u{2026}) or contains /movie/ appear here."
+            }
+            Some(Kind::Xtream) => "No movies yet. They arrive with the catalogue's next refresh.",
+        }
+        .to_owned(),
+    )
+}
+
+/// How many movies there are, and whether the interface should offer them.
+pub fn movies_summary() -> Result<MoviesSummaryDto> {
+    let counts = db::with_db(|c| vod_store::movie_counts(c, now()))?;
+    let kind = crate::catalog::credentials::load_account_stored()
+        .ok()
+        .flatten()
+        .map(|a| a.kind());
+    let note = movies_note(kind, counts.total);
+    Ok(MoviesSummaryDto {
+        available: note.is_none(),
+        note,
+        total: counts.total,
+        favourites: counts.favourites,
+        recent: counts.recent,
+        watched: counts.watched,
+    })
+}
+
+pub fn movie_categories() -> Result<Vec<VodCategoryDto>> {
+    db::with_db(|c| {
+        Ok(vod_store::movie_categories(c)?
+            .into_iter()
+            .map(|r| VodCategoryDto {
+                id: r.id,
+                name: r.name,
+                movie_count: r.movie_count.into(),
+            })
+            .collect())
+    })
+}
+
+/// One page of a list, and how many titles the list has in all.
+pub fn movies(q: &MovieQueryDto, offset: u32, limit: u32) -> Result<MoviePageDto> {
+    let list = match q.list {
+        MovieListKind::Favourites => vod_store::MovieList::Favourites,
+        MovieListKind::Recent => vod_store::MovieList::Recent,
+        MovieListKind::Watched => vod_store::MovieList::Watched,
+        MovieListKind::Category => {
+            let Some(id) = q.category_id.clone() else {
+                return Err(anyhow::anyhow!("a category list needs a category"));
+            };
+            vod_store::MovieList::Category(id)
+        }
+    };
+    let query = vod_store::MovieQuery {
+        list,
+        sort: match q.sort {
+            MovieSort::Added => vod_store::MovieSort::Added,
+            MovieSort::Az => vod_store::MovieSort::Az,
+            MovieSort::Year => vod_store::MovieSort::Year,
+            MovieSort::Rating => vod_store::MovieSort::Rating,
+        },
+        year_from: q.year_from,
+        year_to: q.year_to,
+    };
+    let (total, rows) = db::with_db(|c| vod_store::movies_page(c, &query, offset, limit, now()))?;
+    Ok(MoviePageDto {
+        total,
+        items: rows.into_iter().map(movie_dto).collect(),
+    })
+}
+
+/// Specific titles, in the order asked; ones that are gone are left out.
+pub fn movies_by_ids(ids: &[i64]) -> Result<Vec<MovieDto>> {
+    db::with_db(|c| {
+        Ok(vod_store::movies_by_ids(c, ids)?
+            .into_iter()
+            .map(movie_dto)
+            .collect())
+    })
+}
+
+/// [`INDEXED_FOR`], for the movie index.
+static MOVIES_INDEXED_FOR: Mutex<Option<Option<i64>>> = Mutex::new(None);
+
+/// Fuzzy match over every movie's name, best first. Blank finds nothing.
+pub fn search_movies(query: &str, limit: u32) -> Result<Vec<MovieDto>> {
+    if query.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    let synced = status::last_synced();
+    db::with_db(|conn| {
+        let mut stamp = MOVIES_INDEXED_FOR.lock().unwrap_or_else(|e| e.into_inner());
+        if !index::movies_built() || stamp.is_some_and(|s| s != synced) {
+            index::rebuild_movies(conn)?;
+        }
+        *stamp = Some(synced);
+        drop(stamp);
+        let ids = index::query_movies(query, limit as usize);
+        Ok(vod_store::movies_by_ids(conn, &ids)?
+            .into_iter()
+            .map(movie_dto)
+            .collect())
+    })
+}
+
+pub fn similar_movies(id: i64, limit: u32) -> Result<Vec<MovieDto>> {
+    db::with_db(|c| {
+        Ok(vod_store::similar_movies(c, id, limit)?
+            .into_iter()
+            .map(movie_dto)
+            .collect())
+    })
+}
+
+/// Sets or clears the favourite and watched marks; `None` leaves one alone.
+pub fn set_movie_marks(
+    id: i64,
+    favourite: Option<bool>,
+    watched: Option<bool>,
+) -> Result<MarksDto> {
+    db::with_db(|c| {
+        let m = vod_store::set_marks(c, vod_store::ItemKind::Movie, id, favourite, watched, now())?;
+        Ok(marks_dto(id, m))
+    })
+}
+
+/// Writes down how far into a movie the player is.
+pub fn save_movie_progress(id: i64, position: f64, duration: Option<f64>) -> Result<MarksDto> {
+    db::with_db(|c| {
+        let m = vod_store::record_progress(
+            c,
+            vod_store::ItemKind::Movie,
+            id,
+            position,
+            duration,
+            now(),
+        )?;
+        Ok(marks_dto(id, m))
+    })
+}
+
+/// The poster the catalogue has for a movie, as the provider gave it.
+pub fn movie_poster_url(id: i64) -> Result<Option<String>> {
+    db::with_db(|conn| {
+        Ok(conn
+            .query_row(
+                "SELECT poster_url FROM movies WHERE movie_id = ?1 AND deleted_at IS NULL",
+                [id],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten())
+    })
+}
+
+/// The `n`th backdrop in the details already kept. Never fetches: an image
+/// request must not cost the provider a call.
+pub fn movie_backdrop_url(id: i64, n: usize) -> Result<Option<String>> {
+    let kept = db::with_db(|c| vod_store::cached_details(c, id))?;
+    Ok(kept
+        .and_then(|(_, json)| {
+            serde_json::from_str::<crate::catalog::vod_details::MovieInfo>(&json).ok()
+        })
+        .and_then(|i| i.backdrops.into_iter().nth(n)))
+}
+
+#[cfg(test)]
+mod movie_tests {
+    use super::*;
+
+    #[test]
+    fn movies_note_says_why_a_tuner_has_none() {
+        let n = movies_note(Some(Kind::HdHomeRun), 0).unwrap();
+        assert!(n.contains("tuner") && n.contains("no movies"), "{n}");
+        assert!(movies_note(Some(Kind::Tvheadend), 0)
+            .unwrap()
+            .contains("Tvheadend"));
+        assert!(movies_note(None, 0).unwrap().starts_with("No account yet."));
+    }
+
+    #[test]
+    fn movies_note_is_silent_when_there_are_movies() {
+        for k in [
+            None,
+            Some(Kind::Xtream),
+            Some(Kind::M3u),
+            Some(Kind::HdHomeRun),
+        ] {
+            assert_eq!(movies_note(k, 1), None);
+        }
+    }
+
+    #[test]
+    fn movies_note_tells_a_playlist_what_counts() {
+        let n = movies_note(Some(Kind::M3u), 0).unwrap();
+        assert!(n.contains(".mp4") && n.contains("/movie/"), "{n}");
+        assert!(movies_note(Some(Kind::Xtream), 0)
+            .unwrap()
+            .contains("next refresh"));
+    }
 }

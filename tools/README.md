@@ -50,6 +50,24 @@ so a reconnect plays. `/player_api.php` answers as an Xtream account does,
 with `max_connections` from `--max-connections` (default 1) and `active_cons`
 the streams being served plus `--other-devices`.
 
+### Movies
+
+`make_fixtures.sh` also writes two 120 s "films" (640x360@25, a keyframe every
+2 s, made-up subtitle text):
+
+| Fixture | Format | Why |
+|---|---|---|
+| `movie.mp4` | h264, aac, `-movflags +faststart`, one `mov_text` subtitle track | The common MP4 |
+| `movie.mkv` | h264, **ac3**, a `subrip` and an `ass` subtitle track | Matroska, AC-3 audio, text subtitles to extract |
+
+`tools/fake_stream.py --movies 500` lists 500 made-up movies (ids 1..500, over
+three categories; odd ids are `mkv`, even `mp4`) through `player_api.php`:
+`get_vod_categories`, `get_vod_streams` (`&category_id=` filters) and
+`get_vod_info&vod_id=`. `/movie/<user>/<pass>/<id>.<ext>` serves the matching
+fixture as a file, with `Accept-Ranges: bytes` and `206` plus `Content-Range`
+for a `Range` header. A movie being sent counts in `active_cons` like a live
+stream, and `--refuse` applies to it too.
+
 `cargo run --features harness --bin live_start_bench [fixture]` plays the
 server under several kinds of connect burst, starting each channel both ways
 that reach live — from the first frame then jumping to live ("Play right away,

@@ -193,13 +193,14 @@ fn libmpv(bundle: Option<&Path>) {
 }
 
 /// Compiles the recording service's remuxers (`src/recording/remux.c`, a capture into Matroska,
-/// and `src/recording/livemux.c`, a live feed for a browser) against FFmpeg's libavformat,
+/// `src/recording/livemux.c`, a live feed for a browser, and `src/recording/vodmux.c`, a movie file
+/// for a browser) against FFmpeg's libavformat,
 /// libavcodec, libswresample and libavutil: the bundle's (their headers in `include/`), or, with
 /// none fetched, whatever pkg-config finds. The C side does only what needs FFmpeg's structures
 /// (demuxing, decoding, encoding and muxing); every decision about timing and naming is Rust's.
 #[cfg(feature = "server")]
 fn remuxer(bundle: Option<&Path>) {
-    let srcs = ["src/recording/remux.c", "src/recording/livemux.c"];
+    let srcs = ["src/recording/remux.c", "src/recording/livemux.c", "src/recording/vodmux.c"];
     for src in srcs {
         println!("cargo:rerun-if-changed={src}");
     }

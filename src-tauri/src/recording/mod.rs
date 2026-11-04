@@ -16,10 +16,11 @@
 //! The service itself — the store of recordings, the capture loop, the
 //! connections it shares between recordings and browsers watching ([`hub`],
 //! [`watch`]), the remuxers (a capture into Matroska; a live feed for a
-//! browser, [`livemux`], as [`tsprobe`] decides), the HTTP server with its listeners ([`listen`]), who may use it
+//! browser, [`livemux`], as [`tsprobe`] decides; a movie file from any point in it, [`vodmux`]), the HTTP server with its listeners ([`listen`]), who may use it
 //! ([`access`]), the provider account a signed-in browser may change
 //! ([`account`]), its HTTPS certificate ([`tls`]), and the web interface it
-//! serves ([`web`]) with the catalogue API that interface reads ([`browse`]),
+//! serves ([`web`]) with the catalogue API that interface reads ([`browse`],
+//! and for movies [`vod_browse`]),
 //! and the live stream of a recording a `.strm` file points Jellyfin at
 //! ([`strm`]) — is in the `server` feature, so the app links none of it.
 
@@ -65,7 +66,11 @@ pub mod tls;
 #[cfg(feature = "server")]
 pub mod tsprobe;
 #[cfg(feature = "server")]
+pub mod vodmux;
+#[cfg(feature = "server")]
 pub mod watch;
+#[cfg(feature = "server")]
+pub mod vod_browse;
 #[cfg(feature = "server")]
 pub mod web;
 

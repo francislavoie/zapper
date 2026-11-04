@@ -33,7 +33,7 @@ use super::api::{
 use super::backup::SetBackupRequest;
 use super::now;
 use super::server::Server;
-use super::{account, browse, strm, watch, web};
+use super::{account, browse, strm, vod_browse, watch, web};
 
 type Shared = Arc<Server>;
 
@@ -439,6 +439,7 @@ pub fn router(server: Shared) -> Router {
         .route("/api/settings", get(settings).put(set_settings))
         .route("/api/logout", post(logout))
         .merge(browse::routes())
+        .merge(vod_browse::routes())
         .merge(account::routes())
         .merge(watch::routes())
         .route_layer(middleware::from_fn_with_state(server.clone(), auth));
@@ -1989,6 +1990,225 @@ pub(crate) mod tests {
             call_raw(&s, from_page("GET", "/api/logo/1", Some(&token), None)).await.0,
             StatusCode::NOT_FOUND
         );
+    }
+
+    /// Movies 9_100_001.. in one category; the first has the poster at
+    /// `poster`, and (in its kept details) one backdrop at `backdrop`. The
+    /// second has kept details of a playlist's kind: nothing but a record.
+    fn seed_movies(poster: &str, backdrop: &str) {
+        use crate::catalog::{db, vod_store, vod_sync};
+        db::install_test_db();
+        let movie = |id: i64, name: &str, poster: Option<&str>| vod_sync::NewMovie {
+            movie_id: id,
+            category_id: Some("vod-9100".into()),
+            name: name.into(),
+            poster_url: poster.map(str::to_owned),
+            ..Default::default()
+        };
+        db::with_db(|c| {
+            vod_sync::land_movies(
+                c,
+                &[crate::xtream::Category {
+                    category_id: "vod-9100".into(),
+                    category_name: "Web Films".into(),
+                }],
+                &[
+                    movie(9_100_001, "Harbour Lights", Some(poster)),
+                    movie(9_100_002, "Harbour Dusk", None),
+                ],
+                now(),
+            )?;
+            let info = serde_json::json!({ "backdrops": [backdrop], "genres": ["Drama"] });
+            vod_store::store_details(c, 9_100_001, now(), &info.to_string(), None)?;
+            vod_store::store_details(c, 9_100_002, now(), "{}", None)?;
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_movie_catalogue_is_read_and_marked_without_provider_addresses() {
+        let s = server("vod");
+        enable(&s, true).await;
+        let poster = "http://provider.example/u/secret-user/p/secret-pass/poster.jpg";
+        let backdrop = "http://provider.example/u/secret-user/p/secret-pass/back.jpg";
+        seed_movies(poster, backdrop);
+        let token = browser_login(&s).await;
+        let get = |uri: &str| from_page("GET", uri, Some(&token), None);
+        let put = |uri: &str, body: serde_json::Value| from_page("PUT", uri, Some(&token), Some(body));
+
+        let (st, sum) = call(&s, get("/api/vod/summary")).await;
+        assert_eq!(st, StatusCode::OK);
+        assert!(sum["total"].as_u64().unwrap() >= 2, "{sum}");
+        let (_, cats) = call(&s, get("/api/vod/categories")).await;
+        assert!(cats.as_array().unwrap().iter().any(|c| c["id"] == "vod-9100"));
+
+        let page_uri = "/api/vod/movies?list=category&category=vod-9100&sort=az&offset=0&limit=10";
+        let (st, page) = call(&s, get(page_uri)).await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(page["total"], 2);
+        let posters: Vec<&str> = page["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|m| m["posterUrl"].as_str())
+            .collect();
+        assert_eq!(posters, ["/api/poster/movie/9100001"]);
+        assert_eq!(
+            call(&s, get("/api/vod/movies?list=category&limit=10")).await.0,
+            StatusCode::BAD_REQUEST
+        );
+
+        let (_, hits) = call(&s, get("/api/vod/movies/search?q=harbour%20lights&limit=5")).await;
+        assert_eq!(hits[0]["movieId"], 9_100_001);
+        let (_, like) = call(&s, get("/api/vod/movies/9100001/similar?limit=5")).await;
+        assert!(like.is_array());
+
+        // Opened, a movie's pictures are this service's; a playlist's has
+        // nothing more than the list said.
+        let (st, d) = call(&s, get("/api/vod/movies/9100001")).await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(d["backdropUrls"][0], "/api/backdrop/movie/9100001/0");
+        assert_eq!(d["movie"]["posterUrl"], "/api/poster/movie/9100001");
+        assert_eq!(d["genres"][0], "Drama");
+        let (st, bare) = call(&s, get("/api/vod/movies/9100002")).await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(bare["genres"], serde_json::json!([]));
+        assert_eq!(
+            call(&s, get("/api/vod/movies/9199999")).await.0,
+            StatusCode::NOT_FOUND
+        );
+
+        let (st, m) = call(&s, put("/api/vod/movies/9100001/marks", serde_json::json!({"favourite": true}))).await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(m["favourite"], true);
+        let (_, favs) = call(&s, get("/api/vod/movies?list=favourites&limit=1000")).await;
+        assert!(favs["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m["movieId"] == 9_100_001));
+        let (st, m) = call(
+            &s,
+            put("/api/vod/movies/9100002/progress", serde_json::json!({"position": 95, "duration": 100})),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(m["watched"], true);
+        assert_eq!(
+            call(&s, put("/api/vod/movies/9199999/marks", serde_json::json!({"watched": true}))).await.0,
+            StatusCode::NOT_FOUND
+        );
+
+        // Nothing of the provider's address in any answer.
+        for uri in [
+            page_uri,
+            "/api/vod/movies/search?q=harbour&limit=5",
+            "/api/vod/movies/9100001",
+            "/api/vod/movies/9100002/similar?limit=5",
+            "/api/vod/movies?list=favourites&limit=10",
+        ] {
+            let (_, _, body) = call_raw(&s, get(uri)).await;
+            let text = String::from_utf8(body).unwrap();
+            assert!(!text.contains("provider.example") && !text.contains("secret"), "{uri}: {text}");
+        }
+
+        // Not without signing in.
+        for uri in ["/api/vod/summary", "/api/poster/movie/9100001", "/api/backdrop/movie/9100001/0"] {
+            assert_eq!(
+                call(&s, from_page("GET", uri, None, None)).await.0,
+                StatusCode::UNAUTHORIZED,
+                "{uri}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn posters_and_backdrops_are_fetched_by_the_service() {
+        let provider = crate::test_http::serve(|r, _| match r.route() {
+            "/poster.jpg" | "/back.jpg" => {
+                crate::test_http::Reply::ok(b"\xff\xd8 fake".to_vec()).header("Content-Type", "image/jpeg")
+            }
+            _ => crate::test_http::Reply::ok("<html>no</html>").header("Content-Type", "text/html"),
+        });
+        let s = server("vod-images");
+        enable(&s, true).await;
+        let token = browser_login(&s).await;
+        seed_movies(
+            &format!("{}/poster.jpg", provider.base),
+            &format!("{}/back.jpg", provider.base),
+        );
+        for uri in ["/api/poster/movie/9100001", "/api/backdrop/movie/9100001/0"] {
+            let (st, h, body) = call_raw(&s, from_page("GET", uri, Some(&token), None)).await;
+            assert_eq!(st, StatusCode::OK, "{uri}");
+            assert_eq!(h[header::CONTENT_TYPE], "image/jpeg");
+            assert_eq!(h[header::CONTENT_SECURITY_POLICY], web::LOGO_CSP);
+            assert_eq!(h[header::CACHE_CONTROL], "private, max-age=86400");
+            assert_eq!(body, b"\xff\xd8 fake");
+        }
+        // No picture, no such backdrop, no such movie: a 404 kept for an hour.
+        for uri in [
+            "/api/poster/movie/9100002",
+            "/api/backdrop/movie/9100001/1",
+            "/api/poster/movie/9199999",
+        ] {
+            let (st, h, _) = call_raw(&s, from_page("GET", uri, Some(&token), None)).await;
+            assert_eq!(st, StatusCode::NOT_FOUND, "{uri}");
+            assert_eq!(h[header::CACHE_CONTROL], "private, max-age=3600");
+        }
+    }
+
+    #[test]
+    fn a_failed_details_fetch_does_not_tell_the_page_where_the_provider_is() {
+        use crate::catalog::{db, vod_sync};
+        let provider = crate::test_http::serve(|_, _| crate::test_http::Reply::new(500, "nope"));
+        with_account("vodfail", async {
+            crate::catalog::credentials::save(&crate::xtream::Credentials {
+                host: provider.base.clone(),
+                username: "viewer".into(),
+                password: "vod-secret-41".into(),
+            })
+            .unwrap();
+            db::install_test_db();
+            db::with_db(|c| {
+                vod_sync::land_movies(
+                    c,
+                    &[crate::xtream::Category {
+                        category_id: "vod-9101".into(),
+                        category_name: "Web Films Two".into(),
+                    }],
+                    &[vod_sync::NewMovie {
+                        movie_id: 9_101_001,
+                        category_id: Some("vod-9101".into()),
+                        name: "Harbour Fog".into(),
+                        ..Default::default()
+                    }],
+                    now(),
+                )?;
+                Ok(())
+            })
+            .unwrap();
+            let s = server("vod-fail");
+            enable(&s, true).await;
+            let token = browser_login(&s).await;
+            let get = |uri: &str| from_page("GET", uri, Some(&token), None);
+            let (st, _, body) = call_raw(&s, get("/api/vod/movies/9101001")).await;
+            assert_eq!(st, StatusCode::BAD_GATEWAY);
+            let text = String::from_utf8(body).unwrap();
+            for leak in [provider.base.as_str(), "127.0.0.1", "player_api", "vod-secret-41"] {
+                assert!(!text.contains(leak), "{leak} reached the browser: {text}");
+            }
+            // An unknown id is a 404 for every read of one, and a bad duration is refused.
+            let (st, _) = call(&s, get("/api/vod/movies/9199999/similar?limit=5")).await;
+            assert_eq!(st, StatusCode::NOT_FOUND);
+            let bad = serde_json::json!({"position": 5, "duration": 0});
+            let (st, _) = call(
+                &s,
+                from_page("PUT", "/api/vod/movies/9101001/progress", Some(&token), Some(bad)),
+            )
+            .await;
+            assert_eq!(st, StatusCode::BAD_REQUEST);
+        });
     }
 
     // ------------------------------------------------------------- account
