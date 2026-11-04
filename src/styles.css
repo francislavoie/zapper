@@ -925,6 +925,24 @@ select option {
   background: none;
 }
 
+/* A choice listed and not to be made here: a browser's picture subtitles. */
+.tb-menu-item:disabled {
+  cursor: default;
+  color: var(--dim);
+}
+
+.tb-menu-item:disabled:hover {
+  background: none;
+}
+
+/* Why some of a submenu's choices can't be made. */
+.ctx-note {
+  max-width: 16rem;
+  margin: 0.25rem 0.625rem 0.125rem;
+  font-size: 0.75rem;
+  color: var(--dim);
+}
+
 .watch-state {
   margin: 0;
   font-size: 0.75rem;

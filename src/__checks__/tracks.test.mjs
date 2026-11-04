@@ -7,6 +7,7 @@ import {
   choiceLabel,
   codecName,
   hasAudioChoice,
+  isPictureSubtitle,
   languageName,
   selectedLabel,
   trackLabel,
@@ -102,4 +103,14 @@ test("a submenu opens to the right of its row, else to the left, and stays on sc
   assert.equal(subMenuPosition({ left: 50, right: 250, top: 200 }, 180, 120, 300, 800).left, 114);
   // Near the bottom: slides up to fit.
   assert.equal(subMenuPosition({ left: 100, right: 300, top: 760 }, 180, 120, 1280, 800).top, 674);
+});
+
+test("subtitles drawn as pictures are told from text", () => {
+  for (const codec of ["dvb_subtitle", "hdmv_pgs_subtitle", "dvd_subtitle", "picture"]) {
+    assert.equal(isPictureSubtitle({ codec }), true, codec);
+  }
+  for (const codec of ["subrip", "ass", "webvtt", "mov_text", null]) {
+    assert.equal(isPictureSubtitle({ codec }), false, String(codec));
+  }
+  assert.equal(codecName("picture"), "Pictures");
 });
