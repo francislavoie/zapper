@@ -36,7 +36,11 @@ pub fn classify(e: &Entry) -> EntryKind {
             EntryKind::Movie
         }
     };
-    if path.contains("/movie/") {
+    // What is plainly live comes first: a channel can sit under a path that
+    // happens to be called `movie`, or be a film-looking file on a live path.
+    if path.ends_with(".ts") || path.ends_with(".m3u8") || path.contains("/live/") {
+        EntryKind::Channel
+    } else if path.contains("/movie/") {
         EntryKind::Movie
     } else if path.contains("/series/") || VIDEO_FILES.iter().any(|x| path.ends_with(x)) {
         on_demand()
@@ -85,7 +89,14 @@ mod tests {
             k("http://h/series/u/p/78.mp4", "A Special"),
             EntryKind::Movie
         );
-        for url in ["http://h/live/u/p/12.ts", "http://h/u/p/12", "http://h/news.m3u8"] {
+        for url in [
+            "http://h/live/u/p/12.ts",
+            "http://h/u/p/12",
+            "http://h/news.m3u8",
+            "http://cdn/live/movie/index.m3u8",
+            "http://h/live/u/p/1.mp4",
+            "http://h/movie/u/p/1.m3u8",
+        ] {
             assert_eq!(k(url, "News"), EntryKind::Channel);
         }
     }

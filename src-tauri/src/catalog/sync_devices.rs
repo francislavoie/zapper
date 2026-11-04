@@ -269,7 +269,10 @@ pub(crate) fn land_tvheadend_playlist(
         e.group = tag.or(e.group.take()).or_else(|| Some(fallback.to_owned()));
         match uuid {
             Some(u) => w.push_identified(e, &crate::tvheadend::identity(&u)),
-            None => w.push(e),
+            None => {
+                let identity = crate::m3u::ids::identity(&e);
+                w.push_identified(e, &identity)
+            }
         }
     })?;
     w.rank_groups(&tags.order);
