@@ -10,6 +10,7 @@ import type {
   PlaybackState,
   ProgrammeDto,
 } from "../types";
+import { movieFacts } from "./movies.ts";
 
 /** How the player's state reads to the desktop. Opening counts as playing,
  *  since that is what was asked for and it is a second away; a failed open
@@ -41,6 +42,22 @@ export function mediaSessionOf(
     title,
     subtitle,
     artUrl: channel.logoUrl || null,
+    playback: playbackOf(state),
+  };
+}
+
+/** The same for a movie: its title, its year and length beneath. The poster
+ *  is the service's to serve, not a URL the desktop could fetch, so no art. */
+export function movieSessionOf(
+  movie: { cleanName: string; name: string; year: number | null; durationSecs: number | null } | null,
+  state: PlaybackState,
+): MediaSessionDto | null {
+  if (!movie || state === "stopped") return null;
+  const facts = movieFacts({ year: movie.year, durationSecs: movie.durationSecs, rating: null });
+  return {
+    title: (movie.cleanName || movie.name).trim(),
+    subtitle: facts || null,
+    artUrl: null,
     playback: playbackOf(state),
   };
 }

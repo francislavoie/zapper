@@ -16,9 +16,11 @@ import {
   indexOfStream,
   intentOf,
   mediaSessionOf,
+  movieSessionOf,
   sessionKey,
   stepFrom,
 } from "./logic/mediaKeys";
+import { playingKind } from "./logic/movies";
 import { run, type Action, type State } from "./store";
 import type { ChannelDto, MediaKey } from "./types";
 
@@ -94,7 +96,12 @@ export function handleMediaKey(
   state: Pick<State, "player" | "nowChannel" | "pendingStreamId">,
   dispatch: Dispatch<Action>,
 ): void {
-  const playing = state.pendingStreamId ?? state.player.streamId ?? state.nowChannel?.streamId ?? null;
+  // Next and previous step through channels; with a movie on there is no
+  // channel to step from, and the one last browsed is not what is playing.
+  const playing =
+    state.player.onDemand !== null
+      ? null
+      : (state.pendingStreamId ?? state.player.streamId ?? state.nowChannel?.streamId ?? null);
   switch (intentOf(key, state.player.state)) {
     case "togglePause":
       void run(dispatch, "pause", backend.togglePause());
@@ -120,7 +127,12 @@ export function useMediaControls(state: State, dispatch: Dispatch<Action>): void
   // the desktop's panel to follow.
   const now = useClock(30_000);
   const { now: programme } = useNowNext(on ? state.nowChannel : null, now);
-  const session = on ? mediaSessionOf(state.nowChannel, programme, state.player.state) : null;
+  const movie = playingKind(state.player) === "movie" ? state.movies.playing : null;
+  const session = !on
+    ? null
+    : movie
+      ? movieSessionOf(movie, state.player.state)
+      : mediaSessionOf(state.nowChannel, programme, state.player.state);
   const key = sessionKey(session);
   const latest = useRef(session);
   latest.current = session;

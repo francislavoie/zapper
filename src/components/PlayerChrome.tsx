@@ -2,8 +2,9 @@
 // translucent gradient: mpv is drawing underneath, and an opaque panel would
 // be a hole in the picture.
 //
-// Click does not pause. That is a VOD idiom and it misfires constantly on
-// live TV, where the click you meant for the window lands on the stream.
+// On a channel click does not pause. That is a VOD idiom and it misfires
+// constantly on live TV, where the click you meant for the window lands on
+// the stream. A movie is the VOD case: there a click toggles pause.
 //
 // The bottom bar is TransportBar, which the docked picture uses too — see
 // that file for the order of the row and why. What is only here: the way
@@ -19,6 +20,8 @@ import { backend } from "../backend";
 import { toggleFullscreen } from "../fullscreen";
 import { endedMessage, startingLine } from "../logic/ending";
 import { measuredLine } from "../logic/format";
+import { movieFacts, playingKind } from "../logic/movies";
+import { VOD_SKIP_SECONDS } from "../logic/vodTransport";
 import { atScreenEdge } from "../logic/fade";
 import { volumeAfterWheel } from "../logic/volume";
 import { run, useApp, useDispatch } from "../store";
@@ -33,7 +36,9 @@ import { VideoFeedback } from "./VideoFeedback";
 import { PictureCorner } from "./PictureCorner";
 
 export function PlayerChrome() {
-  const { player, nowChannel, stacked, zoom } = useApp();
+  const { player, nowChannel, stacked, zoom, movies } = useApp();
+  const movie = playingKind(player) === "movie" ? movies.playing : null;
+  const isMovie = playingKind(player) === "movie";
   const dispatch = useDispatch();
   // Offered only when the window can actually take the layout. Below that the
   // control is absent rather than present and cramped.
@@ -54,10 +59,12 @@ export function PlayerChrome() {
       .catch((err: unknown) => dispatch({ type: "toast", text: `fullscreen: ${String(err)}` }));
 
   const gestures = useVideoGestures({
-    atLiveEdge: player.atLiveEdge,
+    // A movie has no live edge to be held back by: forward always seeks.
+    atLiveEdge: isMovie ? false : player.atLiveEdge,
     muted: player.muted,
     onFullscreen: toggle,
     onActivity: () => on({ type: "activity" }),
+    step: isMovie ? VOD_SKIP_SECONDS : undefined,
   });
 
   return (
@@ -74,10 +81,11 @@ export function PlayerChrome() {
       }}
       onPointerLeave={() => on({ type: "leave" })}
       onClick={(e) => {
-        // A click on a paused picture resumes it. Only that way round: a
-        // click never pauses (see logic/gestures.ts), so this cannot misfire
-        // on live TV — the worst a stray click does is what was wanted.
-        if (player.state !== "paused") return;
+        // A click on a paused picture resumes it. On a channel only that way
+        // round: a click never pauses there (see logic/gestures.ts), so this
+        // cannot misfire on live TV — the worst a stray click does is what
+        // was wanted. A movie's click toggles.
+        if (player.state !== "paused" && !(isMovie && player.state === "playing")) return;
         if ((e.target as HTMLElement).closest(".chrome-top, .chrome-bottom")) return;
         on({ type: "activity" });
         void run(dispatch, "pause", backend.togglePause());
@@ -128,15 +136,17 @@ export function PlayerChrome() {
         </button>
 
         <div className="chrome-title">
-          <h2 data-tip-overflow={nowChannel?.name ?? ""}>
-            {nowChannel?.cleanName ?? "Nothing playing"}
+          <h2 data-tip-overflow={movie ? movie.name : (nowChannel?.name ?? "")}>
+            {movie ? movie.cleanName : (nowChannel?.cleanName ?? "Nothing playing")}
           </h2>
           <p>
             {starting
               ? starting
               : ended
                 ? ended.title
-                : (nowChannel?.nowPlaying?.title ?? "no guide data")}
+                : movie
+                  ? movieFacts(movie)
+                  : (nowChannel?.nowPlaying?.title ?? "no guide data")}
           </p>
         </div>
 

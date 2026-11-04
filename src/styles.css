@@ -2925,6 +2925,80 @@ button.prog:hover {
   pointer-events: none;
 }
 
+/* A movie's seek bar: what has been read ahead, what has been played, and a
+   knob that grows under the pointer. Same height and hit area as .scrubber so
+   the bar does not change size between a channel and a movie. */
+.vod-scrubber {
+  position: relative;
+  height: 1.375rem;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  touch-action: none;
+  outline: none;
+}
+
+.vod-track {
+  position: relative;
+  width: 100%;
+  height: 0.375rem;
+  border-radius: 0.1875rem;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.vod-scrubber:hover .vod-track,
+.vod-scrubber:focus-visible .vod-track {
+  height: 0.5rem;
+}
+
+.vod-buffered,
+.vod-played {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+}
+
+.vod-buffered {
+  background: rgba(255, 255, 255, 0.24);
+}
+
+.vod-played {
+  background: var(--accent);
+}
+
+.vod-knob {
+  position: absolute;
+  top: 50%;
+  width: 0.75rem;
+  height: 0.75rem;
+  margin-left: -0.375rem;
+  border-radius: 50%;
+  background: #fff;
+  transform: translateY(-50%) scale(0);
+  transition: transform 0.1s;
+  pointer-events: none;
+}
+
+.vod-scrubber:hover .vod-knob,
+.vod-scrubber:focus-visible .vod-knob {
+  transform: translateY(-50%) scale(1);
+}
+
+.mini-controls .vod-scrubber {
+  height: 1.125rem;
+}
+
+.vod-time {
+  min-width: 9rem;
+}
+
+.mini-controls .vod-time {
+  min-width: 6rem;
+  font-size: 0.6875rem;
+}
+
 /* ---------------------------------------------------------------- modals */
 
 /* Deliberately not dimmed: a translucent sheet over the whole window would
