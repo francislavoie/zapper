@@ -4,11 +4,17 @@
 //! backdrops are one `get_vod_info` call per title. Asking for all of them
 //! would be a hundred and fifty thousand requests, so a title is asked about
 //! when someone opens it, and the answer is kept for a week. A provider that
-//! cannot be reached shows what was kept rather than nothing.
+//! cannot be reached shows what was kept rather than nothing, and is not
+//! asked about that title again for [`FAILED_RETRY_SECS`]: reopening it
+//! while the provider is down answers at once rather than after another
+//! wait for the provider.
 //!
 //! Every error here is scrubbed before it leaves: `reqwest` puts the URL in
 //! its message, and an Xtream URL carries the account's username and
 //! password.
+
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
@@ -21,6 +27,18 @@ use crate::xtream::VodInfo;
 
 /// How long fetched details are trusted before the next open asks again.
 pub const DETAILS_FRESH_SECS: i64 = 7 * 86_400;
+
+/// How long after a failed fetch a title's details are not asked for again.
+pub const FAILED_RETRY_SECS: i64 = 60;
+
+/// Titles whose last fetch failed: when, and the error it gave (scrubbed).
+fn failures() -> std::sync::MutexGuard<'static, HashMap<i64, (i64, String)>> {
+    static FAILED: OnceLock<Mutex<HashMap<i64, (i64, String)>>> = OnceLock::new();
+    FAILED
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+}
 
 /// What is kept of a title's `get_vod_info`, as the JSON in
 /// `movie_details.info`. Every field has a default so that a copy written by
@@ -113,8 +131,21 @@ async fn info_at(source: &Source, id: i64, now: i64) -> Result<Option<(i64, Movi
     let Source::Xtream(client) = source else {
         return Ok(kept);
     };
+    let failed = |why: String| match kept.clone() {
+        Some(k) => Ok(Some(k)),
+        None => Err(anyhow!("the details could not be fetched: {why}")),
+    };
+    // Failed a moment ago: the same answer, without asking again.
+    let recent = failures()
+        .get(&id)
+        .filter(|(at, _)| (0..FAILED_RETRY_SECS).contains(&(now - at)))
+        .map(|(_, why)| why.clone());
+    if let Some(why) = recent {
+        return failed(why);
+    }
     match client.vod_info(id).await {
         Ok(v) => {
+            failures().remove(&id);
             let info = info_from_xtream(&v);
             let json = serde_json::to_string(&info)?;
             db::with_db(|c| vod_store::store_details(c, id, now, &json, info.runtime))?;
@@ -123,10 +154,8 @@ async fn info_at(source: &Source, id: i64, now: i64) -> Result<Option<(i64, Movi
         Err(e) => {
             let why = scrub(&format!("{e:#}"));
             tracing::warn!("movie details for {id} could not be fetched: {why}");
-            match kept {
-                Some(_) => Ok(kept),
-                None => Err(anyhow!("the details could not be fetched: {why}")),
-            }
+            failures().insert(id, (now, why.clone()));
+            failed(why)
         }
     }
 }
@@ -288,6 +317,36 @@ mod tests {
         let text = format!("{err:#}");
         assert!(!text.contains(SECRET), "{text}");
         assert!(text.contains("could not be fetched"), "{text}");
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn a_failed_fetch_is_not_asked_again_for_a_minute() {
+        let _catalogue = db::movie_catalogue();
+        seed(9605);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let n = calls.clone();
+        let s = serve(move |_, _| {
+            if n.fetch_add(1, Ordering::SeqCst) < 2 {
+                Reply::new(500, "boom")
+            } else {
+                Reply::ok(r#"{"info":{"plot":"Back"}}"#)
+            }
+        });
+        let src = source(&s.base);
+        let t = 2_000_000;
+        let first = format!("{:#}", details_with(&src, 9605, t).await.unwrap_err());
+        // Reopened while the provider is down: the same answer, at once.
+        let again = format!("{:#}", details_with(&src, 9605, t + 30).await.unwrap_err());
+        assert_eq!(again, first);
+        assert!(!again.contains(SECRET), "{again}");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        // A minute on, it is asked again; and once it answers, kept.
+        details_with(&src, 9605, t + FAILED_RETRY_SECS).await.unwrap_err();
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        let d = details_with(&src, 9605, t + 2 * FAILED_RETRY_SECS).await.unwrap();
+        assert_eq!(d.plot.as_deref(), Some("Back"));
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
     }
 
     #[allow(clippy::await_holding_lock)]
