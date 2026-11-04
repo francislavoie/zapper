@@ -4,7 +4,7 @@
 # (H.264 8-bit 4:2:0 in MPEG-TS, a keyframe every two seconds), and one the
 # way much broadcast SD still is (MPEG-2 video, MP2 sound).
 #
-#   tools/make_fixtures.sh              # the four fixtures below, 30 s each
+#   tools/make_fixtures.sh              # the fixtures below (the films 120 s, the rest 30 s)
 #   tools/make_fixtures.sh --force      # regenerate ones that already exist
 #
 # They go to $ZAPPER_FIXTURES, by default ~/.cache/zapper/fixtures, outside
@@ -14,6 +14,10 @@
 #   motion1080p.ts  h264 1920x1080@25, aac   the whole frame scrolling
 #   sport720p60.ts  h264 1280x720@60,  ac3   60 fps, high motion, AC-3 audio
 #   mpeg2sd.ts      mpeg2 720x576@25,  mp2   video no browser plays
+#   movie.mp4       h264 640x360@25,   aac   a 120 s "film": faststart, a keyframe every 2 s,
+#                                            one mov_text subtitle track (English)
+#   movie.mkv       h264 640x360@25,   ac3   the same in Matroska, with a subrip and an ass
+#                                            subtitle track (English); all the text is made up
 set -euo pipefail
 
 dir=${ZAPPER_FIXTURES:-$HOME/.cache/zapper/fixtures}
@@ -53,3 +57,39 @@ make sample1080.ts  1920x1080 50 "" aac
 make motion1080p.ts 1920x1080 25 "scroll=horizontal=0.02:vertical=0.01" aac
 make sport720p60.ts 1280x720  60 "scroll=horizontal=0.03:vertical=0.015" ac3
 make mpeg2sd.ts     720x576   25 "scroll=horizontal=0.02:vertical=0.01" mp2 mpeg2video
+
+# movie <name> <audio codec> <subtitle codec>...
+# A "film" for the on-demand tests: 120 s of the test pattern and a tone, with
+# made-up timed subtitle lines (one every 10 s) embedded as text tracks.
+movie() {
+  local out="$dir/$1" acodec=$2; shift 2
+  if [[ -e "$out" && $force -eq 0 ]]; then
+    echo "exists: $out (--force regenerates)"
+    return
+  fi
+  local srt; srt=$(mktemp --suffix=.srt)
+  local i
+  for ((i = 0; i < 12; i++)); do
+    printf '%d\n00:%02d:%02d,000 --> 00:%02d:%02d,000\nMade-up line %d of the test film.\n\n' \
+      $((i + 1)) $(((i * 10 + 1) / 60)) $(((i * 10 + 1) % 60)) $(((i * 10 + 5) / 60)) $(((i * 10 + 5) % 60)) $((i + 1))
+  done >"$srt"
+  local inputs=() maps=(-map 0:v -map 1:a) opts=() n=0 codec
+  for codec in "$@"; do
+    inputs+=(-i "$srt")
+    maps+=(-map "$((n + 2)):s")
+    opts+=("-c:s:$n" "$codec" "-metadata:s:s:$n" language=eng)
+    n=$((n + 1))
+  done
+  ffmpeg -hide_banner -loglevel error -y \
+    -f lavfi -i "testsrc2=size=640x360:rate=25" \
+    -f lavfi -i "sine=frequency=330:sample_rate=48000" \
+    "${inputs[@]}" -t 120 "${maps[@]}" \
+    -c:v libx264 -preset veryfast -pix_fmt yuv420p -g 50 -keyint_min 50 -sc_threshold 0 -b:v 800k \
+    -c:a "$acodec" -ac 2 -b:a 96k "${opts[@]}" \
+    -movflags +faststart "$out"
+  rm -f "$srt"
+  echo "wrote $out"
+}
+
+movie movie.mp4 aac mov_text
+movie movie.mkv ac3 subrip ass
