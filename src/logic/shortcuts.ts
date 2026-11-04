@@ -65,9 +65,9 @@ export const SHORTCUT_GROUPS: readonly ShortcutGroup[] = [
     items: [
       { keys: [["Space"]], does: "Play or pause" },
       { keys: [["←"], ["→"]], pair: true, does: "Back or forward 5 seconds (10 in a movie)" },
-      { keys: [["L"]], does: "Jump to live" },
+      { keys: [["L"]], does: "Jump to live (not in a movie)" },
       { keys: [["T"]], does: "Theater: the picture fills the window" },
-      { keys: [["R"]], does: "Record the programme on now" },
+      { keys: [["R"]], does: "Record the programme on now (not in a movie)" },
     ],
   },
   {

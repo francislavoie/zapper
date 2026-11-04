@@ -37,8 +37,8 @@ import { PictureCorner } from "./PictureCorner";
 
 export function PlayerChrome() {
   const { player, nowChannel, stacked, zoom, movies } = useApp();
-  const movie = playingKind(player) === "movie" ? movies.playing : null;
   const isMovie = playingKind(player) === "movie";
+  const movie = isMovie ? movies.playing : null;
   const dispatch = useDispatch();
   // Offered only when the window can actually take the layout. Below that the
   // control is absent rather than present and cramped.
