@@ -257,6 +257,17 @@ export const webBackend: typeof api = {
   forgetActivity: (streamId) =>
     del<unknown>(`/api/favourites/${streamId}`).then(() => undefined),
 
+  // Filled in with the browser's movies.
+  playMovie: notHere,
+  seekTo: notHere,
+  moviesSummary: notHere,
+  movieCategories: notHere,
+  movies: notHere,
+  searchMovies: notHere,
+  movieDetails: notHere,
+  similarMovies: notHere,
+  setMovieMarks: notHere,
+
   activityRows: notHere,
   importActivity: notHere,
   exportBackup: notHere,

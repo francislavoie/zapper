@@ -87,6 +87,7 @@ const STOPPED: PlayerStateDto = {
   joiningLive: false,
   ending: null,
   reconnect: null,
+  onDemand: null,
 };
 
 const NO_OPTIONS: PlayerOptionsDto = {

@@ -12,6 +12,13 @@ import { alternatives } from "./logic/searchQuery";
 import { patternFor, place, validatePattern } from "./logic/naming";
 import { parsePort, passwordProblem } from "./logic/network";
 import type {
+  MarksDto,
+  MovieDetailsDto,
+  MovieDto,
+  MoviePageDto,
+  MovieQueryDto,
+  MoviesSummaryDto,
+  VodCategoryDto,
   AccountCandidateDto,
   AccountDto,
   ActivityRowDto,
@@ -631,6 +638,7 @@ const playerEmitter = new Emitter<PlayerStateDto>({
   joiningLive: false,
   ending: null,
   reconnect: null,
+  onDemand: null,
 });
 
 const optionsEmitter = new Emitter<PlayerOptionsDto>({
@@ -1490,6 +1498,8 @@ const mockRecordingApi = {
   },
 };
 
+const notYet = <T>(): Promise<T> => Promise.reject(new Error("not yet"));
+
 export const mockApi = {
   categories: async () => {
     await delay(120);
@@ -2032,6 +2042,18 @@ export const mockApi = {
     await delay(40);
     return recentRows(limit);
   },
+
+  // Movies are filled in with the Movies tab.
+  playMovie: (_movieId: number, _start: number | null) => notYet<void>(),
+  seekTo: (_seconds: number) => notYet<void>(),
+  moviesSummary: () => notYet<MoviesSummaryDto>(),
+  movieCategories: () => notYet<VodCategoryDto[]>(),
+  movies: (_query: MovieQueryDto, _offset: number, _limit: number) => notYet<MoviePageDto>(),
+  searchMovies: (_query: string, _limit: number) => notYet<MovieDto[]>(),
+  movieDetails: (_movieId: number) => notYet<MovieDetailsDto>(),
+  similarMovies: (_movieId: number, _limit: number) => notYet<MovieDto[]>(),
+  setMovieMarks: (_movieId: number, _marks: { favourite?: boolean; watched?: boolean }) =>
+    notYet<MarksDto>(),
 
   forgetActivity: async (streamId: number) => {
     await delay(20);
