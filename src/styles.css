@@ -6519,3 +6519,210 @@ html[data-backend="web"] {
   font-size: 0.75rem;
   width: auto;
 }
+
+/* ------------------------------------------------------ movie band, sheet */
+
+.movie-band-facts,
+.sheet-facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem 0.5rem;
+  font-size: 0.75rem;
+  color: var(--dim);
+  min-width: 0;
+}
+
+/* A genre is a short word in an outline. A long one is cut with an ellipsis
+   rather than made to wrap into a block. */
+.movie-tag {
+  max-width: 9rem;
+  padding: 0 0.4375rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 0.6875rem;
+  line-height: 1.25rem;
+  color: var(--dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.movie-play {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3125rem;
+}
+
+.ctl.movie-play .i {
+  width: 0.75rem;
+  height: 0.75rem;
+}
+
+.movie-band-plot,
+.movie-band-people {
+  max-width: 70ch;
+}
+
+/* Over the rail and the list, both columns of the grid and its second row:
+   the band above stays in sight. */
+.browse > .movie-sheet {
+  grid-row: 2;
+  grid-column: 1 / -1;
+  z-index: 2;
+}
+
+.movie-sheet {
+  position: relative;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  background: var(--bg-2);
+  border-top: 1px solid var(--line);
+  scrollbar-color: #39414f transparent;
+  scrollbar-width: thin;
+  outline: none;
+}
+
+.movie-sheet-backdrop {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 12rem;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.movie-sheet-backdrop::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(20, 23, 28, 0.35), var(--bg-2));
+}
+
+.movie-sheet-backdrop img,
+.movie-sheet-blur {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0.55;
+}
+
+/* No backdrop: the poster stands in, enlarged and blurred into a wash of its
+   colours. */
+.movie-sheet-blur {
+  font-size: 0;
+  filter: blur(1.5rem);
+  transform: scale(1.3);
+}
+
+.movie-sheet-close {
+  position: absolute;
+  top: 0.75rem;
+  right: 1rem;
+  z-index: 1;
+}
+
+.sheet-top {
+  position: relative;
+  display: flex;
+  gap: 1.375rem;
+  padding: 4.5rem 2rem 0;
+  align-items: flex-start;
+}
+
+.sheet-poster {
+  flex: 0 0 auto;
+  width: 9rem;
+  height: 13.5rem;
+  font-size: 3rem;
+  box-shadow: 0 0.5rem 1.5rem rgba(0, 0, 0, 0.5);
+}
+
+.sheet-text {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding-top: 4rem;
+}
+
+.sheet-title {
+  margin: 0;
+  font-size: 1.75rem;
+  font-weight: 600;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sheet-plot {
+  margin: 0;
+  max-width: 40rem;
+  font-size: 0.84375rem;
+  line-height: 1.5;
+  color: var(--dim);
+}
+
+.sheet-people {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--dimmer);
+}
+
+.sheet-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.25rem;
+}
+
+.sheet-shelf {
+  position: relative;
+  padding: 1.5rem 2rem 1.5rem;
+}
+
+.sheet-shelf-head {
+  margin: 0 0 0.625rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--dim);
+}
+
+.sheet-shelf-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(4.75rem, 1fr));
+  gap: 0.75rem;
+}
+
+.sheet-thumb {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3125rem;
+  min-width: 0;
+  padding: 0;
+  text-align: left;
+  color: var(--dim);
+}
+
+.sheet-thumb:hover,
+.sheet-thumb:focus-visible {
+  color: var(--text);
+}
+
+.sheet-thumb-art {
+  width: 100%;
+  aspect-ratio: 2 / 3;
+  height: auto;
+  font-size: 1.5rem;
+  border: 1px solid var(--line);
+}
+
+.sheet-thumb-name {
+  font-size: 0.6875rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
