@@ -135,9 +135,6 @@ struct Machine {
     /// behind live its bytes cannot account for — a jump in the timestamps —
     /// is not chased. See [`ByteRate`].
     bytes: ByteRate,
-    /// Whether the log has said, this tune-in, that a catch-up after lost
-    /// time was not made because the depth was a jump in the timestamps.
-    drift_jump_said: bool,
     /// Automatic catch-ups so far this session, for [`LiveJumpDto::seq`].
     jumps: u64,
     /// Whether this stream is live rather than a catch-up programme. A
@@ -217,7 +214,6 @@ impl Machine {
             joining: false,
             join: None,
             bytes: ByteRate::new(),
-            drift_jump_said: false,
             jumps: 0,
             live: true,
             shown: false,
@@ -313,7 +309,6 @@ impl Machine {
         self.opened_at = Some(Instant::now());
         self.settle = None;
         self.bytes = ByteRate::new();
-        self.drift_jump_said = false;
         // Asked for by the caller, after this, for a live channel.
         self.joining = false;
         self.join = None;
@@ -1052,10 +1047,7 @@ fn tick(app: &AppHandle, p: &Player) {
                         m.clues.observe(text);
                     }
                 }
-                // A new file: its byte rate starts here, before the first
-                // frame, so the connect burst is measured too.
-                Signal::StartFile => m.bytes = ByteRate::new(),
-                Signal::FileLoaded | Signal::Tracks(_) => {}
+                Signal::StartFile | Signal::FileLoaded | Signal::Tracks(_) => {}
             }
         }
         m.apply(&probe);
@@ -1076,18 +1068,15 @@ fn tick(app: &AppHandle, p: &Player) {
                 // Somebody pressed play during the hold. That is an answer
                 // too: play from here, and `Settle` catches it up after.
                 m.joined();
-            } else if let Some(by) = {
-                let mm = &mut *m;
-                mm.join.as_mut().and_then(|j| j.observe(elapsed, &reading, &mm.bytes))
-            } {
-                if m.join.as_ref().is_some_and(Join::saw_phantom) {
+            } else if let Some(by) = m.join.as_mut().and_then(|j| j.observe(elapsed, &reading)) {
+                if let Some(j) = m.join.as_ref().filter(|j| j.saw_phantom()) {
                     // The timestamps jumped: skipping "to live" would land
                     // where nothing was ever received.
                     tracing::info!(
                         "starting where the stream is: it reads {:.1}s of data in, but the bytes \
                          received are {}; its timestamps jump, so none of it is skipped",
                         probe.behind_live,
-                        seconds_words(m.bytes.seconds_in(reading.bytes_ahead)),
+                        seconds_words(j.byte_rate().seconds_in(reading.bytes_ahead)),
                     );
                 } else {
                     let burst = m.join.as_ref().is_some_and(Join::saw_burst);
@@ -1142,16 +1131,13 @@ fn tick(app: &AppHandle, p: &Player) {
             // Once per tune-in: up to live after the connect burst, see
             // `Settle`. It runs before the drift rule below and resets it,
             // so the two cannot both seek on one tick.
-            if let Some(decision) = {
-                let mm = &mut *m;
-                mm.settle.as_mut().and_then(|s| s.observe(elapsed, &reading, &mm.bytes))
-            } {
-                if m.settle.as_ref().is_some_and(Settle::saw_phantom) {
+            if let Some(decision) = m.settle.as_mut().and_then(|s| s.observe(elapsed, &reading)) {
+                if let Some(s) = m.settle.as_ref().filter(|s| s.saw_phantom()) {
                     tracing::info!(
                         "tuned in reading {:.1}s behind live, but the bytes received are {}; \
                          its timestamps jump, so not catching up",
                         probe.behind_live,
-                        seconds_words(m.bytes.seconds_in(reading.bytes_ahead)),
+                        seconds_words(s.byte_rate().seconds_in(reading.bytes_ahead)),
                     );
                 }
                 m.settle = None;
@@ -1168,21 +1154,13 @@ fn tick(app: &AppHandle, p: &Player) {
             let settled = m
                 .last_live_nudge
                 .is_none_or(|t| t.elapsed() >= LIVE_NUDGE_INTERVAL);
-            let due = m.drift_secs > MAX_DRIFT_SECS
-                && settled
-                && probe.behind_live > LIVE_CUSHION + 1.0;
             // Never across a jump in the timestamps: there is no data there.
             let real = m.bytes.explains(probe.behind_live, probe.fw_bytes);
-            if due && !real && !m.drift_jump_said {
-                m.drift_jump_said = true;
-                tracing::info!(
-                    "playback lost time, but not catching up: it reads {:.1}s behind live and \
-                     the bytes received are {}; its timestamps jump",
-                    probe.behind_live,
-                    seconds_words(m.bytes.seconds_in(probe.fw_bytes)),
-                );
-            }
-            if due && real {
+            if m.drift_secs > MAX_DRIFT_SECS
+                && settled
+                && real
+                && probe.behind_live > LIVE_CUSHION + 1.0
+            {
                 let by = (probe.behind_live - LIVE_CUSHION).max(0.0);
                 m.caught_up(by);
                 // Best-effort: failing to catch up is not a reason to fail a
@@ -2565,7 +2543,7 @@ mod tests {
         let mut m = held(1);
         m.playing();
         let reading = Reading { behind: 20.0, cache_end: Some(20.0), ..Reading::default() };
-        let _ = m.join.as_mut().unwrap().observe(0.25, &reading, &ByteRate::new());
+        let _ = m.join.as_mut().unwrap().observe(0.25, &reading);
         m.playing();
         let j = m.join.as_ref().unwrap();
         assert!(j.saw_burst(), "the same hold, with what it has seen");

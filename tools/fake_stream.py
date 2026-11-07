@@ -11,7 +11,6 @@ the same path — HTTP, MPEG-TS, mpv's cache — with none of those problems.
   tools/fake_stream.py --gap-every 4         # 1.5s gaps, then a burst
   tools/fake_stream.py --burst 20            # open with 20s at once, as many servers do
   tools/fake_stream.py --burst 20 --burst-rate 4   # ...delivered at 4x rather than at once
-  tools/fake_stream.py --lump 1              # real time, but a second's worth at a time
 
 Imitating a provider that allows one connection and ends it when another
 device takes it:
@@ -56,7 +55,6 @@ class Handler(BaseHTTPRequestHandler):
     gap_for = 0.0
     burst = 0.0
     burst_rate = 0.0
-    lump = 0.0
     end_after = 0.0
     drop_after = 0.0
     stall_after = 0.0
@@ -172,10 +170,6 @@ class Handler(BaseHTTPRequestHandler):
         # in a burst. Playing right at the live edge survives an even feed and
         # stalls on that one, so testing the edge needs the gaps.
         next_gap = time.monotonic() + Handler.gap_every if Handler.gap_every else None
-        # Delivery in lumps (--lump): the pacing's sleeps saved up and taken
-        # at once, so a second's worth arrives together and then nothing for
-        # a second, as from a server re-serving segments.
-        lump_wait = 0.0
         # Chunks to send without pacing: a gap's backlog, and the connect
         # burst many servers open with — what they already hold, at once.
         owed = int(Handler.burst / delay) if Handler.burst else 0
@@ -226,12 +220,6 @@ class Handler(BaseHTTPRequestHandler):
                         # allows, or at a rate of its own (--burst-rate).
                         if Handler.burst_rate:
                             time.sleep(delay / Handler.burst_rate)
-                    elif Handler.lump:
-                        lump_wait += delay
-                        if lump_wait >= Handler.lump:
-                            self.wfile.flush()
-                            time.sleep(lump_wait)
-                            lump_wait = 0.0
                     else:
                         time.sleep(delay)
         except (BrokenPipeError, ConnectionResetError):
@@ -320,8 +308,6 @@ def main():
                     help="how long each gap lasts; the backlog follows in a burst")
     ap.add_argument("--burst", type=float, default=0.0, metavar="SECONDS",
                     help="open each connection with SECONDS of video at once, like a server")
-    ap.add_argument("--lump", type=float, default=0.0, metavar="SECONDS",
-                    help="deliver in lumps of SECONDS of video, SECONDS apart, rather than evenly")
     ap.add_argument("--burst-rate", type=float, default=0.0, metavar="RATE",
                     help="deliver the --burst at RATE times realtime rather than at once")
     ap.add_argument("--drop-after", type=float, default=0.0, metavar="SECONDS",
@@ -348,7 +334,6 @@ def main():
     a = ap.parse_args()
     Handler.burst = a.burst
     Handler.burst_rate = a.burst_rate
-    Handler.lump = a.lump
     Handler.drop_after = a.drop_after
     Handler.stall_after = a.stall_after
     Handler.fault_once = a.fault_once

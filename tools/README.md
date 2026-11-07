@@ -38,8 +38,7 @@ measures from the first timestamp to the last, ten minutes too many here.
 length, as a live feed does, paced to its bitrate. Flags imitate how real
 servers deliver: `--rate 2` bursts at twice realtime, `--burst 20` opens each
 connection with 20 s of video at once (`--burst-rate 4` sends it at four times
-realtime instead), `--lump 1` sends a second's worth at a time a second apart, as a
-server re-serving segments does, and `--gap-every 4` goes quiet every
+realtime instead), and `--gap-every 4` goes quiet every
 four seconds and then sends the backlog in a burst (playing right at the live
 edge survives an even feed and stalls on that one).
 

@@ -28,8 +28,6 @@
 //! lands in a gap where nothing was ever received. So both also check the
 //! depth against the bytes that actually arrived ([`ByteRate`]): a burst the
 //! bytes cannot account for is a jump in the timestamps, not data to skip.
-//! The rate is the caller's, measured from the moment the file loaded, so
-//! that the connect burst and the time before the first frame count too.
 //!
 //! [`LiveStart::CatchUp`]: crate::ipc::types::LiveStart::CatchUp
 //! [`LiveStart::Wait`]: crate::ipc::types::LiveStart::Wait
@@ -63,12 +61,6 @@ pub struct Reading {
 /// the newest timestamp moved — and the median taken, so neither a
 /// heartbeat carrying one large keyframe nor the one heartbeat whose
 /// timestamps jumped (minutes of stream time for a few packets) moves it.
-/// A heartbeat that brought nothing is skipped, so a server that delivers
-/// in lumps a second apart is measured on the heartbeats its lumps land in.
-///
-/// One per stream, fed from the moment the file loads: [`Join`] and
-/// [`Settle`] are handed it rather than keeping their own, which would start
-/// at the first frame with the connect burst already behind them.
 #[derive(Debug, Clone, Default)]
 pub struct ByteRate {
     /// The last `(cache end, total bytes)`.
@@ -87,23 +79,9 @@ const BYTE_RATE_MIN_STEPS: usize = 3;
 /// a real burst reads within a small factor of its bytes, a jump in the
 /// timestamps by tens or hundreds.
 pub const PLAUSIBLE_FACTOR: f64 = 3.0;
-/// And this much more. A real connect burst is five to forty seconds, and
-/// on a variable-bitrate channel (sport) the recent steps the rate is
-/// measured on can run well above the burst's own: with this much slack no
-/// real burst reads as a jump however its bitrate swings, while a jump of
-/// minutes still does. Below it a depth is believed with or without a rate.
-pub const PLAUSIBLE_SLACK: f64 = 60.0;
-
-/// What the bytes say about a depth.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Verdict {
-    /// Data the bytes received can account for.
-    Real,
-    /// More than the bytes received could be: a jump in the timestamps.
-    Jump,
-    /// Too deep to take on trust, and no rate yet to judge it by.
-    Unknown,
-}
+/// And this much more, so that a short, barely measured buffer is never
+/// what decides.
+pub const PLAUSIBLE_SLACK: f64 = 10.0;
 
 impl ByteRate {
     pub fn new() -> Self {
@@ -159,18 +137,6 @@ impl ByteRate {
     pub fn explains(&self, behind: f64, bytes_ahead: Option<i64>) -> bool {
         plausible(behind, self.seconds_in(bytes_ahead))
     }
-
-    /// [`ByteRate::explains`], telling apart a depth too deep to believe on
-    /// trust (past [`PLAUSIBLE_SLACK`]) when there is no rate to judge it by
-    /// yet. Within the slack a depth is real with or without one.
-    pub fn judge(&self, behind: f64, bytes_ahead: Option<i64>) -> Verdict {
-        match self.seconds_in(bytes_ahead) {
-            Some(e) if plausible(behind, Some(e)) => Verdict::Real,
-            Some(_) => Verdict::Jump,
-            None if behind <= PLAUSIBLE_SLACK => Verdict::Real,
-            None => Verdict::Unknown,
-        }
-    }
 }
 
 /// Whether a depth of `behind` stream seconds is believable from the
@@ -193,12 +159,10 @@ pub fn plausible(behind: f64, explained: Option<f64>) -> bool {
 /// than [`SETTLE_SLACK`] past it, otherwise nothing. One seek, after the
 /// data has arrived, so there is nothing for it to stutter over.
 ///
-/// A depth the bytes cannot account for ([`ByteRate::judge`]) is a jump in
-/// the timestamps, and is neither growth nor something to seek across: this
-/// waits for playback to pass it, when the reading is real again, and if it
-/// never does, decides on no seek at all. A depth too deep to take on trust
-/// before there is a rate is waited on the same way, and believed at
-/// [`SETTLE_MAX`] if nothing has said otherwise by then.
+/// A depth the bytes cannot account for ([`ByteRate::explains`]) is a jump
+/// in the timestamps, and is neither growth nor something to seek across:
+/// this waits for playback to pass it, when the reading is real again, and
+/// if it never does, decides on no seek at all.
 #[derive(Debug, Clone)]
 pub struct Settle {
     /// Seconds since playback started.
@@ -207,8 +171,9 @@ pub struct Settle {
     peak: f64,
     /// Seconds since `peak` last grew.
     quiet: f64,
-    /// What the bytes said of the last reading.
-    verdict: Verdict,
+    bytes: ByteRate,
+    /// Whether the last reading was more than its bytes could be.
+    phantom: bool,
 }
 
 /// How long `behind_live` must stop growing for the burst to count as over.
@@ -233,23 +198,21 @@ impl Settle {
             age: 0.0,
             peak: 0.0,
             quiet: 0.0,
-            verdict: Verdict::Real,
+            bytes: ByteRate::new(),
+            phantom: false,
         }
     }
 
-    /// Takes one heartbeat (`dt` seconds since the last), its reading, and
-    /// the stream's byte rate. `None` while waiting; `Some(by)` once
-    /// decided, where `by` is the forward seek to make (zero: none needed).
-    pub fn observe(&mut self, dt: f64, r: &Reading, bytes: &ByteRate) -> Option<f64> {
+    /// Takes one heartbeat (`dt` seconds since the last) and its reading.
+    /// `None` while waiting; `Some(by)` once decided, where `by` is the
+    /// forward seek to make (zero: none needed).
+    pub fn observe(&mut self, dt: f64, r: &Reading) -> Option<f64> {
         self.age += dt;
+        self.bytes.observe(r.cache_end, r.bytes_total);
         let behind = r.behind;
-        let was = self.verdict;
-        self.verdict = bytes.judge(behind, r.bytes_ahead);
-        let real = self.verdict == Verdict::Real;
-        if real && (was != Verdict::Real || behind > self.peak + SETTLE_GROWTH) {
-            // Growth; or the first real reading after ones that were not,
-            // which starts the wait over from here, so that a moment
-            // misjudged cannot have the wait end in the middle of a burst.
+        let real = self.bytes.explains(behind, r.bytes_ahead);
+        self.phantom = !real;
+        if real && behind > self.peak + SETTLE_GROWTH {
             self.peak = behind;
             self.quiet = 0.0;
         } else {
@@ -258,10 +221,8 @@ impl Settle {
         if self.quiet < SETTLE_QUIET && self.age < SETTLE_MAX {
             return None;
         }
-        match self.verdict {
-            Verdict::Jump => return (self.age >= SETTLE_MAX).then_some(0.0),
-            Verdict::Unknown if self.age < SETTLE_MAX => return None,
-            Verdict::Unknown | Verdict::Real => {}
+        if !real {
+            return (self.age >= SETTLE_MAX).then_some(0.0);
         }
         Some(if behind > LIVE_CUSHION + SETTLE_SLACK {
             behind - LIVE_CUSHION
@@ -273,7 +234,12 @@ impl Settle {
     /// Whether the last reading was a depth its bytes could not be. For the
     /// log.
     pub fn saw_phantom(&self) -> bool {
-        self.verdict == Verdict::Jump
+        self.phantom
+    }
+
+    /// The stream's byte rate as measured so far. For the log.
+    pub fn byte_rate(&self) -> &ByteRate {
+        &self.bytes
     }
 }
 
@@ -293,10 +259,8 @@ impl Settle {
 /// delivers faster than real time all along — is cut off at [`JOIN_MAX`],
 /// and [`Settle`] takes over from there.
 ///
-/// A depth the bytes cannot account for ([`ByteRate::judge`]) is not
-/// skipped: the channel starts where the stream is. One too deep to take on
-/// trust before there is a rate to judge it by is held on, up to
-/// [`JOIN_MAX`], for the rate; and believed then if there still is none.
+/// A depth the bytes cannot account for ([`ByteRate::explains`]) is not
+/// skipped: the channel starts where the stream is.
 #[derive(Debug, Clone)]
 pub struct Join {
     /// Seconds since the first frame.
@@ -305,6 +269,7 @@ pub struct Join {
     samples: VecDeque<(f64, f64)>,
     /// Whether anything so far looked like a burst.
     burst: bool,
+    bytes: ByteRate,
     /// Whether the depth at the decision was more than its bytes could be.
     phantom: bool,
 }
@@ -339,16 +304,18 @@ impl Join {
             age: 0.0,
             samples: VecDeque::new(),
             burst: false,
+            bytes: ByteRate::new(),
             phantom: false,
         }
     }
 
-    /// Takes one heartbeat: `dt` seconds since the last, its reading
-    /// (`behind` being how far the paused playhead is behind live), and the
-    /// stream's byte rate. `None` while holding; `Some(by)` to start, `by`
-    /// being the forward seek to make first (zero: none).
-    pub fn observe(&mut self, dt: f64, r: &Reading, bytes: &ByteRate) -> Option<f64> {
+    /// Takes one heartbeat: `dt` seconds since the last, and its reading
+    /// (`behind` being how far the paused playhead is behind live). `None`
+    /// while holding; `Some(by)` to start, `by` being the forward seek to
+    /// make first (zero: none).
+    pub fn observe(&mut self, dt: f64, r: &Reading) -> Option<f64> {
         self.age += dt;
+        self.bytes.observe(r.cache_end, r.bytes_total);
         let behind = r.behind;
         // Already deep at the first frame: the burst arrived before mpv had
         // decoded anything, which on a fast connection is the usual case.
@@ -366,14 +333,9 @@ impl Join {
         if !decided {
             return None;
         }
-        match bytes.judge(behind, r.bytes_ahead) {
-            Verdict::Jump => {
-                self.phantom = true;
-                return Some(0.0);
-            }
-            // Deep, and nothing to judge it by yet: hold on for the rate.
-            Verdict::Unknown if self.age < JOIN_MAX => return None,
-            Verdict::Unknown | Verdict::Real => {}
+        self.phantom = !self.bytes.explains(behind, r.bytes_ahead);
+        if self.phantom {
+            return Some(0.0);
         }
         Some(if behind > LIVE_CUSHION + JOIN_SLACK {
             behind - LIVE_CUSHION
@@ -391,6 +353,11 @@ impl Join {
     /// and so was not skipped. For the log.
     pub fn saw_phantom(&self) -> bool {
         self.phantom
+    }
+
+    /// The stream's byte rate as measured during the hold. For the log.
+    pub fn byte_rate(&self) -> &ByteRate {
+        &self.bytes
     }
 
     /// Records a reading and returns the delivery rate over the last
@@ -440,7 +407,7 @@ mod tests {
         readings
             .into_iter()
             .enumerate()
-            .find_map(|(i, b)| s.observe(DT, &bare(None, b), &ByteRate::new()).map(|by| (i, by)))
+            .find_map(|(i, b)| s.observe(DT, &bare(None, b)).map(|by| (i, by)))
     }
 
     #[test]
@@ -483,7 +450,7 @@ mod tests {
             t += DT;
             end += rate(t) * DT;
             // Paused at zero, so the distance behind is the end itself.
-            if let Some(by) = j.observe(DT, &bare(Some(end), end), &ByteRate::new()) {
+            if let Some(by) = j.observe(DT, &bare(Some(end), end)) {
                 return (t, by);
             }
         }
@@ -548,7 +515,7 @@ mod tests {
         let mut t = 0.0;
         let decided = loop {
             t += DT;
-            if let Some(by) = j.observe(DT, &bare(None, 0.0), &ByteRate::new()) {
+            if let Some(by) = j.observe(DT, &bare(None, 0.0)) {
                 break by;
             }
             assert!(t < JOIN_MAX + 1.0, "held forever with no reading");
@@ -560,10 +527,10 @@ mod tests {
     #[test]
     fn timestamps_that_jump_back_start_the_measurement_again() {
         let mut j = Join::new();
-        assert!(j.observe(DT, &bare(Some(100.0), 30.0), &ByteRate::new()).is_none());
-        assert!(j.observe(DT, &bare(Some(110.0), 30.0), &ByteRate::new()).is_none());
+        assert!(j.observe(DT, &bare(Some(100.0), 30.0)).is_none());
+        assert!(j.observe(DT, &bare(Some(110.0), 30.0)).is_none());
         // A wrap: 110 → 2. Not a rate of −400x, and not a calm reading.
-        assert!(j.observe(DT, &bare(Some(2.0), 30.0), &ByteRate::new()).is_none());
+        assert!(j.observe(DT, &bare(Some(2.0), 30.0)).is_none());
     }
 
     // --- the bytes behind a burst ------------------------------------------
@@ -593,167 +560,55 @@ mod tests {
         }
     }
 
-    /// The stream's byte rate as the app keeps it, from the file loading:
-    /// `depth` seconds arrive over `lead` heartbeats before the first frame,
-    /// the timestamps jumping by `jump` after the first of them (a stale
-    /// lead-in, then live). Returns the feed as the first frame finds it.
-    fn load(depth: f64, jump: f64, lead: usize, bytes: &mut ByteRate) -> Feed {
-        let mut f = Feed { real: 0.0, jump: 0.0, at: 0.0 };
-        for i in 0..lead {
-            f.real += depth / lead as f64;
-            if i > 0 {
-                f.jump = jump;
-            }
-            let r = f.reading();
-            bytes.observe(r.cache_end, r.bytes_total);
-        }
-        f.real = depth;
-        f.jump = jump;
-        f
-    }
-
-    /// Delivery after the first frame: `rate(t)` times real time, in lumps
-    /// every `lump` seconds if given (a restreamer re-serving segments)
-    /// rather than smoothly.
-    struct Delivery<R: Fn(f64) -> f64> {
-        rate: R,
-        lump: Option<f64>,
-        owed: f64,
-        since: f64,
-    }
-
-    impl<R: Fn(f64) -> f64> Delivery<R> {
-        fn new(rate: R, lump: Option<f64>) -> Self {
-            Self { rate, lump, owed: 0.0, since: 0.0 }
-        }
-
-        /// Stream seconds that arrive in the heartbeat ending at `t`.
-        fn arrives(&mut self, t: f64) -> f64 {
-            self.owed += (self.rate)(t) * DT;
-            let Some(lump) = self.lump else {
-                return std::mem::take(&mut self.owed);
-            };
-            self.since += DT;
-            if self.since + 1e-9 < lump {
-                return 0.0;
-            }
-            self.since = 0.0;
-            std::mem::take(&mut self.owed)
-        }
-    }
-
-    /// `Join` over a feed: `depth` seconds received over `lead` heartbeats
-    /// before the first frame, the timestamps jumping by `jump` after the
-    /// first, then delivery as `deliver` says. Paused, so the playhead stays
-    /// at zero. Returns when it started, the seek, and the `Join`.
-    fn join_feed<R: Fn(f64) -> f64>(
-        depth: f64,
-        jump: f64,
-        lead: usize,
-        mut deliver: Delivery<R>,
-    ) -> (f64, f64, Join) {
-        let mut bytes = ByteRate::new();
-        let mut f = load(depth, jump, lead, &mut bytes);
+    /// `Join` over a feed: `depth` seconds received before the first frame
+    /// and then `rate(t)` times real time, with the timestamps jumping by
+    /// `jump` (at once, before the first frame). Paused, so the playhead
+    /// stays at zero. Returns when it started, the seek, and the `Join`.
+    fn join_feed(depth: f64, jump: f64, rate: impl Fn(f64) -> f64) -> (f64, f64, Join) {
         let mut j = Join::new();
+        let mut f = Feed { real: depth, jump, at: 0.0 };
         let mut t = 0.0;
         for _ in 0..200 {
             t += DT;
-            f.real += deliver.arrives(t);
-            let r = f.reading();
-            bytes.observe(r.cache_end, r.bytes_total);
-            if let Some(by) = j.observe(DT, &r, &bytes) {
+            f.real += rate(t) * DT;
+            if let Some(by) = j.observe(DT, &f.reading()) {
                 return (t, by, j);
             }
         }
         panic!("never started");
     }
 
-    fn smooth(rate: impl Fn(f64) -> f64) -> Delivery<impl Fn(f64) -> f64> {
-        Delivery::new(rate, None)
-    }
-
     #[test]
     fn a_burst_its_bytes_account_for_starts_at_live_as_before() {
         // The same 24 seconds as without byte counts, and the same answer.
-        let (at, by, j) = join_feed(24.0, 0.0, 4, smooth(|_| 1.0));
+        let (at, by, j) = join_feed(24.0, 0.0, |_| 1.0);
         let (at0, by0) = join_run(24.0, |_| 1.0);
         assert!(!j.saw_phantom());
         assert_eq!((at, by), (at0, by0));
         // A burst still arriving, likewise.
         let burst = |t: f64| if t <= 4.0 { 5.0 } else { 1.0 };
-        let (at, by, j) = join_feed(1.0, 0.0, 4, smooth(burst));
+        let (at, by, j) = join_feed(1.0, 0.0, burst);
         assert!(!j.saw_phantom());
         assert_eq!((at, by), join_run(1.0, burst));
-        // And forty seconds in lumps a second apart.
-        let (_, by, j) = join_feed(40.0, 0.0, 4, Delivery::new(|_| 1.0, Some(1.0)));
-        assert!(!j.saw_phantom());
-        assert!(by > 35.0, "skipped only {by}s of a real burst");
     }
 
     #[test]
     fn ten_minutes_of_timestamps_on_a_few_seconds_of_bytes_is_not_skipped() {
-        // Two seconds received before the first frame, the timestamps
-        // jumping ten minutes after the first part of it, then real time:
-        // reads as 600-odd seconds in.
-        let (_, by, j) = join_feed(2.0, 600.0, 4, smooth(|_| 1.0));
+        // Two seconds received before the first frame, its timestamps ten
+        // minutes apart, then real time: reads as 600-odd seconds in.
+        let (_, by, j) = join_feed(2.0, 600.0, |_| 1.0);
         assert!(j.saw_phantom());
         assert_eq!(by, 0.0, "skipped {by}s of a jump in the timestamps");
-    }
-
-    #[test]
-    fn the_jump_is_not_skipped_when_the_stream_arrives_in_lumps() {
-        // A restreamer sending a second at a time: most heartbeats bring
-        // nothing. The rate kept from the file loading has the steps the
-        // lead-in brought, so the hold is judged on its first decision.
-        let (at, by, j) = join_feed(2.0, 600.0, 4, Delivery::new(|_| 1.0, Some(1.0)));
-        assert!(j.saw_phantom());
-        assert_eq!(by, 0.0);
-        assert!(at < JOIN_MAX, "held {at}s");
-    }
-
-    #[test]
-    fn a_deep_reading_with_no_rate_yet_is_held_until_there_is_one() {
-        // Everything arrived in one lump before the first frame, so there is
-        // no step to measure by, and then a second at a time: the hold waits
-        // for the steps, and then knows the 600 seconds for a jump.
-        let (at, by, j) = join_feed(2.0, 600.0, 1, Delivery::new(|_| 1.0, Some(1.0)));
-        assert!(j.saw_phantom());
-        assert_eq!(by, 0.0);
-        assert!(at > 1.0 && at <= JOIN_MAX, "started at {at}s");
-    }
-
-    #[test]
-    fn a_deep_reading_never_measured_is_believed_at_the_longest_hold() {
-        // No byte counts at all (an mpv that does not report them): held as
-        // long as a hold goes, then taken at its word, as before.
-        let mut j = Join::new();
-        let none = ByteRate::new();
-        let mut t = 0.0;
-        let by = loop {
-            t += DT;
-            if let Some(by) = j.observe(DT, &bare(Some(100.0), 100.0), &none) {
-                break by;
-            }
-            assert!(t < JOIN_MAX + 1.0, "held forever");
-        };
-        assert!((t - JOIN_MAX).abs() <= DT, "started at {t}s");
-        assert_eq!(by, 100.0 - LIVE_CUSHION);
-        // Within the slack nothing waits for a rate.
-        let mut j = Join::new();
-        let mut t = 0.0;
-        while j.observe(DT, &bare(Some(40.0), 40.0), &none).is_none() {
-            t += DT;
-        }
-        assert!(t < JOIN_MAX - 1.0, "held {t}s for a depth within the slack");
+        let secs = j.byte_rate().seconds_in(Some((3.0 * BPS) as i64)).unwrap();
+        assert!((secs - 3.0).abs() < 0.1, "{secs}");
     }
 
     #[test]
     fn the_jump_arriving_during_the_hold_is_not_skipped_either() {
         // The heartbeat whose timestamps jump is one step of minutes for a
         // few packets; the median of the rest is the stream's real rate.
-        let mut bytes = ByteRate::new();
-        let mut f = load(1.0, 0.0, 4, &mut bytes);
         let mut j = Join::new();
+        let mut f = Feed { real: 1.0, jump: 0.0, at: 0.0 };
         let mut decided = None;
         for i in 1..40 {
             f.real += 3.0 * DT;
@@ -763,9 +618,7 @@ mod tests {
             if i > 8 {
                 f.real -= 2.0 * DT; // real time after two seconds of burst
             }
-            let r = f.reading();
-            bytes.observe(r.cache_end, r.bytes_total);
-            if let Some(by) = j.observe(DT, &r, &bytes) {
+            if let Some(by) = j.observe(DT, &f.reading()) {
                 decided = Some(by);
                 break;
             }
@@ -778,17 +631,11 @@ mod tests {
     fn the_boundary_is_a_multiple_of_what_the_bytes_hold_and_some_slack() {
         let explained = Some(10.0);
         let edge = 10.0 * PLAUSIBLE_FACTOR + PLAUSIBLE_SLACK;
-        assert_eq!(edge, 90.0);
         assert!(plausible(edge, explained));
         assert!(!plausible(edge + 0.01, explained));
-        // A buffer within the slack is never what decides.
+        // A short buffer is never what decides: the slack alone covers it.
         assert!(plausible(PLAUSIBLE_SLACK, Some(0.0)));
         assert!(!plausible(PLAUSIBLE_SLACK + 0.01, Some(0.0)));
-        // A real forty-second burst whose recent steps run at three times
-        // its average bitrate still reads as real, and ten minutes on a few
-        // seconds of bytes still does not.
-        assert!(plausible(40.0, Some(40.0 / 3.0)));
-        assert!(!plausible(600.0, Some(5.0)));
     }
 
     #[test]
@@ -814,22 +661,6 @@ mod tests {
     }
 
     #[test]
-    fn judged_with_no_rate_a_depth_past_the_slack_is_unknown() {
-        let none = ByteRate::new();
-        assert_eq!(none.judge(PLAUSIBLE_SLACK, Some(1_000)), Verdict::Real);
-        assert_eq!(none.judge(PLAUSIBLE_SLACK + 1.0, Some(1_000)), Verdict::Unknown);
-        assert_eq!(none.judge(600.0, None), Verdict::Unknown);
-        let mut b = ByteRate::new();
-        for i in 0..4 {
-            b.observe(Some(f64::from(i)), Some(i64::from(i) * 500_000));
-        }
-        assert_eq!(b.judge(600.0, Some(1_000_000)), Verdict::Jump);
-        assert_eq!(b.judge(20.0, Some(10_000_000)), Verdict::Real);
-        // With a rate but no `fw-bytes`, as with neither.
-        assert_eq!(b.judge(600.0, None), Verdict::Unknown);
-    }
-
-    #[test]
     fn the_rate_ignores_heartbeats_with_nothing_wrapped_or_trimmed() {
         let mut b = ByteRate::new();
         let mut feed = |end: f64, total: i64| b.observe(Some(end), Some(total));
@@ -844,19 +675,12 @@ mod tests {
         assert_eq!(b.per_second(), Some(500_000.0));
     }
 
-    /// `Settle` over a playing feed: `depth` seconds in at the first frame
-    /// (over four heartbeats before it), timestamps `jump` ahead after the
-    /// first `stale` seconds of it, then real time, played at real time.
-    /// `tamper` may change a heartbeat's reading.
-    fn settle_feed(
-        depth: f64,
-        stale: f64,
-        jump: f64,
-        tamper: impl Fn(f64, &mut Reading),
-    ) -> (f64, f64, Settle) {
-        let mut bytes = ByteRate::new();
-        let mut f = load(depth, jump, 4, &mut bytes);
+    /// `Settle` over a playing feed: `depth` seconds in at the first frame,
+    /// timestamps `jump` ahead after the first `stale` seconds of it, then
+    /// real time, played at real time.
+    fn settle_feed(depth: f64, stale: f64, jump: f64) -> (f64, f64, Settle) {
         let mut s = Settle::new();
+        let mut f = Feed { real: depth, jump, at: 0.0 };
         let mut t = 0.0;
         for _ in 0..200 {
             t += DT;
@@ -868,9 +692,7 @@ mod tests {
             if f.at >= stale {
                 r.behind -= jump;
             }
-            tamper(t, &mut r);
-            bytes.observe(r.cache_end, r.bytes_total);
-            if let Some(by) = s.observe(DT, &r, &bytes) {
+            if let Some(by) = s.observe(DT, &r) {
                 return (t, by, s);
             }
         }
@@ -879,7 +701,7 @@ mod tests {
 
     #[test]
     fn settle_catches_up_a_real_burst_as_before() {
-        let (at, by, s) = settle_feed(24.0, 0.0, 0.0, |_, _| {});
+        let (at, by, s) = settle_feed(24.0, 0.0, 0.0);
         assert!(!s.saw_phantom());
         assert!((24.0 - by - LIVE_CUSHION).abs() < 0.3, "jumped {by}");
         assert!(at <= SETTLE_QUIET + 2.0 * DT, "decided at {at}");
@@ -889,8 +711,8 @@ mod tests {
     fn settle_does_not_chase_a_jump_and_catches_up_what_is_real_after_it() {
         // Twelve seconds in, the first six stamped ten minutes before the
         // rest: until the playhead passes them it reads 600-odd behind.
-        let (at, by, s) = settle_feed(12.0, 6.0, 600.0, |_, _| {});
-        assert!(at >= 6.0 + SETTLE_QUIET - 1e-9, "decided at {at}, before the jump was well past");
+        let (at, by, s) = settle_feed(12.0, 6.0, 600.0);
+        assert!(at >= 6.0, "decided at {at}, before the playhead passed the jump");
         assert!(!s.saw_phantom());
         // Then it is twelve seconds behind for real, and goes to the cushion.
         assert!((12.0 - by - LIVE_CUSHION).abs() < 0.3, "jumped {by}");
@@ -898,23 +720,9 @@ mod tests {
 
     #[test]
     fn settle_never_seeks_across_a_jump_it_never_passes() {
-        let (at, by, s) = settle_feed(4.0, 1_000.0, 600.0, |_, _| {});
+        let (at, by, s) = settle_feed(4.0, 1_000.0, 600.0);
         assert!(s.saw_phantom());
         assert_eq!(by, 0.0);
         assert!((at - SETTLE_MAX).abs() <= DT, "decided at {at}");
-    }
-
-    #[test]
-    fn a_moment_misjudged_starts_the_wait_over() {
-        // A real seventy-second burst, and one heartbeat at 1.25s whose
-        // bytes read as next to nothing. The wait restarts from the next
-        // real reading rather than ending on the quiet counted through it.
-        let (at, by, _) = settle_feed(70.0, 0.0, 0.0, |t, r| {
-            if (t - 1.25).abs() < 1e-9 {
-                r.bytes_ahead = Some(1);
-            }
-        });
-        assert!(at >= 1.5 + SETTLE_QUIET - 1e-9, "decided at {at}");
-        assert!((70.0 - by - LIVE_CUSHION).abs() < 0.3, "jumped {by}");
     }
 }

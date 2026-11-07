@@ -28,15 +28,13 @@
 //! The last columns: how far behind it was when the start or the catch-up
 //! decided (starred when that depth was more than the bytes received could
 //! be, a jump in the timestamps, and so was not skipped), how much of the
-//! stream played while it was watched, whether the video track stayed, and
-//! whether every decision was the one the same readings make with no byte
-//! counts at all, which within a minute of depth is how 0.3.0 decided.
+//! stream played while it was watched, and whether the video track stayed.
 
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use zapper_lib::ipc::live_start::{ByteRate, Join, Reading, Settle};
+use zapper_lib::ipc::live_start::{Join, Reading, Settle};
 use zapper_lib::ipc::player_cmds::LIVE_CUSHION;
 use zapper_lib::surface::mpv::NO_RECONNECT;
 
@@ -55,8 +53,6 @@ const SCENARIOS: &[(&str, &[&str])] = &[
     ("30s burst at 8x", &["--burst", "30", "--burst-rate", "8"]),
     ("20s burst at 4x", &["--burst", "20", "--burst-rate", "4"]),
     ("30s burst at 3x", &["--burst", "30", "--burst-rate", "3"]),
-    ("no burst, lumps a second apart", &["--lump", "1"]),
-    ("20s burst, then lumps", &["--burst", "20", "--lump", "1"]),
 ];
 
 #[derive(Clone, Copy, PartialEq)]
@@ -84,23 +80,6 @@ struct Run {
     /// Whether the start or the catch-up found a depth its bytes could not
     /// be (a jump in the timestamps), and so did not skip it.
     phantom: bool,
-    /// The decisions made, `(heartbeat, seek)`: the start's and the
-    /// catch-up's, and the same from twins given no byte counts.
-    decisions: Vec<(usize, f64)>,
-    twin_decisions: Vec<(usize, f64)>,
-}
-
-impl Run {
-    /// Whether the byte counts changed nothing: the twins, with none,
-    /// decided the same on the same heartbeats.
-    fn unchanged(&self) -> bool {
-        self.decisions.len() == self.twin_decisions.len()
-            && self
-                .decisions
-                .iter()
-                .zip(&self.twin_decisions)
-                .all(|(a, b)| a.0 == b.0 && (a.1 - b.1).abs() < 1e-9)
-    }
 }
 
 impl Run {
@@ -116,7 +95,7 @@ fn main() {
     let fixture = std::env::args().nth(1).unwrap_or_else(|| "motion1080p.ts".into());
     println!("fixture {fixture}; times in seconds from the open; cushion {LIVE_CUSHION}s\n");
     println!(
-        "{:32} {:8} {:>6} {:>7} {:>8} {:>13} {:>8} {:>8} {:>7} {:>11} {:>9}",
+        "{:32} {:8} {:>6} {:>7} {:>8} {:>13} {:>8} {:>8} {:>7} {:>11}",
         "server",
         "mode",
         "frame",
@@ -126,8 +105,7 @@ fn main() {
         "at live",
         "decided",
         "played",
-        "video",
-        "unchanged"
+        "video"
     );
     let only = std::env::var("LIVE_START_ONLY").ok();
     let mut next_port = std::env::var("LIVE_START_PORT")
@@ -171,7 +149,7 @@ fn main() {
             };
             let f = |v: Option<f64>| v.map_or("-".to_owned(), |v| format!("{v:.2}"));
             println!(
-                "{:32} {:8} {:>6} {:>7} {:>8} {:>13} {:>8} {:>8} {:>7} {:>11} {:>9}",
+                "{:32} {:8} {:>6} {:>7} {:>8} {:>13} {:>8} {:>8} {:>7} {:>11}",
                 name,
                 if mode == Mode::CatchUp { "catch up" } else { "wait" },
                 f(r.first_frame),
@@ -186,7 +164,6 @@ fn main() {
                 format!("{:.1}", r.played),
                 r.video_lost
                     .map_or("kept".to_owned(), |t| format!("lost at {t:.1}")),
-                if r.unchanged() { "yes" } else { "no" },
             );
             // A moment between opens, as a person zapping would leave.
             std::thread::sleep(Duration::from_millis(500));
@@ -264,13 +241,6 @@ fn play(url: &str, mode: Mode) -> Result<Run, String> {
     let mut run = Run::default();
     let mut join: Option<Join> = None;
     let mut settle: Option<Settle> = None;
-    // The stream's byte rate, from the file loading, as the app keeps it;
-    // and twins of the two decisions, judging the same readings with none.
-    let mut bytes = ByteRate::new();
-    let none = ByteRate::new();
-    let mut twin_join: Option<Join> = None;
-    let mut twin_settle: Option<Settle> = None;
-    let mut beat = 0usize;
     let mut next_tick = Instant::now() + TICK;
     let mut last_pos: Option<f64> = None;
     let mut last_tick = Instant::now();
@@ -304,12 +274,8 @@ fn play(url: &str, mode: Mode) -> Result<Run, String> {
                         Mode::CatchUp => {
                             run.moving = run.first_frame;
                             settle = Some(Settle::new());
-                            twin_settle = Some(Settle::new());
                         }
-                        Mode::Wait => {
-                            join = Some(Join::new());
-                            twin_join = Some(Join::new());
-                        }
+                        Mode::Wait => join = Some(Join::new()),
                     }
                 }
                 Ok(libmpv2::events::Event::EndFile(_)) | Err(_) => {
@@ -324,12 +290,6 @@ fn play(url: &str, mode: Mode) -> Result<Run, String> {
         let dt = last_tick.elapsed().as_secs_f64();
         last_tick = Instant::now();
         let (r, paused) = read(&mpv);
-        bytes.observe(r.cache_end, r.bytes_total);
-        beat += 1;
-        if let Some(by) = twin_join.as_mut().and_then(|j| j.observe(dt, &r, &none)) {
-            run.twin_decisions.push((beat, by));
-            twin_join = None;
-        }
         if trace {
             println!(
                 "      {:5.2} behind {:6.2} cache-end {:?} ahead {:?} total {:?} paused {}",
@@ -343,8 +303,7 @@ fn play(url: &str, mode: Mode) -> Result<Run, String> {
         }
         if let Some(j) = join.as_mut() {
             debug_assert!(paused);
-            if let Some(by) = j.observe(dt, &r, &bytes) {
-                run.decisions.push((beat, by));
+            if let Some(by) = j.observe(dt, &r) {
                 run.decided_behind = Some(r.behind);
                 run.phantom |= j.saw_phantom();
                 if by > 0.05 {
@@ -355,7 +314,6 @@ fn play(url: &str, mode: Mode) -> Result<Run, String> {
                 run.moving = Some(secs());
                 join = None;
                 settle = Some(Settle::new());
-                twin_settle = Some(Settle::new());
             }
             continue;
         }
@@ -370,13 +328,8 @@ fn play(url: &str, mode: Mode) -> Result<Run, String> {
             }
             last_pos = pos;
         }
-        if let Some(by) = twin_settle.as_mut().and_then(|s| s.observe(dt, &r, &none)) {
-            run.twin_decisions.push((beat, by));
-            twin_settle = None;
-        }
         if let Some(s) = settle.as_mut() {
-            if let Some(by) = s.observe(dt, &r, &bytes) {
-                run.decisions.push((beat, by));
+            if let Some(by) = s.observe(dt, &r) {
                 run.phantom |= s.saw_phantom();
                 settle = None;
                 run.decided_behind.get_or_insert(r.behind);
