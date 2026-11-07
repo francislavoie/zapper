@@ -107,7 +107,7 @@ export function useSettings(loadOnMount = false): SettingsControl {
   useEffect(() => {
     if (loadOnMount) reload();
     // Closing the pane, or quitting, mid-debounce must not lose the last
-    // change. Quitting unloads the page without unmounting anything, so the
+    // change. Quitting sends `pagehide` without unmounting anything, so the
     // page hiding has to flush too.
     const flushPending = () => {
       if (timer.current !== undefined) {

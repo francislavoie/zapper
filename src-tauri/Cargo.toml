@@ -254,9 +254,10 @@ souvlaki = { version = "0.9", optional = true }
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = { version = "0.18", optional = true }
 glib = { version = "0.18", optional = true }
-# v2_34 for `terminate_web_process`, which quitting relies on (wry already
-# asks for v2_40; this says so for zapper itself).
-webkit2gtk = { version = "2.0", optional = true, features = ["v2_34"] }
+# v2_40 for `terminate_web_process` (2.34) and `evaluate_javascript` (2.40),
+# which quitting relies on. wry already asks for v2_40; this says so for
+# zapper itself.
+webkit2gtk = { version = "2.0", optional = true, features = ["v2_40"] }
 cairo-rs = { version = "0.18", features = ["png"], optional = true }
 
 # Symbols out of the already-loaded C library and OpenGL: `setlocale` and libGL for
