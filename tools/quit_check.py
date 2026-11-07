@@ -8,7 +8,17 @@ tools/fake_stream.py, and after a few seconds closes the window the way its
 close button does (`ZAPPER_QUIT_AFTER`). It then checks how zapper and every
 process it started ended (exit status or signal), whether any of them was
 still running long after zapper had gone, and whether the kernel logged a
-segfault for any of them.
+segfault for any of them. It also checks that there was exactly one web
+process and that zapper's log says WebKit ended it (`TerminatedByApi`; skip
+that with `--baseline`, for a build that does not), and that what the page
+wrote to local storage as it was closing is there afterwards:
+
+- a nonce, which a `pagehide` handler stores (`ZAPPER_QUIT_NONCE`);
+- the session's folded rail, changed 50 ms before the close, inside the
+  session's 400 ms write delay, so only its `pagehide` flush can save it.
+
+`--quit-by sigterm` sends SIGTERM instead of closing the window (and checks
+no local storage).
 
 Nothing appears on the desktop: it all runs in a headless GNOME Shell
 (Wayland only, a virtual monitor) on a private session bus, with its own
@@ -20,7 +30,8 @@ in /var/crash.
 The binary must load its interface by itself: a release build
 (`npm run build`, then `cargo build --release --features tauri/custom-protocol`).
 """
-import argparse, ctypes, json, os, random, resource, signal, subprocess, sys, tempfile, time
+import argparse, ctypes, glob, json, os, random, resource, signal, sqlite3, subprocess, sys
+import tempfile, time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FATAL = ("SIGSEGV", "SIGABRT", "SIGBUS", "SIGILL", "SIGFPE", "SIGTRAP", "SIGSYS")
@@ -33,6 +44,9 @@ ap.add_argument("--quit-max", type=float, default=10.0, help="latest close, in s
 ap.add_argument("--port", type=int, default=8788, help="the fixture server's port")
 ap.add_argument("--fixture", default="sample1080.ts")
 ap.add_argument("--work", help="where logs go (default: a new temporary directory)")
+ap.add_argument("--quit-by", choices=("close", "sigterm"), default="close")
+ap.add_argument("--baseline", action="store_true",
+                help="a build without the orderly quit: do not require TerminatedByApi")
 args = ap.parse_args()
 
 if os.environ.get("ZAPPER_QUIT_CHECK") != "1":
@@ -105,6 +119,24 @@ def streams(port):
     return sum(int(r[1].split(":")[1], 16) == port and r[3] == "01" for r in rows)
 
 
+def stored(root):
+    """Every local-storage item WebKit wrote under `root`, as {key: value}."""
+    items = {}
+    for path in glob.glob(f"{root}/**/*", recursive=True):
+        if not os.path.isfile(path) or "localstorage" not in path.lower():
+            continue
+        try:
+            db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+            for key, value in db.execute("SELECT key, value FROM ItemTable"):
+                if isinstance(value, bytes):
+                    value = value.decode("utf-16-le", errors="replace")
+                items[key] = value
+            db.close()
+        except sqlite3.Error:
+            pass
+    return items
+
+
 def describe(st):
     if os.WIFSIGNALED(st):
         return f"signal {signal.Signals(os.WTERMSIG(st)).name}"
@@ -134,21 +166,30 @@ try:
         zhome = f"{work}/run-{i}"
         os.makedirs(zhome, exist_ok=True)
         quit_after = round(random.uniform(args.quit_min, args.quit_max), 2)
+        nonce = os.urandom(8).hex()
+        # Its own XDG directories, so each run's local storage starts empty.
+        xdg = f"{zhome}/xdg"
         zenv = dict(env, WAYLAND_DISPLAY=WL, GDK_BACKEND="wayland", ZAPPER_HARNESS="1",
                     ZAPPER_MUTE="1", ZAPPER_AUTOPLAY="1", ZAPPER_HOME=zhome,
                     ZAPPER_FIXTURE_BASE=f"http://127.0.0.1:{args.port}",
-                    ZAPPER_FIXTURE_NAME=args.fixture, ZAPPER_QUIT_AFTER=str(quit_after))
+                    ZAPPER_FIXTURE_NAME=args.fixture, XDG_DATA_HOME=f"{xdg}/data",
+                    XDG_CACHE_HOME=f"{xdg}/cache", XDG_CONFIG_HOME=f"{xdg}/config")
+        if args.quit_by == "close":
+            zenv.update(ZAPPER_QUIT_AFTER=str(quit_after), ZAPPER_QUIT_NONCE=nonce)
         t0 = time.time()
         since = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(t0 - 1))
         z = subprocess.Popen([args.bin], env=zenv, stdout=open(f"{zhome}/zapper.out", "w"),
                              stderr=subprocess.STDOUT)
-        kids, zst, played = {}, None, None
+        kids, zst, played, signalled = {}, None, None, False
         while time.time() - t0 < quit_after + 30:
             for d in descendants(z.pid):
                 kids.setdefault(d, comm(d))
             # Just before the close: is the fixture being played?
             if played is None and time.time() - t0 > quit_after - 1:
                 played = streams(args.port) > 0
+            if args.quit_by == "sigterm" and not signalled and time.time() - t0 > quit_after:
+                z.send_signal(signal.SIGTERM)
+                signalled = True
             reap(statuses)
             if z.pid in statuses:
                 zst = statuses.pop(z.pid)
@@ -190,10 +231,23 @@ try:
                  else "reaped by zapper" for k in kids}
         crashed = bool(kernel) or any(v.endswith(FATAL) for v in [describe(zst), *ended.values()])
         played = bool(played)
-        clean = not crashed and not hung and not lingering and describe(zst) == "exit 0"
+        with open(f"{zhome}/zapper.out", errors="replace") as f:
+            log = f.read()
+        web = sum(c.startswith("WebKitWebProc") for c in kids.values())
+        by_api = "web process ended: TerminatedByApi" in log
+        items = stored(xdg)
+        nonce_kept = items.get("zapper.quit-check") == nonce
+        try:
+            session_kept = json.loads(items.get("zapper.session", "{}")).get("railCollapsed") is True
+        except ValueError:
+            session_kept = False
+        clean = (not crashed and not hung and not lingering and describe(zst) == "exit 0"
+                 and web == 1 and (by_api or args.baseline))
         r = dict(run=i, quit_after=quit_after, quit_secs=quit_secs, zapper=describe(zst),
-                 hung=hung, processes=ended, kernel=kernel, played=played,
-                 crashed=crashed, clean=clean)
+                 hung=hung, processes=ended, kernel=kernel, played=played, web_processes=web,
+                 terminated_by_api=by_api, crashed=crashed, clean=clean)
+        if args.quit_by == "close":
+            r.update(nonce_kept=nonce_kept, session_kept=session_kept)
         results.append(r)
         print(json.dumps(r), flush=True)
 finally:
@@ -215,6 +269,8 @@ with open(f"{work}/results.json", "w") as f:
 crashed = sum(r["crashed"] for r in results)
 unclean = sum(not r["clean"] for r in results)
 played = sum(r["played"] for r in results)
-print(f"{len(results)} runs: {crashed} crashed, {unclean} not clean, {played} played "
-      f"(logs in {work})")
-sys.exit(1 if unclean or played < len(results) else 0)
+kept = sum(r.get("nonce_kept", True) for r in results)
+session = sum(r.get("session_kept", True) for r in results)
+print(f"{len(results)} runs: {crashed} crashed, {unclean} not clean, {played} played, "
+      f"nonce kept in {kept}, session change kept in {session} (logs in {work})")
+sys.exit(1 if unclean or min(played, kept, session) < len(results) else 0)
