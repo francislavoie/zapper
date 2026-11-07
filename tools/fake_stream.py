@@ -49,6 +49,13 @@ answers player_api.php's get_vod_categories, get_vod_streams (optionally
 /movie/<user>/<pass>/<id>.<ext> from the matching fixture (odd ids are mkv,
 even mp4) as a file: Accept-Ranges, and 206 with Content-Range for a Range
 header. A movie being sent counts in active_cons like a live stream.
+And its channels and archive: /live/<user>/<pass>/<id>.ts plays --live-fixture,
+and /streaming/timeshift.php reads `start` in the server's time zone, which
+player_api.php's server_info reports (time_now, timestamp_now). Each request's
+real moment is logged, and listed as JSON at /requests; one older than
+--archive-days is a 404.
+
+  tools/fake_stream.py --panel-utc-offset 1 --archive-days 3   # a server an hour east of UTC
 
 Then point the player at:  http://127.0.0.1:8788/sample1080.ts
 """
@@ -97,6 +104,14 @@ class Handler(BaseHTTPRequestHandler):
     # Set once a stream has been ended by --end-after, so --after-end knows
     # the slot is now "taken".
     ended = threading.Event()
+    # The server's time zone, seconds east of UTC (--panel-utc-offset), and
+    # how far back its archive reaches (--archive-days).
+    panel_offset = None
+    archive_days = 3.0
+    # What /live/<user>/<pass>/<id>.ts and a catch-up play.
+    live_fixture = "sample1080.ts"
+    # Every live and catch-up request, for /requests.
+    requests = []
 
     def log_message(self, fmt, *a):
         if not Handler.quiet:
@@ -119,6 +134,17 @@ class Handler(BaseHTTPRequestHandler):
         if name.startswith("movie/"):
             self._movie(name)
             return
+        if name == "requests":
+            self._json(Handler.requests)
+            return
+        if name == "streaming/timeshift.php":
+            self._timeshift()
+            return
+        live = _live_path(name)
+        if live is not None:
+            Handler.requests.append({"kind": "live", "stream": live, "at": int(time.time())})
+            print(f"live: stream {live}", flush=True)
+            name = Handler.live_fixture
         if name in ("", "index"):
             body = "\n".join(p.name for p in sorted(FIXTURES.glob("*.ts")))
             data = (body + "\n").encode()
@@ -283,13 +309,53 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             with Handler.lock:
                 Handler.open_streams -= 1
+    def _timeshift(self):
+        """A catch-up request, as an Xtream server reads it: `start` is
+        `YYYY-MM-DD:HH-MM` in the server's own time zone (--panel-utc-offset),
+        not the viewer's. The moment it names is logged and kept for
+        /requests, so a test can check what was really asked for; a moment
+        older than --archive-days is refused with a 404, as a server that
+        has dropped it does."""
+        from urllib.parse import parse_qs, urlsplit
+        q = parse_qs(urlsplit(self.path).query)
+        stamp = (q.get("start") or [""])[0]
+        stream = (q.get("stream") or [""])[0]
+        now = int(time.time())
+        start = _stamp_unix(stamp, Handler.panel_offset or 0)
+        entry = {"kind": "timeshift", "stream": stream, "stamp": stamp,
+                 "duration": (q.get("duration") or [""])[0], "at": now,
+                 "start": start, "ago": None if start is None else now - start}
+        oldest = now - int(Handler.archive_days * 86400)
+        if start is None or start < oldest or start > now:
+            entry["status"] = 404
+            Handler.requests.append(entry)
+            print(f"timeshift: stream {stream} start {stamp!r} is not in the archive; 404", flush=True)
+            self.send_error(404, "not in the archive")
+            return
+        entry["status"] = 200
+        Handler.requests.append(entry)
+        print(f"timeshift: stream {stream} start {stamp} = "
+              f"{time.strftime('%Y-%m-%d %H:%M:%SZ', time.gmtime(start))}, {now - start}s ago",
+              flush=True)
+        path = FIXTURES / Handler.live_fixture
+        self._send(f"timeshift {stream}", path, path.read_bytes(), False)
 
     def _user_info(self):
         """The account as an Xtream server reports it: connections allowed
-        and open, which is what a client asks before reconnecting."""
+        and open, which is what a client asks before reconnecting, and with
+        --panel-utc-offset, the server's clock in its own time zone."""
         import json
         with Handler.lock:
             active = Handler.open_streams + Handler.other_devices
+        server_info = {}
+        if Handler.panel_offset is not None:
+            now = int(time.time())
+            wall = time.gmtime(now + int(Handler.panel_offset))
+            server_info = {
+                "timezone": "Etc/Test",
+                "time_now": time.strftime("%Y-%m-%d %H:%M:%S", wall),
+                "timestamp_now": now,
+            }
         body = json.dumps({
             "user_info": {
                 "auth": 1,
@@ -300,7 +366,7 @@ class Handler(BaseHTTPRequestHandler):
                 "exp_date": "1893456000",
                 "is_trial": "0",
             },
-            "server_info": {},
+            "server_info": server_info,
         }).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -503,6 +569,23 @@ def _parse_range(header, size):
     except ValueError:
         return None
     return (a, b) if a <= b and a < size else None
+def _live_path(name):
+    """`live/<user>/<pass>/<id>.ts`, an Xtream channel's URL, to its id."""
+    parts = name.split("/")
+    if len(parts) == 4 and parts[0] == "live" and parts[3].endswith(".ts"):
+        return parts[3][:-3]
+    return None
+
+
+def _stamp_unix(stamp, offset):
+    """`YYYY-MM-DD:HH-MM`, wall time `offset` seconds east of UTC, to Unix
+    seconds; None if it is not one."""
+    import calendar
+    try:
+        t = time.strptime(stamp, "%Y-%m-%d:%H-%M")
+    except ValueError:
+        return None
+    return calendar.timegm(t) - int(offset)
 
 
 _durations: dict[pathlib.Path, float] = {}
@@ -577,8 +660,19 @@ def main():
     ap.add_argument("--placeholder-while", metavar="FILE",
                     help="--placeholder only while FILE exists; delete it and the channel "
                          "comes on the air")
+    ap.add_argument("--panel-utc-offset", type=float, default=None, metavar="HOURS",
+                    help="the server's time zone, hours east of UTC (1, -5, 5.5): reported "
+                         "in player_api.php's server_info and used to read catch-up starts")
+    ap.add_argument("--archive-days", type=float, default=3.0, metavar="DAYS",
+                    help="how far back /streaming/timeshift.php serves; older is a 404")
+    ap.add_argument("--live-fixture", default=None, metavar="NAME",
+                    help="the fixture /live/<user>/<pass>/<id>.ts and catch-up serve "
+                         "(default sample1080.ts, or the first there is)")
     ap.add_argument("--verbose", action="store_true")
     a = ap.parse_args()
+    if a.panel_utc_offset is not None:
+        Handler.panel_offset = round(a.panel_utc_offset * 3600)
+    Handler.archive_days = a.archive_days
     Handler.burst = a.burst
     Handler.burst_rate = a.burst_rate
     Handler.drop_after = a.drop_after
@@ -608,6 +702,13 @@ def main():
         print(f"no fixtures in {FIXTURES}; run tools/make_fixtures.sh first",
               file=sys.stderr)
         return 1
+    names = [f.name for f in fixtures]
+    if a.live_fixture is not None:
+        if a.live_fixture not in names:
+            ap.error(f"no fixture named {a.live_fixture!r}")
+        Handler.live_fixture = a.live_fixture
+    elif Handler.live_fixture not in names:
+        Handler.live_fixture = names[0]
 
     if (a.placeholder or a.placeholder_while) and not (FIXTURES / "placeholder.ts").is_file():
         print(f"no placeholder.ts in {FIXTURES}; run tools/make_fixtures.sh", file=sys.stderr)
