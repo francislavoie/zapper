@@ -304,10 +304,14 @@ mod quit {
             return;
         }
         tracing::info!("quitting");
-        std::thread::spawn(|| {
+        let code = match then {
+            Then::Close => 0,
+            Then::Exit(code) => code,
+        };
+        std::thread::spawn(move || {
             std::thread::sleep(WATCHDOG);
             tracing::error!("quitting took longer than {WATCHDOG:?}; exiting now");
-            exit_now();
+            exit_now(code);
         });
         let app = app.clone();
         crate::surface::shut_down(move || {
@@ -328,13 +332,13 @@ mod quit {
 
     /// Ends the process without running anything more: no exit handlers, no
     /// destructors, which is the point when the orderly path is what hung.
-    fn exit_now() -> ! {
+    fn exit_now(code: i32) -> ! {
         #[cfg(unix)]
         unsafe {
-            libc::_exit(0)
+            libc::_exit(code)
         }
         #[cfg(not(unix))]
-        std::process::exit(0)
+        std::process::exit(code)
     }
 
     /// SIGTERM, SIGINT and SIGHUP (a logout, `kill`, Ctrl+C in a terminal,
