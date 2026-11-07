@@ -30,8 +30,8 @@ in /var/crash.
 The binary must load its interface by itself: a release build
 (`npm run build`, then `cargo build --release --features tauri/custom-protocol`).
 """
-import argparse, ctypes, glob, json, os, random, resource, signal, sqlite3, subprocess, sys
-import tempfile, time
+import argparse, ctypes, datetime, glob, json, os, random, re, resource, signal, sqlite3
+import subprocess, sys, tempfile, time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FATAL = ("SIGSEGV", "SIGABRT", "SIGBUS", "SIGILL", "SIGFPE", "SIGTRAP", "SIGSYS")
@@ -222,7 +222,7 @@ try:
                 reap(statuses)
                 time.sleep(0.05)
             zst = statuses.pop(z.pid)
-        quit_secs = round(time.time() - t0 - quit_after, 2)
+        exited_at = time.time()
 
         def running(k):
             return k not in statuses and os.path.exists(f"/proc/{k}") and comm(k) == kids[k]
@@ -257,6 +257,16 @@ try:
         web_seen = [[seen[k], gone.get(k)] for k, c in kids.items()
                     if c.startswith("WebKitWebProc") and parent.get(k) == z.pid]
         web = len(web_seen)
+        # From zapper logging that it is quitting to its process having exited.
+        quit_secs = None
+        for line in log.splitlines():
+            if "quitting" in line:
+                m = re.search(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d+)Z", line)
+                if m:
+                    began = datetime.datetime.fromisoformat(m.group(1)).replace(
+                        tzinfo=datetime.timezone.utc)
+                    quit_secs = round(exited_at - began.timestamp(), 2)
+                break
         by_api = "web process ended: TerminatedByApi" in log
         items = stored(xdg)
         nonce_kept = items.get("zapper.quit-check") == nonce
