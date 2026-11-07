@@ -65,8 +65,17 @@ pub fn earliest_catchup(now: i64, archive_days: i64) -> i64 {
 ///   the title in `epg_fts_stale` if it has an entry there, else its own.
 ///   Rows above it are not indexed yet.
 /// - `epg_fts_stale`: indexed rows whose title has changed or which have
-///   been deleted since, with the title they were indexed under. `OR IGNORE`
-///   keeps the first, which is the indexed one.
+///   been deleted since, with the title they were indexed under. A row
+///   already queued is left as it is: its entry holds the indexed title, and
+///   a second change before the index catches up (a guide listing one slot
+///   twice, a retitle and then a prune) changes nothing about what has to be
+///   dropped from the index.
+///
+/// The triggers skip a queued row with `WHERE NOT EXISTS`, not `INSERT OR
+/// IGNORE`: the conflict clause of the statement that fires a trigger
+/// overrides the trigger's own, and the guide's upsert runs its `DO UPDATE`
+/// as `OR ABORT`. With `OR IGNORE`, a slot retitled twice in one pass failed
+/// the whole guide with a UNIQUE error on `epg_fts_stale.id`.
 ///
 /// A delete also lowers the mark to the highest rowid left. SQLite gives a
 /// new row the highest rowid plus one, so deleting the top rows would
@@ -92,16 +101,23 @@ CREATE TABLE IF NOT EXISTS epg_fts_stale (
     id    INTEGER PRIMARY KEY,
     title TEXT NOT NULL
 );
+"#;
+
+/// The triggers that keep the index's bookkeeping; see [`DDL`].
+const TRIGGERS: &str = r#"
 CREATE TRIGGER IF NOT EXISTS epg_fts_retitle AFTER UPDATE OF title ON epg
 WHEN old.title IS NOT new.title
  AND old.rowid <= (SELECT upto FROM epg_fts_mark WHERE id = 0)
 BEGIN
-    INSERT OR IGNORE INTO epg_fts_stale (id, title) VALUES (old.rowid, old.title);
+    INSERT INTO epg_fts_stale (id, title)
+        SELECT old.rowid, old.title
+        WHERE NOT EXISTS (SELECT 1 FROM epg_fts_stale WHERE id = old.rowid);
 END;
 CREATE TRIGGER IF NOT EXISTS epg_fts_forget AFTER DELETE ON epg BEGIN
-    INSERT OR IGNORE INTO epg_fts_stale (id, title)
+    INSERT INTO epg_fts_stale (id, title)
         SELECT old.rowid, old.title
-        WHERE old.rowid <= (SELECT upto FROM epg_fts_mark WHERE id = 0);
+        WHERE old.rowid <= (SELECT upto FROM epg_fts_mark WHERE id = 0)
+          AND NOT EXISTS (SELECT 1 FROM epg_fts_stale WHERE id = old.rowid);
     UPDATE epg_fts_mark
        SET upto = MIN(upto, IFNULL((SELECT MAX(rowid) FROM epg), 0))
      WHERE id = 0;
@@ -119,6 +135,7 @@ pub fn install(conn: &Connection) -> Result<()> {
         |r| r.get(0),
     )?;
     if present {
+        replace_old_triggers(conn)?;
         index_changes(conn)?;
         return Ok(());
     }
@@ -126,12 +143,45 @@ pub fn install(conn: &Connection) -> Result<()> {
     // `migrate` is ever called from a caller's. A half-made index — the table
     // without its triggers — would silently go stale.
     conn.execute_batch("SAVEPOINT epg_fts_install")?;
-    let made = conn.execute_batch(DDL).map_err(anyhow::Error::from).and_then(|()| rebuild(conn));
+    let made = conn
+        .execute_batch(DDL)
+        .and_then(|()| conn.execute_batch(TRIGGERS))
+        .map_err(anyhow::Error::from)
+        .and_then(|()| rebuild(conn));
     match made {
         Ok(()) => conn.execute_batch("RELEASE epg_fts_install")?,
         Err(e) => {
             let _ = conn.execute_batch("ROLLBACK TO epg_fts_install; RELEASE epg_fts_install");
             return Err(e).context("creating the programme search index");
+        }
+    }
+    Ok(())
+}
+
+/// Swaps the triggers 0.3.0 and earlier made, with `INSERT OR IGNORE` (see
+/// [`DDL`]), for the current ones. Nothing to do on a mirror that has these.
+fn replace_old_triggers(conn: &Connection) -> Result<()> {
+    let old: bool = conn.query_row(
+        "SELECT COUNT(*) > 0 FROM sqlite_master
+         WHERE type = 'trigger' AND name IN ('epg_fts_retitle', 'epg_fts_forget')
+           AND sql LIKE '%INSERT OR IGNORE%'",
+        [],
+        |r| r.get(0),
+    )?;
+    if !old {
+        return Ok(());
+    }
+    conn.execute_batch("SAVEPOINT epg_fts_triggers")?;
+    let made = conn
+        .execute_batch(
+            "DROP TRIGGER IF EXISTS epg_fts_retitle; DROP TRIGGER IF EXISTS epg_fts_forget;",
+        )
+        .and_then(|()| conn.execute_batch(TRIGGERS));
+    match made {
+        Ok(()) => conn.execute_batch("RELEASE epg_fts_triggers")?,
+        Err(e) => {
+            let _ = conn.execute_batch("ROLLBACK TO epg_fts_triggers; RELEASE epg_fts_triggers");
+            return Err(e).context("replacing the programme search index's triggers");
         }
     }
     Ok(())
@@ -591,6 +641,78 @@ mod tests {
         index_changes(&c).unwrap();
         assert!(hits(&c, "grey").is_empty());
         assert!(hits(&c, "quayside").is_empty());
+        assert_eq!(hits(&c, "riverside").len(), 1);
+        integrity(&c);
+    }
+
+    /// The guide with its last slot listed twice, under two new titles, as
+    /// some providers' guides do.
+    fn guide_with_a_slot_twice() -> String {
+        let slot = r#"<programme start="20260908130000 +0000" stop="20260908140000 +0000" channel="nw1.uk">"#;
+        GUIDE.replace(
+            "<title>Grey's Harbour</title></programme>",
+            &format!("<title>Quayside</title></programme>\n{slot}<title>Riverside</title></programme>"),
+        )
+    }
+
+    #[test]
+    fn a_guide_listing_a_slot_twice_lands_over_one_already_indexed() {
+        // The sync's upsert retitles the indexed row twice in one pass. Its
+        // `DO UPDATE` runs as `OR ABORT`, which overrides a trigger's own
+        // conflict clause, so the second retitle must not need one.
+        let c = db();
+        let twice = guide_with_a_slot_twice();
+        parse_xmltv(twice.as_bytes(), &c).unwrap();
+        assert!(hits(&c, "grey").is_empty());
+        assert!(hits(&c, "quayside").is_empty());
+        assert_eq!(hits(&c, "riverside").len(), 1);
+        integrity(&c);
+        // The next pass, landing the same guide over its own result.
+        parse_xmltv(twice.as_bytes(), &c).unwrap();
+        assert_eq!(hits(&c, "riverside").len(), 1);
+        integrity(&c);
+    }
+
+    #[test]
+    fn a_retitled_row_deleted_in_the_same_pass_is_dropped_once() {
+        // Retitled by the upsert, then pruned before the pass catches up:
+        // the stale queue already holds it, under the indexed title.
+        let c = db();
+        let tx = c.unchecked_transaction().unwrap();
+        tx.execute(
+            "INSERT INTO epg (channel_ref, start, stop, title)
+             VALUES ('nw1.uk', ?1, ?2, 'Quayside')
+             ON CONFLICT(channel_ref, start) DO UPDATE SET title = excluded.title",
+            [NOW + HOUR, NOW + 2 * HOUR],
+        )
+        .unwrap();
+        tx.execute("DELETE FROM epg WHERE title = 'Quayside'", []).unwrap();
+        index_changes(&tx).unwrap();
+        tx.commit().unwrap();
+        assert!(hits(&c, "grey").is_empty());
+        assert!(hits(&c, "quayside").is_empty());
+        integrity(&c);
+    }
+
+    #[test]
+    fn a_mirror_with_the_old_triggers_has_them_replaced() {
+        // As 0.3.0 and earlier made them: `OR IGNORE`, which the upsert
+        // overrides.
+        let c = db();
+        c.execute_batch(
+            "DROP TRIGGER epg_fts_retitle;
+             CREATE TRIGGER epg_fts_retitle AFTER UPDATE OF title ON epg
+             WHEN old.title IS NOT new.title
+              AND old.rowid <= (SELECT upto FROM epg_fts_mark WHERE id = 0)
+             BEGIN
+                 INSERT OR IGNORE INTO epg_fts_stale (id, title) VALUES (old.rowid, old.title);
+             END;",
+        )
+        .unwrap();
+        let twice = guide_with_a_slot_twice();
+        assert!(parse_xmltv(twice.as_bytes(), &c).is_err(), "the old trigger let it through");
+        crate::catalog::migrate(&c).unwrap();
+        parse_xmltv(twice.as_bytes(), &c).unwrap();
         assert_eq!(hits(&c, "riverside").len(), 1);
         integrity(&c);
     }

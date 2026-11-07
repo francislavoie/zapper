@@ -76,6 +76,10 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
 - A radio channel (sound and no picture) plays, rather than saying "The channel didn't start"
   after eight seconds with the sound playing behind the message and being marked as a channel
   that does not load.
+- The guide update no longer fails on most passes with "UNIQUE constraint failed:
+  epg_fts_stale.id". A guide that listed one programme twice under different titles stopped the
+  whole update, so the guide kept going stale. The guide search now handles that, and an existing
+  catalogue is repaired the next time it opens.
 
 ## [0.3.0] - 2026-11-02
 
