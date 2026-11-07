@@ -85,7 +85,9 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
   "Sorry, Ubuntu has experienced an internal error" dialog for `WebKitWebProcess`). zapper now
   quits in order: it stops playback and releases the video surface, lets the interface's page
   unload, and ends the page's process before it exits, instead of leaving that process to wind
-  itself down after zapper had already gone.
+  itself down after zapper had already gone. The window disappears as soon as you close it, and
+  being told to quit by the system (logging out, `kill`, Ctrl+C in a terminal) goes the same way.
+- A setting changed less than half a second before quitting is no longer lost.
 
 ## [0.3.0] - 2026-11-02
 
