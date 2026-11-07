@@ -61,7 +61,8 @@ fn main() {
         if std::env::var_os("ZAPPER_FIXTURE_BASE").is_none() {
             std::env::set_var("ZAPPER_FIXTURE_BASE", zapper_lib::harness::FIXTURE_BASE);
         }
-        if std::env::var_os("ZAPPER_FIXTURE_NAME").is_none() {
+        // Zapping to other ids wants each id to name its own fixture.
+        if std::env::var_os("ZAPPER_FIXTURE_NAME").is_none() && std::env::var_os("ZAPPER_ZAP_TO").is_none() {
             std::env::set_var("ZAPPER_FIXTURE_NAME", "sample1080.ts");
         }
     }
@@ -178,6 +179,17 @@ async fn run(app: &tauri::AppHandle) -> Result<String, String> {
     use zapper_lib::ipc::player_cmds as cmds;
     use zapper_lib::ipc::types::PlaybackState;
 
+    // "When a channel opens", as Settings would set it: `wait` holds each
+    // channel on its first frame (or sound) until the connect burst is in.
+    if std::env::var("ZAPPER_LIVE_START").is_ok_and(|v| v == "wait") {
+        let settings = zapper_lib::ipc::types::SettingsDto {
+            live_start: zapper_lib::ipc::types::LiveStart::Wait,
+            ..Default::default()
+        };
+        cmds::apply_playback_settings(app.clone(), settings).await?;
+        println!("[setup] channels start at live (wait)");
+    }
+
     let stream_id = resolve_stream_id().await?;
     // Printed so a re-run can pass ZAPPER_STREAM_ID and skip the listing. An
     // id is not a credential; the URL that carries one is never printed.
@@ -266,6 +278,41 @@ async fn run(app: &tauri::AppHandle) -> Result<String, String> {
         ));
     }
 
+    // --- zaps -------------------------------------------------------------
+    //
+    // `ZAPPER_ZAP_TO=2,3` changes channel from the one playing to each id in
+    // turn (each id its own fixture, `<id>.ts`), and checks each plays and is
+    // still playing past the first-frame deadline: a radio channel (no
+    // video) included, which has no frame to show.
+    let mut zapped = Vec::new();
+    if let Ok(list) = std::env::var("ZAPPER_ZAP_TO") {
+        for id in list.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+            let id: i64 = id.parse().map_err(|_| format!("ZAPPER_ZAP_TO: {id} is not an id"))?;
+            cmds::play(app.clone(), id).await?;
+            let opened = await_state(Duration::from_secs(25), |s| s.state != PlaybackState::Opening).await;
+            if opened.state != PlaybackState::Playing {
+                return Err(format!(
+                    "zap to {id} ended in {:?}: {:?} {:?}",
+                    opened.state, opened.ending, opened.error
+                ));
+            }
+            // Past the deadline (8 s), and the hold of a start at live.
+            sleep(Duration::from_secs(12)).await;
+            let later = cmds::player_state().await?;
+            note(app, &format!("zapped-{id}")).await;
+            if later.state != PlaybackState::Playing || later.stream_id != Some(id) {
+                return Err(format!(
+                    "zap to {id}: {:?} after 12 s ({:?} {:?})",
+                    later.state, later.ending, later.error
+                ));
+            }
+            zapped.push(format!(
+                "{id} ({})",
+                later.width.map_or("sound only".to_owned(), |w| format!("{w} wide"))
+            ));
+        }
+    }
+
     // --- stop -------------------------------------------------------------
     cmds::stop(app.clone()).await?;
     let stopped = cmds::player_state().await?;
@@ -277,7 +324,7 @@ async fn run(app: &tauri::AppHandle) -> Result<String, String> {
         "stream {stream_id} played {w}x{h} {} @ {}, \
          seek {SEEK_BACK}s took behind_live {:.1}s -> {:.1}s, \
          seek_live returned it to {:.1}s, no stall in the {AFTER_LIVE}s after \
-         (thinnest buffer ahead {thinnest:.1}s), stop() reached Stopped",
+         (thinnest buffer ahead {thinnest:.1}s), zapped to [{}], stop() reached Stopped",
         measured.codec.as_deref().unwrap_or("codec unknown"),
         measured
             .fps
@@ -286,6 +333,7 @@ async fn run(app: &tauri::AppHandle) -> Result<String, String> {
         before.behind_live,
         back.behind_live,
         live.behind_live,
+        zapped.join(", "),
     ))
 }
 

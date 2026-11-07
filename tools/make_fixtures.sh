@@ -4,7 +4,7 @@
 # (H.264 8-bit 4:2:0 in MPEG-TS, a keyframe every two seconds), and one the
 # way much broadcast SD still is (MPEG-2 video, MP2 sound).
 #
-#   tools/make_fixtures.sh              # the four fixtures below, 30 s each
+#   tools/make_fixtures.sh              # the five fixtures below, 30 s each
 #   tools/make_fixtures.sh --force      # regenerate ones that already exist
 #
 # They go to $ZAPPER_FIXTURES, by default ~/.cache/zapper/fixtures, outside
@@ -14,6 +14,7 @@
 #   motion1080p.ts  h264 1920x1080@25, aac   the whole frame scrolling
 #   sport720p60.ts  h264 1280x720@60,  ac3   60 fps, high motion, AC-3 audio
 #   mpeg2sd.ts      mpeg2 720x576@25,  mp2   video no browser plays
+#   radio.ts        no video,          aac   a radio channel: sound alone
 set -euo pipefail
 
 dir=${ZAPPER_FIXTURES:-$HOME/.cache/zapper/fixtures}
@@ -53,3 +54,15 @@ make sample1080.ts  1920x1080 50 "" aac
 make motion1080p.ts 1920x1080 25 "scroll=horizontal=0.02:vertical=0.01" aac
 make sport720p60.ts 1280x720  60 "scroll=horizontal=0.03:vertical=0.015" ac3
 make mpeg2sd.ts     720x576   25 "scroll=horizontal=0.02:vertical=0.01" mp2 mpeg2video
+
+# A radio channel: AAC in MPEG-TS with no video track at all.
+radio="$dir/radio.ts"
+if [[ -e "$radio" && $force -eq 0 ]]; then
+  echo "exists: $radio (--force regenerates)"
+else
+  ffmpeg -hide_banner -loglevel error -y \
+    -f lavfi -i "sine=frequency=330:sample_rate=48000" \
+    -t "$seconds" -map 0:a -c:a aac -ac 2 -b:a 128k \
+    -f mpegts "$radio"
+  echo "wrote $radio"
+fi

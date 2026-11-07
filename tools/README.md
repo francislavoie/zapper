@@ -21,11 +21,17 @@ outside the repository: they are generated, and tens of megabytes each.
 | `motion1080p.ts` | h264 1920x1080@25, aac | 1080p with the whole frame moving |
 | `sport720p60.ts` | h264 1280x720@60, **ac3** | 60 fps, high motion, and the only AC-3 audio |
 | `mpeg2sd.ts` | **mpeg2** 720x576@25, **mp2** | Video no browser plays (watching in a browser says so) |
+| `radio.ts` | no video, aac | A radio channel: sound and nothing else, so no frame ever comes |
 
 Between them: 720p and 1080p, 25/50/60 fps, aac, ac3 and mp2, low and high
-motion. All but `mpeg2sd.ts` are H.264 8-bit 4:2:0 in MPEG-TS with a keyframe
+motion. All but `mpeg2sd.ts` and `radio.ts` are H.264 8-bit 4:2:0 in MPEG-TS with a keyframe
 every two seconds, the shape most live IPTV feeds have. Any other `.ts` file dropped into the
 fixtures directory is served too.
+
+`player_check` can zap after its run: `ZAPPER_ZAP_TO=2,3` opens ids 2 and 3 in turn from the
+channel playing, each from its own fixture (`2.ts`, `3.ts`: a fixtures directory of links, say
+`2.ts` to `radio.ts`), and checks each still plays past the first-frame deadline.
+`ZAPPER_LIVE_START=wait` starts every channel at live, held on its first frame (or sound).
 
 `fake_stream.py` sends a fixture as an endless chunked response with no
 length, as a live feed does, paced to its bitrate. Flags imitate how real
