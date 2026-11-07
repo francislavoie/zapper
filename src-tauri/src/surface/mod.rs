@@ -81,8 +81,9 @@ pub fn repeat_on_main(interval: Duration, f: impl FnMut() -> bool + 'static) {
 /// `then` on the main thread. Main thread only; once.
 ///
 /// On Linux: playback stops and mpv's render context is freed while its GL
-/// context still exists, the page unloads, and WebKit ends its web process
-/// (see `linux::shut_down`). Elsewhere `then` runs straight away.
+/// context still exists, the window hides, the page is sent `pagehide`, and
+/// WebKit ends its web process (see `linux::shut_down`). Elsewhere `then`
+/// runs straight away.
 pub fn shut_down(then: impl FnOnce() + 'static) {
     platform::shut_down(then)
 }

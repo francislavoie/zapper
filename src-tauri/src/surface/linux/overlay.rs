@@ -502,8 +502,8 @@ fn survive_a_failed_interface(webview: &webkit2gtk::WebView, win: &gtk::Window) 
     webview.connect_load_failed(move |_, _event, uri, error| {
         // The URI is ours — a file path or the dev server — and carries no
         // credentials, unlike a stream URL.
-        // A load that was cancelled did not fail: quitting replaces the page
-        // with about:blank, which cancels one still loading.
+        // A load that was cancelled did not fail: something replaced it, and
+        // that is not the interface failing to load.
         if error.matches(webkit2gtk::NetworkError::Cancelled) {
             return false;
         }
