@@ -195,6 +195,16 @@ npm run build
 tools/quit_check.py --runs 30 --port 19601
 ```
 
+It also requires exactly one web process per run, ended by WebKit at zapper's
+request (zapper's log says `TerminatedByApi`; `--baseline` drops that, for a
+build from before the orderly quit), and checks that what the page writes as
+it closes reaches local storage. With `ZAPPER_QUIT_NONCE` set, the hook
+registers a `pagehide` handler that stores the nonce, and folds the rail
+away 50 ms before the close, inside the session's 400 ms write delay; each
+run has its own XDG directories, and the check reads both back from WebKit's
+local-storage database afterwards. `--quit-by sigterm` ends each run with
+SIGTERM instead of the close.
+
 ## Never the real account
 
 Many providers allow one connection per account, and end the older one when

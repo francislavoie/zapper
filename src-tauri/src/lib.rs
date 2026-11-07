@@ -342,15 +342,34 @@ fn dev_hooks(app: &tauri::AppHandle) {
     // button does, so a harness can check that quitting is clean. Only for an
     // unattended run.
     if unattended() {
-        if let Some(secs) = std::env::var("ZAPPER_QUIT_AFTER")
+        if let Some(after) = std::env::var("ZAPPER_QUIT_AFTER")
             .ok()
             .and_then(|s| s.parse::<f64>().ok())
+            .and_then(|secs| std::time::Duration::try_from_secs_f64(secs).ok())
         {
             let handle = app.clone();
             tauri::async_runtime::spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_secs_f64(secs.max(0.0))).await;
+                tokio::time::sleep(after).await;
                 use tauri::Manager;
                 if let Some(w) = handle.get_webview_window("main") {
+                    // `ZAPPER_QUIT_NONCE` checks what the page writes as it
+                    // goes: a `pagehide` handler stores the nonce, and the
+                    // rail is folded away (a session change) just before the
+                    // close, inside the session's 400 ms write delay. The
+                    // harness then looks for both in local storage.
+                    if let Ok(nonce) = std::env::var("ZAPPER_QUIT_NONCE") {
+                        let nonce = serde_json::to_string(&nonce).unwrap_or_default();
+                        let js = format!(
+                            "addEventListener('pagehide', () => \
+                             localStorage.setItem('zapper.quit-check', {nonce})); \
+                             document.querySelector('button[aria-label=\"Hide the \
+                             categories and favourites\"]')?.click();"
+                        );
+                        if let Err(e) = w.eval(js) {
+                            tracing::warn!("ZAPPER_QUIT_NONCE: {e}");
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    }
                     tracing::info!("closing the window for ZAPPER_QUIT_AFTER");
                     if let Err(e) = w.close() {
                         tracing::warn!("ZAPPER_QUIT_AFTER: {e}");
