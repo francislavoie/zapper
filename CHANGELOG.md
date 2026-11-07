@@ -10,6 +10,26 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
 
 ## [Unreleased]
 
+### Fixed
+
+- Rewinding into a provider's archive plays the moment you clicked. The provider reads the time
+  asked for in its own time zone, and zapper sent it in this computer's: with the provider an
+  hour east of UTC and the computer five hours west, "five minutes ago" played what aired six
+  hours earlier, and clicks near the start of the archive asked for something already gone. The
+  provider's time zone is now read from its clock at every refresh of the channel list, so it
+  also follows its summer time. Playlists are unchanged.
+- Live leaves a programme replayed from the archive: it opens the channel again, live, as picking
+  it does, instead of skipping to the end of what had arrived. A replayed programme is no longer
+  "caught up" toward the end of its buffer after it opens or after a stall either, and it never
+  reads as live, so Live is offered throughout.
+- The archive's oldest ten minutes are no longer asked for — a click at the left end of the bar,
+  or a programme in the guide that is about to leave the archive — since the provider may drop
+  them before the request arrives. A replay the provider refuses or answers with nothing now says
+  "That's further back than your provider keeps for this channel." instead of blaming the
+  connection.
+- A stream the provider refused straight away, after another one had been playing, could be
+  taken for one that had played, and was then explained wrongly or not at all.
+
 ## [0.3.0] - 2026-11-02
 
 ### Added

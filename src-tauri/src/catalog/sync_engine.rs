@@ -408,6 +408,9 @@ pub async fn run_once<S: StatusSink>(app: &S) -> Result<Option<PassOutcome>> {
     let from = origin::of_xtream(&creds);
     let switched = db::with_write_db(|conn| origin::changed(conn, &from))?;
     let client = XtreamClient::new(creds)?;
+    // The server's time zone, for catch-up: not a phase, because the
+    // catalogue does not depend on it and the toolbar has nothing to say.
+    crate::catalog::panel_clock::learn(&client, &from).await;
     let outcome = run_steps(
         app,
         vec![

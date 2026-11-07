@@ -7,6 +7,7 @@ import {
   ARCHIVE_FRACTION,
   DAY,
   behindLiveAt,
+  ARCHIVE_MARGIN,
   catchupRequest,
   geometry,
   headPixel,
@@ -149,6 +150,23 @@ test("a catchup request starts on a minute boundary and runs to live", () => {
   assert.ok(r.durationMinutes >= 120);
   // Clamped into the archive: asking for buffer time as catchup makes no sense.
   assert.ok(catchupRequest(archived, NOW).start <= archived.bufferStart);
+});
+
+test("the archive's far edge is asked for ten minutes in", () => {
+  // The provider drops its oldest footage as it goes: a click at the very
+  // left would ask for what it no longer has by the time the request lands.
+  assert.equal(ARCHIVE_MARGIN, 600);
+  const earliest = NOW - 3 * DAY + ARCHIVE_MARGIN;
+  const edge = timeAtPixel(archived, 0);
+  for (const t of [edge - 100, edge, edge + 1, edge + ARCHIVE_MARGIN - 1]) {
+    const r = catchupRequest(archived, t);
+    assert.ok(r.start >= earliest, `${t - edge}s in: ${r.start} is before ${earliest}`);
+    assert.ok(r.start - earliest < 60, `${t - edge}s in: no further in than the next minute`);
+    assert.equal(r.start % 60, 0);
+  }
+  // Inside the margin already: where it was clicked, to the minute.
+  const t = earliest + 3600 + 25;
+  assert.equal(catchupRequest(archived, t).start, earliest + 3600 - ((earliest + 3600) % 60));
 });
 
 test("a seven-day archive is seven days wide", () => {

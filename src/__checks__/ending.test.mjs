@@ -45,12 +45,24 @@ test("every kind of ending has a headline and something to go on", () => {
     "network",
     "noVideo",
     "other",
+    "beyondArchive",
   ]) {
     const m = endedMessage(failed({ kind, status: null, limit: false }));
     assert.ok(m, kind);
     assert.ok(m.title.length > 0, kind);
     assert.ok(m.detail && m.detail.length > 0, kind);
   }
+});
+
+test("a catch-up older than the archive keeps says so, plainly", () => {
+  const m = endedMessage(failed({ kind: "beyondArchive", status: 404, limit: false }));
+  assert.equal(m.title, "That's further back than your provider keeps for this channel.");
+  assert.equal(m.code, "HTTP 404");
+  // Not the connection limit, and nothing about another device.
+  assert.doesNotMatch(m.title + m.detail, /connection|device/i);
+  const a = endedActions(failed({ kind: "beyondArchive", status: 404, limit: false }));
+  assert.equal(a.primary, "retry");
+  assert.equal(a.note, null);
 });
 
 test("the network is not blamed on the provider", () => {

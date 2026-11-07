@@ -215,6 +215,13 @@ test("an archive that does not reach back that far cannot be asked to", () => {
   assert.equal(withinArchive({ start: now - 40 * 86400 }, now, null), true);
 });
 
+test("a programme in the archive's last ten minutes is not offered", () => {
+  const now = at(0);
+  // Its oldest footage is going as the request travels.
+  assert.equal(withinArchive({ start: now - 3 * 86400 + 5 * 60 }, now, 3), false);
+  assert.equal(withinArchive({ start: now - 3 * 86400 + 10 * 60 }, now, 3), true);
+});
+
 // ------------------------------------------------------------ virtual rows
 
 test("the guide virtualizes on the same arithmetic as the channel list", () => {

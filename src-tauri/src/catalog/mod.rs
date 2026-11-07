@@ -13,6 +13,7 @@ pub mod epg_match;
 pub mod guide_search;
 pub mod index;
 pub mod origin;
+pub mod panel_clock;
 pub mod playlist;
 pub mod prune;
 pub mod reads;

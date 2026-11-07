@@ -5,6 +5,7 @@
 
 import type { ProgrammeDto } from "../types";
 import type { WheelLike } from "./wheel";
+import { ARCHIVE_MARGIN } from "./scrubber.ts";
 
 export const HOUR = 3600;
 
@@ -312,15 +313,17 @@ export function catchupMinutes(p: { start: number; stop: number }): number {
   return Math.max(1, Math.round((Math.max(p.start, p.stop) - p.start) / 60));
 }
 
-/** Whether the archive still reaches back that far. `archiveDays` is null when
- *  the provider did not say, and a missing number is not permission to refuse. */
+/** Whether the archive still reaches back that far, with ARCHIVE_MARGIN to
+ *  spare: its oldest minutes are going as the request travels. `archiveDays`
+ *  is null when the provider did not say, and a missing number is not
+ *  permission to refuse. */
 export function withinArchive(
   p: { start: number },
   now: number,
   archiveDays: number | null,
 ): boolean {
   if (archiveDays == null) return true;
-  return p.start >= now - archiveDays * 86400;
+  return p.start >= now - archiveDays * 86400 + ARCHIVE_MARGIN;
 }
 
 // ------------------------------------------------------------ easing in time
