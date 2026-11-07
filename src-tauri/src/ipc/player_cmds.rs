@@ -156,6 +156,14 @@ struct Machine {
     /// When data last arrived and when its end was read, which tells a
     /// stalled connection from one the provider closed; see `ipc::ending`.
     flow: Flow,
+    /// Whether the end of the data came too soon after too much of it for a
+    /// broadcast: a placeholder clip, sent because the channel is off the
+    /// air. See `ending::Placeholder`.
+    placeholder: ending::Placeholder,
+    /// This open was found off air and that has not yet gone to the
+    /// channel's record. Apart from `noted`, which the clip's first frame
+    /// has usually set already.
+    off_air_unnoted: bool,
     /// Automatic reconnects made since a person last asked for this stream.
     reconnects: u32,
     /// When a reconnect last brought the picture back. A stream that has
@@ -220,6 +228,8 @@ impl Machine {
             noted: false,
             measure_at: None,
             flow: Flow::default(),
+            placeholder: ending::Placeholder::default(),
+            off_air_unnoted: false,
             reconnects: 0,
             reconnected_at: None,
             reconnect_due: None,
@@ -240,6 +250,14 @@ impl Machine {
         let id = self.dto.stream_id?;
         if !self.live {
             return None;
+        }
+        // Off air: written whether or not the clip showed a frame, and
+        // before that frame is written as a load if both land at once.
+        if self.off_air_unnoted {
+            self.off_air_unnoted = false;
+            self.noted = true;
+            let why = ending::against_channel(&self.dto.ending?, None)?;
+            return Some(Ledger::Failed(id, why));
         }
         if self.shown && !self.noted {
             self.noted = true;
@@ -304,6 +322,8 @@ impl Machine {
         self.noted = false;
         self.measure_at = None;
         self.flow = Flow::default();
+        self.placeholder = ending::Placeholder::default();
+        self.off_air_unnoted = false;
         // Whoever opens this decides whether it continues a run of
         // reconnects (see `open_as`); anything waiting is stale.
         self.reconnects = 0;
@@ -354,7 +374,7 @@ impl Machine {
     /// First frame decoded. The only honest "it works" edge: `file-loaded`
     /// fires on a stream that connects and then stalls.
     fn playing(&mut self) {
-        if matches!(self.dto.state, PlaybackState::Stopped) {
+        if matches!(self.dto.state, PlaybackState::Stopped) || self.is_off_air() {
             return;
         }
         if self.joining {
@@ -389,6 +409,52 @@ impl Machine {
             self.measure_at = Some(Instant::now() + MEASURE_AFTER);
         }
         self.opened_at = None;
+    }
+
+    /// Watches this open's data for a placeholder clip, `dt` seconds after
+    /// the last heartbeat, and stops on finding one: the channel is off air.
+    /// Returns the clip's length then, for the caller to stop mpv, which
+    /// would otherwise skip to the clip's end (the hold and the catch-up
+    /// after a burst both would) or play it out.
+    ///
+    /// Before anything else in the heartbeat moves the picture. Only for a
+    /// live channel; see `ending::off_air`.
+    fn watch_for_placeholder(&mut self, dt: f64, p: &Probe) -> Option<f64> {
+        if !matches!(
+            self.dto.state,
+            PlaybackState::Opening | PlaybackState::Playing | PlaybackState::Paused
+        ) {
+            return None;
+        }
+        let read = self
+            .placeholder
+            .observe(dt, p.cache_start.or(p.time_pos), p.cache_end, p.demuxer_eof)?;
+        let clip = ending::off_air(self.live && self.dto.on_demand.is_none(), read)?;
+        tracing::info!(
+            "off air: the provider sent {:.0}s of stream and closed it {:.1}s after the open; \
+             a placeholder, not the channel. Stopping",
+            read.span,
+            read.at
+        );
+        self.off_air(clip);
+        Some(clip)
+    }
+
+    /// The channel is off air: the provider sent a placeholder clip `clip`
+    /// seconds long instead of it. Stopped, said so, and written against
+    /// the channel. Never reconnected: the provider would only send the
+    /// clip again.
+    fn off_air(&mut self, clip: f64) {
+        self.dto.at_live_edge = true;
+        self.following_live = false;
+        self.settle = None;
+        self.failed("the provider sent a placeholder instead of the channel");
+        self.dto.ending = Some(Ending::off_air(clip));
+        self.off_air_unnoted = true;
+    }
+
+    fn is_off_air(&self) -> bool {
+        self.dto.ending.is_some_and(|e| e.kind == EndingKind::OffAir)
     }
 
     /// The hold on the first frame is over and the caller is starting
@@ -568,6 +634,7 @@ impl Machine {
             status: None,
             limit: true,
             slots: Some(slots),
+            clip_secs: None,
         });
     }
 
@@ -1152,11 +1219,26 @@ fn tick(app: &AppHandle, p: &Player) {
         }
         m.apply(&probe);
         m.check_deadline();
-        ledger = m.ledger(Instant::now());
         // Wall time since the last heartbeat, which is never exactly TICK.
         let elapsed = m
             .last_tick_at
             .map_or(TICK.as_secs_f64(), |t| t.elapsed().as_secs_f64());
+        // A placeholder clip rather than the channel: stopped here, before
+        // the hold or the catch-up below can skip to the clip's end.
+        let holding_first_frame = m.join.is_some();
+        if m.watch_for_placeholder(elapsed, &probe).is_some() {
+            if let Err(e) = p.command("stop", &[]) {
+                tracing::warn!("could not stop the placeholder: {e}");
+            }
+            // `pause` outlives the file: the hold's is let go of here, as
+            // nothing else will.
+            if holding_first_frame {
+                if let Err(e) = p.set_flag("pause", false) {
+                    tracing::warn!("could not let go of the held frame: {e}");
+                }
+            }
+        }
+        ledger = m.ledger(Instant::now());
 
         // Starting at live: the picture is held on its first frame until the
         // connect burst is in, then started at the cushion. See `Join`.
@@ -2575,6 +2657,7 @@ mod tests {
             status: None,
             limit: false,
             slots: None,
+            clip_secs: None,
         };
         let mut live = Machine::new();
         live.opening(Opened::Channel(7));
@@ -3115,6 +3198,173 @@ mod tests {
         assert_eq!(m.dto.error.as_deref(), Some("the stream could not be opened"));
         let e = m.dto.ending.unwrap();
         assert_eq!((e.kind, e.status, e.limit), (ending::EndingKind::Refused, Some(509), true));
+    }
+
+    /// mpv's cache as a placeholder clip leaves it: ten minutes of stream,
+    /// all of it in, and the end read.
+    fn clip_read(eof: bool) -> Probe {
+        Probe {
+            cache_start: Some(1.4),
+            cache_end: Some(601.4),
+            time_pos: Some(1.4),
+            behind_live: 600.0,
+            demuxer_eof: eof,
+            paused: true,
+            ..Probe::default()
+        }
+    }
+
+    /// Heartbeats of a placeholder clip arriving over three seconds, then
+    /// its end. Returns what the machine decided on the last.
+    fn a_clip_arrives(m: &mut Machine) -> Option<f64> {
+        for i in 1..12 {
+            let p = Probe {
+                cache_end: Some(1.4 + 50.0 * f64::from(i)),
+                demuxer_eof: false,
+                ..clip_read(false)
+            };
+            assert_eq!(m.watch_for_placeholder(0.25, &p), None, "nothing until the end is read");
+        }
+        m.watch_for_placeholder(0.25, &clip_read(true))
+    }
+
+    #[test]
+    fn a_placeholder_on_a_live_channel_is_off_air_and_stops_there() {
+        for mode in [LiveStart::CatchUp, LiveStart::Stay, LiveStart::Wait] {
+            let mut m = Machine::new();
+            m.opening(Opened::Channel(7));
+            m.starting(mode);
+            m.playing();
+            assert_eq!(a_clip_arrives(&mut m), Some(600.0), "{mode:?}");
+            assert_eq!(m.dto.state, PlaybackState::Failed, "{mode:?}");
+            let e = m.dto.ending.unwrap();
+            assert_eq!((e.kind, e.clip_secs), (EndingKind::OffAir, Some(600)), "{mode:?}");
+            // Never by itself: no reconnect, nothing following the edge.
+            assert!(m.reconnect_due.is_none() && m.dto.reconnect.is_none(), "{mode:?}");
+            assert!(!m.following_live, "{mode:?}");
+            assert_eq!(m.dto.stream_id, Some(7), "Retry knows what to tune");
+        }
+    }
+
+    #[test]
+    fn the_hold_lets_go_without_skipping_when_it_is_off_air() {
+        // Start at live holds the first frame and would skip to the newest
+        // data once it stopped arriving: the clip's last second. The
+        // decision comes first, and the hold is over with no seek.
+        let mut m = held(7);
+        m.playing();
+        assert!(m.join.is_some());
+        assert!(a_clip_arrives(&mut m).is_some());
+        assert!(m.join.is_none() && !m.joining && !m.dto.joining_live);
+        assert!(m.settle.is_none(), "nothing left to catch up either");
+    }
+
+    #[test]
+    fn what_comes_after_the_stop_is_not_a_second_ending() {
+        let mut m = Machine::new();
+        m.opening(Opened::Channel(7));
+        m.playing();
+        a_clip_arrives(&mut m);
+        // mpv's own end-file, had it played out what it had, would not
+        // replace the explanation.
+        m.ended();
+        assert_eq!(m.dto.ending.unwrap().kind, EndingKind::OffAir);
+        assert_eq!(m.watch_for_placeholder(0.25, &clip_read(true)), None);
+    }
+
+    #[test]
+    fn a_normal_burst_then_an_end_ends_as_it_did() {
+        // A minute of connect burst, then the provider ends it five seconds
+        // in (another device), or the network fails.
+        let burst = |eof| Probe {
+            cache_start: Some(0.0),
+            cache_end: Some(65.0),
+            time_pos: Some(0.0),
+            demuxer_eof: eof,
+            ..Probe::default()
+        };
+        let mut m = Machine::new();
+        m.opening(Opened::Channel(7));
+        m.playing();
+        assert_eq!(m.watch_for_placeholder(5.0, &burst(true)), None);
+        assert_eq!(m.dto.state, PlaybackState::Playing, "it plays out what it has");
+        m.ended();
+        assert_eq!(m.dto.ending.unwrap().kind, EndingKind::Dropped);
+
+        let mut m = Machine::new();
+        m.opening(Opened::Channel(7));
+        m.playing();
+        assert_eq!(m.watch_for_placeholder(5.0, &burst(true)), None);
+        network_failure(&mut m);
+        assert_eq!(m.dto.ending.unwrap().kind, EndingKind::Network);
+        assert!(m.reconnect_due.is_some(), "and is reconnected as before");
+    }
+
+    #[test]
+    fn an_end_read_after_the_window_ends_as_it_did() {
+        let mut m = Machine::new();
+        m.opening(Opened::Channel(7));
+        m.playing();
+        let late = ending::OFF_AIR_WINDOW + 1.0;
+        assert_eq!(m.watch_for_placeholder(late, &clip_read(true)), None);
+        assert_eq!(m.dto.state, PlaybackState::Playing);
+        m.ended();
+        assert_eq!(m.dto.ending.unwrap().kind, EndingKind::Dropped);
+    }
+
+    #[test]
+    fn without_the_cache_state_it_ends_as_it_did() {
+        let mut m = Machine::new();
+        m.opening(Opened::Channel(7));
+        m.playing();
+        // `demuxer-cache-state` unreadable: no end, no start, no span.
+        let blind = Probe { time_pos: Some(3.0), ..Probe::default() };
+        for _ in 0..80 {
+            assert_eq!(m.watch_for_placeholder(0.25, &blind), None);
+        }
+        m.ended();
+        assert_eq!(m.dto.ending.unwrap().kind, EndingKind::Dropped);
+    }
+
+    #[test]
+    fn a_catch_up_programme_or_a_movie_is_never_off_air() {
+        let mut m = Machine::new();
+        m.opening(Opened::Channel(7));
+        m.live = false;
+        m.starting(LiveStart::CatchUp);
+        m.playing();
+        assert_eq!(a_clip_arrives(&mut m), None);
+        assert_eq!(m.dto.state, PlaybackState::Playing);
+
+        let mut m = a_playing_movie(3);
+        assert_eq!(a_clip_arrives(&mut m), None);
+        assert_eq!(m.dto.state, PlaybackState::Playing);
+    }
+
+    #[test]
+    fn off_air_is_written_against_the_channel_even_though_a_frame_was_shown() {
+        let mut m = Machine::new();
+        m.opening(Opened::Channel(7));
+        m.playing();
+        let t0 = Instant::now();
+        assert_eq!(m.ledger(t0), Some(Ledger::Loaded(7)), "the clip's first frame");
+        a_clip_arrives(&mut m);
+        assert_eq!(m.ledger(t0), Some(Ledger::Failed(7, "off air".into())));
+        assert_eq!(m.ledger(t0 + FAILURE_SETTLE), None, "once per open");
+        // The next live play clears it, as any other failure.
+        m.opening(Opened::Channel(7));
+        m.playing();
+        assert_eq!(m.ledger(Instant::now()), Some(Ledger::Loaded(7)));
+    }
+
+    #[test]
+    fn off_air_found_before_the_first_frame_is_not_written_as_loaded() {
+        let mut m = Machine::new();
+        m.opening(Opened::Channel(7));
+        a_clip_arrives(&mut m);
+        m.playing();
+        assert_eq!(m.ledger(Instant::now()), Some(Ledger::Failed(7, "off air".into())));
+        assert_eq!(m.ledger(Instant::now() + FAILURE_SETTLE), None);
     }
 
     #[test]

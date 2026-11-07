@@ -21,6 +21,7 @@ outside the repository: they are generated, and tens of megabytes each.
 | `motion1080p.ts` | h264 1920x1080@25, aac | 1080p with the whole frame moving |
 | `sport720p60.ts` | h264 1280x720@60, **ac3** | 60 fps, high motion, and the only AC-3 audio |
 | `mpeg2sd.ts` | **mpeg2** 720x576@25, **mp2** | Video no browser plays (watching in a browser says so) |
+| `placeholder.ts` | h264 1920x1080@30, aac, 600 s | Black and silence: what a provider sends for a channel that is off the air (`--placeholder`) |
 
 Between them: 720p and 1080p, 25/50/60 fps, aac, ac3 and mp2, low and high
 motion. All but `mpeg2sd.ts` are H.264 8-bit 4:2:0 in MPEG-TS with a keyframe
@@ -42,6 +43,28 @@ stream after that with a 509 (or any status, or `body` for a `200` carrying a
 line of text instead of video), `--refuse 403` refuses every stream from the
 start, and `--reason "Max Connections Reached"` sets the reason phrase a
 refusal is sent with.
+
+And a provider answering a channel that is off the air with a placeholder clip
+instead of the channel: `--placeholder` answers every stream with
+`placeholder.ts` (600 s of black and silence, 1080p at 30 fps and under
+100 kbit/s, which `make_fixtures.sh` writes too), as one chunked response
+with no length, all at once, and then ends it and closes the connection.
+`--burst-rate 200` paces it to about three seconds, as the provider measured
+did. The app should stop it as off air within `ending::OFF_AIR_WINDOW` of the
+open, without skipping to the clip's end or reconnecting:
+
+```sh
+tools/fake_stream.py --placeholder &
+ZAPPER_LIVE_START=wait cargo run --features harness --bin player_check -- --ending offAir
+```
+
+`player_check --ending <kind>` plays a channel that should stop by itself and
+checks the kind it ends as (`offAir`, `dropped`, …); for `offAir` also that it
+came within the window, carried the clip's length, never jumped ahead or
+reconnected, and was written to the channel's record as off air.
+`ZAPPER_LIVE_START` (`wait`, `catchUp`, `stay`) picks how the channel starts.
+Against `--burst 20 --end-after 8`, `--ending dropped` checks a takeover still
+ends as one.
 
 And the network failing instead: `--drop-after 5` resets the connection after
 5 s with no end of stream, `--stall-after 5` stops sending and leaves it open,

@@ -29,6 +29,7 @@ import {
   duration,
   liveOffset,
   measuredLine,
+  offAirLabel,
   playerBadge,
   programmeProgress,
 } from "../logic/format";
@@ -48,6 +49,7 @@ import { MovieBand, PlayingEnd } from "./MovieBand";
 import { Fullscreen, ResizeHandle, Stop } from "./icons";
 import { MiniControls } from "./MiniControls";
 import { StreamEnded } from "./StreamEnded";
+import { Alternatives } from "./Alternatives";
 import { usePlayerRecord } from "../hooks/usePlayerRecord";
 import { PlayerRecordLine } from "./PlayerRecord";
 import type { ChannelDto, ProgrammeDto } from "../types";
@@ -354,7 +356,12 @@ function ChannelProgramme({
   now: number;
   badge?: string;
 }) {
-  const { categories } = useApp();
+  const { categories, qualityNews } = useApp();
+  // What playing it has since added to its record, over what the channel
+  // was fetched with: found off air a moment ago, say.
+  const quality = channel.streamId in qualityNews ? qualityNews[channel.streamId] : channel.quality;
+  // Read at render, as the list's rows do.
+  const off = offAirLabel(quality, Date.now() / 1000);
   const category =
     channel.categoryId !== null && categories.status === "ready"
       ? categoryNames(categories.data).get(channel.categoryId)
@@ -381,6 +388,11 @@ function ChannelProgramme({
           </span>
         ) : null}
         {onNow ? <span className="watch-time">{timeRange(onNow.start, onNow.stop)}</span> : null}
+        {off ? (
+          <span className="badge offair" data-tip="Your provider sent a placeholder instead of the channel">
+            {off}
+          </span>
+        ) : null}
       </div>
       {onNow ? (
         <>
@@ -515,6 +527,9 @@ function Playing({
             <p className="watch-state bad">{ended.title}</p>
             {ended.detail ? <p className="watch-state">{ended.detail}</p> : null}
             {ended.code ? <p className="watch-state">{ended.code}</p> : null}
+            {ended.alternatives && player.streamId !== null ? (
+              <Alternatives streamId={player.streamId} />
+            ) : null}
           </>
         ) : null}
       </div>

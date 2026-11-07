@@ -134,7 +134,7 @@ export interface WatchRefusal {
   reason?: string;
   anyway?: boolean;
   slots?: { active: number; max: number } | null;
-  ending?: { kind: string; status: number | null; limit: boolean } | null;
+  ending?: { kind: string; status: number | null; limit: boolean; clipSecs?: number | null } | null;
   watchInstead?: number[];
 }
 
@@ -148,16 +148,21 @@ const ENDING_KINDS: readonly EndingKind[] = [
   "noVideo",
   "other",
   "inUse",
+  "offAir",
 ];
 
 function ending(kind: EndingKind, from: Partial<StreamEnding> = {}): StreamEnding {
-  return { kind, slots: null, status: null, limit: false, ...from };
+  return { kind, slots: null, status: null, limit: false, clipSecs: null, ...from };
 }
 
 /** The ending the service reported, in the player's terms. */
 export function endingOf(e: WatchRefusal["ending"]): StreamEnding | null {
   if (!e || !(ENDING_KINDS as readonly string[]).includes(e.kind)) return null;
-  return ending(e.kind as EndingKind, { status: e.status ?? null, limit: e.limit === true });
+  return ending(e.kind as EndingKind, {
+    status: e.status ?? null,
+    limit: e.limit === true,
+    clipSecs: typeof e.clipSecs === "number" ? e.clipSecs : null,
+  });
 }
 
 /** What the picture shows for a refusal: the reason as the app's player

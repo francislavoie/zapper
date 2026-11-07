@@ -50,6 +50,25 @@ pub struct Ending {
     /// How many of the account's connections were in use, and how many it
     /// has, when that was asked: for [`EndingKind::InUse`].
     pub slots: Option<crate::connections::Slots>,
+    /// How long the placeholder clip was, in whole seconds: for
+    /// [`EndingKind::OffAir`]. Defaulted when read, so an ending written
+    /// before it was a field still reads.
+    #[serde(default)]
+    pub clip_secs: Option<u32>,
+}
+
+impl Ending {
+    /// The channel is off air: see [`off_air`]. `clip` is the clip's length
+    /// in seconds.
+    pub fn off_air(clip: f64) -> Self {
+        Self {
+            kind: EndingKind::OffAir,
+            status: None,
+            limit: false,
+            slots: None,
+            clip_secs: Some(clip.max(0.0).round() as u32),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -76,6 +95,11 @@ pub enum EndingKind {
     InUse,
     /// It connected and never produced a picture before the deadline.
     NoVideo,
+    /// Not a broadcast at all: the provider answered the live channel with
+    /// a placeholder clip (minutes of black, sent at once, then closed)
+    /// because the channel is not on the air. `clip_secs` says how long the
+    /// clip was. See [`off_air`].
+    OffAir,
     /// None of the above could be told; `error` carries mpv's words.
     Other,
 }
@@ -265,6 +289,7 @@ pub fn classify(how: How, shown: bool, clues: Clues) -> Ending {
         status: clues.status,
         limit: clues.limit,
         slots: None,
+        clip_secs: None,
     };
     if how == How::Deadline {
         return kind(EndingKind::NoVideo);
@@ -333,10 +358,120 @@ pub fn against_channel(e: &Ending, error: Option<&str>) -> Option<String> {
         EndingKind::Unavailable => Some(http("not on the server")),
         EndingKind::NotVideo => Some("the server answered with something that is not video".to_owned()),
         EndingKind::NoVideo => Some("no picture arrived".to_owned()),
+        // Said in two words, because the list shows it as "Off air · 18:26"
+        // (src/logic/format.ts reads it back by this text).
+        EndingKind::OffAir => Some(OFF_AIR_REASON.to_owned()),
         EndingKind::Other => Some(error.unwrap_or("it could not be played").to_owned()),
         // Not tried at all: the account was full.
         EndingKind::Dropped | EndingKind::ServerError | EndingKind::Network | EndingKind::InUse => None,
     }
+}
+
+/// The reason a channel that was off air is written down with in its
+/// record (`channel_quality.fail_reason`). The interface recognises it by
+/// this text, so it is spelled exactly the same in `src/logic/format.ts`.
+pub const OFF_AIR_REASON: &str = "off air";
+
+/// How soon after the open the end of the provider's data has to be read for
+/// the stream to be a placeholder clip, in seconds.
+///
+/// The captured case sent its whole ten-minute clip in about three seconds.
+/// Twenty leaves room for a link six or seven times slower than that, and is
+/// still far too soon for any live stream to have produced
+/// [`OFF_AIR_MIN_CLIP`] of video: see there.
+pub const OFF_AIR_WINDOW: f64 = 20.0;
+
+/// The least stream time a placeholder clip must have delivered by its end,
+/// in seconds.
+///
+/// A live server can only send what it already holds — its connect burst,
+/// at most about sixty seconds on the providers measured — and then what
+/// happens, one second per second. So by the end of [`OFF_AIR_WINDOW`] a
+/// live channel has delivered at most about 60 + 20 = 80 seconds, and a
+/// takeover or a dropped connection right after a long burst stays well
+/// under this. Twice the longest burst, so nothing live reaches it; the
+/// placeholders seen are several minutes long, so none falls short.
+pub const OFF_AIR_MIN_CLIP: f64 = 120.0;
+
+/// What an open showed when the end of its data was read: when, and how
+/// much stream time had arrived by then.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Read {
+    /// Seconds since the open.
+    pub at: f64,
+    /// Stream time received: the newest timestamp less the oldest seen.
+    pub span: f64,
+}
+
+/// Watches an open for the end of the provider's data, so that a
+/// placeholder clip can be told from a broadcast.
+///
+/// Some providers, when a channel is not on the air, answer its live URL
+/// with a clip instead — minutes of black, sent as fast as the link allows,
+/// and then the response ends. Played as a live stream it reads as minutes
+/// of "data in", jumps to the clip's end, and stops as if another device had
+/// taken the connection. The tell is the end: read within seconds of the
+/// open, after more stream time than any live server could have sent by
+/// then (see [`off_air`]).
+///
+/// Fed mpv's `demuxer-cache-state` once a heartbeat. Without it nothing is
+/// ever read, and the ending is whatever it would have been.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Placeholder {
+    /// Seconds since the open.
+    t: f64,
+    /// The oldest timestamp seen since the timeline began.
+    first: Option<f64>,
+    /// The newest packet's timestamp, last heartbeat.
+    end: Option<f64>,
+    /// The end has been read and judged; once per open.
+    done: bool,
+}
+
+impl Placeholder {
+    /// One heartbeat: `dt` seconds since the last, the start of mpv's cache
+    /// (or the playhead, failing that), its end, both in stream time, and
+    /// whether the demuxer has read the end of the stream. `Some` once, on
+    /// the heartbeat the end is first read.
+    pub fn observe(&mut self, dt: f64, start: Option<f64>, cache_end: Option<f64>, eof: bool) -> Option<Read> {
+        self.t += dt;
+        if self.done {
+            return None;
+        }
+        if let Some(end) = cache_end.filter(|e| e.is_finite()) {
+            // Timestamps that went back started a new timeline (a reset, a
+            // splice): the jump is not stream time received.
+            if self.end.is_some_and(|last| end < last - 1.0) {
+                self.first = None;
+            }
+            self.end = Some(end);
+        }
+        for seen in [start, cache_end].into_iter().flatten().filter(|v| v.is_finite()) {
+            // Never past the end: a start from before the reset is not this
+            // timeline's.
+            if self.end.is_none_or(|e| seen <= e) {
+                self.first = Some(self.first.map_or(seen, |f| f.min(seen)));
+            }
+        }
+        if !eof {
+            return None;
+        }
+        self.done = true;
+        let span = match (self.first, self.end) {
+            (Some(f), Some(e)) => (e - f).max(0.0),
+            _ => 0.0,
+        };
+        Some(Read { at: self.t, span })
+    }
+}
+
+/// Whether an open whose data ended as `read` says was a placeholder clip,
+/// and if so its length in seconds.
+///
+/// Only a live channel: a catch-up programme and a movie are files, sent as
+/// fast as the link allows and then ended, which is exactly this shape.
+pub fn off_air(live: bool, read: Read) -> Option<f64> {
+    (live && read.at <= OFF_AIR_WINDOW && read.span >= OFF_AIR_MIN_CLIP).then_some(read.span)
 }
 
 /// How long the data must have stopped before the stream ended for the
@@ -590,7 +725,7 @@ mod tests {
 
     #[test]
     fn only_the_channels_own_failures_count_against_it() {
-        let end = |kind, status, limit| Ending { kind, status, limit, slots: None };
+        let end = |kind, status, limit| Ending { kind, status, limit, slots: None, clip_secs: None };
         let counted = |e: Ending| against_channel(&e, Some("the stream could not be opened"));
         assert_eq!(
             counted(end(EndingKind::Refused, Some(403), false)).as_deref(),
@@ -748,7 +883,7 @@ mod tests {
 
     #[test]
     fn only_the_network_is_reconnected_by_itself() {
-        let e = |kind, status| Ending { kind, status, limit: false, slots: None };
+        let e = |kind, status| Ending { kind, status, limit: false, slots: None, clip_secs: None };
         assert!(worth_reconnecting(&e(EndingKind::Network, None), true));
         // A catch-up programme would start again from its beginning.
         assert!(!worth_reconnecting(&e(EndingKind::Network, None), false));
@@ -761,10 +896,124 @@ mod tests {
             EndingKind::NoVideo,
             EndingKind::Other,
             EndingKind::InUse,
+            EndingKind::OffAir,
         ] {
             assert!(!worth_reconnecting(&e(kind, None), true), "{kind:?}");
         }
         assert!(!worth_reconnecting(&e(EndingKind::Network, Some(503)), true));
+    }
+
+    /// An open watched a heartbeat at a time: data whose newest timestamp
+    /// is `end_at(t)`, the start of the cache at `start`, and the end of the
+    /// stream read at `eof` seconds (never, for infinity). Returns what the
+    /// watch saw when the end was read, if it was.
+    fn placeholder_run(start: Option<f64>, end_at: impl Fn(f64) -> Option<f64>, eof: f64, until: f64) -> Option<Read> {
+        let mut p = Placeholder::default();
+        let mut t = 0.0;
+        let mut seen = None;
+        while t < until {
+            t += 0.25;
+            seen = seen.or(p.observe(0.25, start, end_at(t), t >= eof));
+        }
+        seen
+    }
+
+    #[test]
+    fn a_placeholder_clip_is_off_air() {
+        // The measured case: ten minutes of stream, all of it in three
+        // seconds, then the end.
+        let read = placeholder_run(Some(1.4), |t| Some(1.4 + (t * 200.0).min(600.0)), 3.0, 10.0)
+            .expect("the end was read");
+        assert!((read.at - 3.0).abs() < 0.01, "{read:?}");
+        assert!((read.span - 600.0).abs() < 0.01, "{read:?}");
+        assert_eq!(off_air(true, read), Some(600.0));
+        let e = Ending::off_air(600.4);
+        assert_eq!((e.kind, e.clip_secs, e.status, e.limit), (EndingKind::OffAir, Some(600), None, false));
+    }
+
+    #[test]
+    fn a_clip_whose_whole_length_arrived_before_the_first_heartbeat_is_measured_from_its_start() {
+        // On a fast link the whole file is in before anything is read: the
+        // span is the cache's start to its end, not the first reading's.
+        let read = placeholder_run(Some(0.0), |_| Some(598.0), 0.25, 1.0).unwrap();
+        assert_eq!(off_air(true, read), Some(598.0));
+        // No seekable range reported: the playhead's first reading stands in.
+        let read = placeholder_run(None, |_| Some(598.0), 0.25, 1.0).unwrap();
+        assert_eq!(read.span, 0.0, "nothing earlier than the end was ever seen");
+    }
+
+    #[test]
+    fn a_normal_burst_then_an_end_is_not_off_air() {
+        // The longest connect bursts seen, about a minute, then the provider
+        // ending it (a takeover) or the network dropping it seconds later.
+        for (burst, eof) in [(60.0, 4.0), (30.0, 2.0), (60.0, 19.0), (20.0, 12.0)] {
+            let read = placeholder_run(Some(0.0), |t| Some(burst + t), eof, eof + 1.0).unwrap();
+            assert_eq!(off_air(true, read), None, "burst {burst}s, ended at {eof}s");
+        }
+        // And whatever ended it is classified exactly as before.
+        assert_eq!(classify(How::Eof, true, Clues::default()).kind, EndingKind::Dropped);
+        let c = Clues { network: true, ..Default::default() };
+        assert_eq!(classify(How::Eof, true, c).kind, EndingKind::Network);
+    }
+
+    #[test]
+    fn an_end_after_the_window_is_not_off_air() {
+        let read = placeholder_run(Some(0.0), |_| Some(600.0), OFF_AIR_WINDOW + 0.5, 30.0).unwrap();
+        assert_eq!(off_air(true, read), None);
+        // At the window's edge it still counts.
+        let read = placeholder_run(Some(0.0), |_| Some(600.0), OFF_AIR_WINDOW, 30.0).unwrap();
+        assert_eq!(off_air(true, read), Some(600.0));
+    }
+
+    #[test]
+    fn a_clip_shorter_than_the_minimum_is_not_off_air() {
+        let read = placeholder_run(Some(0.0), |_| Some(OFF_AIR_MIN_CLIP - 1.0), 2.0, 5.0).unwrap();
+        assert_eq!(off_air(true, read), None);
+        let read = placeholder_run(Some(0.0), |_| Some(OFF_AIR_MIN_CLIP), 2.0, 5.0).unwrap();
+        assert_eq!(off_air(true, read), Some(OFF_AIR_MIN_CLIP));
+    }
+
+    #[test]
+    fn catch_up_and_movies_are_never_off_air() {
+        // A programme from the archive, or a film, arrives this way by
+        // design: as fast as the link allows, and then it ends.
+        let read = placeholder_run(Some(0.0), |_| Some(600.0), 3.0, 5.0).unwrap();
+        assert_eq!(off_air(false, read), None);
+    }
+
+    #[test]
+    fn without_the_cache_state_nothing_is_decided() {
+        // mpv would not hand back `demuxer-cache-state`: no end is ever read
+        // and no span known, so the ending is whatever it was before.
+        assert_eq!(placeholder_run(None, |_| None, f64::INFINITY, 30.0), None);
+        // An end read with no timestamps at all says nothing either.
+        let read = placeholder_run(None, |_| None, 2.0, 5.0).unwrap();
+        assert_eq!(off_air(true, read), None);
+    }
+
+    #[test]
+    fn the_end_is_judged_once() {
+        let mut p = Placeholder::default();
+        assert!(p.observe(0.25, Some(0.0), Some(600.0), true).is_some());
+        assert!(p.observe(0.25, Some(0.0), Some(600.0), true).is_none());
+    }
+
+    #[test]
+    fn timestamps_that_go_back_start_the_span_again() {
+        // A live stream whose timestamps reset (a splice) and which then
+        // ends: the jump is not stream time received.
+        let mut p = Placeholder::default();
+        p.observe(0.25, Some(95_000.0), Some(95_010.0), false);
+        p.observe(0.25, Some(95_000.0), Some(95_020.0), false);
+        let read = p.observe(0.25, Some(0.0), Some(8.0), true).unwrap();
+        assert_eq!(read.span, 8.0);
+    }
+
+    #[test]
+    fn off_air_is_held_against_the_channel_and_never_reconnected() {
+        let e = Ending::off_air(600.0);
+        assert_eq!(against_channel(&e, None).as_deref(), Some(OFF_AIR_REASON));
+        assert!(!worth_reconnecting(&e, true));
     }
 
     #[test]
@@ -775,20 +1024,28 @@ mod tests {
 
     #[test]
     fn the_dto_speaks_the_interfaces_names() {
-        let e = Ending { kind: EndingKind::NotVideo, status: Some(509), limit: true, slots: None };
+        let e = Ending { kind: EndingKind::NotVideo, status: Some(509), limit: true, slots: None, clip_secs: None };
         assert_eq!(
             serde_json::to_string(&e).unwrap(),
-            r#"{"kind":"notVideo","status":509,"limit":true,"slots":null}"#
+            r#"{"kind":"notVideo","status":509,"limit":true,"slots":null,"clipSecs":null}"#
         );
         let e = Ending {
             kind: EndingKind::InUse,
             status: None,
             limit: true,
             slots: Some(crate::connections::Slots { max: 1, active: 1 }),
+            clip_secs: None,
         };
         assert_eq!(
             serde_json::to_string(&e).unwrap(),
-            r#"{"kind":"inUse","status":null,"limit":true,"slots":{"max":1,"active":1}}"#
+            r#"{"kind":"inUse","status":null,"limit":true,"slots":{"max":1,"active":1},"clipSecs":null}"#
         );
+        assert_eq!(
+            serde_json::to_string(&Ending::off_air(600.0)).unwrap(),
+            r#"{"kind":"offAir","status":null,"limit":false,"slots":null,"clipSecs":600}"#
+        );
+        // An ending written before the clip's length was a field still reads.
+        let old: Ending = serde_json::from_str(r#"{"kind":"dropped","status":null,"limit":false,"slots":null}"#).unwrap();
+        assert_eq!((old.kind, old.clip_secs), (EndingKind::Dropped, None));
     }
 }

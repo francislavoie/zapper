@@ -221,7 +221,8 @@ export type EndingKind =
   | "network"
   | "noVideo"
   | "other"
-  | "inUse";
+  | "inUse"
+  | "offAir";
 
 export interface StreamEnding {
   kind: EndingKind;
@@ -231,6 +232,9 @@ export interface StreamEnding {
   status: number | null;
   /** The server said in words that it was a connection limit. */
   limit: boolean;
+  /** For "offAir": how long the placeholder clip the provider sent instead
+   *  of the channel was, in whole seconds. */
+  clipSecs: number | null;
 }
 
 /** Normalised window coordinates. Video is not a DOM element; the frontend

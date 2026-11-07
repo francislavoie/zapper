@@ -18,6 +18,9 @@
 #                                            one mov_text subtitle track (English)
 #   movie.mkv       h264 640x360@25,   ac3   the same in Matroska, with a subrip and an ass
 #                                            subtitle track (English); all the text is made up
+#   placeholder.ts  h264 1920x1080@30, aac   600 s of black and silence at a low bitrate: what
+#                                            some providers send instead of a channel that is
+#                                            off the air (fake_stream.py --placeholder)
 set -euo pipefail
 
 dir=${ZAPPER_FIXTURES:-$HOME/.cache/zapper/fixtures}
@@ -93,3 +96,25 @@ movie() {
 
 movie movie.mp4 aac mov_text
 movie movie.mkv ac3 subrip ass
+
+# The placeholder clip a provider answers an off-air channel's live URL with:
+# ten minutes of black and silence, 1080p at 30 fps and a couple of hundred
+# kbit/s, timestamps continuous throughout. fake_stream.py --placeholder sends
+# it all at once and closes the connection, as such a provider does.
+placeholder() {
+  local out="$dir/placeholder.ts"
+  if [[ -e "$out" && $force -eq 0 ]]; then
+    echo "exists: $out (--force regenerates)"
+    return
+  fi
+  ffmpeg -hide_banner -loglevel error -y \
+    -f lavfi -i "color=c=black:size=1920x1080:rate=30" \
+    -f lavfi -i "anullsrc=channel_layout=stereo:sample_rate=48000" \
+    -t 600 -map 0:v -map 1:a \
+    -c:v libx264 -preset veryfast -tune stillimage -pix_fmt yuv420p -g 60 -b:v 160k -maxrate 200k -bufsize 400k \
+    -c:a aac -ac 2 -b:a 32k \
+    -f mpegts "$out"
+  echo "wrote $out"
+}
+
+placeholder
