@@ -111,6 +111,9 @@ struct Seen {
     start: Option<i64>,
     #[serde(default)]
     status: Option<u16>,
+    /// Other streams the server was still sending when this was asked for.
+    #[serde(default)]
+    open_streams: Option<u32>,
 }
 
 #[cfg(target_os = "linux")]
@@ -219,8 +222,15 @@ async fn run(app: &tauri::AppHandle, base: &str) -> Result<String, String> {
         live.behind_live,
         &after[before..]
     );
-    if reopened.is_none_or(|r| r.stream != STREAM.to_string()) {
+    let Some(reopened) = reopened.filter(|r| r.stream == STREAM.to_string()) else {
         return Err("Live did not open the channel again".into());
+    };
+    // One connection at a time: the programme's was closed first.
+    if reopened.open_streams != Some(0) {
+        return Err(format!(
+            "the channel was asked for with {:?} other stream(s) still open",
+            reopened.open_streams
+        ));
     }
     if after[before..].iter().any(|r| r.kind == "timeshift") {
         return Err("Live asked for the catch-up programme again".into());
@@ -270,10 +280,18 @@ async fn run(app: &tauri::AppHandle, base: &str) -> Result<String, String> {
         return Err("after a refused catch-up, Live is not offered".into());
     }
     // And Live leaves that too.
+    let before = seen(base).await?.len();
     cmds::seek_live(app.clone()).await?;
     let back = await_state(Duration::from_secs(25), |s| s.state == PlaybackState::Playing && s.at_live_edge).await;
-    if back.state != PlaybackState::Playing {
-        return Err(format!("Live after a refused catch-up: {:?}", back.state));
+    if back.state != PlaybackState::Playing || !back.at_live_edge {
+        return Err(format!(
+            "Live after a refused catch-up: {:?}, at the live edge: {}",
+            back.state, back.at_live_edge
+        ));
+    }
+    let after = seen(base).await?;
+    if !after[before..].iter().any(|r| r.kind == "live" && r.stream == STREAM.to_string()) {
+        return Err("Live after a refused catch-up did not ask for the channel".into());
     }
 
     Ok(format!(

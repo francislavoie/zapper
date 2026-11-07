@@ -49,6 +49,7 @@ answers player_api.php's get_vod_categories, get_vod_streams (optionally
 /movie/<user>/<pass>/<id>.<ext> from the matching fixture (odd ids are mkv,
 even mp4) as a file: Accept-Ranges, and 206 with Content-Range for a Range
 header. A movie being sent counts in active_cons like a live stream.
+
 And its channels and archive: /live/<user>/<pass>/<id>.ts plays --live-fixture,
 and /streaming/timeshift.php reads `start` in the server's time zone, which
 player_api.php's server_info reports (time_now, timestamp_now). Each request's
@@ -142,7 +143,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         live = _live_path(name)
         if live is not None:
-            Handler.requests.append({"kind": "live", "stream": live, "at": int(time.time())})
+            Handler.requests.append({"kind": "live", "stream": live, "at": int(time.time()),
+                                     "open_streams": _others_open()})
             print(f"live: stream {live}", flush=True)
             name = Handler.live_fixture
         if name in ("", "index"):
@@ -309,6 +311,7 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             with Handler.lock:
                 Handler.open_streams -= 1
+
     def _timeshift(self):
         """A catch-up request, as an Xtream server reads it: `start` is
         `YYYY-MM-DD:HH-MM` in the server's own time zone (--panel-utc-offset),
@@ -324,7 +327,8 @@ class Handler(BaseHTTPRequestHandler):
         start = _stamp_unix(stamp, Handler.panel_offset or 0)
         entry = {"kind": "timeshift", "stream": stream, "stamp": stamp,
                  "duration": (q.get("duration") or [""])[0], "at": now,
-                 "start": start, "ago": None if start is None else now - start}
+                 "start": start, "ago": None if start is None else now - start,
+                 "open_streams": _others_open()}
         oldest = now - int(Handler.archive_days * 86400)
         if start is None or start < oldest or start > now:
             entry["status"] = 404
@@ -338,7 +342,14 @@ class Handler(BaseHTTPRequestHandler):
               f"{time.strftime('%Y-%m-%d %H:%M:%SZ', time.gmtime(start))}, {now - start}s ago",
               flush=True)
         path = FIXTURES / Handler.live_fixture
-        self._send(f"timeshift {stream}", path, path.read_bytes(), False)
+        data = path.read_bytes()
+        with Handler.lock:
+            Handler.open_streams += 1
+        try:
+            self._send(f"timeshift {stream}", path, data, False)
+        finally:
+            with Handler.lock:
+                Handler.open_streams -= 1
 
     def _user_info(self):
         """The account as an Xtream server reports it: connections allowed
@@ -447,10 +458,22 @@ class Handler(BaseHTTPRequestHandler):
                         # allows, or at a rate of its own (--burst-rate).
                         if Handler.burst_rate:
                             time.sleep(delay / Handler.burst_rate)
-                    else:
-                        time.sleep(delay)
+                    elif self._hung_up_within(delay):
+                        return
         except (BrokenPipeError, ConnectionResetError):
             pass  # client went away; normal
+
+    def _hung_up_within(self, seconds):
+        """Waits `seconds` between chunks, and says whether the client hung
+        up meanwhile. A player sends nothing once it has asked, so the socket
+        turns readable only when it closes: noticed at once, rather than at
+        the next write, so /requests counts a closed stream as closed."""
+        import select
+        try:
+            readable, _, _ = select.select([self.connection], [], [], seconds)
+            return bool(readable) and self.connection.recv(1, socket_peek()) == b""
+        except OSError:
+            return True
 
     def _reset(self):
         """Drops the connection the way a failing network does: a reset,
@@ -569,6 +592,27 @@ def _parse_range(header, size):
     except ValueError:
         return None
     return (a, b) if a <= b and a < size else None
+
+
+def socket_peek():
+    import socket
+    return socket.MSG_PEEK
+
+
+def _others_open(grace=0.3):
+    """Streams still being sent as a new one is asked for: the account's
+    connections in use besides it. A player closes the last stream before it
+    asks for the next, but the thread sending it notices a moment later, so
+    that moment is allowed for."""
+    until = time.monotonic() + grace
+    while True:
+        with Handler.lock:
+            n = Handler.open_streams
+        if n == 0 or time.monotonic() >= until:
+            return n
+        time.sleep(0.02)
+
+
 def _live_path(name):
     """`live/<user>/<pass>/<id>.ts`, an Xtream channel's URL, to its id."""
     parts = name.split("/")
