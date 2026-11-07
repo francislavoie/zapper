@@ -520,8 +520,17 @@ impl OffAirWatch {
         ending::off_air(
             read,
             ending::Context {
+                // Every hub is a live channel's (`Server::playable` asks the
+                // source for its live stream; movies have connections of
+                // their own, `vodwatch`).
                 live: true,
+                // What the hub hands on is MPEG-TS and nothing else: a body
+                // that does not start with its sync bytes ends the hub as
+                // `NotVideo` before anything is read (`sync_at`). An HLS
+                // playlist is such a body, so it never reaches this.
                 format: Some("mpegts"),
+                // Only a clean end of the response is judged; a reset or a
+                // stall ends the hub as `Unreachable` or `Stalled` instead.
                 network: false,
             },
         )
@@ -651,7 +660,7 @@ pub(crate) mod tests {
     /// A stream server on 127.0.0.1 sending numbered packets, 50 a tick, in
     /// odd-sized writes (so chunks never line up with packets), for as long
     /// as the client stays. Counts the connections it took.
-    async fn stream_server() -> (String, Arc<AtomicUsize>) {
+    pub(crate) async fn stream_server() -> (String, Arc<AtomicUsize>) {
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}/live/1.ts", l.local_addr().unwrap());
         let count = Arc::new(AtomicUsize::new(0));
@@ -959,7 +968,7 @@ pub(crate) mod tests {
 
     /// A provider answering every stream with `body`, then closing: the
     /// placeholder for a channel off the air. Counts the connections.
-    async fn clip_server(body: Vec<u8>) -> (String, Arc<AtomicUsize>) {
+    pub(crate) async fn clip_server(body: Vec<u8>) -> (String, Arc<AtomicUsize>) {
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}/live/1.ts", l.local_addr().unwrap());
         let count = Arc::new(AtomicUsize::new(0));

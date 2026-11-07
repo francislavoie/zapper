@@ -200,7 +200,7 @@ export function recordingStatus(r: RecordingDto, now: number): string {
       return left ? `starts in ${left}` : "starting";
     }
     case "recording":
-      return r.waiting ? capitalise(r.waiting) : `${size} so far${parts}`;
+      return notCapturing(r) ?? `${size} so far${parts}`;
     case "finishing":
       return `Saving ${size}${parts}…`;
     case "done":
@@ -236,7 +236,8 @@ export function recordingRowStatus(r: RecordingDto, now: number): RowStatus {
       const until = r.stop + r.padAfter;
       const conflict = r.conflicts?.[0];
       if (r.state === "recording") {
-        if (r.waiting) return { text: capitalise(r.waiting), tone: "warn", progress: null };
+        const paused = notCapturing(r);
+        if (paused) return { text: paused, tone: "warn", progress: null };
         const progress = Math.min(1, Math.max(0, (now - from) / (until - from)));
         return { text: `recording · ${duration(Math.max(0, until - now))} left`, tone: "", progress };
       }
@@ -299,6 +300,14 @@ function capitalise(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
+/** Why a recording is not capturing right now, in words, or null when it
+ *  is: waiting for a connection, or off air until its next try. */
+export function notCapturing(r: RecordingDto): string | null {
+  if (r.waiting) return capitalise(r.waiting);
+  if (r.retryAt != null) return `Off air; trying again at ${hhmm(r.retryAt)}`;
+  return null;
+}
+
 /** "740 MB", "1.2 GB": decimal units, as file managers show them. */
 export function bytes(n: number): string {
   if (n < 1000) return `${n} B`;
@@ -339,7 +348,8 @@ export function activeRecordingLine(r: RecordingDto, now: number): string {
   const lines = [`${head} — ${elapsed(Math.max(0, now - began))}, until ${hhmm(r.stop + r.padAfter)}`];
   // The tooltip collapses leading spaces, so the details are marked instead
   // of indented.
-  if (r.waiting) lines.push(`↳ ${capitalise(r.waiting)}`);
+  const paused = notCapturing(r);
+  if (paused) lines.push(`↳ ${paused}`);
   const feed = r.parts[r.parts.length - 1]?.streamId;
   if (feed != null && feed !== r.streamId) {
     lines.push(`↳ On its backup channel${r.backupName ? `, ${r.backupName}` : ""}`);

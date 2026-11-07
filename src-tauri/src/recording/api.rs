@@ -111,6 +111,11 @@ pub struct RecordingDto {
     /// "waiting for a free connection".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub waiting: Option<String>,
+    /// While recording a channel that is off air: when it asks again (Unix
+    /// seconds). It needs no connection meanwhile, so this is never
+    /// `waiting`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_at: Option<i64>,
     /// What it would lose to other recordings on an account with too few
     /// connections for them all (`sharing::conflicts`), while that is still
     /// ahead. Empty when nothing is, or the account's limit is unknown.

@@ -614,14 +614,34 @@ minutes it stops switching, stays on the last feed that delivered and retries wi
 minutes of black, sent at once, then the end of the stream. The service tells one apart by the
 app's own rule (see `ipc::ending::off_air`): the stream ends cleanly within 20 seconds of the
 connection, having carried at least two minutes of stream time (read from its timestamps) with
-enough data behind it, which no live channel can send that fast. The recording then notes "Off
-air at 18:26; retrying" once, switches to its backup feed if it has one, and otherwise asks again
-every three minutes until the programme ends (never into its padding after), through the same
-connection rules as any start, so it picks the broadcast up when it begins. The clip never
-reaches the file: each connection's first 20 seconds are held back until the service knows they
-aren't a clip, then written with the times they arrived, so the clock track is unchanged. A
-retry that finds the clip again adds nothing, not even an empty part. The channel's record says
-"off air", as the app's does, until the service or the app next finds it broadcasting.
+enough data behind it, which no live channel can send that fast.
+
+- The recording notes "Off air at 18:26; retrying" once, and Recordings shows "Off air; trying
+  again at 18:29" in place of its progress. That is not a wait for a connection: nothing else
+  (a browser watching, the app's player) is told the recording needs one.
+- It asks again until its programme ends, never into its padding after. Each feed found off air
+  is asked again three minutes later; with a backup the two take turns, so one of them is asked
+  about every ninety seconds (the backup the first time as soon as the main's connection has been
+  let go). While off air no switch counts towards the flap guard, and each note is given once.
+- A try may always ride a connection the service already has to either feed. It opens one of
+  its own only when the account has one free outright and none of the service's is being closed
+  or was let go moments ago (then it looks again every few seconds until that has settled); on a
+  full account that try is skipped. It never closes another recording's padding for it, and never
+  waits its turn for a connection. The first try, at the recording's start, follows the ordinary
+  rules.
+- The clip is kept out of the recording: each connection's first 20 seconds are held back (in
+  memory) until the service knows they aren't a clip, then written with the times they arrived,
+  so the clock track and the part's start are unchanged. A try that finds the clip again adds
+  nothing, not even an empty part. The limits: what is held is written when the recording is
+  stopped or its window ends while holding, when more than 64 MiB arrives within the 20 seconds,
+  or when the stream ends any other way (a clip cut short by a reset is written, as is one sent
+  so slowly that it takes longer than 20 seconds to arrive, which then also isn't recognised).
+  A crash of the service while holding loses those 20 seconds (or 64 MiB) of the recording.
+- The hold makes each connection's start reach the files 20 seconds late: the visible
+  `(recording).ts` and a `.strm`'s live stream are quiet for that long after the recording
+  starts or reconnects, then catch up.
+- The channel's record says "off air", as the app's does, until the service or the app next
+  finds it broadcasting.
 
 **Schedule.** Recordings are kept in `recordings.db` beside the catalogue, so they survive
 restarts. A start missed while the service was off begins at once if the programme is still on;
@@ -805,8 +825,8 @@ recording still *recording*, and that starting the service again carries on into
 `offair_check` (`--bin zapper-server --bin offair_check`, the same features) stands a channel
 behind `tools/fake_stream.py --placeholder-while`, which sends the placeholder clip while a file
 exists. It checks that a recording of it notes "Off air at …; retrying" once, asks again by itself
-(every 25 s, which only a harness build allows), and keeps none of the clip however often it
-comes; that it records once the file is gone; that two browsers' viewers on the channel are told
+(every 25 s, which only a harness build allows) with `retryAt` set and never `waiting`, and keeps
+none of the clip however often it comes; that it records once the file is gone; that two browsers' viewers on the channel are told
 `offAir` with the clip's length while the channel's record says "off air"; and that
 `/api/channels/{id}/alternatives` needs a sign-in and names no provider address. With
 `--serve-until FILE` it leaves everything running afterwards, for a browser to look at.
@@ -934,6 +954,8 @@ as a port taken when the service started, in which case it listens on `127.0.0.1
 turned into its files, which for a long one takes a minute or two; it is `finishing` from the
 moment it is stopped, and `active` in the status says `finishing: true`. `waiting` is set while
 a recording is not capturing, such as "waiting for a free connection (1 of 1 in use)".
+`retryAt` is set instead while a recording of a channel that is [off air](#how-it-behaves) waits
+for its next try (Unix seconds); it needs no connection meanwhile, so it is never `waiting`.
 `conflicts`, when there are any still ahead, is `[Conflict]`: `{title, with, kind, secs,
 streams}`, what recording `title` loses to `with` on another channel when the account allows
 `streams` — `kind` is `cutEnd` (its padding after ends `secs` early), `lateStart` (it starts
