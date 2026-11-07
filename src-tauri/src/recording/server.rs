@@ -37,6 +37,9 @@ pub struct Live {
     pub bytes: u64,
     pub since: i64,
     pub waiting: Option<String>,
+    /// Off air: when it asks again (Unix seconds). Not a wait for a
+    /// connection, so nothing treats it as one.
+    pub retry_at: Option<i64>,
     /// The end of its window, padding included.
     pub until: i64,
     /// Capturing no more: being finished into its files.
@@ -245,6 +248,7 @@ impl Server {
                     bytes: 0,
                     since: now(),
                     waiting: None,
+                    retry_at: None,
                     until: rec.stop + rec.pad_after,
                     finishing: false,
                     stop: tx,
@@ -338,6 +342,7 @@ impl Server {
             for r in &mut list {
                 if let Some(l) = m.get(&r.id) {
                     r.waiting = l.waiting.clone();
+                    r.retry_at = l.retry_at;
                 }
             }
         });
@@ -349,7 +354,8 @@ impl Server {
         let mut r = self
             .db(|c| store::get(c, id))?
             .ok_or_else(|| anyhow!("no such recording"))?;
-        r.waiting = self.live(|m| m.get(&id).and_then(|l| l.waiting.clone()));
+        (r.waiting, r.retry_at) =
+            self.live(|m| m.get(&id).map_or((None, None), |l| (l.waiting.clone(), l.retry_at)));
         name_backups(std::slice::from_mut(&mut r));
         Ok(r)
     }

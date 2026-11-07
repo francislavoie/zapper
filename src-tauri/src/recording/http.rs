@@ -1577,6 +1577,7 @@ pub(crate) mod tests {
                     bytes: 5_000_000_000,
                     since: t - 600,
                     waiting: None,
+                    retry_at: None,
                     until: t + 3900,
                     finishing: false,
                     stop: tx,
@@ -3931,6 +3932,86 @@ pub(crate) mod tests {
             .flatten())
         })
         .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_recording_waiting_to_ask_an_off_air_channel_again_is_in_no_browsers_way() {
+        let s = server("off-air-retry-notice");
+        enable(&s, true).await;
+        let (base, _) = feed_server().await;
+        feeds_from(&s, &base);
+        let t = now();
+        // A recording of channel 9, running, between its off-air tries.
+        let id = s
+            .db(|c| {
+                let req = ScheduleRequest {
+                    stream_id: 9,
+                    backup_stream_id: None,
+                    channel_name: Some("Nine".into()),
+                    title: "Late Show".into(),
+                    episode_title: None,
+                    season: None,
+                    episode: None,
+                    start: t - 60,
+                    stop: t + 3600,
+                    pad_before: None,
+                    pad_after: None,
+                };
+                let id = store::insert(
+                    c,
+                    &store::NewRecording {
+                        req: &req,
+                        backup_stream_id: None,
+                        channel_name: "Nine",
+                        pad_before: 0,
+                        pad_after: 0,
+                        folder: "/v",
+                        base: "Late Show",
+                        clock_track: false,
+                        now: t,
+                    },
+                )?;
+                store::set_state(c, id, RecordingState::Recording, None)?;
+                Ok(id)
+            })
+            .unwrap();
+        let (tx, _stop) = tokio::sync::watch::channel(false);
+        s.live(|m| {
+            m.insert(
+                id,
+                crate::recording::server::Live {
+                    title: "Late Show".into(),
+                    stream_id: 9,
+                    bytes: 0,
+                    since: t - 60,
+                    waiting: None,
+                    retry_at: Some(t + 120),
+                    until: t + 3600,
+                    finishing: false,
+                    stop: tx,
+                },
+            )
+        });
+        let cookie = browser_login(&s).await;
+        let (st, body) =
+            call(&s, from_page("POST", "/api/watch", Some(&cookie), watch_body(5, false))).await;
+        assert_eq!(st, StatusCode::OK, "{body}");
+        assert!(body["notice"].is_null(), "{body}");
+        let status = format!("/api/watch/{}", viewer_id(&body));
+        let (_, said) = call(&s, from_page("GET", &status, Some(&cookie), None)).await;
+        assert!(said["notice"].is_null(), "no recording waits for this one: {said}");
+        // The recordings list shows the retry, and no wait for a connection.
+        let (_, list) = call(&s, req("GET", "/api/recordings", HOME, false, Some(APP))).await;
+        assert_eq!(list[0]["retryAt"], t + 120);
+        assert!(list[0].get("waiting").is_none(), "{list}");
+
+        // The same recording waiting for a connection is: the test sees it.
+        s.update_live(id, |l| {
+            l.retry_at = None;
+            l.waiting = Some("waiting for a free connection (1 of 1 in use)".into());
+        });
+        let (_, said) = call(&s, from_page("GET", &status, Some(&cookie), None)).await;
+        assert_eq!(said["notice"]["recordingId"], id, "{said}");
     }
 
     #[tokio::test]

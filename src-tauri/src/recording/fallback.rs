@@ -19,6 +19,12 @@
 //!   on it, retrying with back-off, until the ten minutes have passed.
 //! - **Back-off** for a feed that keeps failing: 5 s, doubling to a minute.
 //!   It starts over once a connection has delivered for 30 s.
+//! - **Off air** (`hub`'s placeholder clip) is no failure of the feed's: a
+//!   feed found off air is asked again every [`OFF_AIR_RETRY_SECS`], never
+//!   sooner whichever rule picks it; with a backup the two take turns, one
+//!   about every half of that. Until a connection delivers again, no switch
+//!   counts for the flap guard, which is not applied, and each note is
+//!   given once.
 //!
 //! Pure, with the clock passed in, so every rule is a unit test.
 
@@ -108,10 +114,13 @@ pub struct Fallback {
     limits: u32,
     /// Whether the flap guard's note has been given for the current spell.
     guarded: bool,
-    /// When each feed was last found off air, until it delivers again.
+    /// When each feed was last found off air (or its try skipped), until a
+    /// connection delivers again: the spell off air.
     off_air: [Option<i64>; 2],
     /// How long to wait before asking an off-air feed again.
     off_air_retry: i64,
+    /// The notes given during the spell off air, each given once.
+    spell_notes: Vec<String>,
 }
 
 impl Fallback {
@@ -132,6 +141,7 @@ impl Fallback {
             guarded: false,
             off_air: [None; 2],
             off_air_retry: OFF_AIR_RETRY_SECS,
+            spell_notes: Vec::new(),
         }
     }
 
@@ -175,20 +185,65 @@ impl Fallback {
 
     /// The connection to the current feed ended at `now` after delivering
     /// data for `delivered_secs` (0: none at all).
+    ///
+    /// However it is chosen, a feed found off air is not asked again before
+    /// its retry is due ([`Self::due`]); and while the recording is off air
+    /// (until a connection delivers), a note is given once, not at every
+    /// try.
     pub fn failed(&mut self, now: i64, why: Failure, delivered_secs: i64) -> Next {
         if delivered_secs > 0 {
             self.last_good = Some(self.current);
             self.limits = 0;
-            self.off_air[self.current] = None;
+            // Something broadcast: the spell off air is over.
+            self.off_air = [None; 2];
+            self.spell_notes.clear();
         }
         if delivered_secs >= PROVEN_SECS {
             self.failures[self.current] = 0;
         }
-
-        if let Failure::OffAir { .. } = why {
-            return self.off_air(now, why);
+        let mut next = match why {
+            Failure::OffAir { .. } => self.off_air(now),
+            _ => self.ordinary(now, why),
+        };
+        if let Some(due) = self.due(next.feed) {
+            next.at = next.at.max(due);
         }
+        if self.off_air_spell() {
+            if let Some(n) = next.note.take() {
+                if !self.spell_notes.contains(&n) {
+                    self.spell_notes.push(n.clone());
+                    next.note = Some(n);
+                }
+            }
+        }
+        next
+    }
 
+    /// A try at an off-air feed that was not made (the account had no
+    /// connection free): the next is as if it had found the clip again.
+    pub fn skipped(&mut self, now: i64) -> Next {
+        self.failed(now, Failure::OffAir { clip_secs: 0 }, 0)
+    }
+
+    /// Whether a feed was found off air and has not delivered since.
+    pub fn off_air_spell(&self) -> bool {
+        self.off_air.iter().any(Option::is_some)
+    }
+
+    /// When `feed`, found off air, may be asked again.
+    pub fn due(&self, feed: usize) -> Option<i64> {
+        self.off_air
+            .get(feed)
+            .copied()
+            .flatten()
+            .map(|t| t + self.off_air_retry)
+    }
+
+    /// Any failure but off air: the module's rules. While off air, a
+    /// switch is not counted for the flap guard, which is not applied
+    /// either: the feeds are not flapping, one of them is waiting for its
+    /// broadcast.
+    fn ordinary(&mut self, now: i64, why: Failure) -> Next {
         if why.is_limit() {
             self.limits += 1;
             let wait = limit_backoff(self.limits);
@@ -234,7 +289,8 @@ impl Fallback {
             };
         }
 
-        if self.switches.len() >= FLAP_MAX_SWITCHES {
+        let spell = self.off_air_spell();
+        if !spell && self.switches.len() >= FLAP_MAX_SWITCHES {
             // Flapping: settle on the feed that last worked and wait it out.
             let stay = self.last_good.unwrap_or(self.current);
             self.current = stay;
@@ -258,8 +314,11 @@ impl Fallback {
         let from = self.current;
         let to = 1 - from;
         self.current = to;
-        self.switches.push_back(now);
-        // A feed that failed recently waits out its own back-off first.
+        if !spell {
+            self.switches.push_back(now);
+        }
+        // A feed that failed recently waits out its own back-off first (and
+        // one off air its retry, which `failed` sees to).
         let wait = if self.failures[to] == 0 {
             0
         } else {
@@ -276,38 +335,35 @@ impl Fallback {
             )),
         }
     }
-}
 
-impl Fallback {
     /// The current feed is off air. That is no fault of the feed's: nothing
-    /// is counted against it and the flap guard does not see it. The other
-    /// feed is tried at once, unless it too was found off air within the
-    /// retry's wait; with nothing else to try, the feed found off air
-    /// longest ago is asked again after the wait ([`OFF_AIR_RETRY_SECS`]).
-    /// The caller stops asking at its programme's end.
-    fn off_air(&mut self, now: i64, why: Failure) -> Next {
+    /// is counted against it, and it is never a flap. Each feed found off
+    /// air is asked again [`OFF_AIR_RETRY_SECS`] after ([`Self::due`]).
+    /// With a backup the feeds take turns: one not asked yet in this spell
+    /// at once (after its own back-off, if it failed lately), and then
+    /// alternately, half the wait apart, so one of them is asked about
+    /// every ninety seconds. No note: the recording says it is off air
+    /// itself. The caller stops asking at its programme's end.
+    fn off_air(&mut self, now: i64) -> Next {
         let from = self.current;
         self.off_air[from] = Some(now);
-        if self.feeds == 2 {
-            let to = 1 - from;
-            if self.off_air[to].is_none_or(|t| t <= now - self.off_air_retry) {
-                self.current = to;
-                return Next {
-                    feed: to,
-                    at: now,
-                    note: Some(format!(
-                        "switched from the {} feed to the {}: {}",
-                        name(from),
-                        name(to),
-                        why.describe()
-                    )),
-                };
-            }
-            self.current = if self.off_air[0] <= self.off_air[1] { 0 } else { 1 };
+        if self.feeds == 1 {
+            return Next {
+                feed: from,
+                at: now + self.off_air_retry,
+                note: None,
+            };
         }
+        let to = 1 - from;
+        self.current = to;
+        let at = match self.off_air[to] {
+            None if self.failures[to] == 0 => now,
+            None => now + backoff(self.failures[to]),
+            Some(_) => now + self.off_air_retry / 2,
+        };
         Next {
-            feed: self.current,
-            at: now + self.off_air_retry,
+            feed: to,
+            at,
             note: None,
         }
     }
@@ -525,26 +581,94 @@ mod tests {
     }
 
     #[test]
-    fn off_air_tries_the_backup_at_once_then_both_every_few_minutes() {
+    fn off_air_tries_the_backup_at_once_then_takes_turns_every_half_the_wait() {
+        const HALF: i64 = OFF_AIR_RETRY_SECS / 2;
         let mut f = Fallback::new(2);
         let n = f.failed(0, OFF_AIR, 0);
         assert_eq!((n.feed, n.at), (1, 0), "the backup at once");
-        assert!(n.note.unwrap().contains("off air"));
-        // The backup is off air too: the main one again, in a while.
-        let n = f.failed(2, OFF_AIR, 0);
-        assert_eq!((n.feed, n.at), (0, 2 + OFF_AIR_RETRY_SECS));
-        // Still off air: the backup at once (it was asked long enough ago),
-        // and so on, never the flap guard's.
-        let mut t = 2 + OFF_AIR_RETRY_SECS;
-        let n = f.failed(t, OFF_AIR, 0);
-        assert_eq!((n.feed, n.at), (1, t));
-        for i in 0..10 {
+        assert_eq!(n.note, None, "the recording's own note says it");
+        // The backup is off air too: the main one when it is due.
+        let n = f.failed(0, OFF_AIR, 0);
+        assert_eq!((n.feed, n.at), (0, OFF_AIR_RETRY_SECS));
+        // From then on they take turns, one about every half the wait, each
+        // asked exactly every wait; never a note, never the flap guard.
+        let mut t = n.at;
+        let mut asked = [Vec::new(), Vec::new()];
+        for _ in 0..12 {
+            asked[f.current()].push(t);
             let n = f.failed(t, OFF_AIR, 0);
-            assert_eq!(n.at, t + OFF_AIR_RETRY_SECS, "{i}: both asked, so a wait");
+            assert_eq!(n.at - t, HALF);
+            assert_eq!(n.note, None);
             t = n.at;
-            let n = f.failed(t, OFF_AIR, 0);
-            assert_eq!(n.at, t, "{i}: the other one straight after");
-            assert!(n.note.unwrap().contains("switched"), "never the flap guard");
+        }
+        for (feed, times) in asked.iter().enumerate() {
+            assert!(
+                times.windows(2).all(|w| w[1] - w[0] == OFF_AIR_RETRY_SECS),
+                "feed {feed}: {times:?}"
+            );
         }
     }
+
+    #[test]
+    fn main_off_air_and_the_backup_refused_asks_the_main_exactly_every_retry() {
+        let refused = Failure::Refused {
+            status: 403,
+            limit: false,
+        };
+        let mut f = Fallback::new(2);
+        let mut main_asked = vec![0];
+        let mut notes = Vec::new();
+        let mut t = 0;
+        let mut n = f.failed(t, OFF_AIR, 0);
+        for _ in 0..40 {
+            t = n.at;
+            notes.extend(n.note.clone());
+            if n.feed == 0 {
+                main_asked.push(t);
+                n = f.failed(t, OFF_AIR, 0);
+            } else {
+                n = f.failed(t, refused, 0);
+            }
+            assert!(n.at >= t);
+        }
+        assert!(main_asked.len() > 10, "{main_asked:?}");
+        assert!(
+            main_asked.windows(2).all(|w| w[1] - w[0] == OFF_AIR_RETRY_SECS),
+            "{main_asked:?}"
+        );
+        assert!(
+            !notes.iter().any(|n| n.contains("kept failing")),
+            "never the flap guard: {notes:?}"
+        );
+        assert_eq!(notes.len(), 1, "the switch is noted once: {notes:?}");
+    }
+
+    #[test]
+    fn a_skipped_try_waits_like_one_that_found_the_clip() {
+        let mut f = Fallback::new(1);
+        f.failed(100, OFF_AIR, 0);
+        let n = f.skipped(100 + OFF_AIR_RETRY_SECS);
+        assert_eq!(n.at, 100 + 2 * OFF_AIR_RETRY_SECS);
+        assert!(f.off_air_spell());
+        // A connection that delivers ends the spell.
+        f.failed(1000, Failure::Ended, 40);
+        assert!(!f.off_air_spell());
+        assert_eq!(f.due(0), None);
+    }
+
+    #[test]
+    fn a_feed_off_air_is_not_asked_before_its_retry_whichever_rule_picks_it() {
+        // The main off air, the backup then ended by the provider: the
+        // ordinary switch back to the main waits for its retry.
+        let mut f = Fallback::new(2);
+        f.failed(0, OFF_AIR, 0);
+        let n = f.failed(1, Failure::Ended, 0);
+        assert_eq!((n.feed, n.at), (0, OFF_AIR_RETRY_SECS));
+        // A limit refusal on an off-air feed waits for the later of the two.
+        let mut f = Fallback::new(1);
+        f.failed(0, OFF_AIR, 0);
+        let n = f.failed(1, Failure::NotVideo, 0);
+        assert_eq!(n.at, (1 + limit_backoff(1)).max(OFF_AIR_RETRY_SECS));
+    }
 }
+
