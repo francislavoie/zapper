@@ -54,14 +54,16 @@ pub(super) fn install(window: &tauri::WebviewWindow) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// How long each step of quitting may take before the next one goes ahead
-/// anyway. Each normally takes a few milliseconds.
+/// How long the page may take to unload, and then its process to end, before
+/// quitting goes ahead without it. Each normally takes a few milliseconds.
 const QUIT_STEP: Duration = Duration::from_millis(1500);
 
 /// Ends playback, then the page, then WebKit's web process, and calls `then`
 /// once they are gone. See [`crate::surface::shut_down`].
 ///
-/// The page is unloaded first (`about:blank`), so it gets its `pagehide` and
+/// The window is hidden as soon as the video is down, so the close looks
+/// immediate: it stays realized, so nothing about it is torn down early, and
+/// the page sees `visibilitychange` to hidden. The page is unloaded first (`about:blank`), so it gets its `pagehide` and
 /// writes what it keeps in local storage while the app is still there. The
 /// web process is then ended through WebKit's own API rather than left to
 /// notice that the app has gone and exit by itself. Exiting by itself, it
@@ -72,9 +74,16 @@ const QUIT_STEP: Duration = Duration::from_millis(1500);
 /// desktop reports that as a crash. A process WebKit ends runs no exit
 /// handlers at all.
 pub(super) fn shut_down(then: impl FnOnce() + 'static) {
+    use gtk::prelude::WidgetExt;
+
     render::shut_down();
-    match with_overlay(|o| o.webview.clone()) {
-        Some(webview) => end_page(webview, Box::new(then)),
+    match with_overlay(|o| o.webview.upgrade()).flatten() {
+        Some(webview) => {
+            if let Some(window) = webview.toplevel() {
+                window.hide();
+            }
+            end_page(webview, Box::new(then))
+        }
         None => then(),
     }
 }
@@ -128,7 +137,10 @@ fn end_web_process(webview: webkit2gtk::WebView, then: Box<dyn FnOnce()>) {
 
     let done = once(then);
     let on_end = done.clone();
-    webview.connect_web_process_terminated(move |_, _| advance(&on_end));
+    webview.connect_web_process_terminated(move |_, reason| {
+        tracing::info!("web process ended: {reason:?}");
+        advance(&on_end)
+    });
     let late = done.clone();
     gtk::glib::timeout_add_local_once(QUIT_STEP, move || {
         if late.borrow().is_some() {

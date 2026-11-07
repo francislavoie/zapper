@@ -217,6 +217,7 @@ pub fn run() {
             }
 
             chrome::install_menu(app.handle());
+            quit::on_signals(app.handle());
 
             // Development hooks. Nothing here runs in a normal launch: they
             // exist because the composited window cannot be screenshotted on
@@ -239,10 +240,19 @@ pub fn run() {
 /// on Mesa can crash in libEGL's exit handler. So the close and the exit are
 /// both held back until [`surface::shut_down`] has taken playback, the page
 /// and the web process down, and then let through.
+///
+/// Waiting on the page and on its process is bounded inside the surface;
+/// stopping mpv and freeing its render context are calls into libmpv that
+/// cannot be. So a watchdog ends the process outright if quitting has not
+/// finished `WATCHDOG` after it began: a quit that hangs is worse than one
+/// that skips the tidying.
 #[cfg(feature = "gui")]
 mod quit {
     use std::sync::atomic::{AtomicU8, Ordering};
     use tauri::{AppHandle, Manager, RunEvent, WindowEvent};
+
+    /// How long quitting may take before the watchdog ends the process.
+    const WATCHDOG: std::time::Duration = std::time::Duration::from_secs(5);
 
     const RUNNING: u8 = 0;
     const STOPPING: u8 = 1;
@@ -283,6 +293,11 @@ mod quit {
             return;
         }
         tracing::info!("quitting");
+        std::thread::spawn(|| {
+            std::thread::sleep(WATCHDOG);
+            tracing::error!("quitting took longer than {WATCHDOG:?}; exiting now");
+            exit_now();
+        });
         let app = app.clone();
         crate::surface::shut_down(move || {
             STATE.store(STOPPED, Ordering::Release);
@@ -299,6 +314,35 @@ mod quit {
             }
         });
     }
+
+    /// Ends the process without running anything more: no exit handlers, no
+    /// destructors, which is the point when the orderly path is what hung.
+    fn exit_now() -> ! {
+        #[cfg(unix)]
+        unsafe {
+            libc::_exit(0)
+        }
+        #[cfg(not(unix))]
+        std::process::exit(0)
+    }
+
+    /// SIGTERM, SIGINT and SIGHUP (a logout, `kill`, Ctrl+C in a terminal,
+    /// the terminal closing) quit the same way as closing the window, rather
+    /// than ending the process where it stands.
+    #[cfg(target_os = "linux")]
+    pub fn on_signals(app: &AppHandle) {
+        for signal in [libc::SIGTERM, libc::SIGINT, libc::SIGHUP] {
+            let app = app.clone();
+            gtk::glib::unix_signal_add_local(signal, move || {
+                tracing::info!("signal {signal}: quitting");
+                app.exit(0);
+                gtk::glib::ControlFlow::Continue
+            });
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub fn on_signals(_app: &AppHandle) {}
 }
 
 /// The variables that make this a run nobody is sitting in front of.
