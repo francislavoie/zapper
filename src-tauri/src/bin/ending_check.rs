@@ -455,7 +455,9 @@ fn play(mpv: &libmpv2::Mpv, url: &str) -> Result<Outcome, String> {
         let Some(ev) = mpv.wait_event(0.05) else { continue };
         match signal_of(ev) {
             Some(Signal::StartFile) => loaded = true,
-            Some(Signal::VideoReconfig) => {
+            // As the app counts it: a reconfigure with a picture behind it
+            // (`Machine::reconfigured`), not the last one being taken down.
+            Some(Signal::VideoReconfig) if mpv.get_property::<i64>("video-params/w").is_ok() => {
                 shown.get_or_insert_with(Instant::now);
             }
             Some(Signal::Log(text)) => {
@@ -469,6 +471,19 @@ fn play(mpv: &libmpv2::Mpv, url: &str) -> Result<Outcome, String> {
             Some(Signal::EndFile { replaced: true, .. }) => {}
             Some(Signal::EndFile { error, .. }) if loaded => {
                 let how = error.map_or(How::Eof, How::Error);
+                // mpv hands out queued events before the log lines beside
+                // them, and the app reads a heartbeat's lines first
+                // (`player_cmds::logs_first`): the lines that explain this
+                // end may still be waiting. Read them as the app would.
+                let until = Instant::now() + Duration::from_millis(100);
+                while Instant::now() < until {
+                    if let Some(Signal::Log(text)) = mpv.wait_event(0.02).and_then(signal_of) {
+                        if std::env::var_os("ZAPPER_ENDING_DEBUG").is_some() {
+                            println!("        mpv (after the end): {}", text.trim_end());
+                        }
+                        clues.observe(&text);
+                    }
+                }
                 let mut c = clues;
                 c.stalled = flow.stalled();
                 let e = classify(how, shown.is_some(), c);

@@ -21,6 +21,7 @@
 #   placeholder.ts  h264 1920x1080@30, aac   600 s of black and silence at a low bitrate: what
 #                                            some providers send instead of a channel that is
 #                                            off the air (fake_stream.py --placeholder)
+#   radio.ts        no video,          aac   a radio channel: sound alone
 set -euo pipefail
 
 dir=${ZAPPER_FIXTURES:-$HOME/.cache/zapper/fixtures}
@@ -118,3 +119,15 @@ placeholder() {
 }
 
 placeholder
+
+# A radio channel: AAC in MPEG-TS with no video track at all.
+radio="$dir/radio.ts"
+if [[ -e "$radio" && $force -eq 0 ]]; then
+  echo "exists: $radio (--force regenerates)"
+else
+  ffmpeg -hide_banner -loglevel error -y \
+    -f lavfi -i "sine=frequency=330:sample_rate=48000" \
+    -t "$seconds" -map 0:a -c:a aac -ac 2 -b:a 128k \
+    -f mpegts "$radio"
+  echo "wrote $radio"
+fi
