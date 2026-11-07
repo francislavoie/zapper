@@ -400,23 +400,35 @@ fn dev_hooks(app: &tauri::AppHandle) {
                 tokio::time::sleep(after).await;
                 use tauri::Manager;
                 if let Some(w) = handle.get_webview_window("main") {
-                    // `ZAPPER_QUIT_NONCE` checks what the page writes as it
-                    // goes: a `pagehide` handler stores the nonce, and the
-                    // rail is folded away (a session change) just before the
-                    // close, inside the session's 400 ms write delay. The
-                    // harness then looks for both in local storage.
+                    // `ZAPPER_QUIT_NONCE` checks what the page saves as it
+                    // goes. A `pagehide` handler stores the nonce in local
+                    // storage. Settings › Playback is opened, and then, 150 ms
+                    // before the close (inside both write delays, 400 ms
+                    // each), the rail is folded away (the session) and
+                    // hardware decoding is turned off (a setting). The
+                    // harness then looks for all three.
                     if let Ok(nonce) = std::env::var("ZAPPER_QUIT_NONCE") {
                         let nonce = serde_json::to_string(&nonce).unwrap_or_default();
-                        let js = format!(
+                        let open = format!(
                             "addEventListener('pagehide', () => \
                              localStorage.setItem('zapper.quit-check', {nonce})); \
-                             document.querySelector('button[aria-label=\"Hide the \
-                             categories and favourites\"]')?.click();"
+                             document.querySelector('button[aria-label=\"Settings\"]')?.click(); \
+                             setTimeout(() => [...document.querySelectorAll(\
+                             'nav[aria-label=\"Settings pages\"] button')]\
+                             .find((b) => b.textContent.trim() === 'Playback')?.click(), 100);"
                         );
-                        if let Err(e) = w.eval(js) {
-                            tracing::warn!("ZAPPER_QUIT_NONCE: {e}");
+                        let change = "{ document.querySelector('button[aria-label=\"Hide the \
+                             categories and favourites\"]')?.click(); \
+                             const hw = document.getElementById('set-hwdec'); \
+                             localStorage.setItem('zapper.quit-check-switch', \
+                             String(hw?.getAttribute('aria-checked'))); \
+                             if (hw?.getAttribute('aria-checked') === 'true') hw.click(); }";
+                        for (js, then) in [(open.as_str(), 600), (change, 150)] {
+                            if let Err(e) = w.eval(js) {
+                                tracing::warn!("ZAPPER_QUIT_NONCE: {e}");
+                            }
+                            tokio::time::sleep(std::time::Duration::from_millis(then)).await;
                         }
-                        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
                     }
                     tracing::info!("closing the window for ZAPPER_QUIT_AFTER");
                     if let Err(e) = w.close() {
