@@ -48,6 +48,17 @@ use crate::catalog::search::alternatives;
 use crate::catalog::store::{channel_from_row, CHANNEL_COLUMNS, CHANNEL_COLUMN_COUNT, QUALITY_JOIN};
 use crate::ipc::types::{AiringDto, ProgrammeDto, ProgrammeHitDto};
 
+/// How far inside its far end an archive is asked for. A server drops its
+/// oldest footage as it goes, and by the time a request for the very edge
+/// reaches it, that minute may be gone; ten minutes in, it is still there.
+/// `ARCHIVE_MARGIN` in `src/logic/scrubber.ts` is the interface's copy.
+pub const ARCHIVE_MARGIN: i64 = 10 * 60;
+
+/// The earliest moment worth asking an archive of `archive_days` for.
+pub fn earliest_catchup(now: i64, archive_days: i64) -> i64 {
+    now - archive_days * 86_400 + ARCHIVE_MARGIN
+}
+
 /// The index and what keeps it, created together or not at all.
 ///
 /// - `epg_fts_mark.upto`: every `epg` row at or below it is indexed, under
@@ -249,7 +260,7 @@ pub fn search(
                AND (e.stop > ?2
                     OR (ch.has_archive <> 0
                         AND (ch.archive_days IS NULL
-                             OR e.start >= ?2 - ch.archive_days * 86400)))
+                             OR e.start >= ?2 - ch.archive_days * 86400 + {ARCHIVE_MARGIN})))
          )
          SELECT {CHANNEL_COLUMNS}, p.start, p.stop, p.title, p.description, p.tier, p.season, p.episode
          FROM placed p
@@ -416,6 +427,23 @@ mod tests {
         assert!(!got.contains(&(2, NOW - 26 * HOUR, AiringDto::Catchup)));
         // Northwind's from nine days ago: older than its three days.
         assert!(got.iter().all(|(_, start, _)| *start > NOW - 3 * 86_400));
+    }
+
+    #[test]
+    fn the_archive_s_last_ten_minutes_are_not_offered() {
+        let c = db();
+        // Northwind's from last night, 20:00, seen when it is five minutes
+        // from leaving the three-day archive, and then fifteen.
+        let start = NOW - 16 * HOUR;
+        let found = |now: i64| {
+            search(&c, "harbour lights", now, 0, 100)
+                .unwrap()
+                .iter()
+                .any(|h| h.channel.stream_id == 1 && h.programme.start == start)
+        };
+        assert!(!found(start + 3 * 86_400 - 5 * 60));
+        assert!(found(start + 3 * 86_400 - 15 * 60));
+        assert_eq!(earliest_catchup(NOW, 3), NOW - 3 * 86_400 + 600);
     }
 
     #[test]

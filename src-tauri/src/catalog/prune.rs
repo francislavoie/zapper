@@ -387,7 +387,8 @@ mod tests {
 
     #[test]
     fn exactly_the_archive_is_kept_as_search_counts_it() {
-        // Search offers a catch-up while `start >= now - days * 86400`; the
+        // The archive holds what started since `now - days * 86400` (search
+        // offers it from `guide_search::ARCHIVE_MARGIN` inside that); the
         // prune keeps every one of those and nothing earlier.
         let c = open_in_memory().unwrap();
         chan(&c, 1, "a", true, Some(2));

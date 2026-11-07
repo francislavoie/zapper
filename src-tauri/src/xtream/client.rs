@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use std::fmt;
 
 use crate::xtream::models::Rows;
-use crate::xtream::{Category, Channel, UserInfo, VodInfo, VodStream};
+use crate::xtream::{Category, Channel, ServerInfo, UserInfo, VodInfo, VodStream};
 
 /// Some servers reject default agents; VLC's is widely accepted.
 const USER_AGENT: &str = "VLC/3.0.20 LibVLC/3.0.20";
@@ -38,6 +38,23 @@ const API_STALL: std::time::Duration = std::time::Duration::from_secs(150);
 /// The most a catalogue call may take in all: a list of 100,000 channels is
 /// tens of megabytes, a few minutes on a slow line.
 const API_TOTAL: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+/// `player_api.php`'s answer with no action: the account, and the server.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct Account {
+    pub user_info: UserInfo,
+    /// Missing or malformed on some servers; it only matters for its clock.
+    #[serde(default, deserialize_with = "lenient_server_info")]
+    pub server_info: ServerInfo,
+}
+
+/// A `server_info` that is not an object (some servers send `[]`) is an
+/// empty one, not a failed login.
+fn lenient_server_info<'de, D: serde::Deserializer<'de>>(d: D) -> Result<ServerInfo, D::Error> {
+    use serde::Deserialize;
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(serde_json::from_value(v).unwrap_or_default())
+}
 
 pub struct XtreamClient {
     creds: Credentials,
@@ -132,11 +149,12 @@ impl XtreamClient {
     }
 
     pub async fn login(&self) -> Result<UserInfo> {
-        #[derive(serde::Deserialize)]
-        struct Envelope {
-            user_info: UserInfo,
-        }
-        let e: Envelope = self
+        Ok(self.account().await?.user_info)
+    }
+
+    /// The account and the server's clock, in one call: what `login` asks.
+    pub async fn account(&self) -> Result<Account> {
+        let e: Account = self
             .http
             .get(self.api_url(None))
             // Asked before reconnecting and from Settings: a server that
@@ -148,7 +166,13 @@ impl XtreamClient {
             .json()
             .await
             .context("parsing login")?;
-        Ok(e.user_info)
+        Ok(e)
+    }
+
+    /// The account these calls are made as. For keying what is learnt about
+    /// the server (`catalog::origin`), never for logging.
+    pub fn credentials(&self) -> &Credentials {
+        &self.creds
     }
 
     pub async fn categories(&self) -> Result<Vec<Category>> {
@@ -256,6 +280,25 @@ fn urlencoding(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_account_answer_carries_the_server_clock_when_it_has_one() {
+        let a: Account = serde_json::from_str(
+            r#"{"user_info":{"auth":1,"max_connections":"1"},
+                "server_info":{"timezone":"Europe/Somewhere","time_now":"2026-11-07 21:17:17",
+                               "timestamp_now":1794082637}}"#,
+        )
+        .unwrap();
+        assert_eq!(a.user_info.max_connections, Some(1));
+        assert_eq!(a.server_info.utc_offset(), Some(3600));
+        // Missing, or not an object: still a login, with no clock.
+        for body in [r#"{"user_info":{"auth":1}}"#, r#"{"user_info":{"auth":1},"server_info":[]}"#,
+                     r#"{"user_info":{"auth":1},"server_info":null}"#] {
+            let a: Account = serde_json::from_str(body).unwrap();
+            assert!(a.user_info.auth, "{body}");
+            assert_eq!(a.server_info.utc_offset(), None, "{body}");
+        }
+    }
 
     fn creds() -> Credentials {
         Credentials {

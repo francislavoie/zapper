@@ -53,6 +53,18 @@ pub fn civil_from_days(days: i64) -> (i64, u32, u32) {
     (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
+/// A civil date to days since the Unix epoch: the inverse of
+/// [`civil_from_days`] (Howard Hinnant's `days_from_civil`).
+pub fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
+    let (m, d) = (i64::from(month), i64::from(day));
+    let y = if m <= 2 { year - 1 } else { year };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * ((m + 9) % 12) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
 /// Seconds east of UTC at `unix`, from the C library.
 ///
 /// std has no local time, so this is the C library's `localtime_r`, which
@@ -157,5 +169,15 @@ mod tests {
         assert_eq!(Civil::at(t, -5 * 3600).hour, 15);
         let east = Civil::at(t, 11 * 3600);
         assert_eq!((east.day, east.hour), (4, 7));
+    }
+
+    #[test]
+    fn days_from_civil_inverts_civil_from_days() {
+        assert_eq!(days_from_civil(1970, 1, 1), 0);
+        assert_eq!(days_from_civil(2024, 2, 29), 19_782);
+        for days in [-800_000, -1, 0, 59, 19_782, 20_764, 400_000] {
+            let (y, m, d) = civil_from_days(days);
+            assert_eq!(days_from_civil(y, m, d), days, "{y}-{m}-{d}");
+        }
     }
 }

@@ -100,6 +100,10 @@ pub enum EndingKind {
     /// because the channel is not on the air. `clip_secs` says how long the
     /// clip was. See [`off_air`].
     OffAir,
+    /// A catch-up programme the server refused, or answered with nothing,
+    /// before showing a frame: most likely further back than its archive
+    /// keeps. Only ever from [`for_catchup`].
+    BeyondArchive,
     /// None of the above could be told; `error` carries mpv's words.
     Other,
 }
@@ -327,6 +331,35 @@ pub fn classify(how: How, shown: bool, clues: Clues) -> Ending {
     }
 }
 
+/// The same ending, for a catch-up programme.
+///
+/// A server asked for footage older than it keeps answers 404, or another
+/// refusal, or an empty answer — the same evidence a channel that is gone
+/// or an account at its limit leaves. For a catch-up open that never showed
+/// a frame, the archive is the likelier reason, and the one worth saying:
+/// the account and the channel were fine a moment ago, live. A refusal
+/// that names a connection limit (in words, or as 429 or 509) is still
+/// that, and anything after a frame was shown is left as it was.
+pub fn for_catchup(e: Ending, shown: bool) -> Ending {
+    if shown {
+        return e;
+    }
+    let beyond = match e.kind {
+        EndingKind::Unavailable => true,
+        EndingKind::Refused => !e.limit && !matches!(e.status, Some(429 | 509)),
+        EndingKind::NotVideo => !e.limit,
+        _ => false,
+    };
+    if beyond {
+        Ending {
+            kind: EndingKind::BeyondArchive,
+            ..e
+        }
+    } else {
+        e
+    }
+}
+
 /// Whether a live channel that never showed a picture failed through a
 /// fault of its own — and if so, why, in a few words for the channel list.
 ///
@@ -362,8 +395,13 @@ pub fn against_channel(e: &Ending, error: Option<&str>) -> Option<String> {
         // (src/logic/format.ts reads it back by this text).
         EndingKind::OffAir => Some(OFF_AIR_REASON.to_owned()),
         EndingKind::Other => Some(error.unwrap_or("it could not be played").to_owned()),
-        // Not tried at all: the account was full.
-        EndingKind::Dropped | EndingKind::ServerError | EndingKind::Network | EndingKind::InUse => None,
+        // Not tried at all: the account was full. Or not the channel's
+        // doing: a programme older than its archive keeps.
+        EndingKind::Dropped
+        | EndingKind::ServerError
+        | EndingKind::Network
+        | EndingKind::InUse
+        | EndingKind::BeyondArchive => None,
     }
 }
 
@@ -699,6 +737,37 @@ mod tests {
         assert_eq!(c.status, Some(509));
         assert!(c.limit);
         assert_eq!(clues(&["Server returned 4XX Client Error, but not one of 40{0,1,3,4}"]).status, None);
+    }
+
+    #[test]
+    fn a_catch_up_the_server_refuses_or_leaves_empty_is_beyond_its_archive() {
+        let catchup = |lines: &[&str], how| for_catchup(classify(how, false, clues(lines)), false);
+        let e = catchup(&["HTTP error 404 Not Found"], How::Error(-13));
+        assert_eq!((e.kind, e.status), (EndingKind::BeyondArchive, Some(404)));
+        assert_eq!(catchup(&["HTTP error 403 Forbidden"], How::Error(-13)).kind, EndingKind::BeyondArchive);
+        assert_eq!(catchup(&["Server returned 400 Bad Request"], How::Error(-13)).kind, EndingKind::BeyondArchive);
+        // An empty answer.
+        assert_eq!(catchup(&[], How::Eof).kind, EndingKind::BeyondArchive);
+        assert_eq!(catchup(&[], How::Error(UNKNOWN_FORMAT)).kind, EndingKind::BeyondArchive);
+    }
+
+    #[test]
+    fn a_catch_up_refused_for_the_limit_or_the_network_says_so() {
+        let catchup = |lines: &[&str], how| for_catchup(classify(how, false, clues(lines)), false);
+        let e = catchup(&["HTTP error 509 Max Connections Reached"], How::Error(-13));
+        assert_eq!((e.kind, e.limit), (EndingKind::Refused, true));
+        assert_eq!(catchup(&["HTTP error 429 Too Many Requests"], How::Error(-13)).kind, EndingKind::Refused);
+        assert_eq!(catchup(&["HTTP error 403 Max connections reached"], How::Error(-13)).kind, EndingKind::Refused);
+        assert_eq!(catchup(&["HTTP error 502 Bad Gateway"], How::Error(-13)).kind, EndingKind::ServerError);
+        assert_eq!(catchup(&["Connection refused"], How::Error(-13)).kind, EndingKind::Network);
+        assert_eq!(catchup(&[], How::Deadline).kind, EndingKind::NoVideo);
+        // Once it had played, an ending is about the stream, not the archive.
+        let played = for_catchup(classify(How::Eof, true, Clues::default()), true);
+        assert_eq!(played.kind, EndingKind::Dropped);
+        // And it is never the channel's fault.
+        let e = catchup(&["HTTP error 404 Not Found"], How::Error(-13));
+        assert_eq!(against_channel(&e, None), None);
+        assert!(!worth_reconnecting(&e, false));
     }
 
     #[test]
