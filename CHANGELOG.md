@@ -52,6 +52,13 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
   arrive. Because of this, each connection's first 20 seconds reach the recording's file (and a
   Jellyfin .strm) 20 seconds late, and a crash in those seconds loses them.
 
+### Fixed
+
+- The guide update no longer fails on most passes with "UNIQUE constraint failed:
+  epg_fts_stale.id". A guide that listed one programme twice under different titles stopped the
+  whole update, so the guide kept going stale. The guide search now handles that, and an existing
+  catalogue is repaired the next time it opens.
+
 ## [0.3.0] - 2026-11-02
 
 ### Added
