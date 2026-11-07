@@ -252,9 +252,9 @@ The packages carry zapper's own libmpv and FFmpeg in `/usr/lib/zapper/` (docs/li
 none depends on the distribution's, and the recording service as `/usr/bin/zapper-server`
 (docs/recording.md), built by `just package` against that FFmpeg; the Windows installers put
 `zapper-server.exe` beside `zapper.exe`. Their `Depends` (`.deb`) and `Requires` (`.rpm`) are fixed in
-tauri.conf.json, not derived from the runner: `libwebkit2gtk-4.1-0`, `libgtk-3-0` and the system
-libraries that libmpv needs (VA-API, Wayland, EGL, the audio libraries, OpenSSL 3 and the text
-stack) for the `.deb`; the same libraries by soname for the `.rpm` (`libva.so.2()(64bit)` and so
+tauri.conf.json, not derived from the runner: `libwebkit2gtk-4.1-0` (2.40 or later, which quitting
+needs), `libgtk-3-0` and the system libraries that libmpv needs (VA-API, Wayland, EGL, the
+audio libraries, OpenSSL 3 and the text stack) for the `.deb`; the same libraries by soname for the `.rpm` (`libva.so.2()(64bit)` and so
 on), which resolves on Fedora and openSUSE alike. `scripts/check-deb.sh` checks the `.deb`'s
 cover everything the bundled library links. The Arch package's `depend`s are the `.deb`'s,
 mapped to Arch's package names through the table in `scripts/arch-pkg.py` (`webkit2gtk-4.1`,
