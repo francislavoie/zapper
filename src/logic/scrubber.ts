@@ -189,14 +189,25 @@ export function behindLiveAt(g: Geometry, t: number): number {
   return Math.max(0, g.live - t);
 }
 
+/** How far inside its far end the archive is asked for, in seconds. The
+ *  provider drops its oldest footage as it goes, and a request for the very
+ *  edge asks for a minute that is gone by the time it arrives. The backend's
+ *  copy is `ARCHIVE_MARGIN` in `catalog/guide_search.rs`. */
+export const ARCHIVE_MARGIN = 10 * 60;
+
 /** Catchup is requested as a start time plus a duration in minutes; the
  *  backend builds the timeshift URL from those. Rounded down to the minute
- *  because the server's `start` parameter has minute resolution. */
+ *  because the server's `start` parameter has minute resolution — except at
+ *  the far edge, which is rounded up so it stays inside the margin. */
 export function catchupRequest(
   g: Geometry,
   t: number,
 ): { start: number; durationMinutes: number } {
-  const start = Math.floor(clamp(t, g.archiveStart, g.bufferStart) / 60) * 60;
+  const earliest = Math.min(g.archiveStart + ARCHIVE_MARGIN, g.bufferStart);
+  const start =
+    t < earliest
+      ? Math.ceil(earliest / 60) * 60
+      : Math.floor(clamp(t, earliest, g.bufferStart) / 60) * 60;
   const minutes = Math.max(1, Math.ceil((g.live - start) / 60));
   return { start, durationMinutes: minutes };
 }

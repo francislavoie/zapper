@@ -125,6 +125,15 @@ export function endedMessage(
         detail: "No picture arrived in time. It may be off the air.",
         code,
       };
+    case "beyondArchive":
+      // A catch-up programme the provider refused or sent nothing of, for
+      // a reason other than the connection limit (`ending::for_catchup`).
+      // Retry plays the channel live.
+      return {
+        title: "That's further back than your provider keeps for this channel.",
+        detail: "Pick a later time, or go back to live.",
+        code,
+      };
     case "other":
       return {
         title: "Couldn't play this channel.",

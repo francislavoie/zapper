@@ -222,7 +222,8 @@ export type EndingKind =
   | "noVideo"
   | "other"
   | "inUse"
-  | "offAir";
+  | "offAir"
+  | "beyondArchive";
 
 export interface StreamEnding {
   kind: EndingKind;
