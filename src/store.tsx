@@ -873,6 +873,9 @@ export function reducer(state: State, action: Action): State {
  *  backend reports a jump it had not reported before, nothing once the
  *  stream it happened on has gone, and otherwise whatever was showing. */
 function nextLiveJump(state: State, next: PlayerStateDto): LiveJumpDto | null {
+  // Off air, any jump was through the placeholder clip (the browser plays
+  // what came of it until the service has judged it), not a stall to report.
+  if (next.state === "failed" && next.ending?.kind === "offAir") return null;
   const jump = next.liveJump;
   if (jump && jump.seq !== state.player.liveJump?.seq) return jump;
   if (next.streamId !== state.player.streamId || next.state === "stopped") return null;

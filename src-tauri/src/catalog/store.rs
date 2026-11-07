@@ -514,6 +514,23 @@ pub fn record_failed(conn: &Connection, stream_id: i64, reason: &str, at: i64) -
     Ok(())
 }
 
+/// The channel was found broadcasting: a mark of "off air" against it
+/// (`ipc::ending::OFF_AIR_REASON`) is over. Any other failure on record is
+/// left for a picture to clear ([`record_loaded`]). The recording service's
+/// way of clearing what it wrote, as it never shows a picture.
+pub fn clear_off_air(conn: &Connection, stream_id: i64) -> Result<()> {
+    conn.execute(
+        concat!(
+            "UPDATE channel_quality SET failed_at = NULL, fail_reason = NULL
+             WHERE origin = ",
+            current_origin_sql!(),
+            " AND stream_id = ?1 AND fail_reason = ?2"
+        ),
+        rusqlite::params![stream_id, crate::ipc::ending::OFF_AIR_REASON],
+    )?;
+    Ok(())
+}
+
 // ------------------------------------------------------------------ activity
 
 /// Every channel with watch time against it, unordered.
@@ -985,6 +1002,30 @@ mod tests {
         assert_eq!(alternatives(&c, 1), [3, 4, 6]);
         // From another of the group, the first is offered too.
         assert_eq!(alternatives(&c, 3), [1, 4, 6]);
+    }
+
+    #[test]
+    fn only_off_air_is_cleared_by_finding_the_channel_broadcasting() {
+        let c = open_in_memory().unwrap();
+        record_failed(&c, 2, "off air", 300).unwrap();
+        record_failed(&c, 5, "refused by the provider (HTTP 403)", 300).unwrap();
+        clear_off_air(&c, 2).unwrap();
+        clear_off_air(&c, 5).unwrap();
+        clear_off_air(&c, 9).unwrap();
+        let reason = |id: i64| -> Option<String> {
+            c.query_row(
+                "SELECT fail_reason FROM channel_quality WHERE stream_id = ?1",
+                [id],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(reason(2), None);
+        assert_eq!(reason(5).as_deref(), Some("refused by the provider (HTTP 403)"));
+        let rows: i64 = c
+            .query_row("SELECT COUNT(*) FROM channel_quality WHERE stream_id = 9", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 0, "nothing is written for a channel with no record");
     }
 
     #[test]

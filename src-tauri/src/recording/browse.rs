@@ -1,5 +1,6 @@
 //! The catalogue over HTTP, for the web interface: categories, channel
-//! pages, search, the guide, favourites and the sync's status — what the app
+//! pages, search, other sources for a channel, the guide, favourites and the
+//! sync's status — what the app
 //! asks its own Rust side for through Tauri's commands, answered from the
 //! same reads ([`crate::catalog::reads`]) out of the catalogue the service
 //! keeps (docs/recording.md, "API").
@@ -142,6 +143,14 @@ async fn channels(Query(q): Query<PageQuery>) -> Result<Response, Failed> {
 async fn channels_by_ids(Query(q): Query<IdsQuery>) -> Result<Response, Failed> {
     let ids = parse_ids(&q.ids)?;
     let rows = read(move || reads::channels_by_ids(&ids)).await?;
+    Ok(Json(local_logos(rows)).into_response())
+}
+
+/// Other sources for a channel's programmes, offered under the message for
+/// a channel that is off air: the app's own answer
+/// ([`reads::alternatives_for`]), with this service's logo addresses.
+async fn alternatives(Path(id): Path<i64>) -> Result<Response, Failed> {
+    let rows = read(move || reads::alternatives_for(id)).await?;
     Ok(Json(local_logos(rows)).into_response())
 }
 
@@ -308,6 +317,7 @@ pub fn routes<S: Clone + Send + Sync + 'static>() -> Router<S> {
         .route("/api/channels/numbers", get(channel_numbers))
         .route("/api/channels/search", get(search))
         .route("/api/channels/{id}/index", get(channel_index))
+        .route("/api/channels/{id}/alternatives", get(alternatives))
         .route("/api/programmes/search", get(search_programmes))
         .route("/api/guide", get(guide))
         .route("/api/guide/rows", get(guide_rows))
