@@ -48,7 +48,7 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
   three minutes (taking turns with its backup channel) until the programme ends, on a connection
   that is free, so it starts when the broadcast does. The placeholder is kept out of the
   recording, except when the recording is stopped within 20 seconds of a try, when more than
-  64 MB arrives in those 20 seconds, or when the clip is cut short or takes longer than that to
+  64 MiB arrives in those 20 seconds, or when the clip is cut short or takes longer than that to
   arrive. Because of this, each connection's first 20 seconds reach the recording's file (and a
   Jellyfin .strm) 20 seconds late, and a crash in those seconds loses them.
 
