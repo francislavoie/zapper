@@ -6,6 +6,22 @@
 
 use crate::ipc::types::{AspectMode, DeinterlaceMode, TrackDto};
 
+/// Whether mpv's `track-list` has a video track in it: `None` while it is
+/// empty or unreadable (the file is not loaded yet). A cover picture
+/// (`albumart`) is not video.
+pub fn has_video(json: &str) -> Option<bool> {
+    let Ok(serde_json::Value::Array(entries)) = serde_json::from_str::<serde_json::Value>(json) else {
+        return None;
+    };
+    if entries.is_empty() {
+        return None;
+    }
+    Some(entries.iter().any(|e| {
+        e.get("type").and_then(|v| v.as_str()) == Some("video")
+            && !e.get("albumart").and_then(|v| v.as_bool()).unwrap_or(false)
+    }))
+}
+
 /// The audio and subtitle tracks in mpv's `track-list`, in its order.
 ///
 /// mpv renders the list as JSON when it is read (or observed) as a string,
@@ -115,6 +131,19 @@ pub fn track_value(id: Option<i64>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_radio_channel_has_no_video_and_a_cover_picture_is_none() {
+        assert_eq!(has_video(LIST), Some(true));
+        assert_eq!(has_video(r#"[{"id":1,"type":"audio","codec":"aac"}]"#), Some(false));
+        assert_eq!(
+            has_video(r#"[{"id":1,"type":"video","albumart":true},{"id":1,"type":"audio"}]"#),
+            Some(false)
+        );
+        // Not loaded yet: nothing to say.
+        assert_eq!(has_video("[]"), None);
+        assert_eq!(has_video("nonsense"), None);
+    }
 
     /// Read from libmpv 0.41 playing a Matroska file with two audio tracks
     /// and one subtitle track, trimmed to the fields that matter.

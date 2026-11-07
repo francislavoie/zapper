@@ -66,11 +66,16 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
   reads as live, so Live is offered throughout.
 - The archive's oldest ten minutes are no longer asked for — a click at the left end of the bar,
   or a programme in the guide that is about to leave the archive — since the provider may drop
-  them before the request arrives. A replay the provider refuses or answers with nothing now says
-  "That's further back than your provider keeps for this channel." instead of blaming the
-  connection.
+  them before the request arrives. A replay the provider no longer has now says "That's further
+  back than your provider keeps for this channel." and offers *Watch live*, instead of blaming
+  the connection. A refusal that looks like the connection limit, well inside the archive, is
+  still explained as one, with *Watch here anyway*.
 - A stream the provider refused straight away, after another one had been playing, could be
-  taken for one that had played, and was then explained wrongly or not at all.
+  taken for one that had played, and was then explained wrongly or not at all. A replay the
+  provider is slow to refuse is explained too, rather than "Couldn't play this channel".
+- A radio channel (sound and no picture) plays, rather than saying "The channel didn't start"
+  after eight seconds with the sound playing behind the message and being marked as a channel
+  that does not load.
 
 ## [0.3.0] - 2026-11-02
 

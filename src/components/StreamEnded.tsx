@@ -14,7 +14,7 @@
 
 import { playChannel, playMovie } from "../actions";
 import { backend } from "../backend";
-import { endedActions, endedMessage, reconnectMessage, retryStart, retryTarget } from "../logic/ending";
+import { endedActions, endedMessage, primaryLabel, reconnectMessage, retryStart, retryTarget } from "../logic/ending";
 import { run, useApp, useDispatch } from "../store";
 import { Alternatives } from "./Alternatives";
 
@@ -75,7 +75,7 @@ export function StreamEnded({ compact = false, onDismissed }: StreamEndedProps) 
           </button>
         ) : (
           <button className="ctl retry" onClick={retry} disabled={retryTarget(player) === "none"}>
-            {actions.primary === "watchHere" ? "Watch here anyway" : "Retry"}
+            {primaryLabel(actions.primary)}
           </button>
         )}
         {actions.dismiss ? (
