@@ -412,7 +412,7 @@ fn dev_hooks(app: &tauri::AppHandle) {
                              localStorage.setItem('zapper.quit-check-switch', \
                              String(hw?.getAttribute('aria-checked'))); \
                              if (hw?.getAttribute('aria-checked') === 'true') hw.click(); }";
-                        for (js, then) in [(open.as_str(), 600), (change, 150)] {
+                        for (js, then) in [(open.as_str(), 1200), (change, 150)] {
                             if let Err(e) = w.eval(js) {
                                 tracing::warn!("ZAPPER_QUIT_NONCE: {e}");
                             }
