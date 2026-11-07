@@ -14,7 +14,13 @@
 // moving or resizing the picture is one edit and the rect follows by
 // measurement.
 
-import { useMemo, useRef, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
+import {
+  useMemo,
+  useRef,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import { playChannel, showChannelCategory, showChannelInGuide } from "../actions";
 import { endedMessage, startingLine } from "../logic/ending";
 import { chordLabel } from "../logic/keys";
@@ -349,19 +355,22 @@ function ChannelProgramme({
   next,
   now,
   badge,
+  notice,
 }: {
   channel: ChannelDto;
   onNow: ProgrammeDto | null;
   next: ProgrammeDto | null;
   now: number;
   badge?: string;
+  /** Said straight under the channel's line, before the programme's
+   *  details: what must be in view without scrolling the column. */
+  notice?: ReactNode;
 }) {
   const { categories, qualityNews } = useApp();
   // What playing it has since added to its record, over what the channel
   // was fetched with: found off air a moment ago, say.
   const quality = channel.streamId in qualityNews ? qualityNews[channel.streamId] : channel.quality;
-  // Read at render, as the list's rows do.
-  const off = offAirLabel(quality, Date.now() / 1000);
+  const off = offAirLabel(quality, now);
   const category =
     channel.categoryId !== null && categories.status === "ready"
       ? categoryNames(categories.data).get(channel.categoryId)
@@ -394,6 +403,7 @@ function ChannelProgramme({
           </span>
         ) : null}
       </div>
+      {notice}
       {onNow ? (
         <>
           <div className="watch-prog-line">
@@ -515,23 +525,31 @@ function Playing({
     `Rewind ${duration(player.bufferedBack)}`,
   ].filter(Boolean);
 
+  const endedBlock = ended ? (
+    <>
+      <p className="watch-state bad">{ended.title}</p>
+      {ended.detail ? <p className="watch-state">{ended.detail}</p> : null}
+      {ended.code ? <p className="watch-state">{ended.code}</p> : null}
+      {ended.alternatives && player.streamId !== null ? <Alternatives streamId={player.streamId} inline /> : null}
+    </>
+  ) : null;
+  // Other sources to try are the point of the message, so it goes above the
+  // programme's details, where the column shows it without scrolling.
+  const upFront = !starting && ended?.alternatives === true;
+
   return (
     <>
       <div className="watch-body">
-        <ChannelProgramme channel={channel} onNow={onNow} next={next} now={now} badge={playerBadge(player) ?? undefined} />
-        <p className="watch-facts">{facts.join(" · ")}</p>
-        {starting ? (
-          <p className="watch-state">{starting}</p>
-        ) : ended ? (
-          <>
-            <p className="watch-state bad">{ended.title}</p>
-            {ended.detail ? <p className="watch-state">{ended.detail}</p> : null}
-            {ended.code ? <p className="watch-state">{ended.code}</p> : null}
-            {ended.alternatives && player.streamId !== null ? (
-              <Alternatives streamId={player.streamId} />
-            ) : null}
-          </>
-        ) : null}
+        <ChannelProgramme
+          channel={channel}
+          onNow={onNow}
+          next={next}
+          now={now}
+          badge={playerBadge(player) ?? undefined}
+          notice={upFront ? <div className="watch-notice">{endedBlock}</div> : undefined}
+        />
+        {upFront ? null : <p className="watch-facts">{facts.join(" · ")}</p>}
+        {starting ? <p className="watch-state">{starting}</p> : upFront ? null : endedBlock}
       </div>
       <div className="watch-actions">
         {record ? <PlayerRecordLine record={record} /> : null}

@@ -13,7 +13,9 @@ import { alternativeLine } from "../logic/alternatives";
 import { useDispatch } from "../store";
 import type { ChannelDto } from "../types";
 
-export function Alternatives({ streamId }: { streamId: number }) {
+/** `inline`: one wrapping row, for the band's column, where the first must
+ *  be in view without scrolling; one per line otherwise. */
+export function Alternatives({ streamId, inline = false }: { streamId: number; inline?: boolean }) {
   const dispatch = useDispatch();
   const [found, setFound] = useState<{ for: number; channels: ChannelDto[] } | null>(null);
 
@@ -37,7 +39,7 @@ export function Alternatives({ streamId }: { streamId: number }) {
   if (channels.length === 0) return null;
 
   return (
-    <div className="alternatives">
+    <div className={`alternatives ${inline ? "inline" : ""}`}>
       <p className="alternatives-head">Try another source:</p>
       <ul className="alternatives-list">
         {channels.map((c) => {
