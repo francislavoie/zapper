@@ -281,6 +281,11 @@ pub(super) fn request_frame() {
     kick();
 }
 
+/// Nothing to take down in order here yet; see `surface::shut_down`.
+pub(super) fn shut_down(then: impl FnOnce() + 'static) {
+    then()
+}
+
 fn kick() {
     SURFACE.with(|s| {
         if let Some(s) = s.borrow().as_ref() {

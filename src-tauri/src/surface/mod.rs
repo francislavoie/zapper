@@ -77,6 +77,16 @@ pub fn repeat_on_main(interval: Duration, f: impl FnMut() -> bool + 'static) {
     platform::repeat_on_main(interval, f)
 }
 
+/// Takes the surface and the page down in order for quitting, then calls
+/// `then` on the main thread. Main thread only; once.
+///
+/// On Linux: playback stops and mpv's render context is freed while its GL
+/// context still exists, the page unloads, and WebKit ends its web process
+/// (see `linux::shut_down`). Elsewhere `then` runs straight away.
+pub fn shut_down(then: impl FnOnce() + 'static) {
+    platform::shut_down(then)
+}
+
 /// Writes a reconstruction of the window to `path` after `after`, then exits
 /// the process. Development only (`ZAPPER_CAPTURE`); a platform that cannot
 /// do it says so and carries on.
