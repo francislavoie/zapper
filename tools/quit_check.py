@@ -15,7 +15,10 @@ wrote to local storage as it was closing is there afterwards:
 
 - a nonce, which a `pagehide` handler stores (`ZAPPER_QUIT_NONCE`);
 - the session's folded rail, changed 150 ms before the close, inside the
-  session's 400 ms write delay, so only its `pagehide` flush can save it.
+  session's 400 ms write delay, so only its `pagehide` flush can save it;
+- a setting (hardware decoding, turned off in Settings › Playback) changed
+  at the same moment, inside the settings' 400 ms save delay, read back from
+  zapper's database.
 
 `--quit-by sigterm` sends SIGTERM instead of closing the window (and checks
 no local storage).
@@ -280,8 +283,22 @@ try:
                  hung=hung, processes=ended, kernel=kernel, played=played, web_processes=web,
                  web_seen=web_seen,
                  terminated_by_api=by_api, crashed=crashed, clean=clean)
+        # The setting turned off 150 ms before the close, in zapper's own
+        # database (`ZAPPER_HOME/data/zapper.db`).
+        setting_kept = False
+        try:
+            db = sqlite3.connect(f"file:{zhome}/data/zapper.db?mode=ro", uri=True)
+            row = db.execute("SELECT value FROM meta WHERE key = 'settings'").fetchone()
+            db.close()
+            saved = json.loads(row[0]) if row else {}
+            setting_kept = saved.get("hardwareDecode", saved.get("hardware_decode")) is False
+        except (sqlite3.Error, ValueError):
+            pass
+        freed = "freed mpv's render context" in log
         if args.quit_by == "close":
-            r.update(nonce_kept=nonce_kept, session_kept=session_kept)
+            r.update(nonce_kept=nonce_kept, session_kept=session_kept, setting_kept=setting_kept,
+                     switch_was=items.get("zapper.quit-check-switch"))
+        r.update(render_context_freed=freed)
         results.append(r)
         print(json.dumps(r), flush=True)
 finally:
@@ -305,6 +322,8 @@ unclean = sum(not r["clean"] for r in results)
 played = sum(r["played"] for r in results)
 kept = sum(r.get("nonce_kept", True) for r in results)
 session = sum(r.get("session_kept", True) for r in results)
+setting = sum(r.get("setting_kept", True) for r in results)
 print(f"{len(results)} runs: {crashed} crashed, {unclean} not clean, {played} played, "
-      f"nonce kept in {kept}, session change kept in {session} (logs in {work})")
-sys.exit(1 if unclean or min(played, kept, session) < len(results) else 0)
+      f"nonce kept in {kept}, session change kept in {session}, setting kept in {setting} "
+      f"(logs in {work})")
+sys.exit(1 if unclean or min(played, kept, session, setting) < len(results) else 0)
