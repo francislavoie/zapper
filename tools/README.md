@@ -84,6 +84,25 @@ so a reconnect plays. `/player_api.php` answers as an Xtream account does,
 with `max_connections` from `--max-connections` (default 1) and `active_cons`
 the streams being served plus `--other-devices`.
 
+It is an archive too. `--panel-utc-offset 1` puts the server's clock an hour
+east of UTC, which `player_api.php`'s `server_info` reports (`time_now`,
+`timestamp_now`) as a real server does; `/streaming/timeshift.php` reads its
+`start` in that zone, logs the moment it names, and lists every catch-up and
+`/live/<user>/<pass>/<id>.ts` request as JSON at `/requests`. A start older
+than `--archive-days` (default 3) is a 404.
+
+`cargo run --features harness --bin catchup_check` plays that archive through
+a scratch account: "five minutes ago" must reach the server as five minutes
+ago, Live must open the channel again rather than seek through the
+programme, a request at the archive's far edge must be moved inside it, and
+one older than the archive must say so. Run it with this computer in another
+zone from the server's:
+
+```sh
+tools/fake_stream.py --panel-utc-offset 1 &
+TZ=America/New_York cargo run --features harness --bin catchup_check
+```
+
 ### Movies
 
 `make_fixtures.sh` also writes two 120 s "films" (640x360@25, a keyframe every
