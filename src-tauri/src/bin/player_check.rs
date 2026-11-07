@@ -25,6 +25,17 @@
 //! with ranges at `movie/<user>/<pass>/2.mp4`) and checks its clock,
 //! `seek_to`, a relative seek past what was buffered, pause and stop.
 //!
+//! `--ending <kind>` plays a channel that is expected to stop by itself, and
+//! checks it stops the way the app explains it (`offAir`, `dropped`, …), as
+//! the ending kinds are spelled to the interface. Against
+//! `fake_stream.py --placeholder` (`offAir`) it also checks the stop came
+//! within `ending::OFF_AIR_WINDOW` of the open, said how long the clip was,
+//! never skipped ahead or reconnected, and was written against the channel
+//! as off air.
+//!
+//! `ZAPPER_LIVE_START` (`wait`, `catchUp`, `stay`) chooses how the channel
+//! starts, in any run; unset, as a fresh install does.
+//!
 //! Audio is disabled outright (`ao=null`) before anything is loaded, not
 //! muted: this runs unattended and must never make noise.
 
@@ -105,7 +116,16 @@ fn main() {
 
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                let verdict = if std::env::args().any(|a| a == "--movie") {
+                let args: Vec<String> = std::env::args().collect();
+                let ending = args
+                    .iter()
+                    .position(|a| a == "--ending")
+                    .and_then(|i| args.get(i + 1).cloned());
+                let verdict = if let Err(e) = live_start_from_env(&handle).await {
+                    Err(e)
+                } else if let Some(kind) = ending {
+                    run_ending(&handle, &kind).await
+                } else if args.iter().any(|a| a == "--movie") {
                     run_movie(&handle).await
                 } else {
                     run(&handle).await
@@ -295,6 +315,131 @@ async fn run(app: &tauri::AppHandle) -> Result<String, String> {
         before.behind_live,
         back.behind_live,
         live.behind_live,
+    ))
+}
+
+/// "When a channel opens" from `ZAPPER_LIVE_START` (`wait`, `catchUp`,
+/// `stay`), for any run; left as a fresh install has it when unset.
+#[cfg(target_os = "linux")]
+async fn live_start_from_env(app: &tauri::AppHandle) -> Result<(), String> {
+    use zapper_lib::ipc::types::LiveStart;
+    let Ok(mode) = std::env::var("ZAPPER_LIVE_START") else {
+        return Ok(());
+    };
+    let mut settings = zapper_lib::catalog::settings::load_or_default();
+    settings.live_start = LiveStart::from(mode.clone());
+    println!("[start] live start: {:?} (from {mode:?})", settings.live_start);
+    zapper_lib::ipc::player_cmds::apply_playback_settings(app.clone(), settings).await
+}
+
+/// The `--ending <kind>` run: a channel that stops by itself, and how.
+#[cfg(target_os = "linux")]
+async fn run_ending(app: &tauri::AppHandle, want: &str) -> Result<String, String> {
+    use std::time::{Duration, Instant};
+    use zapper_lib::ipc::ending::{EndingKind, OFF_AIR_REASON, OFF_AIR_WINDOW};
+    use zapper_lib::ipc::player_cmds as cmds;
+    use zapper_lib::ipc::types::PlaybackState;
+
+    let stream_id = resolve_stream_id().await?;
+    let started = Instant::now();
+    cmds::play(app.clone(), stream_id).await?;
+
+    // Watched closely until it stops: anything that would show a skip ahead
+    // (a reported jump, a playhead far from where the stream began) or a
+    // reconnect is noted on the way.
+    let mut jumped = None;
+    let mut reconnected = false;
+    let mut playing_at = None;
+    let ended = loop {
+        let s = cmds::player_state().await.unwrap_or_default();
+        jumped = jumped.or(s.live_jump);
+        reconnected |= s.reconnect.is_some();
+        if playing_at.is_none() && matches!(s.state, PlaybackState::Playing | PlaybackState::Paused) {
+            playing_at = Some(started.elapsed());
+        }
+        if s.state == PlaybackState::Failed {
+            break s;
+        }
+        if started.elapsed() > Duration::from_secs(90) {
+            return Err(format!("still {:?} after 90s; expected it to end as {want}", s.state));
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    let after = started.elapsed();
+    let e = ended.ending.ok_or_else(|| {
+        format!("failed with no ending: {}", ended.error.as_deref().unwrap_or("no words"))
+    })?;
+    let kind = serde_json::to_value(e.kind).map_err(|x| x.to_string())?;
+    let kind = kind.as_str().unwrap_or("?").to_owned();
+    println!(
+        "[ending] {kind} after {:.1}s (first picture moving at {}), clip {:?}s, error {:?}",
+        after.as_secs_f64(),
+        playing_at.map_or("never".into(), |t| format!("{:.1}s", t.as_secs_f64())),
+        e.clip_secs,
+        ended.error,
+    );
+    if kind != want {
+        return Err(format!("ended as {kind}, expected {want}"));
+    }
+
+    // It stays stopped: nothing reconnects by itself, nothing plays out.
+    tokio::time::sleep(Duration::from_secs(12)).await;
+    let later = cmds::player_state().await?;
+    reconnected |= later.reconnect.is_some();
+    if later.state != PlaybackState::Failed || later.ending.map(|l| l.kind) != Some(e.kind) {
+        return Err(format!("12s later it was {:?} ({:?})", later.state, later.ending.map(|l| l.kind)));
+    }
+
+    if e.kind != EndingKind::OffAir {
+        return Ok(format!(
+            "ended as {kind} after {:.1}s, and stayed that way{}",
+            after.as_secs_f64(),
+            if reconnected { ", after reconnecting" } else { "" }
+        ));
+    }
+
+    if after.as_secs_f64() > OFF_AIR_WINDOW {
+        return Err(format!("off air only after {:.1}s, past the {OFF_AIR_WINDOW}s window", after.as_secs_f64()));
+    }
+    if !e.clip_secs.is_some_and(|c| (590..=610).contains(&c)) {
+        return Err(format!("the clip is 600s, but the ending says {:?}", e.clip_secs));
+    }
+    if let Some(j) = jumped {
+        return Err(format!("it skipped {:.1}s ahead before stopping", j.seconds));
+    }
+    if reconnected {
+        return Err("it reconnected by itself".into());
+    }
+    // Written against the channel, for the list to dim it.
+    let mut reason = None;
+    for _ in 0..20 {
+        reason = zapper_lib::catalog::db::with_db(|c| {
+            use rusqlite::OptionalExtension;
+            Ok(c.query_row(
+                "SELECT fail_reason, failed_at FROM channel_quality WHERE stream_id = ?1",
+                [stream_id],
+                |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, Option<i64>>(1)?)),
+            )
+            .optional()?)
+        })
+        .map_err(|x| x.to_string())?;
+        if reason.as_ref().is_some_and(|(why, _)| why.is_some()) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    match reason {
+        Some((Some(why), Some(at))) if why == OFF_AIR_REASON => {
+            println!("[ending] channel_quality: fail_reason={why:?} failed_at={at}");
+        }
+        other => return Err(format!("the channel's record says {other:?}, not off air")),
+    }
+    Ok(format!(
+        "off air {:.1}s after the open (window {OFF_AIR_WINDOW}s), a {}s clip, \
+         no skip ahead reported, no reconnect, \
+         written against the channel as {OFF_AIR_REASON:?}, still stopped 12s later",
+        after.as_secs_f64(),
+        e.clip_secs.unwrap_or(0),
     ))
 }
 

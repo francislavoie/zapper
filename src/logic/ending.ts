@@ -40,6 +40,9 @@ export interface EndedMessage {
   detail: string | null;
   /** The server's own answer, for whoever wants it: "HTTP 509". */
   code: string | null;
+  /** Whether other channels with the same programmes are worth offering
+   *  under it ("Try another source:"): this one will not play now. */
+  alternatives?: boolean;
 }
 
 /** The message for a stream that is not playing because it failed, or `null`
@@ -109,6 +112,13 @@ export function endedMessage(
         detail: "Stop it there and retry, or watch here instead.",
         code,
       };
+    case "offAir":
+      return {
+        title: "This channel isn't broadcasting right now.",
+        detail: `Your provider sent ${placeholderText(e.clipSecs)} instead of the live channel. Try again later, or use another source for it.`,
+        code,
+        alternatives: true,
+      };
     case "noVideo":
       return {
         title: "The channel didn't start.",
@@ -124,6 +134,15 @@ export function endedMessage(
         code,
       };
   }
+}
+
+/** "a 10-minute placeholder", by the clip's length rounded to minutes; "a
+ *  short placeholder" under a minute. */
+function placeholderText(clipSecs: number | null | undefined): string {
+  if (clipSecs == null) return "a placeholder";
+  const minutes = Math.round(clipSecs / 60);
+  if (clipSecs < 60 || minutes < 1) return "a short placeholder";
+  return `a ${minutes}-minute placeholder`;
 }
 
 /** " (1 of 1 connections)", or nothing when the count is unknown. */

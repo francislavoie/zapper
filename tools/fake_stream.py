@@ -20,6 +20,12 @@ device takes it:
   tools/fake_stream.py --refuse 403                     # refuses every stream
   tools/fake_stream.py --refuse body                    # 200 with a short text body, no video
 
+Imitating a provider answering a channel that is off the air with a
+placeholder clip instead (needs placeholder.ts from make_fixtures.sh):
+
+  tools/fake_stream.py --placeholder         # every stream: the whole 600 s clip at once, then closed
+  tools/fake_stream.py --placeholder --burst-rate 200   # ...over about three seconds
+
 Imitating the network failing rather than the provider:
 
   tools/fake_stream.py --drop-after 5        # reset the connection after 5s, no end of stream
@@ -83,6 +89,8 @@ class Handler(BaseHTTPRequestHandler):
     reason = ""
     # How many made-up movies the API lists; 0 means none.
     movies = 0
+    # Answer every live stream with placeholder.ts, all at once, then close.
+    placeholder = False
     # Set once a stream has been ended by --end-after, so --after-end knows
     # the slot is now "taken".
     ended = threading.Event()
@@ -136,11 +144,59 @@ class Handler(BaseHTTPRequestHandler):
         # The faults below apply to every stream, or only to the first.
         faulty = first or not Handler.fault_once
 
+        if Handler.placeholder:
+            self._placeholder(name)
+            return
+
         data = path.read_bytes()
         with Handler.lock:
             Handler.open_streams += 1
         try:
             self._send(name, path, data, faulty)
+        finally:
+            with Handler.lock:
+                Handler.open_streams -= 1
+
+    def _placeholder(self, name):
+        """Answers a live channel as a provider does when it is off the air:
+        a clip of black instead (placeholder.ts), as one chunked response with
+        no length like a live feed, sent as fast as the link takes it (or at
+        --burst-rate times realtime), and then finished and closed."""
+        path = FIXTURES / "placeholder.ts"
+        data = path.read_bytes()
+        # Paced only when asked: --burst-rate 200 sends the ten minutes in
+        # about three seconds, as the provider measured did.
+        pause = 0.0
+        if Handler.burst_rate:
+            pause = 64 * 1024 / (len(data) / max(_duration(path), 0.001) * Handler.burst_rate)
+        started = time.monotonic()
+        with Handler.lock:
+            Handler.open_streams += 1
+            n = Handler.served
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "video/mp2t")
+            self.send_header("Transfer-Encoding", "chunked")
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            chunk = 64 * 1024
+            for i in range(0, len(data), chunk):
+                part = data[i : i + chunk]
+                self.wfile.write(f"{len(part):X}\r\n".encode())
+                self.wfile.write(part)
+                self.wfile.write(b"\r\n")
+                if pause:
+                    self.wfile.flush()
+                    time.sleep(pause)
+            self.wfile.write(b"0\r\n\r\n")
+            self.wfile.flush()
+            self.close_connection = True
+            print(f"placeholder for {name} (stream request {n}): {len(data)} bytes, "
+                  f"{_duration(path):.0f}s of stream, sent in "
+                  f"{time.monotonic() - started:.2f}s, then closed", flush=True)
+        except (BrokenPipeError, ConnectionResetError):
+            print(f"placeholder for {name} (stream request {n}): the client hung up "
+                  f"after {time.monotonic() - started:.2f}s", flush=True)
         finally:
             with Handler.lock:
                 Handler.open_streams -= 1
@@ -511,6 +567,9 @@ def main():
     ap.add_argument("--movies", type=int, default=0, metavar="N",
                     help="list N made-up movies in the VOD API and serve them from "
                          "movie.mp4 / movie.mkv, with Range support")
+    ap.add_argument("--placeholder", action="store_true",
+                    help="answer every live stream with placeholder.ts (a 600 s black clip) "
+                         "all at once, then close: a provider's reply for a channel off the air")
     ap.add_argument("--verbose", action="store_true")
     a = ap.parse_args()
     Handler.burst = a.burst
@@ -521,6 +580,7 @@ def main():
     Handler.max_connections = a.max_connections
     Handler.other_devices = a.other_devices
     Handler.movies = a.movies
+    Handler.placeholder = a.placeholder
 
     Handler.rate = a.rate
     Handler.gap_every = a.gap_every
@@ -538,6 +598,10 @@ def main():
     if not fixtures:
         print(f"no fixtures in {FIXTURES}; run tools/make_fixtures.sh first",
               file=sys.stderr)
+        return 1
+
+    if a.placeholder and not (FIXTURES / "placeholder.ts").is_file():
+        print(f"no placeholder.ts in {FIXTURES}; run tools/make_fixtures.sh", file=sys.stderr)
         return 1
 
     if a.movies:
