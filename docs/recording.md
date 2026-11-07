@@ -621,8 +621,8 @@ enough data behind it, which no live channel can send that fast.
   (a browser watching, the app's player) is told the recording needs one.
 - It asks again until its programme ends, never into its padding after. Each feed found off air
   is asked again three minutes later; with a backup the two take turns, so one of them is asked
-  about every ninety seconds (the backup the first time as soon as the main's connection has been
-  let go). While off air no switch counts towards the flap guard, and each note is given once.
+  about every ninety seconds (the backup the first time once the main's connection has settled, up
+  to 20 s). While off air no switch counts towards the flap guard, and each note is given once.
 - A try may always ride a connection the service already has to either feed. It opens one of
   its own only when the account has one free outright and none of the service's is being closed
   or was let go moments ago (then it looks again every few seconds until that has settled); on a
