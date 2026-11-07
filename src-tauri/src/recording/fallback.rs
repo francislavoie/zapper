@@ -38,6 +38,9 @@ pub enum Failure {
     NotVideo,
     /// The server could not be reached, or the connection broke.
     Unreachable,
+    /// The channel is not on the air: the provider answered with a
+    /// placeholder clip this many seconds long (`hub`'s "Off air").
+    OffAir { clip_secs: u32 },
 }
 
 impl Failure {
@@ -60,9 +63,18 @@ impl Failure {
             Failure::Refused { status, .. } => format!("refused ({status})"),
             Failure::NotVideo => "the provider answered with something other than video".into(),
             Failure::Unreachable => "the server could not be reached".into(),
+            Failure::OffAir { .. } => {
+                "the channel is off air: the provider sent a placeholder instead".into()
+            }
         }
     }
 }
+
+/// How long a recording whose channel is off air waits before asking again,
+/// so that it picks the broadcast up if it starts. Each try costs one of the
+/// account's connections for a few seconds; one every three minutes misses
+/// at most that much of a start.
+pub const OFF_AIR_RETRY_SECS: i64 = 180;
 
 /// Seconds without data before a connection counts as failed.
 pub const STALL_SECS: i64 = 10;
@@ -96,6 +108,10 @@ pub struct Fallback {
     limits: u32,
     /// Whether the flap guard's note has been given for the current spell.
     guarded: bool,
+    /// When each feed was last found off air, until it delivers again.
+    off_air: [Option<i64>; 2],
+    /// How long to wait before asking an off-air feed again.
+    off_air_retry: i64,
 }
 
 impl Fallback {
@@ -114,7 +130,16 @@ impl Fallback {
             last_failed: [i64::MIN; 2],
             limits: 0,
             guarded: false,
+            off_air: [None; 2],
+            off_air_retry: OFF_AIR_RETRY_SECS,
         }
+    }
+
+    /// Asks an off-air feed again after `secs` rather than
+    /// [`OFF_AIR_RETRY_SECS`]: for a harness that cannot wait minutes.
+    pub fn with_off_air_retry(mut self, secs: i64) -> Self {
+        self.off_air_retry = secs.max(1);
+        self
     }
 
     pub fn current(&self) -> usize {
@@ -136,6 +161,7 @@ impl Fallback {
         }
         self.failures[1] = 0;
         self.last_failed[1] = i64::MIN;
+        self.off_air[1] = None;
     }
 
     /// Rides a connection the service already has open on `feed` (another
@@ -153,9 +179,14 @@ impl Fallback {
         if delivered_secs > 0 {
             self.last_good = Some(self.current);
             self.limits = 0;
+            self.off_air[self.current] = None;
         }
         if delivered_secs >= PROVEN_SECS {
             self.failures[self.current] = 0;
+        }
+
+        if let Failure::OffAir { .. } = why {
+            return self.off_air(now, why);
         }
 
         if why.is_limit() {
@@ -243,6 +274,41 @@ impl Fallback {
                 name(to),
                 why.describe()
             )),
+        }
+    }
+}
+
+impl Fallback {
+    /// The current feed is off air. That is no fault of the feed's: nothing
+    /// is counted against it and the flap guard does not see it. The other
+    /// feed is tried at once, unless it too was found off air within the
+    /// retry's wait; with nothing else to try, the feed found off air
+    /// longest ago is asked again after the wait ([`OFF_AIR_RETRY_SECS`]).
+    /// The caller stops asking at its programme's end.
+    fn off_air(&mut self, now: i64, why: Failure) -> Next {
+        let from = self.current;
+        self.off_air[from] = Some(now);
+        if self.feeds == 2 {
+            let to = 1 - from;
+            if self.off_air[to].is_none_or(|t| t <= now - self.off_air_retry) {
+                self.current = to;
+                return Next {
+                    feed: to,
+                    at: now,
+                    note: Some(format!(
+                        "switched from the {} feed to the {}: {}",
+                        name(from),
+                        name(to),
+                        why.describe()
+                    )),
+                };
+            }
+            self.current = if self.off_air[0] <= self.off_air[1] { 0 } else { 1 };
+        }
+        Next {
+            feed: self.current,
+            at: now + self.off_air_retry,
+            note: None,
         }
     }
 }
@@ -436,5 +502,49 @@ mod tests {
         f.failed(0, REFUSED, 0); // main failed once → backup
         let n = f.failed(1, REFUSED, 0); // backup failed once → main, which failed once
         assert_eq!((n.feed, n.at), (0, 1 + 5));
+    }
+
+    const OFF_AIR: Failure = Failure::OffAir { clip_secs: 600 };
+
+    #[test]
+    fn a_feed_off_air_is_asked_again_every_few_minutes_without_a_back_off() {
+        let mut f = Fallback::new(1);
+        for i in 0..10 {
+            let now = 1000 + i * OFF_AIR_RETRY_SECS;
+            let n = f.failed(now, OFF_AIR, 0);
+            assert_eq!((n.feed, n.at), (0, now + OFF_AIR_RETRY_SECS));
+            assert_eq!(n.note, None, "the recording says so itself, once");
+        }
+        // Then it broadcasts, and a failure after that is an ordinary one.
+        let n = f.failed(5000, Failure::Ended, 40);
+        assert_eq!(n.at, 5000 + 5);
+        assert_eq!(
+            Fallback::new(1).with_off_air_retry(3).failed(10, OFF_AIR, 0).at,
+            13
+        );
+    }
+
+    #[test]
+    fn off_air_tries_the_backup_at_once_then_both_every_few_minutes() {
+        let mut f = Fallback::new(2);
+        let n = f.failed(0, OFF_AIR, 0);
+        assert_eq!((n.feed, n.at), (1, 0), "the backup at once");
+        assert!(n.note.unwrap().contains("off air"));
+        // The backup is off air too: the main one again, in a while.
+        let n = f.failed(2, OFF_AIR, 0);
+        assert_eq!((n.feed, n.at), (0, 2 + OFF_AIR_RETRY_SECS));
+        // Still off air: the backup at once (it was asked long enough ago),
+        // and so on, never the flap guard's.
+        let mut t = 2 + OFF_AIR_RETRY_SECS;
+        let n = f.failed(t, OFF_AIR, 0);
+        assert_eq!((n.feed, n.at), (1, t));
+        for i in 0..10 {
+            let n = f.failed(t, OFF_AIR, 0);
+            assert_eq!(n.at, t + OFF_AIR_RETRY_SECS, "{i}: both asked, so a wait");
+            t = n.at;
+            let n = f.failed(t, OFF_AIR, 0);
+            assert_eq!(n.at, t, "{i}: the other one straight after");
+            assert!(n.note.unwrap().contains("switched"), "never the flap guard");
+        }
     }
 }
