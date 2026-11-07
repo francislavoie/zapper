@@ -125,6 +125,13 @@ fn main() {
                     Err(e)
                 } else if let Some(kind) = ending {
                     run_ending(&handle, &kind).await
+                } else if let Some(secs) = args
+                    .iter()
+                    .position(|a| a == "--keeps-playing")
+                    .and_then(|i| args.get(i + 1))
+                    .and_then(|s| s.parse::<u64>().ok())
+                {
+                    run_keeps_playing(&handle, secs, args.iter().any(|a| a == "--after-movie")).await
                 } else if args.iter().any(|a| a == "--movie") {
                     run_movie(&handle).await
                 } else {
@@ -330,6 +337,74 @@ async fn live_start_from_env(app: &tauri::AppHandle) -> Result<(), String> {
     settings.live_start = LiveStart::from(mode.clone());
     println!("[start] live start: {:?} (from {mode:?})", settings.live_start);
     zapper_lib::ipc::player_cmds::apply_playback_settings(app.clone(), settings).await
+}
+
+/// The `--keeps-playing <secs>` run: a channel that must play, and not be
+/// stopped as anything (off air above all), for that long. An episode a
+/// playlist lists among its channels, say: an MP4 sent fast and then ended.
+///
+/// With `--after-movie`, a movie (`ZAPPER_FIXTURE_MOVIE`) is played first,
+/// taken to a few seconds from its end so that mpv has read all of it, and
+/// the channel opened straight from there: the first heartbeats of the
+/// channel must not judge the movie's cache as the channel's.
+#[cfg(target_os = "linux")]
+async fn run_keeps_playing(app: &tauri::AppHandle, secs: u64, after_movie: bool) -> Result<String, String> {
+    use std::time::{Duration, Instant};
+    use zapper_lib::ipc::player_cmds as cmds;
+    use zapper_lib::ipc::types::PlaybackState;
+
+    let mut before = String::new();
+    if after_movie {
+        cmds::play_movie(app.clone(), 2, None).await?;
+        let s = await_state(Duration::from_secs(25), |s| {
+            s.state == PlaybackState::Playing && s.on_demand.is_some_and(|o| o.duration.is_some())
+        })
+        .await;
+        let length = s.on_demand.and_then(|o| o.duration).ok_or("the movie never played")?;
+        cmds::seek_to(app.clone(), (length - 6.0).max(0.0)).await?;
+        let near = await_state(Duration::from_secs(10), |s| {
+            s.on_demand.is_some_and(|o| o.position >= length - 8.0)
+        })
+        .await;
+        // Long enough for its end to have been read, short of playing out.
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        before = format!(
+            "a {length:.0}s movie taken to {:.0}s, then ",
+            near.on_demand.map_or(-1.0, |o| o.position)
+        );
+        println!("[keeps-playing] {before}the channel");
+    }
+
+    let stream_id = resolve_stream_id().await?;
+    let started = Instant::now();
+    cmds::play(app.clone(), stream_id).await?;
+    let mut playing_at = None;
+    while started.elapsed() < Duration::from_secs(secs) {
+        let s = cmds::player_state().await.unwrap_or_default();
+        if s.state == PlaybackState::Failed || s.state == PlaybackState::Stopped {
+            let kind = s
+                .ending
+                .and_then(|e| serde_json::to_value(e.kind).ok())
+                .and_then(|v| v.as_str().map(str::to_owned));
+            return Err(format!(
+                "{:?} as {kind:?} after {:.1}s: {}",
+                s.state,
+                started.elapsed().as_secs_f64(),
+                s.error.as_deref().unwrap_or("no words")
+            ));
+        }
+        if playing_at.is_none() && s.state == PlaybackState::Playing {
+            playing_at = Some(started.elapsed());
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let Some(at) = playing_at else {
+        return Err(format!("never reached Playing in {secs}s"));
+    };
+    Ok(format!(
+        "{before}stream {stream_id} played from {:.1}s and was still playing {secs}s after the open",
+        at.as_secs_f64()
+    ))
 }
 
 /// The `--ending <kind>` run: a channel that stops by itself, and how.

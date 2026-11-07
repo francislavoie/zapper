@@ -161,9 +161,22 @@ struct Machine {
     /// air. See `ending::Placeholder`.
     placeholder: ending::Placeholder,
     /// This open was found off air and that has not yet gone to the
-    /// channel's record. Apart from `noted`, which the clip's first frame
-    /// has usually set already.
+    /// channel's record.
     off_air_unnoted: bool,
+    /// mpv has started a file since this open began (`start-file`).
+    started: bool,
+    /// The watch for a placeholder is reading this open's own file: one
+    /// has started since the open, and mpv's `path` is the address this
+    /// open loaded. Until then mpv's cache state may still be the last
+    /// file's — a movie or a programme near its end, a stream playing out
+    /// its buffer — which must never be judged as this channel.
+    armed: bool,
+    /// When this open began, for how long the placeholder watch can still
+    /// fire; see [`Machine::watch_settled`].
+    began: Option<Instant>,
+    /// A record the last open earned but had not yet written when it was
+    /// replaced or stopped: written on the next heartbeat.
+    carry: Option<Ledger>,
     /// Automatic reconnects made since a person last asked for this stream.
     reconnects: u32,
     /// When a reconnect last brought the picture back. A stream that has
@@ -230,6 +243,10 @@ impl Machine {
             flow: Flow::default(),
             placeholder: ending::Placeholder::default(),
             off_air_unnoted: false,
+            started: false,
+            armed: false,
+            began: None,
+            carry: None,
             reconnects: 0,
             reconnected_at: None,
             reconnect_due: None,
@@ -247,17 +264,28 @@ impl Machine {
     /// mpv reported, after [`FAILURE_SETTLE`] for a bare deadline, whose
     /// reason may still arrive and may well excuse the channel.
     fn ledger(&mut self, now: Instant) -> Option<Ledger> {
+        if let Some(carried) = self.carry.take() {
+            return Some(carried);
+        }
         let id = self.dto.stream_id?;
         if !self.live {
             return None;
         }
-        // Off air: written whether or not the clip showed a frame, and
-        // before that frame is written as a load if both land at once.
+        // Off air: written whether or not the clip showed a frame. The
+        // frame was never written as a load: see below.
         if self.off_air_unnoted {
             self.off_air_unnoted = false;
             self.noted = true;
             let why = ending::against_channel(&self.dto.ending?, None)?;
             return Some(Ledger::Failed(id, why));
+        }
+        // A picture, and a measurement of it, are held back while the open
+        // could still turn out to be a placeholder clip: its first frame is
+        // a frame, and its black 1080p a reading, of nothing. Written once
+        // the watch can no longer fire, so that a load never lands after
+        // (and undoes) an off-air record.
+        if !self.watch_settled(now) {
+            return None;
         }
         if self.shown && !self.noted {
             self.noted = true;
@@ -290,6 +318,7 @@ impl Machine {
     /// A channel or a movie is opening. A catch-up programme sets `live`
     /// false straight after, and so does a movie.
     fn opening(&mut self, what: Opened) {
+        self.carry_unwritten_load();
         let movie = matches!(what, Opened::Movie(_));
         // Nothing about a title is "live", and nothing keeps it near an edge.
         self.dto.at_live_edge = !movie;
@@ -324,6 +353,9 @@ impl Machine {
         self.flow = Flow::default();
         self.placeholder = ending::Placeholder::default();
         self.off_air_unnoted = false;
+        self.started = false;
+        self.armed = false;
+        self.began = Some(Instant::now());
         // Whoever opens this decides whether it continues a run of
         // reconnects (see `open_as`); anything waiting is stale.
         self.reconnects = 0;
@@ -419,17 +451,29 @@ impl Machine {
     ///
     /// Before anything else in the heartbeat moves the picture. Only for a
     /// live channel; see `ending::off_air`.
-    fn watch_for_placeholder(&mut self, dt: f64, p: &Probe) -> Option<f64> {
-        if !matches!(
-            self.dto.state,
-            PlaybackState::Opening | PlaybackState::Playing | PlaybackState::Paused
-        ) {
+    /// `format` is mpv's `file-format`, read when the end is.
+    fn watch_for_placeholder(&mut self, dt: f64, p: &Probe, format: Option<&str>) -> Option<f64> {
+        if !self.armed
+            || !matches!(
+                self.dto.state,
+                PlaybackState::Opening | PlaybackState::Playing | PlaybackState::Paused
+            )
+        {
             return None;
         }
-        let read = self
-            .placeholder
-            .observe(dt, p.cache_start.or(p.time_pos), p.cache_end, p.demuxer_eof)?;
-        let clip = ending::off_air(self.live && self.dto.on_demand.is_none(), read)?;
+        let read = self.placeholder.observe(
+            dt,
+            p.cache_start.or(p.time_pos),
+            p.cache_end,
+            p.demuxer_eof,
+            p.cache_bytes,
+        )?;
+        let cx = ending::Context {
+            live: self.live && self.dto.on_demand.is_none(),
+            format,
+            network: self.clues.network,
+        };
+        let clip = ending::off_air(read, cx)?;
         tracing::info!(
             "off air: the provider sent {:.0}s of stream and closed it {:.1}s after the open; \
              a placeholder, not the channel. Stopping",
@@ -451,6 +495,46 @@ impl Machine {
         self.failed("the provider sent a placeholder instead of the channel");
         self.dto.ending = Some(Ending::off_air(clip));
         self.off_air_unnoted = true;
+    }
+
+    /// mpv started a file. The watch is armed once that file is known to be
+    /// this open's: see [`Machine::arm`].
+    fn file_started(&mut self) {
+        self.started = true;
+    }
+
+    /// Arms the placeholder watch if a file has started since this open
+    /// began and `ours` — mpv's `path` is the address this open loaded.
+    fn arm(&mut self, ours: bool) {
+        if self.started && ours {
+            self.armed = true;
+        }
+    }
+
+    /// Whether the watch for a placeholder can no longer fire for this open:
+    /// its end has been judged, the window is over, or the stream is no
+    /// longer open. Loads and measurements wait for this.
+    fn watch_settled(&self, now: Instant) -> bool {
+        self.placeholder.judged()
+            || !matches!(
+                self.dto.state,
+                PlaybackState::Opening | PlaybackState::Playing | PlaybackState::Paused
+            )
+            || self
+                .began
+                .is_none_or(|t| now.saturating_duration_since(t).as_secs_f64() > ending::OFF_AIR_WINDOW)
+    }
+
+    /// A live channel that showed a picture and is being replaced or
+    /// stopped before its load was written: the load stands, so it is kept
+    /// for the next heartbeat to write.
+    fn carry_unwritten_load(&mut self) {
+        if self.live && self.shown && !self.noted && !self.is_off_air() && self.dto.on_demand.is_none() {
+            if let Some(id) = self.dto.stream_id {
+                self.noted = true;
+                self.carry = Some(Ledger::Loaded(id));
+            }
+        }
     }
 
     fn is_off_air(&self) -> bool {
@@ -510,6 +594,7 @@ impl Machine {
     }
 
     fn stopped(&mut self) {
+        self.carry_unwritten_load();
         self.dto.at_live_edge = true;
         self.following_live = false;
         self.reconnects = 0;
@@ -1167,6 +1252,16 @@ fn tick(app: &AppHandle, p: &Player) {
         });
     }
     let mut finished = None;
+    // Whether the file mpv has is the one the current open loaded: its
+    // `path` against the address. Read before the state lock, and kept out
+    // of every log: the address can carry the account.
+    let this_opens_file = {
+        let loaded = LAST_OPEN
+            .lock()
+            .ok()
+            .and_then(|l| l.as_ref().map(|(_, target, _, _)| target.url.clone()));
+        loaded.is_some_and(|url| p.get_string("path").is_some_and(|path| path == url))
+    };
     let payload = {
         let mut m = STATE.lock().expect("player state mutex poisoned");
         let was_failed = m.dto.state == PlaybackState::Failed;
@@ -1214,7 +1309,8 @@ fn tick(app: &AppHandle, p: &Player) {
                         m.clues.observe(text);
                     }
                 }
-                Signal::StartFile | Signal::FileLoaded | Signal::Tracks(_) => {}
+                Signal::StartFile => m.file_started(),
+                Signal::FileLoaded | Signal::Tracks(_) => {}
             }
         }
         m.apply(&probe);
@@ -1226,7 +1322,10 @@ fn tick(app: &AppHandle, p: &Player) {
         // A placeholder clip rather than the channel: stopped here, before
         // the hold or the catch-up below can skip to the clip's end.
         let holding_first_frame = m.join.is_some();
-        if m.watch_for_placeholder(elapsed, &probe).is_some() {
+        m.arm(this_opens_file);
+        // Which demuxer read it, asked only when there is an end to judge.
+        let format = if probe.demuxer_eof { p.get_string("file-format") } else { None };
+        if m.watch_for_placeholder(elapsed, &probe, format.as_deref()).is_some() {
             if let Err(e) = p.command("stop", &[]) {
                 tracing::warn!("could not stop the placeholder: {e}");
             }
@@ -3201,7 +3300,7 @@ mod tests {
     }
 
     /// mpv's cache as a placeholder clip leaves it: ten minutes of stream,
-    /// all of it in, and the end read.
+    /// all of it in (6.6 MB, as the fixture), and the end read.
     fn clip_read(eof: bool) -> Probe {
         Probe {
             cache_start: Some(1.4),
@@ -3209,31 +3308,56 @@ mod tests {
             time_pos: Some(1.4),
             behind_live: 600.0,
             demuxer_eof: eof,
+            cache_bytes: Some(6_600_000),
             paused: true,
             ..Probe::default()
         }
     }
 
+    const TS: Option<&str> = Some("mpegts");
+
+    /// This open's own file has started: the watch reads it.
+    fn armed(m: &mut Machine) {
+        m.file_started();
+        m.arm(true);
+    }
+
+    /// Long enough after an open for the placeholder watch to be over.
+    fn settled() -> Instant {
+        Instant::now() + Duration::from_secs_f64(ending::OFF_AIR_WINDOW + 1.0)
+    }
+
     /// Heartbeats of a placeholder clip arriving over three seconds, then
-    /// its end. Returns what the machine decided on the last.
-    fn a_clip_arrives(m: &mut Machine) -> Option<f64> {
+    /// its end, in `format`. Returns what the machine decided on the last.
+    fn a_clip_arrives_as(m: &mut Machine, format: Option<&str>) -> Option<f64> {
         for i in 1..12 {
             let p = Probe {
                 cache_end: Some(1.4 + 50.0 * f64::from(i)),
                 demuxer_eof: false,
                 ..clip_read(false)
             };
-            assert_eq!(m.watch_for_placeholder(0.25, &p), None, "nothing until the end is read");
+            assert_eq!(m.watch_for_placeholder(0.25, &p, None), None, "nothing until the end is read");
         }
-        m.watch_for_placeholder(0.25, &clip_read(true))
+        m.watch_for_placeholder(0.25, &clip_read(true), format)
+    }
+
+    fn a_clip_arrives(m: &mut Machine) -> Option<f64> {
+        a_clip_arrives_as(m, TS)
+    }
+
+    /// A live channel opened and its file started.
+    fn live(id: i64, mode: LiveStart) -> Machine {
+        let mut m = Machine::new();
+        m.opening(Opened::Channel(id));
+        m.starting(mode);
+        armed(&mut m);
+        m
     }
 
     #[test]
     fn a_placeholder_on_a_live_channel_is_off_air_and_stops_there() {
         for mode in [LiveStart::CatchUp, LiveStart::Stay, LiveStart::Wait] {
-            let mut m = Machine::new();
-            m.opening(Opened::Channel(7));
-            m.starting(mode);
+            let mut m = live(7, mode);
             m.playing();
             assert_eq!(a_clip_arrives(&mut m), Some(600.0), "{mode:?}");
             assert_eq!(m.dto.state, PlaybackState::Failed, "{mode:?}");
@@ -3247,11 +3371,62 @@ mod tests {
     }
 
     #[test]
+    fn a_stale_probe_from_the_last_file_decides_nothing() {
+        // A movie (or a programme, or a stream playing out its buffer) near
+        // its end: ten minutes in the cache and its end read. A live channel
+        // opens; until mpv has started this open's file, what it reports is
+        // still the last one's.
+        let mut m = Machine::new();
+        m.opening(Opened::Channel(7));
+        m.starting(LiveStart::CatchUp);
+        for _ in 0..8 {
+            assert_eq!(m.watch_for_placeholder(0.25, &clip_read(true), TS), None);
+        }
+        // A file started, but mpv's path is not this open's: the last
+        // file's start arriving late.
+        m.file_started();
+        m.arm(false);
+        assert_eq!(m.watch_for_placeholder(0.25, &clip_read(true), TS), None);
+        // An address match with no start since the open is not enough
+        // either: a Retry of the same channel loads the same address.
+        let mut r = Machine::new();
+        r.opening(Opened::Channel(7));
+        r.arm(true);
+        assert_eq!(r.watch_for_placeholder(0.25, &clip_read(true), TS), None);
+        // Its first frame then plays as any other.
+        m.playing();
+        assert_eq!(m.dto.state, PlaybackState::Playing);
+        // And once this open's file is the one read, the watch is on.
+        m.arm(true);
+        assert_eq!(a_clip_arrives(&mut m), Some(600.0));
+    }
+
+    #[test]
+    fn an_episode_in_a_file_container_is_not_off_air() {
+        // A playlist's episode, listed among the channels: an MP4 sent fast
+        // and then ended. It plays.
+        for format in [Some("mov,mp4,m4a,3gp,3g2,mj2"), Some("matroska,webm"), None] {
+            let mut m = live(7, LiveStart::CatchUp);
+            m.playing();
+            assert_eq!(a_clip_arrives_as(&mut m, format), None, "{format:?}");
+            assert_eq!(m.dto.state, PlaybackState::Playing, "{format:?}");
+        }
+    }
+
+    #[test]
+    fn the_network_failing_first_is_not_off_air() {
+        let mut m = live(7, LiveStart::CatchUp);
+        m.playing();
+        m.clues.observe("Connection reset by peer");
+        assert_eq!(a_clip_arrives(&mut m), None);
+    }
+
+    #[test]
     fn the_hold_lets_go_without_skipping_when_it_is_off_air() {
         // Start at live holds the first frame and would skip to the newest
         // data once it stopped arriving: the clip's last second. The
         // decision comes first, and the hold is over with no seek.
-        let mut m = held(7);
+        let mut m = live(7, LiveStart::Wait);
         m.playing();
         assert!(m.join.is_some());
         assert!(a_clip_arrives(&mut m).is_some());
@@ -3261,15 +3436,16 @@ mod tests {
 
     #[test]
     fn what_comes_after_the_stop_is_not_a_second_ending() {
-        let mut m = Machine::new();
-        m.opening(Opened::Channel(7));
+        let mut m = live(7, LiveStart::CatchUp);
         m.playing();
         a_clip_arrives(&mut m);
         // mpv's own end-file, had it played out what it had, would not
-        // replace the explanation.
+        // replace the explanation; nor would a late first frame.
         m.ended();
+        m.playing();
+        assert_eq!(m.dto.state, PlaybackState::Failed);
         assert_eq!(m.dto.ending.unwrap().kind, EndingKind::OffAir);
-        assert_eq!(m.watch_for_placeholder(0.25, &clip_read(true)), None);
+        assert_eq!(m.watch_for_placeholder(0.25, &clip_read(true), TS), None);
     }
 
     #[test]
@@ -3281,20 +3457,19 @@ mod tests {
             cache_end: Some(65.0),
             time_pos: Some(0.0),
             demuxer_eof: eof,
+            cache_bytes: Some(65 * 750_000),
             ..Probe::default()
         };
-        let mut m = Machine::new();
-        m.opening(Opened::Channel(7));
+        let mut m = live(7, LiveStart::CatchUp);
         m.playing();
-        assert_eq!(m.watch_for_placeholder(5.0, &burst(true)), None);
+        assert_eq!(m.watch_for_placeholder(5.0, &burst(true), TS), None);
         assert_eq!(m.dto.state, PlaybackState::Playing, "it plays out what it has");
         m.ended();
         assert_eq!(m.dto.ending.unwrap().kind, EndingKind::Dropped);
 
-        let mut m = Machine::new();
-        m.opening(Opened::Channel(7));
+        let mut m = live(7, LiveStart::CatchUp);
         m.playing();
-        assert_eq!(m.watch_for_placeholder(5.0, &burst(true)), None);
+        assert_eq!(m.watch_for_placeholder(5.0, &burst(true), TS), None);
         network_failure(&mut m);
         assert_eq!(m.dto.ending.unwrap().kind, EndingKind::Network);
         assert!(m.reconnect_due.is_some(), "and is reconnected as before");
@@ -3302,11 +3477,10 @@ mod tests {
 
     #[test]
     fn an_end_read_after_the_window_ends_as_it_did() {
-        let mut m = Machine::new();
-        m.opening(Opened::Channel(7));
+        let mut m = live(7, LiveStart::CatchUp);
         m.playing();
         let late = ending::OFF_AIR_WINDOW + 1.0;
-        assert_eq!(m.watch_for_placeholder(late, &clip_read(true)), None);
+        assert_eq!(m.watch_for_placeholder(late, &clip_read(true), TS), None);
         assert_eq!(m.dto.state, PlaybackState::Playing);
         m.ended();
         assert_eq!(m.dto.ending.unwrap().kind, EndingKind::Dropped);
@@ -3314,13 +3488,12 @@ mod tests {
 
     #[test]
     fn without_the_cache_state_it_ends_as_it_did() {
-        let mut m = Machine::new();
-        m.opening(Opened::Channel(7));
+        let mut m = live(7, LiveStart::CatchUp);
         m.playing();
         // `demuxer-cache-state` unreadable: no end, no start, no span.
         let blind = Probe { time_pos: Some(3.0), ..Probe::default() };
         for _ in 0..80 {
-            assert_eq!(m.watch_for_placeholder(0.25, &blind), None);
+            assert_eq!(m.watch_for_placeholder(0.25, &blind, None), None);
         }
         m.ended();
         assert_eq!(m.dto.ending.unwrap().kind, EndingKind::Dropped);
@@ -3332,39 +3505,81 @@ mod tests {
         m.opening(Opened::Channel(7));
         m.live = false;
         m.starting(LiveStart::CatchUp);
+        armed(&mut m);
         m.playing();
         assert_eq!(a_clip_arrives(&mut m), None);
         assert_eq!(m.dto.state, PlaybackState::Playing);
 
         let mut m = a_playing_movie(3);
+        armed(&mut m);
         assert_eq!(a_clip_arrives(&mut m), None);
         assert_eq!(m.dto.state, PlaybackState::Playing);
     }
 
     #[test]
-    fn off_air_is_written_against_the_channel_even_though_a_frame_was_shown() {
-        let mut m = Machine::new();
-        m.opening(Opened::Channel(7));
+    fn off_air_is_written_against_the_channel_and_its_frame_never_as_a_load() {
+        let mut m = live(7, LiveStart::CatchUp);
         m.playing();
         let t0 = Instant::now();
-        assert_eq!(m.ledger(t0), Some(Ledger::Loaded(7)), "the clip's first frame");
+        assert_eq!(m.ledger(t0), None, "the first frame may be the clip's");
         a_clip_arrives(&mut m);
         assert_eq!(m.ledger(t0), Some(Ledger::Failed(7, "off air".into())));
-        assert_eq!(m.ledger(t0 + FAILURE_SETTLE), None, "once per open");
-        // The next live play clears it, as any other failure.
-        m.opening(Opened::Channel(7));
+        assert_eq!(m.ledger(settled()), None, "once per open, and no load after it");
+        // The next live play clears it, as any other failure, once it is
+        // past the window.
+        let mut m = live(7, LiveStart::CatchUp);
         m.playing();
-        assert_eq!(m.ledger(Instant::now()), Some(Ledger::Loaded(7)));
+        assert_eq!(m.ledger(Instant::now()), None);
+        assert_eq!(m.ledger(settled()), Some(Ledger::Loaded(7)));
     }
 
     #[test]
     fn off_air_found_before_the_first_frame_is_not_written_as_loaded() {
-        let mut m = Machine::new();
-        m.opening(Opened::Channel(7));
+        let mut m = live(7, LiveStart::CatchUp);
         a_clip_arrives(&mut m);
         m.playing();
         assert_eq!(m.ledger(Instant::now()), Some(Ledger::Failed(7, "off air".into())));
-        assert_eq!(m.ledger(Instant::now() + FAILURE_SETTLE), None);
+        assert_eq!(m.ledger(settled()), None);
+    }
+
+    #[test]
+    fn a_load_waits_until_the_end_is_judged_not_a_placeholder() {
+        // A live stream that ends in a takeover after its burst: the end is
+        // read, judged, and the load is written at once.
+        let mut m = live(7, LiveStart::CatchUp);
+        m.playing();
+        assert_eq!(m.ledger(Instant::now()), None);
+        let burst = Probe { cache_start: Some(0.0), cache_end: Some(60.0), demuxer_eof: true, ..Probe::default() };
+        assert_eq!(m.watch_for_placeholder(2.0, &burst, TS), None);
+        assert_eq!(m.ledger(Instant::now()), Some(Ledger::Loaded(7)));
+    }
+
+    #[test]
+    fn a_load_held_back_is_written_when_the_channel_is_left_early() {
+        // A picture, then a zap within the window: the load stands.
+        let mut m = live(7, LiveStart::CatchUp);
+        m.playing();
+        assert_eq!(m.ledger(Instant::now()), None);
+        m.opening(Opened::Channel(8));
+        assert_eq!(m.ledger(Instant::now()), Some(Ledger::Loaded(7)));
+        assert_eq!(m.ledger(Instant::now()), None, "and the new one waits its turn");
+        // Stopping, the same.
+        armed(&mut m);
+        m.playing();
+        m.stopped();
+        assert_eq!(m.ledger(Instant::now()), Some(Ledger::Loaded(8)));
+        // A provider ending it within the window: written then.
+        let mut m = live(9, LiveStart::CatchUp);
+        m.playing();
+        m.ended();
+        assert_eq!(m.ledger(Instant::now()), Some(Ledger::Loaded(9)));
+        // An off-air channel left early has nothing to carry.
+        let mut m = live(10, LiveStart::CatchUp);
+        m.playing();
+        a_clip_arrives(&mut m);
+        assert_eq!(m.ledger(Instant::now()), Some(Ledger::Failed(10, "off air".into())));
+        m.opening(Opened::Channel(11));
+        assert_eq!(m.ledger(Instant::now()), None);
     }
 
     #[test]
@@ -3372,12 +3587,12 @@ mod tests {
         let mut m = Machine::new();
         m.opening(Opened::Channel(7));
         m.joining = true;
-        let t0 = Instant::now();
         m.playing();
+        assert_eq!(m.ledger(Instant::now()), None, "not while it could be a placeholder");
+        let t0 = settled();
         assert_eq!(m.ledger(t0), Some(Ledger::Loaded(7)), "the held frame is the open");
         m.joined();
-        assert_eq!(m.ledger(Instant::now() + MEASURE_AFTER / 2), None);
-        let later = Instant::now() + MEASURE_AFTER;
+        let later = t0 + MEASURE_AFTER;
         assert_eq!(m.ledger(later), Some(Ledger::Measure(7)));
         assert_eq!(m.ledger(later), None, "measured once per open");
     }
@@ -3389,12 +3604,12 @@ mod tests {
         let t0 = Instant::now();
         assert_eq!(m.ledger(t0), None, "opening is not loading");
         m.playing();
-        assert_eq!(m.ledger(t0), Some(Ledger::Loaded(7)));
-        assert_eq!(m.ledger(t0), None, "once per open");
-        assert_eq!(m.ledger(Instant::now() + MEASURE_AFTER / 2), None);
-        let later = Instant::now() + MEASURE_AFTER;
+        assert_eq!(m.ledger(t0 + MEASURE_AFTER), None, "nor measured, while it could be a placeholder");
+        let later = settled();
+        assert_eq!(m.ledger(later), Some(Ledger::Loaded(7)));
+        // One thing per heartbeat: the measurement, due long since, next.
         assert_eq!(m.ledger(later), Some(Ledger::Measure(7)));
-        assert_eq!(m.ledger(later), None, "measured once per open");
+        assert_eq!(m.ledger(later), None, "each once per open");
         // A resolution change later in the stream is not a second open.
         m.playing();
         assert_eq!(m.ledger(later + MEASURE_AFTER), None);
@@ -3414,7 +3629,7 @@ mod tests {
         // Retrying is a new open, with its own outcome.
         m.opening(Opened::Channel(9));
         m.playing();
-        assert_eq!(m.ledger(Instant::now()), Some(Ledger::Loaded(9)));
+        assert_eq!(m.ledger(settled()), Some(Ledger::Loaded(9)));
     }
 
     #[test]
@@ -3456,8 +3671,9 @@ mod tests {
         let mut m = Machine::new();
         m.opening(Opened::Channel(5));
         m.playing();
-        assert_eq!(m.ledger(Instant::now()), Some(Ledger::Loaded(5)));
         m.ended();
+        // The picture it showed counts; the ending does not.
+        assert_eq!(m.ledger(Instant::now()), Some(Ledger::Loaded(5)));
         assert_eq!(m.ledger(Instant::now() + FAILURE_SETTLE), None);
 
         m.opening(Opened::Channel(6));

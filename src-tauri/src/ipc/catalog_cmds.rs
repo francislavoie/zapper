@@ -57,6 +57,13 @@ pub async fn channels_by_ids(ids: Vec<i64>) -> Result<Vec<ChannelDto>, String> {
     reads::channels_by_ids(&ids).map_err(words)
 }
 
+/// Other channels with the same programmes, to try when one is off air.
+/// See [`crate::catalog::store::alternatives_for`].
+#[tauri::command]
+pub async fn alternatives_for(stream_id: i64) -> Result<Vec<ChannelDto>, String> {
+    reads::alternatives_for(stream_id).map_err(words)
+}
+
 /// Every channel number and the channel it tunes, for typing a number to
 /// change channel. See [`crate::catalog::store::channel_numbers`].
 ///
@@ -64,12 +71,6 @@ pub async fn channels_by_ids(ids: Vec<i64>) -> Result<Vec<ChannelDto>, String> {
 /// whether another digit could still be coming needs every number that starts
 /// with what has been typed, and the frontend asks once and keeps the answer
 /// until the next sync.
-/// Other channels with the same programmes, to try when one is off air.
-#[tauri::command]
-pub async fn alternatives_for(stream_id: i64) -> Result<Vec<ChannelDto>, String> {
-    reads::alternatives_for(stream_id).map_err(words)
-}
-
 #[tauri::command]
 pub async fn channel_numbers() -> Result<Vec<(String, i64)>, String> {
     reads::channel_numbers().map_err(words)
