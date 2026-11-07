@@ -120,7 +120,7 @@ test("a feed that failed is told as the app tells it", () => {
     reason: "feed",
     ending: { kind: "refused", status: 509, limit: true },
   });
-  assert.deepEqual(r.ending, { kind: "refused", slots: null, status: 509, limit: true });
+  assert.deepEqual(r.ending, { kind: "refused", slots: null, status: 509, limit: true, clipSecs: null });
   assert.equal(endingOf({ kind: "nonsense", status: null, limit: false }), null);
   assert.equal(refusalState(0, null).ending.kind, "network");
 });

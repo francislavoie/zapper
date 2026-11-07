@@ -400,7 +400,7 @@ async function broke(s: Session) {
   if (session !== s) return;
   if (st?.ended) {
     if (st.takenOver) {
-      fail(s.streamId, { kind: "inUse", slots: null, status: null, limit: false }, "Another browser started watching on this account's connection.");
+      fail(s.streamId, { kind: "inUse", slots: null, status: null, limit: false, clipSecs: null }, "Another browser started watching on this account's connection.");
     } else {
       fail(s.streamId, endingOf(st.ended), "The stream stopped.");
     }
@@ -409,7 +409,7 @@ async function broke(s: Session) {
   const now = Date.now();
   s.reopens = s.reopens.filter((t) => now - t < 60_000);
   if (st === null || s.reopens.length >= 3) {
-    fail(s.streamId, { kind: "network", slots: null, status: null, limit: false }, "The stream from the recording service broke off.");
+    fail(s.streamId, { kind: "network", slots: null, status: null, limit: false, clipSecs: null }, "The stream from the recording service broke off.");
     return;
   }
   s.reopens.push(now);
@@ -458,7 +458,7 @@ async function forget(viewer: string, keepalive = false) {
 }
 
 interface ViewerStatus {
-  ended: { kind: string; status: number | null; limit: boolean } | null;
+  ended: { kind: string; status: number | null; limit: boolean; clipSecs?: number | null } | null;
   takenOver: boolean;
   notice: WatchNotice | null;
 }

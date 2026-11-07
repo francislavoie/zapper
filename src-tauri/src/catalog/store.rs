@@ -250,6 +250,38 @@ pub fn channels_by_ids(conn: &Connection, ids: &[i64]) -> Result<Vec<ChannelDto>
     Ok(ids.iter().filter_map(|id| by_id.remove(id)).collect())
 }
 
+/// The most [`alternatives_for`] offers.
+pub const ALTERNATIVES_MAX: u32 = 3;
+
+/// Other live channels that carry the same programmes as `stream_id` — the
+/// same guide id (`epg_channel_id`) — for when it is off air or will not
+/// play: "Try another source".
+///
+/// Those that last played first, the most recently measured leading, then
+/// the rest by number. A channel whose last open failed, or was off air, is
+/// left out: it is the last thing to suggest. None for a channel with no
+/// guide id. Served by `channels_by_epg`.
+pub fn alternatives_for(conn: &Connection, stream_id: i64) -> Result<Vec<ChannelDto>> {
+    let sql = format!(
+        "SELECT {CHANNEL_COLUMNS}
+         FROM channels ch {QUALITY_JOIN}
+         WHERE ch.epg_channel_id = (
+                   SELECT epg_channel_id FROM channels
+                   WHERE stream_id = ?1 AND epg_channel_id IS NOT NULL AND epg_channel_id <> '')
+           AND ch.stream_id <> ?1
+           AND ch.deleted_at IS NULL
+           AND ch.is_separator = 0
+           AND q.failed_at IS NULL
+         ORDER BY COALESCE(q.ok_count, 0) > 0 DESC,
+                  CASE WHEN COALESCE(q.ok_count, 0) > 0 THEN COALESCE(q.measured_at, 0) END DESC,
+                  ch.num IS NULL, ch.num, ch.stream_id
+         LIMIT ?2"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(rusqlite::params![stream_id, ALTERNATIVES_MAX], channel_from_row)?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
 /// Programmes overlapping `[from, to)` for each channel, in the order the ids
 /// were given. A channel with no guide yields an empty vec rather than
 /// vanishing: only 15% of the catalogue carries EPG, and the guide grid still
@@ -893,6 +925,98 @@ mod tests {
         assert_eq!(q.fps, Some(25.0));
         assert_eq!((q.audio_codec.as_deref(), q.audio_channels), (Some("mp2"), Some(6)));
         assert_eq!(q.measured_at, Some(200));
+    }
+
+    /// A channel carrying guide id `epg`.
+    fn guided(c: &Connection, id: i64, num: Option<i64>, epg: Option<&str>) {
+        c.execute(
+            "INSERT INTO channels (stream_id, category_id, name, clean_name, num, epg_channel_id)
+             VALUES (?1, '1', ?2, ?2, ?3, ?4)",
+            rusqlite::params![id, format!("Channel {id}"), num, epg],
+        )
+        .unwrap();
+    }
+
+    fn measured(c: &Connection, id: i64, at: i64) {
+        record_loaded(c, id).unwrap();
+        let r = Reading {
+            codec: Some("h264".into()),
+            width: Some(1280),
+            height: Some(720),
+            fps: Some(50.0),
+            interlaced: Some(false),
+            is_hdr: false,
+            audio_codec: None,
+            audio_channels: None,
+        };
+        record_reading(c, id, &r, at).unwrap();
+    }
+
+    fn alternatives(c: &Connection, id: i64) -> Vec<i64> {
+        alternatives_for(c, id).unwrap().iter().map(|ch| ch.stream_id).collect()
+    }
+
+    #[test]
+    fn alternatives_share_the_guide_id_and_put_what_played_first() {
+        let c = open_in_memory().unwrap();
+        guided(&c, 1, Some(1), Some("one.example"));
+        // The same programmes, five more times over.
+        guided(&c, 2, Some(40), Some("one.example"));
+        guided(&c, 3, Some(30), Some("one.example"));
+        guided(&c, 4, Some(20), Some("one.example"));
+        guided(&c, 5, Some(10), Some("one.example"));
+        guided(&c, 6, None, Some("one.example"));
+        // Another channel's, and one with none.
+        guided(&c, 7, Some(2), Some("two.example"));
+        guided(&c, 8, Some(3), None);
+        // Nothing played yet: by number, itself left out, at most three.
+        assert_eq!(alternatives(&c, 1), [5, 4, 3]);
+        // Played ones lead, the most recently measured first.
+        measured(&c, 3, 100);
+        measured(&c, 2, 200);
+        assert_eq!(alternatives(&c, 1), [2, 3, 5]);
+        // A failure, or off air, is left out; the rest close up behind.
+        record_failed(&c, 2, "off air", 300).unwrap();
+        record_failed(&c, 5, "refused by the provider (HTTP 403)", 300).unwrap();
+        assert_eq!(alternatives(&c, 1), [3, 4, 6]);
+        // From another of the group, the first is offered too.
+        assert_eq!(alternatives(&c, 3), [1, 4, 6]);
+    }
+
+    #[test]
+    fn a_channel_without_a_guide_id_has_no_alternatives() {
+        let c = open_in_memory().unwrap();
+        guided(&c, 1, Some(1), None);
+        guided(&c, 2, Some(2), None);
+        guided(&c, 3, Some(3), Some(""));
+        guided(&c, 4, Some(4), Some(""));
+        assert!(alternatives(&c, 1).is_empty(), "no id is not a shared id");
+        assert!(alternatives(&c, 3).is_empty(), "nor is an empty one");
+        assert!(alternatives(&c, 99).is_empty(), "nor an unknown channel");
+    }
+
+    #[test]
+    fn alternatives_leave_out_deleted_channels_and_dividers() {
+        let c = open_in_memory().unwrap();
+        guided(&c, 1, Some(1), Some("one.example"));
+        guided(&c, 2, Some(2), Some("one.example"));
+        guided(&c, 3, Some(3), Some("one.example"));
+        c.execute("UPDATE channels SET deleted_at = 5 WHERE stream_id = 2", []).unwrap();
+        c.execute("UPDATE channels SET is_separator = 1 WHERE stream_id = 3", []).unwrap();
+        assert!(alternatives(&c, 1).is_empty());
+    }
+
+    #[test]
+    fn alternatives_are_found_by_the_guide_index() {
+        let c = open_in_memory().unwrap();
+        let plan: String = c
+            .query_row(
+                "EXPLAIN QUERY PLAN SELECT stream_id FROM channels WHERE epg_channel_id = 'x'",
+                [],
+                |r| r.get(3),
+            )
+            .unwrap();
+        assert!(plan.contains("channels_by_epg"), "{plan}");
     }
 
     #[test]

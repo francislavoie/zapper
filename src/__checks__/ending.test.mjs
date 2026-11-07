@@ -151,3 +151,37 @@ test("an account in use elsewhere says how many connections", () => {
   });
   assert.match(two.title, /\(2 of 2 connections\)/);
 });
+
+// ------------------------------------------------------------------ off air
+
+const offAir = (clipSecs) =>
+  failed({ kind: "offAir", status: null, limit: false, slots: null, clipSecs });
+
+test("a placeholder instead of the channel says it isn't broadcasting, and how long the clip was", () => {
+  const m = endedMessage(offAir(600));
+  assert.equal(m.title, "This channel isn't broadcasting right now.");
+  assert.equal(
+    m.detail,
+    "Your provider sent a 10-minute placeholder instead of the live channel. Try again later, or use another source for it.",
+  );
+  assert.equal(m.code, null);
+  assert.equal(m.alternatives, true, "other sources are offered under it");
+  // Rounded to minutes; under one, "short".
+  assert.match(endedMessage(offAir(150)).detail, /a 3-minute placeholder/);
+  assert.match(endedMessage(offAir(89)).detail, /a 1-minute placeholder/);
+  assert.match(endedMessage(offAir(45)).detail, /a short placeholder/);
+  // Nothing about another device: none is involved.
+  assert.doesNotMatch(m.title + m.detail, /device/);
+});
+
+test("off air offers Retry, never Watch here anyway", () => {
+  const a = endedActions({ ...offAir(600), reconnect: null });
+  assert.deepEqual(a, { primary: "retry", note: null, dismiss: true });
+});
+
+test("only off air offers other sources", () => {
+  for (const kind of ["dropped", "refused", "notVideo", "unavailable", "serverError", "network", "noVideo", "other"]) {
+    const m = endedMessage(failed({ kind, status: null, limit: false, slots: null, clipSecs: null }));
+    assert.ok(!m.alternatives, kind);
+  }
+});
