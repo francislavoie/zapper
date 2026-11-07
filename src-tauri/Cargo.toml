@@ -111,6 +111,11 @@ path = "src/bin/player_check.rs"
 required-features = ["harness", "gui"]
 
 [[bin]]
+name = "catchup_check"
+path = "src/bin/catchup_check.rs"
+required-features = ["harness", "gui"]
+
+[[bin]]
 name = "shot_check"
 path = "src/bin/shot_check.rs"
 required-features = ["harness", "gui"]
