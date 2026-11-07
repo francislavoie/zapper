@@ -3870,4 +3870,174 @@ pub(crate) mod tests {
         let (st, _) = call(&s, put_prelude(id, first_ms, APP, ts)).await;
         assert_eq!(st, StatusCode::CONFLICT);
     }
+
+    // ------------------------------------------------------------ off air
+
+    /// A provider answering every stream as one does for a channel off the
+    /// air: the tables (H.264 and AAC), a pause long enough for a page to be
+    /// given its viewer, then ten minutes of stream at once, and the end.
+    async fn placeholder_server() -> String {
+        use crate::recording::hub::tests::stream_of;
+        use crate::recording::tsprobe::tests::{pat, pmt};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", l.local_addr().unwrap());
+        tokio::spawn(async move {
+            while let Ok((mut sock, _)) = l.accept().await {
+                tokio::spawn(async move {
+                    let mut req = [0u8; 2048];
+                    let _ = sock.read(&mut req).await;
+                    let head =
+                        "HTTP/1.1 200 OK\r\nContent-Type: video/mp2t\r\nConnection: close\r\n\r\n";
+                    let mut first = pat(0x100);
+                    first.extend(pmt(0x100, &[(0x1b, 0x101, vec![]), (0x0f, 0x102, vec![])]));
+                    if sock.write_all(head.as_bytes()).await.is_err()
+                        || sock.write_all(&first).await.is_err()
+                    {
+                        return;
+                    }
+                    tokio::time::sleep(Duration::from_millis(400)).await;
+                    let _ = sock.write_all(&stream_of(0.0, 600.0)).await;
+                    let _ = sock.shutdown().await;
+                });
+            }
+        });
+        base
+    }
+
+    /// What the status route says of viewer `id` once it has ended.
+    async fn ended_status(s: &Shared, cookie: &str, id: &str) -> serde_json::Value {
+        let uri = format!("/api/watch/{id}");
+        let t = std::time::Instant::now();
+        loop {
+            let (st, said) = call(s, from_page("GET", &uri, Some(cookie), None)).await;
+            assert_eq!(st, StatusCode::OK, "{said}");
+            if !said["ended"].is_null() {
+                return said;
+            }
+            assert!(t.elapsed() < Duration::from_secs(10), "it never ended: {said}");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
+    fn fail_reason(stream_id: i64) -> Option<String> {
+        crate::catalog::db::with_db(|c| {
+            Ok(c.query_row(
+                "SELECT fail_reason FROM channel_quality WHERE stream_id = ?1",
+                [stream_id],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .ok()
+            .flatten())
+        })
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_browser_watching_a_channel_off_air_is_told_so_and_so_is_everyone_on_it() {
+        crate::catalog::db::install_test_db();
+        let s = server("watch-off-air");
+        enable(&s, true).await;
+        let base = placeholder_server().await;
+        s.set_playables(Arc::new(move |_| {
+            Ok(crate::source::Playable::plain(format!("{base}/live.ts")))
+        }));
+        let cookie = browser_login(&s).await;
+        let (st, body) =
+            call(&s, from_page("POST", "/api/watch", Some(&cookie), watch_body(93_001, false))).await;
+        assert_eq!(st, StatusCode::OK, "{body}");
+        let id = viewer_id(&body);
+        // A recording on the same feed meanwhile: one connection, and it
+        // learns the same.
+        let (_, mut rec) = s
+            .hubs
+            .join(&[93_001], crate::recording::sharing::Rider { id: 1, stop: now() + 600, until: now() + 900 })
+            .expect("the viewer's connection");
+        assert_eq!(s.hubs.open_count(), 1);
+
+        let said = ended_status(&s, &cookie, &id).await;
+        assert_eq!(said["ended"]["kind"], "offAir", "{said}");
+        assert_eq!(said["ended"]["clipSecs"], 600, "{said}");
+        assert_eq!(said["takenOver"], false);
+        // Its stream says it has ended rather than playing the clip.
+        let (st, _) = call(&s, from_page("GET", &format!("/api/stream/{id}"), Some(&cookie), None)).await;
+        assert_eq!(st, StatusCode::GONE);
+
+        assert!(rec.recv().await.is_none(), "the recording reads none of the clip");
+        assert!(matches!(
+            rec.ended(),
+            Some((crate::recording::fallback::Failure::OffAir { clip_secs: 600 }, _))
+        ));
+        until("the ledger says off air", || fail_reason(93_001).is_some()).await;
+        assert_eq!(fail_reason(93_001).as_deref(), Some("off air"));
+
+        // Asked again, it does not start: the page shows why all the same.
+        let (st, body) =
+            call(&s, from_page("POST", "/api/watch", Some(&cookie), watch_body(93_001, false))).await;
+        if st == StatusCode::OK {
+            // The tables came before the clip ended: the viewer ends as above.
+            let said = ended_status(&s, &cookie, &viewer_id(&body)).await;
+            assert_eq!(said["ended"]["kind"], "offAir");
+        } else {
+            assert_eq!(st, StatusCode::BAD_GATEWAY, "{body}");
+            assert_eq!(body["ending"]["kind"], "offAir");
+            assert_eq!(body["anyway"], false, "no other device is involved");
+        }
+    }
+
+    #[tokio::test]
+    async fn other_sources_for_a_channel_are_offered_without_provider_addresses() {
+        use crate::catalog::db;
+        let s = server("alternatives");
+        enable(&s, true).await;
+        db::install_test_db();
+        let secret = "http://provider.example/u/secret-user/p/secret-pass";
+        db::with_db(|c| {
+            for (id, name, num) in [(94_101, "Lantern One", 1), (94_102, "Lantern One HD", 2), (94_103, "Lantern One East", 3)] {
+                c.execute(
+                    "INSERT INTO channels (stream_id, category_id, name, clean_name, num,
+                                           epg_channel_id, logo_url, stream_url)
+                     VALUES (?1, 'alt-94100', ?2, ?2, ?3, 'lantern.one', ?4, ?5)",
+                    rusqlite::params![id, name, num, format!("{secret}/logo.png"), format!("{secret}/{id}.ts")],
+                )?;
+            }
+            Ok(())
+        })
+        .unwrap();
+        let cookie = browser_login(&s).await;
+        let uri = "/api/channels/94101/alternatives";
+
+        assert_eq!(
+            call(&s, from_page("GET", uri, None, None)).await.0,
+            StatusCode::UNAUTHORIZED,
+            "behind the sign-in"
+        );
+        let (st, body) = call(&s, from_page("GET", uri, Some(&cookie), None)).await;
+        assert_eq!(st, StatusCode::OK);
+        let ids: Vec<i64> = body
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["streamId"].as_i64().unwrap())
+            .collect();
+        assert_eq!(ids, [94_102, 94_103], "the others with its guide id, by number");
+        // The app's own shape: a channel as every channel route gives it.
+        let first = &body[0];
+        assert_eq!(first["name"], "Lantern One HD");
+        assert_eq!(first["num"], 2);
+        assert_eq!(first["logoUrl"], "/api/logo/94102");
+        for key in ["cleanName", "categoryId", "hasArchive", "isSeparator", "quality", "nowPlaying"] {
+            assert!(first.get(key).is_some(), "{key} in {first}");
+        }
+        let (_, _, raw) = call_raw(&s, from_page("GET", uri, Some(&cookie), None)).await;
+        let raw = String::from_utf8(raw).unwrap();
+        assert!(!raw.contains("secret") && !raw.contains("provider.example"), "{raw}");
+        assert!(!raw.to_ascii_lowercase().contains("url\":\"http"), "{raw}");
+
+        // An unknown channel has none; not a number is refused.
+        let (st, none) = call(&s, from_page("GET", "/api/channels/94999/alternatives", Some(&cookie), None)).await;
+        assert_eq!((st, none), (StatusCode::OK, serde_json::json!([])));
+        let (st, _) = call(&s, from_page("GET", "/api/channels/x/alternatives", Some(&cookie), None)).await;
+        assert_eq!(st, StatusCode::BAD_REQUEST);
+    }
 }

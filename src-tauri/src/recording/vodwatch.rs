@@ -935,6 +935,7 @@ async fn status(
         kind: "dropped",
         status: None,
         limit: false,
+        clip_secs: None,
     };
     let dto = match ended {
         Some(Ended::Feed(f)) => StatusDto {

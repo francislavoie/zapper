@@ -11,6 +11,15 @@
 //! already open for one of the recording's feeds is ridden at no cost;
 //! opening one asks the service's [`super::budget`] first, and on a full
 //! account follows [`super::sharing`]'s rules.
+//!
+//! **Off air.** A channel that is not broadcasting may be answered with a
+//! placeholder clip (`hub`, "Off air"). Each connection's first data is
+//! held back until the hub has told it from a clip ([`receive`]), so a clip
+//! never reaches the file. The recording notes "Off air at 18:26;
+//! retrying" once, and asks again every [`OFF_AIR_RETRY_SECS`] (the backup
+//! feed first, if it has one) until its programme ends, through the same
+//! budget and rules as any start, so it picks the broadcast up when it
+//! begins.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -23,7 +32,7 @@ use tokio::sync::watch;
 use super::api::{PartDto, RecordingState, WhileRecording};
 use super::budget::{jitter, wait_for_slot, Slots};
 use super::clock::{self, Arrival};
-use super::fallback::{Failure, Fallback};
+use super::fallback::{Failure, Fallback, OFF_AIR_RETRY_SECS};
 use super::hub::{Subscription, SETTLE_LOOK_SECS};
 use super::naming;
 use super::server::Server;
@@ -92,13 +101,13 @@ impl OpenPart {
         let _ = self.log.write_all(clock::log_line(&a).as_bytes()).await;
     }
 
-    async fn write(&mut self, data: &[u8]) -> Result<()> {
+    /// Writes `data`, which arrived at `t` (Unix milliseconds).
+    async fn write(&mut self, data: &[u8], t: i64) -> Result<()> {
         self.file
             .write_all(data)
             .await
             .context("writing the recording")?;
         self.bytes += data.len() as u64;
-        let t = now_ms();
         // A few records a second is plenty for a clock that shows seconds.
         if t - self.last_logged_ms >= 200 {
             self.last_logged_ms = t;
@@ -216,34 +225,185 @@ async fn room(server: &Arc<Server>, me: Rider, title: &str, waits: &mut u32) -> 
     }
 }
 
+/// The most a recording holds back of a connection's first data while its
+/// hub cannot yet tell it from a placeholder clip (`hub`, "Off air"). The
+/// clips seen are a few megabytes for ten minutes of black; a broadcast's
+/// connect burst at a high bitrate can come to more than this in the
+/// twenty seconds, and past it what is held is written, the rest as it
+/// comes.
+pub const HOLD_MAX: usize = 64 << 20;
+
+/// Where one connection's data goes: the recording's part for its feed,
+/// opened at the first data written. So a connection that brings nothing,
+/// or only a placeholder clip, leaves nothing behind: no part, no byte, no
+/// line in the arrival log.
+struct Sink<'a> {
+    server: &'a Server,
+    id: i64,
+    folder: &'a Path,
+    base: &'a str,
+    stream_id: i64,
+    open: &'a mut Option<OpenPart>,
+    /// When the connection was made, Unix milliseconds: the arrival log's
+    /// reconnect line.
+    connect_ms: i64,
+    /// Something was written.
+    wrote: bool,
+}
+
+impl Sink<'_> {
+    async fn write(&mut self, data: &[u8], at_ms: i64) -> Result<()> {
+        if !self.wrote {
+            self.begin().await?;
+            self.wrote = true;
+        }
+        let part = self.open.as_mut().expect("a part was opened");
+        part.write(data, at_ms).await?;
+        let bytes = part.bytes;
+        self.server.update_live(self.id, |l| l.bytes = bytes);
+        Ok(())
+    }
+
+    /// A new feed starts a new part; the same feed again continues its part
+    /// (the remuxer joins the timeline across the reconnect).
+    async fn begin(&mut self) -> Result<()> {
+        let (server, id, stream_id) = (self.server, self.id, self.stream_id);
+        if self.open.as_ref().is_none_or(|p| p.stream_id != stream_id) {
+            if let Some(p) = self.open.take() {
+                close(server, id, p).await?;
+            }
+            // Numbered among what the service received: a part handed over
+            // by the app is not one other programs see (`add_prelude`).
+            let index = server
+                .db(|c| store::get(c, id))?
+                .map_or(0, |r| r.parts.iter().filter(|p| !p.handed_over).count())
+                + 1;
+            let visible = server.config().while_recording == WhileRecording::Visible;
+            let p = OpenPart::create(self.folder, self.base, index, stream_id, visible).await?;
+            let dto = p.dto(None);
+            server.db(|c| store::edit_parts(c, id, |ps| ps.push(dto)))?;
+            server.update_live(id, |l| {
+                l.stream_id = stream_id;
+                l.since = p.started;
+            });
+            *self.open = Some(p);
+        }
+        let part = self.open.as_mut().expect("a part was just opened");
+        let pos = part.bytes;
+        part.log(Arrival {
+            pos,
+            wall_ms: self.connect_ms,
+            connect: true,
+        })
+        .await;
+        Ok(())
+    }
+}
+
+/// What a connection delivered before its hub could tell it from a
+/// placeholder clip, with when each piece arrived (for the clock).
+#[derive(Default)]
+struct Held {
+    chunks: Vec<(i64, bytes::Bytes)>,
+    bytes: usize,
+}
+
+impl Held {
+    async fn flush(self, sink: &mut Sink<'_>) -> Result<()> {
+        for (at, data) in self.chunks {
+            sink.write(&data, at).await?;
+        }
+        Ok(())
+    }
+}
+
 /// What the recording gets from its hub until its window ends, it is
 /// stopped (both `None`), or the feed fails: how, and for how long the feed
 /// had delivered.
+///
+/// Until the hub has judged the stream not to be a placeholder clip (its
+/// first `OFF_AIR_WINDOW`, see `hub`), what comes is held back: a clip ends
+/// within it, and is then dropped whole, so a channel that is off air never
+/// adds to the recording, however often it is asked again. Anything else
+/// that ends the stream, or the recording, writes what was held.
 async fn receive(
-    server: &Server,
-    id: i64,
+    sink: &mut Sink<'_>,
     sub: &mut Subscription,
-    part: &mut OpenPart,
     until: i64,
     stop: &mut watch::Receiver<bool>,
 ) -> Result<Option<(Failure, i64)>> {
+    let mut judged = sub.judged();
+    let mut held = (!*judged.borrow_and_update()).then(Held::default);
     loop {
         let left = until - now();
         if left <= 0 || *stop.borrow() {
+            if let Some(h) = held.take() {
+                h.flush(sink).await?;
+            }
             return Ok(None);
         }
         let data = tokio::select! {
             d = sub.recv() => d,
             _ = tokio::time::sleep(Duration::from_secs(left as u64)) => continue,
-            _ = stop.changed() => return Ok(None),
+            _ = stop.changed() => {
+                if let Some(h) = held.take() {
+                    h.flush(sink).await?;
+                }
+                return Ok(None);
+            }
+            r = judged.changed(), if held.is_some() => {
+                // `changed` fails only with the hub gone, which ends the
+                // stream too: that is read next.
+                if r.is_ok() && *judged.borrow_and_update() {
+                    if let Some(h) = held.take() {
+                        h.flush(sink).await?;
+                    }
+                }
+                continue;
+            }
         };
         let Some(data) = data else {
-            return Ok(Some(sub.ended().unwrap_or((Failure::Ended, 0))));
+            let ended = sub.ended().unwrap_or((Failure::Ended, 0));
+            if let Some(h) = held.take() {
+                if !matches!(ended.0, Failure::OffAir { .. }) {
+                    h.flush(sink).await?;
+                }
+            }
+            return Ok(Some(ended));
         };
-        part.write(&data).await?;
-        let bytes = part.bytes;
-        server.update_live(id, |l| l.bytes = bytes);
+        match held.as_mut() {
+            Some(h) => {
+                h.bytes += data.len();
+                h.chunks.push((now_ms(), data));
+                if h.bytes > HOLD_MAX {
+                    if let Some(h) = held.take() {
+                        h.flush(sink).await?;
+                    }
+                }
+            }
+            None => sink.write(&data, now_ms()).await?,
+        }
     }
+}
+
+/// How long a recording whose channel is off air waits before asking again:
+/// [`OFF_AIR_RETRY_SECS`], or for a harness build, `ZAPPER_OFF_AIR_RETRY_SECS`
+/// (a check cannot wait minutes for each try).
+fn off_air_retry() -> i64 {
+    #[cfg(feature = "harness")]
+    if let Some(s) = std::env::var("ZAPPER_OFF_AIR_RETRY_SECS")
+        .ok()
+        .and_then(|v| v.trim().parse::<i64>().ok())
+    {
+        return s;
+    }
+    OFF_AIR_RETRY_SECS
+}
+
+/// `18:26`, local time: when, for a note.
+fn clock_time(unix: i64) -> String {
+    let c = crate::localtime::Civil::local(unix);
+    format!("{:02}:{:02}", c.hour, c.minute)
 }
 
 /// Captures recording `id` until its window ends or it is stopped.
@@ -278,8 +438,11 @@ async fn run_inner(server: &Arc<Server>, id: i64, stop: &mut watch::Receiver<boo
     if let Some(b) = rec.backup_stream_id.filter(|&b| b != rec.stream_id) {
         feeds.push(b);
     }
-    let mut fallback = Fallback::new(feeds.len());
+    let mut fallback = Fallback::new(feeds.len()).with_off_air_retry(off_air_retry());
     let mut open: Option<OpenPart> = None;
+    // When the channel was found off air, until a connection writes again:
+    // one note for the spell, however often it is asked.
+    let mut off_air_since: Option<i64> = None;
     let mut next_at = now();
     let mut slot_waits: u32 = 0;
     let mut waiting_for_room = false;
@@ -365,43 +528,25 @@ async fn run_inner(server: &Arc<Server>, id: i64, stop: &mut watch::Receiver<boo
         slot_waits = 0;
         waiting_for_room = false;
         server.update_live(id, |l| l.waiting = None);
-        let stream_id = sub.feed();
 
-        // A new feed starts a new part; the same feed again continues its
-        // part (the remuxer joins the timeline across the reconnect).
-        if open.as_ref().is_none_or(|p| p.stream_id != stream_id) {
-            if let Some(p) = open.take() {
-                close(server, id, p).await?;
-            }
-            // Numbered among what the service received: a part handed over
-            // by the app is not one other programs see (`add_prelude`).
-            let index = server
-                .db(|c| store::get(c, id))?
-                .map_or(0, |r| r.parts.iter().filter(|p| !p.handed_over).count())
-                + 1;
-            let visible = server.config().while_recording == WhileRecording::Visible;
-            let p = OpenPart::create(&folder, &info.base, index, stream_id, visible).await?;
-            let dto = p.dto(None);
-            server.db(|c| store::edit_parts(c, id, |ps| ps.push(dto)))?;
-            server.update_live(id, |l| {
-                l.stream_id = stream_id;
-                l.since = p.started;
-            });
-            open = Some(p);
-        }
-        let part = open.as_mut().expect("a part was just opened");
-        let pos = part.bytes;
-        part.log(Arrival {
-            pos,
-            wall_ms: now_ms(),
-            connect: true,
-        })
-        .await;
-
-        let ended = receive(server, id, &mut sub, part, until, stop).await?;
+        let mut sink = Sink {
+            server,
+            id,
+            folder: &folder,
+            base: &info.base,
+            stream_id: sub.feed(),
+            open: &mut open,
+            connect_ms: now_ms(),
+            wrote: false,
+        };
+        let ended = receive(&mut sink, &mut sub, until, stop).await?;
+        let wrote = sink.wrote;
         let lost = sub.lost();
         drop(sub);
-        if lost > 0 && !lost_noted {
+        let off_air = matches!(ended, Some((Failure::OffAir { .. }, _)));
+        // A clip comes faster than anything reads it; what it lost is not
+        // the disk's doing.
+        if lost > 0 && !lost_noted && !off_air {
             lost_noted = true;
             server.note(
                 id,
@@ -411,15 +556,39 @@ async fn run_inner(server: &Arc<Server>, id: i64, stop: &mut watch::Receiver<boo
                 ),
             );
         }
+        if wrote {
+            off_air_since = None;
+        }
         let Some((failure, delivered)) = ended else {
             break;
         };
         last_failure = Some(failure);
-        let next = fallback.failed(now(), failure, delivered);
+        let t = now();
+        let next = fallback.failed(t, failure, delivered);
         if let Some(n) = next.note {
             server.note(id, &n);
         }
         next_at = next.at;
+        if off_air {
+            // Asked again until the programme's end, never into the padding
+            // after it: a connection then is only padding, which the next
+            // recording's start may need.
+            let again = next.at < rec.stop;
+            if off_air_since.is_none() {
+                off_air_since = Some(t);
+                let retrying = if again { "; retrying" } else { "" };
+                server.note(id, &format!("Off air at {}{retrying}", clock_time(t)));
+            }
+            if !again {
+                break;
+            }
+            if next.at > t {
+                let when = clock_time(next.at);
+                server.update_live(id, |l| {
+                    l.waiting = Some(format!("off air; trying again at {when}"))
+                });
+            }
+        }
     }
     if let Some(p) = open.take() {
         close(server, id, p).await?;

@@ -203,6 +203,101 @@ impl Tables {
     }
 }
 
+/// The stream time a transport stream's packets carry, read as they pass:
+/// what `hub` measures a placeholder clip's length by (see
+/// `crate::ipc::ending::off_air`), as mpv's cache span measures it for the
+/// app.
+///
+/// Each PCR of the first PID that carries one, or, in a stream with no PCR,
+/// each PES header's PTS on the first PID that has one: either is the
+/// programme's clock, at 90 kHz. They wrap after about 26.5 hours, and are
+/// unwrapped here so a wrap reads as time going on rather than going back.
+#[derive(Debug, Default, Clone)]
+pub struct StreamClock {
+    pcr_pid: Option<u16>,
+    pts_pid: Option<u16>,
+    /// The last value, in 90 kHz ticks, and what has been added for wraps.
+    last: Option<u64>,
+    wraps: u64,
+}
+
+/// The 33-bit clock's range, in its ticks.
+const CLOCK_RANGE: u64 = 1 << 33;
+
+impl StreamClock {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Feeds whole packets (from a sync byte on, as a hub hands them out);
+    /// `each` is given every timestamp in them, in seconds, in order.
+    pub fn feed(&mut self, data: &[u8], mut each: impl FnMut(f64)) {
+        for p in data.as_chunks::<PACKET>().0 {
+            if p[0] != 0x47 {
+                continue;
+            }
+            if let Some(t) = self.packet(p) {
+                each(self.unwrap(t));
+            }
+        }
+    }
+
+    fn packet(&mut self, p: &[u8]) -> Option<u64> {
+        let pid = (u16::from(p[1] & 0x1f) << 8) | u16::from(p[2]);
+        let afc = (p[3] >> 4) & 3;
+        let mut payload = 4;
+        if afc & 2 != 0 {
+            let len = usize::from(p[4]);
+            payload = 5 + len;
+            // The PCR: the adaptation field's flags, then 33 bits of base
+            // (90 kHz) and 9 of extension (27 MHz), which this ignores.
+            if len >= 7 && p[5] & 0x10 != 0 && self.pcr_pid.is_none_or(|w| w == pid) {
+                self.pcr_pid = Some(pid);
+                let b = &p[6..11];
+                return Some(
+                    (u64::from(b[0]) << 25)
+                        | (u64::from(b[1]) << 17)
+                        | (u64::from(b[2]) << 9)
+                        | (u64::from(b[3]) << 1)
+                        | (u64::from(b[4]) >> 7),
+                );
+            }
+        }
+        if self.pcr_pid.is_some() || afc & 1 == 0 || p[1] & 0x40 == 0 {
+            return None;
+        }
+        // A PES header starting here, with a PTS.
+        let h = p.get(payload..)?;
+        if h.len() < 14 || h[..3] != [0, 0, 1] || h[7] & 0x80 == 0 {
+            return None;
+        }
+        if self.pts_pid.is_some_and(|w| w != pid) {
+            return None;
+        }
+        self.pts_pid = Some(pid);
+        let t = &h[9..14];
+        Some(
+            (u64::from((t[0] >> 1) & 0x07) << 30)
+                | (u64::from(t[1]) << 22)
+                | (u64::from(t[2] >> 1) << 15)
+                | (u64::from(t[3]) << 7)
+                | (u64::from(t[4]) >> 1),
+        )
+    }
+
+    /// Seconds, carried across the clock's wrap: a value more than half
+    /// the range below the last one is the clock starting over.
+    fn unwrap(&mut self, ticks: u64) -> f64 {
+        if let Some(last) = self.last {
+            if ticks + CLOCK_RANGE / 2 < last {
+                self.wraps += CLOCK_RANGE;
+            }
+        }
+        self.last = Some(ticks);
+        (ticks + self.wraps) as f64 / 90_000.0
+    }
+}
+
 /// The section a payload unit starts, past its pointer field.
 fn section_after_pointer(payload: &[u8]) -> Option<&[u8]> {
     let pointer = usize::from(*payload.first()?);
@@ -712,5 +807,74 @@ pub(crate) mod tests {
         );
         assert_eq!(audio, None);
         assert!(silent.unwrap().contains("AC3"));
+    }
+
+    /// A packet of `pid` with nothing but an adaptation field carrying a
+    /// PCR of `secs`.
+    pub(crate) fn pcr_packet(pid: u16, secs: f64) -> Vec<u8> {
+        let base = (secs * 90_000.0).round() as u64 % CLOCK_RANGE;
+        let mut p = vec![0xffu8; PACKET];
+        p[0] = 0x47;
+        p[1] = (pid >> 8) as u8 & 0x1f;
+        p[2] = pid as u8;
+        p[3] = 0x20; // adaptation field only
+        p[4] = 183;
+        p[5] = 0x10; // PCR present
+        p[6] = (base >> 25) as u8;
+        p[7] = (base >> 17) as u8;
+        p[8] = (base >> 9) as u8;
+        p[9] = (base >> 1) as u8;
+        p[10] = ((base & 1) << 7) as u8 | 0x7e;
+        p[11] = 0;
+        p
+    }
+
+    /// A packet of `pid` starting a PES with a PTS of `secs`.
+    pub(crate) fn pes_packet(pid: u16, secs: f64) -> Vec<u8> {
+        let t = (secs * 90_000.0).round() as u64 % CLOCK_RANGE;
+        let mut p = vec![0xffu8; PACKET];
+        p[0] = 0x47;
+        p[1] = 0x40 | ((pid >> 8) as u8 & 0x1f);
+        p[2] = pid as u8;
+        p[3] = 0x10;
+        p[4..13].copy_from_slice(&[0, 0, 1, 0xe0, 0, 0, 0x80, 0x80, 5]);
+        p[13] = 0x21 | (((t >> 30) as u8 & 0x07) << 1);
+        p[14] = (t >> 22) as u8;
+        p[15] = (((t >> 15) as u8) << 1) | 1;
+        p[16] = (t >> 7) as u8;
+        p[17] = ((t as u8) << 1) | 1;
+        p
+    }
+
+    fn clock_of(packets: &[Vec<u8>]) -> Vec<f64> {
+        let mut c = StreamClock::new();
+        let mut seen = Vec::new();
+        c.feed(&packets.concat(), |t| seen.push((t * 1000.0).round() / 1000.0));
+        seen
+    }
+
+    #[test]
+    fn the_clock_is_read_from_the_pcr_of_one_pid() {
+        let seen = clock_of(&[
+            pcr_packet(0x100, 10.0),
+            pes_packet(0x101, 10.5),
+            pcr_packet(0x200, 900.0),
+            pcr_packet(0x100, 10.1),
+        ]);
+        assert_eq!(seen, vec![10.0, 10.1], "the PTS and another PID's PCR are not read");
+    }
+
+    #[test]
+    fn without_a_pcr_the_clock_is_read_from_the_pts() {
+        let seen = clock_of(&[pes_packet(0x101, 3.0), pes_packet(0x102, 50.0), pes_packet(0x101, 3.04)]);
+        assert_eq!(seen, vec![3.0, 3.04]);
+    }
+
+    #[test]
+    fn the_clock_carries_on_across_its_wrap() {
+        let range = CLOCK_RANGE as f64 / 90_000.0;
+        let seen = clock_of(&[pcr_packet(0x100, range - 1.0), pcr_packet(0x100, 1.0)]);
+        assert_eq!(seen.len(), 2);
+        assert!((seen[1] - seen[0] - 2.0).abs() < 0.01, "{seen:?}");
     }
 }

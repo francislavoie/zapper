@@ -513,6 +513,8 @@ pub(super) struct EndingDto {
     pub(super) kind: &'static str,
     pub(super) status: Option<u16>,
     pub(super) limit: bool,
+    /// For `offAir`: how long the provider's placeholder clip was.
+    pub(super) clip_secs: Option<u32>,
 }
 
 pub(super) fn ending_of(f: Failure) -> EndingDto {
@@ -521,11 +523,16 @@ pub(super) fn ending_of(f: Failure) -> EndingDto {
         Failure::Refused { status, limit } => ("refused", Some(status), f.is_limit() || limit),
         Failure::NotVideo => ("notVideo", None, false),
         Failure::Stalled | Failure::Unreachable => ("network", None, false),
+        Failure::OffAir { .. } => ("offAir", None, false),
     };
     EndingDto {
         kind,
         status,
         limit,
+        clip_secs: match f {
+            Failure::OffAir { clip_secs } => Some(clip_secs),
+            _ => None,
+        },
     }
 }
 
@@ -1031,9 +1038,20 @@ async fn status(
     let found = s
         .viewers
         .map()
-        .get(&id)
+        .get_mut(&id)
         .filter(|v| v.device == device)
-        .map(|v| (v.stream_id, v.rider, v.ended));
+        .map(|v| {
+            // Off air while nobody reads it yet (the page asks before its
+            // player has opened the stream): there is nothing left to read,
+            // so it has ended now.
+            if v.ended.is_none() {
+                if let Some((f, secs)) = v.sub.as_ref().and_then(Subscription::cut_off) {
+                    v.ended = Some((Ended::Feed(f, secs), Instant::now()));
+                    v.sub = None;
+                }
+            }
+            (v.stream_id, v.rider, v.ended)
+        });
     let Some((feed, rider, ended)) = found else {
         return plain(StatusCode::NOT_FOUND, "channel", "No such viewer.");
     };
@@ -1048,6 +1066,7 @@ async fn status(
                 kind: "dropped",
                 status: None,
                 limit: false,
+                clip_secs: None,
             }),
             taken_over: true,
             notice: None,
