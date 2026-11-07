@@ -213,15 +213,20 @@ async fn recording(
 
     // Three tries, each answered with the clip.
     let t = Instant::now();
-    let mut seen_waiting = None;
+    let mut seen_retry = None;
     while off.placeholders() < 3 {
         if t.elapsed() > Duration::from_secs(4 * RETRY_SECS + 60) {
             return Err(format!("only {} tries in {:?}", off.placeholders(), t.elapsed()));
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
         let r = one(client, rec.id).await?;
-        if let Some(w) = r.waiting.as_ref().filter(|w| w.contains("off air")) {
-            seen_waiting.get_or_insert_with(|| w.clone());
+        // Between tries: a retry time, never a wait for a connection,
+        // which would tell browsers and the app it needs one.
+        if let Some(w) = &r.waiting {
+            return Err(format!("off air, the recording says it is waiting: {w}"));
+        }
+        if let Some(at) = r.retry_at {
+            seen_retry.get_or_insert(at);
         }
         grows_by_nothing(&r)?;
     }
@@ -232,17 +237,17 @@ async fn recording(
     grows_by_nothing(&r)?;
     let tries = off.placeholders();
     println!(
-        "after {tries} tries, {:.0} s apart on average: nothing captured; notes {:?}; waiting {:?}",
+        "after {tries} tries, {:.0} s apart on average: nothing captured; notes {:?}; first retryAt {:?}",
         t.elapsed().as_secs_f64() / tries as f64,
         r.notes,
-        seen_waiting
+        seen_retry
     );
     let off_air_notes: Vec<&String> = r.notes.iter().filter(|n| n.starts_with("Off air at ")).collect();
     if off_air_notes.len() != 1 || !off_air_notes[0].ends_with("; retrying") {
         return Err(format!("expected one \"Off air at HH:MM; retrying\" note, got {:?}", r.notes));
     }
-    if seen_waiting.is_none() {
-        return Err("the recording never said it was waiting to try again".into());
+    if seen_retry.is_none() {
+        return Err("the recording never said when it would try again".into());
     }
     if ledger(stream_id).0.as_deref() != Some("off air") {
         return Err(format!("the channel's record does not say off air: {:?}", ledger(stream_id)));

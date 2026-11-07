@@ -343,6 +343,15 @@ test("rows say when and how it is going", () => {
     recordingStatus(rec({ state: "recording", waiting: "waiting for a free connection (1 of 1 in use)" }), NOON),
     "Waiting for a free connection (1 of 1 in use)",
   );
+  // Off air: its next try, as a warning, never as waiting for a connection.
+  const offAir = rec({ state: "recording", retryAt: NOON + 180 });
+  assert.equal(recordingStatus(offAir, NOON), "Off air; trying again at 12:03");
+  assert.deepEqual(recordingRowStatus(offAir, NOON), {
+    text: "Off air; trying again at 12:03",
+    tone: "warn",
+    progress: null,
+  });
+  assert.match(activeRecordingLine(offAir, NOON), /↳ Off air; trying again at 12:03/);
   assert.equal(recordingStatus(rec({ state: "done", parts: [part(1e9), part(2e8)] }), NOON), "1.2 GB in 2 parts");
   assert.equal(recordingStatus(rec({ state: "failed", error: "missed: the service was off" }), NOON), "Missed: the service was off");
 });
