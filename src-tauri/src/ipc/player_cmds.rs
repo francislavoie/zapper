@@ -1015,8 +1015,7 @@ fn tick(app: &AppHandle, p: &Player) {
                     tracing::info!(
                         "decoding {} with {}",
                         p.get_string("video-codec").unwrap_or_else(|| "video".into()),
-                        p.get_string("hwdec-current")
-                            .map_or_else(|| "software (no hardware decoder)".into(), |h| format!("hardware ({h})"))
+                        decoder_words(p.get_string("hwdec-current").as_deref())
                     );
                 }
                 Signal::EndFile { error: Some(code), .. } => m.ended_with(How::Error(*code)),
@@ -2141,6 +2140,15 @@ pub async fn set_deinterlace(
 // Pure helpers
 // ---------------------------------------------------------------------------
 
+/// Which decoder the log says is at work, from mpv's `hwdec-current`: absent,
+/// empty or `"no"` is software.
+fn decoder_words(hwdec_current: Option<&str>) -> String {
+    match hwdec_current.map(str::trim) {
+        None | Some("" | "no") => "software (no hardware decoder)".to_owned(),
+        Some(h) => format!("hardware ({h})"),
+    }
+}
+
 /// Clamps a relative seek to what is actually buffered.
 ///
 /// Seeking past either end of the demuxer cache on a live stream drops the
@@ -2242,6 +2250,15 @@ fn timeshift_stamp(unix: i64, offset: i64) -> String {
 mod tests {
     use super::*;
     use crate::ipc::types::{SettingsDto, SubtitleBackdrop, SubtitleStyleDto};
+
+    #[test]
+    fn the_decoder_log_reads_hwdec_no_as_software() {
+        let software = "software (no hardware decoder)";
+        assert_eq!(decoder_words(None), software);
+        assert_eq!(decoder_words(Some("no")), software);
+        assert_eq!(decoder_words(Some("")), software);
+        assert_eq!(decoder_words(Some("vaapi")), "hardware (vaapi)");
+    }
 
     #[test]
     fn state_walks_stopped_to_opening_to_playing() {
