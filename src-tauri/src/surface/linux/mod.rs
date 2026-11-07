@@ -54,8 +54,9 @@ pub(super) fn install(window: &tauri::WebviewWindow) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// How long the page may take to unload, and then its process to end, before
-/// quitting goes ahead without it. Each normally takes a few milliseconds.
+/// How long the page may take to save what it keeps, and then its process to
+/// end, before quitting goes ahead without it. Each normally takes a few
+/// milliseconds.
 const QUIT_STEP: Duration = Duration::from_millis(1500);
 
 /// Ends playback, then the page, then WebKit's web process, and calls `then`
@@ -63,10 +64,16 @@ const QUIT_STEP: Duration = Duration::from_millis(1500);
 ///
 /// The window is hidden as soon as the video is down, so the close looks
 /// immediate: it stays realized, so nothing about it is torn down early, and
-/// the page sees `visibilitychange` to hidden. The page is unloaded first (`about:blank`), so it gets its `pagehide` and
-/// writes what it keeps in local storage while the app is still there. The
-/// web process is then ended through WebKit's own API rather than left to
-/// notice that the app has gone and exit by itself. Exiting by itself, it
+/// the page sees `visibilitychange` to hidden. The page is then sent
+/// `pagehide`, the event its handlers save what it keeps in local storage on
+/// (the session, a pending settings change), and quitting waits for those
+/// handlers to have run. The event is dispatched rather than caused by
+/// navigating away: a navigation to `about:blank` was measured to start a
+/// second web process now and then, and sometimes not to finish within the
+/// step's time limit, which skipped the handlers.
+///
+/// The web process is then ended through WebKit's own API rather than left
+/// to notice that the app has gone and exit by itself. Exiting by itself, it
 /// runs its libraries' exit handlers while its own threads may still be
 /// letting go of their EGL state, and libEGL's handler has been seen to crash
 /// there: heap corruption found by `free` under `_dl_fini`, with another
@@ -102,34 +109,38 @@ fn advance(step: &Step) {
     }
 }
 
-fn end_page(webview: webkit2gtk::WebView, then: Box<dyn FnOnce()>) {
-    use gtk::glib::object::ObjectExt;
-    use webkit2gtk::{LoadEvent, WebViewExt};
+/// The page's goodbye: `pagehide`, as when it is navigated away from. The
+/// handlers run synchronously inside the dispatch, so once this script has
+/// returned they have.
+const PAGEHIDE: &str = "dispatchEvent(new PageTransitionEvent('pagehide', { persisted: false })); true";
 
-    let handler: std::rc::Rc<RefCell<Option<gtk::glib::SignalHandlerId>>> = Default::default();
+fn end_page(webview: webkit2gtk::WebView, then: Box<dyn FnOnce()>) {
+    use webkit2gtk::WebViewExt;
+
     let next = {
-        let (webview, handler) = (webview.clone(), handler.clone());
-        once(Box::new(move || {
-            if let Some(id) = handler.borrow_mut().take() {
-                webview.disconnect(id);
-            }
-            end_web_process(webview, then);
-        }))
+        let webview = webview.clone();
+        once(Box::new(move || end_web_process(webview, then)))
     };
-    let on_load = next.clone();
-    *handler.borrow_mut() = Some(webview.connect_load_changed(move |v, event| {
-        if event == LoadEvent::Finished && v.uri().is_some_and(|u| u == "about:blank") {
-            advance(&on_load);
-        }
-    }));
+    let saved = next.clone();
+    webview.evaluate_javascript(
+        PAGEHIDE,
+        None,
+        None,
+        None::<&gtk::gio::Cancellable>,
+        move |result| {
+            if let Err(e) = result {
+                tracing::warn!("the page's pagehide: {e}");
+            }
+            advance(&saved);
+        },
+    );
     let late = next.clone();
     gtk::glib::timeout_add_local_once(QUIT_STEP, move || {
         if late.borrow().is_some() {
-            tracing::warn!("the page did not unload in time; quitting anyway");
+            tracing::warn!("the page did not finish its pagehide in time; quitting anyway");
         }
         advance(&late);
     });
-    webview.load_uri("about:blank");
 }
 
 fn end_web_process(webview: webkit2gtk::WebView, then: Box<dyn FnOnce()>) {
