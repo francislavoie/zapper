@@ -1070,6 +1070,7 @@ mod tests {
             EndingKind::Other,
             EndingKind::InUse,
             EndingKind::OffAir,
+            EndingKind::BeyondArchive,
         ] {
             assert!(!worth_reconnecting(&e(kind, None), true), "{kind:?}");
         }
