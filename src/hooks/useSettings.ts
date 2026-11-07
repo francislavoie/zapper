@@ -106,12 +106,19 @@ export function useSettings(loadOnMount = false): SettingsControl {
 
   useEffect(() => {
     if (loadOnMount) reload();
-    return () => {
-      // Closing the pane mid-debounce must not lose the last change.
+    // Closing the pane, or quitting, mid-debounce must not lose the last
+    // change. Quitting unloads the page without unmounting anything, so the
+    // page hiding has to flush too.
+    const flushPending = () => {
       if (timer.current !== undefined) {
         window.clearTimeout(timer.current);
         flush();
       }
+    };
+    window.addEventListener("pagehide", flushPending);
+    return () => {
+      window.removeEventListener("pagehide", flushPending);
+      flushPending();
     };
   }, [flush, loadOnMount, reload]);
 
