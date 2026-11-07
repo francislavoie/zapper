@@ -32,7 +32,6 @@ fixtures directory is served too.
 `player_check` can zap after its run: `ZAPPER_ZAP_TO=2,3` opens ids 2 and 3 in turn from the
 channel playing, each from its own fixture (`2.ts`, `3.ts`: a fixtures directory of links, say
 `2.ts` to `radio.ts`), and checks each still plays past the first-frame deadline.
-`ZAPPER_LIVE_START=wait` starts every channel at live, held on its first frame (or sound).
 
 `fake_stream.py` sends a fixture as an endless chunked response with no
 length, as a live feed does, paced to its bitrate. Flags imitate how real

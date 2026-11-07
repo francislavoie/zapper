@@ -215,17 +215,6 @@ async fn run(app: &tauri::AppHandle) -> Result<String, String> {
     use zapper_lib::ipc::player_cmds as cmds;
     use zapper_lib::ipc::types::PlaybackState;
 
-    // "When a channel opens", as Settings would set it: `wait` holds each
-    // channel on its first frame (or sound) until the connect burst is in.
-    if std::env::var("ZAPPER_LIVE_START").is_ok_and(|v| v == "wait") {
-        let settings = zapper_lib::ipc::types::SettingsDto {
-            live_start: zapper_lib::ipc::types::LiveStart::Wait,
-            ..Default::default()
-        };
-        cmds::apply_playback_settings(app.clone(), settings).await?;
-        println!("[setup] channels start at live (wait)");
-    }
-
     let stream_id = resolve_stream_id().await?;
     // Printed so a re-run can pass ZAPPER_STREAM_ID and skip the listing. An
     // id is not a credential; the URL that carries one is never printed.
