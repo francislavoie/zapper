@@ -7,7 +7,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { endedActions, endedMessage, reconnectMessage, startingLine } from "../logic/ending.ts";
+import { endedActions, endedMessage, primaryLabel, reconnectMessage, startingLine } from "../logic/ending.ts";
 
 const failed = (ending, error = "the stream ended") => ({ state: "failed", ending, error });
 
@@ -60,9 +60,14 @@ test("a catch-up older than the archive keeps says so, plainly", () => {
   assert.equal(m.code, "HTTP 404");
   // Not the connection limit, and nothing about another device.
   assert.doesNotMatch(m.title + m.detail, /connection|device/i);
+  // Tuning again plays the channel live, and the button says so.
   const a = endedActions(failed({ kind: "beyondArchive", status: 404, limit: false }));
-  assert.equal(a.primary, "retry");
+  assert.equal(a.primary, "watchLive");
   assert.equal(a.note, null);
+  assert.equal(a.dismiss, true);
+  assert.equal(primaryLabel("watchLive"), "Watch live");
+  assert.equal(primaryLabel("watchHere"), "Watch here anyway");
+  assert.equal(primaryLabel("retry"), "Retry");
 });
 
 test("the network is not blamed on the provider", () => {

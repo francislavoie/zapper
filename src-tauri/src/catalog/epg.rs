@@ -32,14 +32,9 @@ pub fn parse_xmltv_time(s: &str) -> Result<i64> {
     let (y, mo, d) = (num(0, 4)?, num(4, 6)?, num(6, 8)?);
     let (h, mi, sec) = (num(8, 10)?, num(10, 12)?, num(12, 14)?);
 
-    // Days since the Unix epoch, via the civil-from-days algorithm.
-    let yy = if mo <= 2 { y - 1 } else { y };
-    let era = yy.div_euclid(400);
-    let yoe = yy - era * 400;
-    let mp = (mo + 9) % 12;
-    let doy = (153 * mp + 2) / 5 + d - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days = era * 146_097 + doe - 719_468;
+    let month = u32::try_from(mo).map_err(|_| anyhow!("bad month in {s}"))?;
+    let day = u32::try_from(d).map_err(|_| anyhow!("bad day in {s}"))?;
+    let days = crate::localtime::days_from_civil(y, month, day);
 
     let mut t = days * 86_400 + h * 3600 + mi * 60 + sec;
 

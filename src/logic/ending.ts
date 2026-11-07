@@ -160,8 +160,10 @@ export function reconnectMessage(
 /** The buttons under a stopped picture, and what the main one does. */
 export interface EndedActions {
   /** "retry" tunes again; "watchHere" tunes again knowing it will take the
-   *  connection from the other device; "cancel" stops a reconnect. */
-  primary: "retry" | "watchHere" | "cancel";
+   *  connection from the other device; "watchLive" tunes the channel live
+   *  after a programme from its archive could not be had; "cancel" stops a
+   *  reconnect. */
+  primary: "retry" | "watchHere" | "watchLive" | "cancel";
   /** Said under the buttons: what pressing the main one will do to somebody
    *  else. */
   note: string | null;
@@ -200,7 +202,25 @@ export function endedActions(
         note: "If another device is using your connection, this will stop it there.",
         dismiss: true,
       };
+    // Tuning again plays the channel, live: Retry would promise the
+    // programme again.
+    case "beyondArchive":
+      return { primary: "watchLive", note: null, dismiss: true };
     default:
       return { primary: "retry", note: null, dismiss: true };
+  }
+}
+
+/** The words on the main button. */
+export function primaryLabel(primary: EndedActions["primary"]): string {
+  switch (primary) {
+    case "watchHere":
+      return "Watch here anyway";
+    case "watchLive":
+      return "Watch live";
+    case "cancel":
+      return "Cancel";
+    case "retry":
+      return "Retry";
   }
 }
