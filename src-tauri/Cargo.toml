@@ -83,6 +83,14 @@ name = "recording_check"
 path = "src/bin/recording_check.rs"
 required-features = ["harness", "server"]
 
+# A channel the fixture server answers with a placeholder clip, through a
+# real zapper-server: a recording retries and keeps none of the clip, a
+# browser's viewer ends as off air, and the other-sources route.
+[[bin]]
+name = "offair_check"
+path = "src/bin/offair_check.rs"
+required-features = ["harness", "server"]
+
 # Records what a headless mpv is watching on an account of one connection:
 # the player moves onto zapper-server's connection, and its buffer becomes
 # the recording's first part.

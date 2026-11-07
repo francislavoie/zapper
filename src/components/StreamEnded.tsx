@@ -16,6 +16,7 @@ import { playChannel, playMovie } from "../actions";
 import { backend } from "../backend";
 import { endedActions, endedMessage, reconnectMessage, retryStart, retryTarget } from "../logic/ending";
 import { run, useApp, useDispatch } from "../store";
+import { Alternatives } from "./Alternatives";
 
 export interface StreamEndedProps {
   /** The docked picture: smaller type, no detail line. */
@@ -84,6 +85,9 @@ export function StreamEnded({ compact = false, onDismissed }: StreamEndedProps) 
         ) : null}
       </div>
       {!compact && actions.note ? <p className="stream-ended-note">{actions.note}</p> : null}
+      {!compact && message.alternatives && player.streamId !== null ? (
+        <Alternatives streamId={player.streamId} />
+      ) : null}
     </div>
   );
 }

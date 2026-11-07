@@ -250,6 +250,42 @@ pub fn channels_by_ids(conn: &Connection, ids: &[i64]) -> Result<Vec<ChannelDto>
     Ok(ids.iter().filter_map(|id| by_id.remove(id)).collect())
 }
 
+/// The most [`alternatives_for`] offers.
+pub const ALTERNATIVES_MAX: u32 = 3;
+
+/// Other live channels that carry the same programmes as `stream_id` — the
+/// same guide id (`epg_channel_id`) — for when it is off air or will not
+/// play: "Try another source".
+///
+/// Those that last played first (`ok_count` above zero), the newest
+/// `measured_at` leading, then the rest by number. A channel whose last open failed, or was off air, is
+/// left out: it is the last thing to suggest. None for a channel with no
+/// guide id. Served by `channels_by_epg`.
+pub fn alternatives_for(conn: &Connection, stream_id: i64) -> Result<Vec<ChannelDto>> {
+    let mut stmt = conn.prepare(&alternatives_sql())?;
+    let rows = stmt.query_map(rusqlite::params![stream_id, ALTERNATIVES_MAX], channel_from_row)?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
+/// [`alternatives_for`]'s query: `?1` the channel, `?2` how many.
+fn alternatives_sql() -> String {
+    format!(
+        "SELECT {CHANNEL_COLUMNS}
+         FROM channels ch {QUALITY_JOIN}
+         WHERE ch.epg_channel_id = (
+                   SELECT epg_channel_id FROM channels
+                   WHERE stream_id = ?1 AND epg_channel_id IS NOT NULL AND epg_channel_id <> '')
+           AND ch.stream_id <> ?1
+           AND ch.deleted_at IS NULL
+           AND ch.is_separator = 0
+           AND q.failed_at IS NULL
+         ORDER BY COALESCE(q.ok_count, 0) > 0 DESC,
+                  CASE WHEN COALESCE(q.ok_count, 0) > 0 THEN COALESCE(q.measured_at, 0) END DESC,
+                  ch.num IS NULL, ch.num, ch.stream_id
+         LIMIT ?2"
+    )
+}
+
 /// Programmes overlapping `[from, to)` for each channel, in the order the ids
 /// were given. A channel with no guide yields an empty vec rather than
 /// vanishing: only 15% of the catalogue carries EPG, and the guide grid still
@@ -474,6 +510,23 @@ pub fn record_failed(conn: &Connection, stream_id: i64, reason: &str, at: i64) -
                  fail_reason = excluded.fail_reason"
         ),
         rusqlite::params![stream_id, at, reason],
+    )?;
+    Ok(())
+}
+
+/// The channel was found broadcasting: a mark of "off air" against it
+/// (`ipc::ending::OFF_AIR_REASON`) is over. Any other failure on record is
+/// left for a picture to clear ([`record_loaded`]). The recording service's
+/// way of clearing what it wrote, as it never shows a picture.
+pub fn clear_off_air(conn: &Connection, stream_id: i64) -> Result<()> {
+    conn.execute(
+        concat!(
+            "UPDATE channel_quality SET failed_at = NULL, fail_reason = NULL
+             WHERE origin = ",
+            current_origin_sql!(),
+            " AND stream_id = ?1 AND fail_reason = ?2"
+        ),
+        rusqlite::params![stream_id, crate::ipc::ending::OFF_AIR_REASON],
     )?;
     Ok(())
 }
@@ -893,6 +946,122 @@ mod tests {
         assert_eq!(q.fps, Some(25.0));
         assert_eq!((q.audio_codec.as_deref(), q.audio_channels), (Some("mp2"), Some(6)));
         assert_eq!(q.measured_at, Some(200));
+    }
+
+    /// A channel carrying guide id `epg`.
+    fn guided(c: &Connection, id: i64, num: Option<i64>, epg: Option<&str>) {
+        c.execute(
+            "INSERT INTO channels (stream_id, category_id, name, clean_name, num, epg_channel_id)
+             VALUES (?1, '1', ?2, ?2, ?3, ?4)",
+            rusqlite::params![id, format!("Channel {id}"), num, epg],
+        )
+        .unwrap();
+    }
+
+    fn measured(c: &Connection, id: i64, at: i64) {
+        record_loaded(c, id).unwrap();
+        let r = Reading {
+            codec: Some("h264".into()),
+            width: Some(1280),
+            height: Some(720),
+            fps: Some(50.0),
+            interlaced: Some(false),
+            is_hdr: false,
+            audio_codec: None,
+            audio_channels: None,
+        };
+        record_reading(c, id, &r, at).unwrap();
+    }
+
+    fn alternatives(c: &Connection, id: i64) -> Vec<i64> {
+        alternatives_for(c, id).unwrap().iter().map(|ch| ch.stream_id).collect()
+    }
+
+    #[test]
+    fn alternatives_share_the_guide_id_and_put_what_played_first() {
+        let c = open_in_memory().unwrap();
+        guided(&c, 1, Some(1), Some("one.example"));
+        // The same programmes, five more times over.
+        guided(&c, 2, Some(40), Some("one.example"));
+        guided(&c, 3, Some(30), Some("one.example"));
+        guided(&c, 4, Some(20), Some("one.example"));
+        guided(&c, 5, Some(10), Some("one.example"));
+        guided(&c, 6, None, Some("one.example"));
+        // Another channel's, and one with none.
+        guided(&c, 7, Some(2), Some("two.example"));
+        guided(&c, 8, Some(3), None);
+        // Nothing played yet: by number, itself left out, at most three.
+        assert_eq!(alternatives(&c, 1), [5, 4, 3]);
+        // Played ones lead, the most recently measured first.
+        measured(&c, 3, 100);
+        measured(&c, 2, 200);
+        assert_eq!(alternatives(&c, 1), [2, 3, 5]);
+        // A failure, or off air, is left out; the rest close up behind.
+        record_failed(&c, 2, "off air", 300).unwrap();
+        record_failed(&c, 5, "refused by the provider (HTTP 403)", 300).unwrap();
+        assert_eq!(alternatives(&c, 1), [3, 4, 6]);
+        // From another of the group, the first is offered too.
+        assert_eq!(alternatives(&c, 3), [1, 4, 6]);
+    }
+
+    #[test]
+    fn only_off_air_is_cleared_by_finding_the_channel_broadcasting() {
+        let c = open_in_memory().unwrap();
+        record_failed(&c, 2, "off air", 300).unwrap();
+        record_failed(&c, 5, "refused by the provider (HTTP 403)", 300).unwrap();
+        clear_off_air(&c, 2).unwrap();
+        clear_off_air(&c, 5).unwrap();
+        clear_off_air(&c, 9).unwrap();
+        let reason = |id: i64| -> Option<String> {
+            c.query_row(
+                "SELECT fail_reason FROM channel_quality WHERE stream_id = ?1",
+                [id],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(reason(2), None);
+        assert_eq!(reason(5).as_deref(), Some("refused by the provider (HTTP 403)"));
+        let rows: i64 = c
+            .query_row("SELECT COUNT(*) FROM channel_quality WHERE stream_id = 9", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 0, "nothing is written for a channel with no record");
+    }
+
+    #[test]
+    fn a_channel_without_a_guide_id_has_no_alternatives() {
+        let c = open_in_memory().unwrap();
+        guided(&c, 1, Some(1), None);
+        guided(&c, 2, Some(2), None);
+        guided(&c, 3, Some(3), Some(""));
+        guided(&c, 4, Some(4), Some(""));
+        assert!(alternatives(&c, 1).is_empty(), "no id is not a shared id");
+        assert!(alternatives(&c, 3).is_empty(), "nor is an empty one");
+        assert!(alternatives(&c, 99).is_empty(), "nor an unknown channel");
+    }
+
+    #[test]
+    fn alternatives_leave_out_deleted_channels_and_dividers() {
+        let c = open_in_memory().unwrap();
+        guided(&c, 1, Some(1), Some("one.example"));
+        guided(&c, 2, Some(2), Some("one.example"));
+        guided(&c, 3, Some(3), Some("one.example"));
+        c.execute("UPDATE channels SET deleted_at = 5 WHERE stream_id = 2", []).unwrap();
+        c.execute("UPDATE channels SET is_separator = 1 WHERE stream_id = 3", []).unwrap();
+        assert!(alternatives(&c, 1).is_empty());
+    }
+
+    #[test]
+    fn alternatives_are_found_by_the_guide_index() {
+        let c = open_in_memory().unwrap();
+        let mut stmt = c.prepare(&format!("EXPLAIN QUERY PLAN {}", alternatives_sql())).unwrap();
+        let plan: Vec<String> = stmt
+            .query_map(rusqlite::params![1, ALTERNATIVES_MAX], |r| r.get(3))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        let plan = plan.join("\n");
+        assert!(plan.contains("SEARCH ch USING INDEX channels_by_epg"), "{plan}");
     }
 
     #[test]

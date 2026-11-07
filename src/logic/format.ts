@@ -103,9 +103,37 @@ export function failedToLoad(q: QualityDto | null): boolean {
   return q?.failedAt != null;
 }
 
+/** The reason the backend records a channel that was off air with
+ *  (`ending::OFF_AIR_REASON` in Rust): the provider sent a placeholder clip
+ *  instead of it. Spelled the same on both sides. */
+export const OFF_AIR_REASON = "off air";
+
+/** Whether a channel's last live open found it off air, and nothing has
+ *  played on it since. */
+export function offAir(q: QualityDto | null): boolean {
+  return q?.failedAt != null && q.failReason === OFF_AIR_REASON;
+}
+
+/** Whether two instants fall on the same local calendar day. */
+function sameLocalDay(a: number, b: number): boolean {
+  return new Date(a * 1000).toDateString() === new Date(b * 1000).toDateString();
+}
+
+/** "Off air · 18:26": when a channel was found off air, for its row and the
+ *  band. The clock time on the day it happened, which is when it reads as
+ *  today's; how long ago after that ("Off air · yesterday"). `null` unless
+ *  the channel is off air. */
+export function offAirLabel(q: QualityDto | null, nowSeconds: number): string | null {
+  if (!q || q.failedAt == null || !offAir(q)) return null;
+  const when = sameLocalDay(q.failedAt, nowSeconds) ? hhmm(q.failedAt) : ago(q.failedAt, nowSeconds);
+  return `Off air · ${when}`;
+}
+
 /** What a dimmed row says on hover: when it last failed and why. */
 export function failedTip(q: QualityDto | null, nowSeconds: number): string | null {
   if (!q || q.failedAt == null) return null;
+  const off = offAirLabel(q, nowSeconds);
+  if (off) return `${off} — your provider sent a placeholder instead of the channel`;
   const why = q.failReason ? ` — ${q.failReason}` : "";
   return `Didn't load ${ago(q.failedAt, nowSeconds)}${why}`;
 }

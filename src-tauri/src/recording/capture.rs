@@ -11,6 +11,20 @@
 //! already open for one of the recording's feeds is ridden at no cost;
 //! opening one asks the service's [`super::budget`] first, and on a full
 //! account follows [`super::sharing`]'s rules.
+//!
+//! **Off air.** A channel that is not broadcasting may be answered with a
+//! placeholder clip (`hub`, "Off air"). Each connection's first data is
+//! held back until the hub has told it from a clip ([`receive`]), which
+//! keeps a clip out of the file (the limits are `receive`'s and
+//! [`HOLD_MAX`]'s; what is held is in memory, so a crash loses it). The
+//! recording notes "Off air at 18:26; retrying" once, and asks again until
+//! its programme ends: each feed every [`OFF_AIR_RETRY_SECS`], taking turns
+//! with a backup (`fallback`). A try rides any connection the service has
+//! to either feed, and opens one only when one is free outright
+//! ([`free_now`]): never through the sharing rules, so it closes nobody's
+//! padding, and its wait is a retry time (`Live::retry_at`), never
+//! "waiting for a free connection", which would tell a browser or the app
+//! that it needs theirs.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -23,7 +37,7 @@ use tokio::sync::watch;
 use super::api::{PartDto, RecordingState, WhileRecording};
 use super::budget::{jitter, wait_for_slot, Slots};
 use super::clock::{self, Arrival};
-use super::fallback::{Failure, Fallback};
+use super::fallback::{Failure, Fallback, OFF_AIR_RETRY_SECS};
 use super::hub::{Subscription, SETTLE_LOOK_SECS};
 use super::naming;
 use super::server::Server;
@@ -45,17 +59,28 @@ struct OpenPart {
     log: tokio::fs::File,
     bytes: u64,
     started: i64,
+    /// When the last connection that wrote into it ended (Unix seconds):
+    /// the part's end when it is closed later, which may be after another
+    /// connection's data was held back for a while.
+    last_end: Option<i64>,
     last_logged_ms: i64,
 }
 
+/// Held data is written in pieces of about this much, not one write per
+/// chunk it arrived in.
+const COALESCE: usize = 1 << 20;
+
 impl OpenPart {
-    /// A new part file and its arrival log.
+    /// A new part file and its arrival log. `started`: when its first data
+    /// arrived (Unix seconds), which is not when it is written for data that
+    /// was held back.
     async fn create(
         folder: &Path,
         base: &str,
         index: usize,
         stream_id: i64,
         visible: bool,
+        started: i64,
     ) -> Result<Self> {
         let (path, file) = create_capture_file(folder, base, index, visible).await?;
         let log = tokio::fs::OpenOptions::new()
@@ -70,7 +95,8 @@ impl OpenPart {
             file,
             log,
             bytes: 0,
-            started: now(),
+            started,
+            last_end: None,
             last_logged_ms: 0,
         })
     }
@@ -92,24 +118,53 @@ impl OpenPart {
         let _ = self.log.write_all(clock::log_line(&a).as_bytes()).await;
     }
 
-    async fn write(&mut self, data: &[u8]) -> Result<()> {
+    /// Writes `data`, which arrived at `t` (Unix milliseconds).
+    async fn write(&mut self, data: &[u8], t: i64) -> Result<()> {
         self.file
             .write_all(data)
             .await
             .context("writing the recording")?;
         self.bytes += data.len() as u64;
-        let t = now_ms();
-        // A few records a second is plenty for a clock that shows seconds.
+        self.arrived(self.bytes, t).await;
+        Ok(())
+    }
+
+    /// Writes pieces that arrived at different times (Unix milliseconds,
+    /// each with its piece), joined into writes of about [`COALESCE`]; the
+    /// arrival log is as if each had been written as it came.
+    async fn write_pieces(&mut self, pieces: &[(i64, bytes::Bytes)]) -> Result<()> {
+        let mut buf: Vec<u8> = Vec::new();
+        let mut ends: Vec<(u64, i64)> = Vec::new();
+        for (i, (t, data)) in pieces.iter().enumerate() {
+            buf.extend_from_slice(data);
+            ends.push((self.bytes + buf.len() as u64, *t));
+            if buf.len() >= COALESCE || i + 1 == pieces.len() {
+                self.file
+                    .write_all(&buf)
+                    .await
+                    .context("writing the recording")?;
+                self.bytes += buf.len() as u64;
+                buf.clear();
+                for (pos, t) in ends.drain(..) {
+                    self.arrived(pos, t).await;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The arrival log's record that the file was `pos` bytes long at `t`.
+    /// A few records a second is plenty for a clock that shows seconds.
+    async fn arrived(&mut self, pos: u64, t: i64) {
         if t - self.last_logged_ms >= 200 {
             self.last_logged_ms = t;
             let a = Arrival {
-                pos: self.bytes,
+                pos,
                 wall_ms: t,
                 connect: false,
             };
             self.log(a).await;
         }
-        Ok(())
     }
 }
 
@@ -216,44 +271,259 @@ async fn room(server: &Arc<Server>, me: Rider, title: &str, waits: &mut u32) -> 
     }
 }
 
+/// Whether a recording off air may open a connection of its own for a try.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OffAirRoom {
+    /// The account has one free: try.
+    Free,
+    /// One of the service's connections is being closed, or was let go too
+    /// lately for the provider to have stopped counting it: look again in
+    /// a moment ([`SETTLE_LOOK_SECS`]), as the release settles. Most often
+    /// the recording's own last try, just before it turns to its backup.
+    Settling,
+    /// The account is full: this try is skipped.
+    Full,
+}
+
+/// The sharing rules ([`room`]) are not asked: an off-air try never closes
+/// another recording's padding or waits its turn for a connection. An
+/// account whose count nobody can tell (`Slots::Unknown`) is taken as
+/// free, as any start takes it.
+async fn free_now(server: &Server) -> OffAirRoom {
+    if server.hubs.closing()
+        || server.hubs.released_lately()
+        || server.vod.released_recently() > 0
+    {
+        return OffAirRoom::Settling;
+    }
+    if server.budget.check(server.open_streams()).await.is_full() {
+        OffAirRoom::Full
+    } else {
+        OffAirRoom::Free
+    }
+}
+
+/// The most a recording holds back of a connection's first data while its
+/// hub cannot yet tell it from a placeholder clip (`hub`, "Off air"). The
+/// clips seen are a few megabytes for ten minutes of black; a broadcast's
+/// connect burst at a high bitrate can come to more than this in the
+/// twenty seconds, and past it what is held is written, the rest as it
+/// comes.
+pub const HOLD_MAX: usize = 64 << 20;
+
+/// Where one connection's data goes: the recording's part for its feed,
+/// opened at the first data written. So a connection that brings nothing,
+/// or only a placeholder clip, leaves nothing behind: no part, no byte, no
+/// line in the arrival log.
+struct Sink<'a> {
+    server: &'a Server,
+    id: i64,
+    folder: &'a Path,
+    base: &'a str,
+    stream_id: i64,
+    open: &'a mut Option<OpenPart>,
+    /// When the connection was made, Unix milliseconds: the arrival log's
+    /// reconnect line.
+    connect_ms: i64,
+    /// Something was written.
+    wrote: bool,
+}
+
+impl Sink<'_> {
+    async fn write(&mut self, data: &[u8], at_ms: i64) -> Result<()> {
+        let part = self.part().await?;
+        part.write(data, at_ms).await?;
+        let bytes = part.bytes;
+        self.server.update_live(self.id, |l| l.bytes = bytes);
+        Ok(())
+    }
+
+    /// What was held back, in a few large writes.
+    async fn write_held(&mut self, held: Held) -> Result<()> {
+        if held.chunks.is_empty() {
+            return Ok(());
+        }
+        let part = self.part().await?;
+        part.write_pieces(&held.chunks).await?;
+        let bytes = part.bytes;
+        self.server.update_live(self.id, |l| l.bytes = bytes);
+        Ok(())
+    }
+
+    /// The part to write into, begun at the first write.
+    async fn part(&mut self) -> Result<&mut OpenPart> {
+        if !self.wrote {
+            self.begin().await?;
+            self.wrote = true;
+        }
+        Ok(self.open.as_mut().expect("a part was opened"))
+    }
+
+    /// A new feed starts a new part; the same feed again continues its part
+    /// (the remuxer joins the timeline across the reconnect).
+    async fn begin(&mut self) -> Result<()> {
+        let (server, id, stream_id) = (self.server, self.id, self.stream_id);
+        if self.open.as_ref().is_none_or(|p| p.stream_id != stream_id) {
+            if let Some(p) = self.open.take() {
+                close(server, id, p).await?;
+            }
+            // Numbered among what the service received: a part handed over
+            // by the app is not one other programs see (`add_prelude`).
+            let index = server
+                .db(|c| store::get(c, id))?
+                .map_or(0, |r| r.parts.iter().filter(|p| !p.handed_over).count())
+                + 1;
+            let visible = server.config().while_recording == WhileRecording::Visible;
+            // Begun when its connection was made, not when what was held
+            // back from it is written.
+            let started = self.connect_ms.div_euclid(1000);
+            let p = OpenPart::create(self.folder, self.base, index, stream_id, visible, started)
+                .await?;
+            let dto = p.dto(None);
+            server.db(|c| store::edit_parts(c, id, |ps| ps.push(dto)))?;
+            server.update_live(id, |l| {
+                l.stream_id = stream_id;
+                l.since = p.started;
+            });
+            *self.open = Some(p);
+        }
+        let part = self.open.as_mut().expect("a part was just opened");
+        let pos = part.bytes;
+        part.log(Arrival {
+            pos,
+            wall_ms: self.connect_ms,
+            connect: true,
+        })
+        .await;
+        Ok(())
+    }
+}
+
+/// What a connection delivered before its hub could tell it from a
+/// placeholder clip, with when each piece arrived (for the clock).
+#[derive(Default)]
+struct Held {
+    chunks: Vec<(i64, bytes::Bytes)>,
+    bytes: usize,
+}
+
+impl Held {
+    async fn flush(self, sink: &mut Sink<'_>) -> Result<()> {
+        sink.write_held(self).await
+    }
+}
+
 /// What the recording gets from its hub until its window ends, it is
 /// stopped (both `None`), or the feed fails: how, and for how long the feed
 /// had delivered.
+///
+/// Until the hub has judged the stream not to be a placeholder clip (its
+/// first `OFF_AIR_WINDOW`, see `hub`), what comes is held back: a clip ends
+/// within it, and is then dropped whole, so a channel that is off air never
+/// adds to the recording, however often it is asked again. Anything else
+/// that ends the stream, or the recording, writes what was held.
 async fn receive(
-    server: &Server,
-    id: i64,
+    sink: &mut Sink<'_>,
     sub: &mut Subscription,
-    part: &mut OpenPart,
     until: i64,
     stop: &mut watch::Receiver<bool>,
 ) -> Result<Option<(Failure, i64)>> {
+    let mut judged = sub.judged();
+    let mut held = (!*judged.borrow_and_update()).then(Held::default);
     loop {
         let left = until - now();
         if left <= 0 || *stop.borrow() {
+            if let Some(h) = held.take() {
+                h.flush(sink).await?;
+            }
             return Ok(None);
         }
         let data = tokio::select! {
             d = sub.recv() => d,
             _ = tokio::time::sleep(Duration::from_secs(left as u64)) => continue,
-            _ = stop.changed() => return Ok(None),
+            _ = stop.changed() => {
+                if let Some(h) = held.take() {
+                    h.flush(sink).await?;
+                }
+                return Ok(None);
+            }
+            r = judged.changed(), if held.is_some() => {
+                // The hub only ever sets it to true. `changed` cannot fail
+                // while `sub` holds the hub, whose sender it is; if it ever
+                // did, nothing would judge the stream any more, so what was
+                // held is written rather than waited on (and this branch,
+                // with nothing held, is not polled again).
+                if r.is_err() || *judged.borrow_and_update() {
+                    if let Some(h) = held.take() {
+                        h.flush(sink).await?;
+                    }
+                }
+                continue;
+            }
         };
         let Some(data) = data else {
-            return Ok(Some(sub.ended().unwrap_or((Failure::Ended, 0))));
+            let ended = sub.ended().unwrap_or((Failure::Ended, 0));
+            if let Some(h) = held.take() {
+                if !matches!(ended.0, Failure::OffAir { .. }) {
+                    h.flush(sink).await?;
+                }
+            }
+            return Ok(Some(ended));
         };
-        part.write(&data).await?;
-        let bytes = part.bytes;
-        server.update_live(id, |l| l.bytes = bytes);
+        match held.as_mut() {
+            Some(h) => {
+                h.bytes += data.len();
+                h.chunks.push((now_ms(), data));
+                if h.bytes > HOLD_MAX {
+                    if let Some(h) = held.take() {
+                        h.flush(sink).await?;
+                    }
+                }
+            }
+            None => sink.write(&data, now_ms()).await?,
+        }
     }
 }
 
+/// How long a recording whose channel is off air waits before asking again:
+/// [`OFF_AIR_RETRY_SECS`], or for a harness build, `ZAPPER_OFF_AIR_RETRY_SECS`
+/// (a check cannot wait minutes for each try). Unit tests pass theirs to
+/// [`run_with`] instead.
+fn off_air_retry() -> i64 {
+    #[cfg(feature = "harness")]
+    if let Some(s) = std::env::var("ZAPPER_OFF_AIR_RETRY_SECS")
+        .ok()
+        .and_then(|v| v.trim().parse::<i64>().ok())
+    {
+        return s;
+    }
+    OFF_AIR_RETRY_SECS
+}
+
+/// `18:26`, local time: when, for a note.
+fn clock_time(unix: i64) -> String {
+    let c = crate::localtime::Civil::local(unix);
+    format!("{:02}:{:02}", c.hour, c.minute)
+}
+
 /// Captures recording `id` until its window ends or it is stopped.
-pub async fn run(server: &Arc<Server>, id: i64, mut stop: watch::Receiver<bool>) {
-    if let Err(e) = run_inner(server, id, &mut stop).await {
+pub async fn run(server: &Arc<Server>, id: i64, stop: watch::Receiver<bool>) {
+    run_with(server, id, stop, off_air_retry()).await
+}
+
+/// [`run`], asking a channel that is off air again every `retry` seconds.
+async fn run_with(server: &Arc<Server>, id: i64, mut stop: watch::Receiver<bool>, retry: i64) {
+    if let Err(e) = run_inner(server, id, &mut stop, retry).await {
         server.note(id, &format!("the capture stopped: {e:#}"));
     }
 }
 
-async fn run_inner(server: &Arc<Server>, id: i64, stop: &mut watch::Receiver<bool>) -> Result<()> {
+async fn run_inner(
+    server: &Arc<Server>,
+    id: i64,
+    stop: &mut watch::Receiver<bool>,
+    retry: i64,
+) -> Result<()> {
     let Some(rec) = server.db(|c| store::get(c, id))? else {
         return Ok(());
     };
@@ -278,8 +548,11 @@ async fn run_inner(server: &Arc<Server>, id: i64, stop: &mut watch::Receiver<boo
     if let Some(b) = rec.backup_stream_id.filter(|&b| b != rec.stream_id) {
         feeds.push(b);
     }
-    let mut fallback = Fallback::new(feeds.len());
+    let mut fallback = Fallback::new(feeds.len()).with_off_air_retry(retry);
     let mut open: Option<OpenPart> = None;
+    // When the channel was found off air, until a connection writes again:
+    // one note for the spell, however often it is asked.
+    let mut off_air_since: Option<i64> = None;
     let mut next_at = now();
     let mut slot_waits: u32 = 0;
     let mut waiting_for_room = false;
@@ -337,8 +610,34 @@ async fn run_inner(server: &Arc<Server>, id: i64, stop: &mut watch::Receiver<boo
             }
             None => {
                 // A connection of its own: never one the account does not
-                // have to spare.
-                if let Room::Wait { at, why, note } =
+                // have to spare. Off air, only one that is free outright:
+                // a try that may well find the clip again never waits its
+                // turn, closes another recording's padding, or shows as
+                // needing a connection. Without one, this try is skipped.
+                if off_air_since.is_some() {
+                    let room = free_now(server).await;
+                    if room == OffAirRoom::Settling {
+                        if now() + SETTLE_LOOK_SECS >= rec.stop {
+                            break;
+                        }
+                        next_at = now() + SETTLE_LOOK_SECS;
+                        server.update_live(id, |l| l.retry_at = Some(next_at));
+                        continue;
+                    }
+                    if room == OffAirRoom::Full {
+                        let t = now();
+                        let next = fallback.skipped(t);
+                        if let Some(n) = next.note {
+                            server.note(id, &n);
+                        }
+                        if next.at >= rec.stop {
+                            break;
+                        }
+                        next_at = next.at;
+                        server.update_live(id, |l| l.retry_at = Some(next.at));
+                        continue;
+                    }
+                } else if let Room::Wait { at, why, note } =
                     room(server, me, &rec.title, &mut slot_waits).await
                 {
                     if note {
@@ -364,44 +663,29 @@ async fn run_inner(server: &Arc<Server>, id: i64, stop: &mut watch::Receiver<boo
         };
         slot_waits = 0;
         waiting_for_room = false;
-        server.update_live(id, |l| l.waiting = None);
-        let stream_id = sub.feed();
+        server.update_live(id, |l| {
+            l.waiting = None;
+            l.retry_at = None;
+        });
 
-        // A new feed starts a new part; the same feed again continues its
-        // part (the remuxer joins the timeline across the reconnect).
-        if open.as_ref().is_none_or(|p| p.stream_id != stream_id) {
-            if let Some(p) = open.take() {
-                close(server, id, p).await?;
-            }
-            // Numbered among what the service received: a part handed over
-            // by the app is not one other programs see (`add_prelude`).
-            let index = server
-                .db(|c| store::get(c, id))?
-                .map_or(0, |r| r.parts.iter().filter(|p| !p.handed_over).count())
-                + 1;
-            let visible = server.config().while_recording == WhileRecording::Visible;
-            let p = OpenPart::create(&folder, &info.base, index, stream_id, visible).await?;
-            let dto = p.dto(None);
-            server.db(|c| store::edit_parts(c, id, |ps| ps.push(dto)))?;
-            server.update_live(id, |l| {
-                l.stream_id = stream_id;
-                l.since = p.started;
-            });
-            open = Some(p);
-        }
-        let part = open.as_mut().expect("a part was just opened");
-        let pos = part.bytes;
-        part.log(Arrival {
-            pos,
-            wall_ms: now_ms(),
-            connect: true,
-        })
-        .await;
-
-        let ended = receive(server, id, &mut sub, part, until, stop).await?;
+        let mut sink = Sink {
+            server,
+            id,
+            folder: &folder,
+            base: &info.base,
+            stream_id: sub.feed(),
+            open: &mut open,
+            connect_ms: now_ms(),
+            wrote: false,
+        };
+        let ended = receive(&mut sink, &mut sub, until, stop).await?;
+        let wrote = sink.wrote;
         let lost = sub.lost();
         drop(sub);
-        if lost > 0 && !lost_noted {
+        let off_air = matches!(ended, Some((Failure::OffAir { .. }, _)));
+        // A clip comes faster than anything reads it; what it lost is not
+        // the disk's doing.
+        if lost > 0 && !lost_noted && !off_air {
             lost_noted = true;
             server.note(
                 id,
@@ -411,15 +695,41 @@ async fn run_inner(server: &Arc<Server>, id: i64, stop: &mut watch::Receiver<boo
                 ),
             );
         }
+        if wrote {
+            off_air_since = None;
+            // The part's end, should it be closed only after the next
+            // connection's data was held back for a while.
+            if let Some(p) = open.as_mut() {
+                p.last_end = Some(now());
+            }
+        }
         let Some((failure, delivered)) = ended else {
             break;
         };
         last_failure = Some(failure);
-        let next = fallback.failed(now(), failure, delivered);
+        let t = now();
+        let next = fallback.failed(t, failure, delivered);
         if let Some(n) = next.note {
             server.note(id, &n);
         }
         next_at = next.at;
+        // Off air, it is asked again until the programme's end, never into
+        // the padding after it: a connection then is only padding, which
+        // the next recording's start may need.
+        let again = next.at < rec.stop;
+        if off_air && off_air_since.is_none() {
+            off_air_since = Some(t);
+            let retrying = if again { "; retrying" } else { "" };
+            server.note(id, &format!("Off air at {}{retrying}", clock_time(t)));
+        }
+        if off_air_since.is_some() {
+            if !again {
+                break;
+            }
+            // Shown as a retry, never as waiting for a connection: it is
+            // in nobody's way (`watch::notice`, the app's handover).
+            server.update_live(id, |l| l.retry_at = Some(next.at));
+        }
     }
     if let Some(p) = open.take() {
         close(server, id, p).await?;
@@ -586,7 +896,7 @@ fn length(secs: i64) -> String {
 /// will come.
 async fn close(server: &Server, id: i64, mut p: OpenPart) -> Result<()> {
     let _ = p.file.flush().await;
-    let done = p.dto(Some(now()));
+    let done = p.dto(Some(p.last_end.unwrap_or_else(now)));
     server.db(|c| {
         store::edit_parts(c, id, |parts| {
             if let Some(slot) = parts.iter_mut().rev().find(|d| d.path == done.path) {
@@ -812,6 +1122,239 @@ mod tests {
         let r = room(&s, me, "Evening", &mut 0).await;
         assert!(matches!(r, Room::Wait { .. }));
         assert_eq!(*said.lock().unwrap(), vec![2]);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    // ------------------------------------------------------------ off air
+
+    use crate::recording::api::ScheduleRequest;
+    use crate::recording::hub::tests::{clip_server, stream_of, stream_server};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    /// An account that is full while the flag is set, and free otherwise;
+    /// counts the times it was asked while full.
+    struct Switch(Arc<AtomicBool>, Arc<AtomicUsize>);
+    impl Budget for Switch {
+        fn check(
+            &self,
+            _own: usize,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Slots> + Send + '_>> {
+            let full = self.0.load(Ordering::SeqCst);
+            if full {
+                self.1.fetch_add(1, Ordering::SeqCst);
+            }
+            Box::pin(async move {
+                if full {
+                    Slots::Full { active: 1, max: 1 }
+                } else {
+                    Slots::Free
+                }
+            })
+        }
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("zapper-capture-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn server_in(d: &Path, budget: Box<dyn Budget>) -> Arc<Server> {
+        let path = d.join("server.json");
+        config::save_to(&path, &ServerConfig::default()).unwrap();
+        Server::new(
+            store::open_in_memory().unwrap(),
+            ServerConfig::default(),
+            path,
+            "token".into(),
+            budget,
+        )
+    }
+
+    /// A recording of `stream_id` from now for `secs`, no padding, its
+    /// files in `folder`.
+    fn recording(s: &Server, stream_id: i64, secs: i64, folder: &Path) -> i64 {
+        let t = now();
+        let req = ScheduleRequest {
+            stream_id,
+            backup_stream_id: None,
+            channel_name: Some("Five".into()),
+            title: "Night Show".into(),
+            episode_title: None,
+            season: None,
+            episode: None,
+            start: t,
+            stop: t + secs,
+            pad_before: Some(0),
+            pad_after: Some(0),
+        };
+        let folder = folder.to_string_lossy().into_owned();
+        s.db(|c| {
+            store::insert(
+                c,
+                &store::NewRecording {
+                    req: &req,
+                    backup_stream_id: None,
+                    channel_name: "Five",
+                    pad_before: 0,
+                    pad_after: 0,
+                    folder: &folder,
+                    base: "Night Show",
+                    clock_track: true,
+                    now: t,
+                },
+            )
+        })
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn an_off_air_try_opens_a_connection_only_when_one_is_free() {
+        let d = scratch("free-now");
+        let full = Arc::new(AtomicBool::new(true));
+        let s = server_in(&d, Box::new(Switch(Arc::clone(&full), Arc::default())));
+        assert_eq!(free_now(&s).await, OffAirRoom::Full, "a full account: skipped");
+        full.store(false, Ordering::SeqCst);
+        assert_eq!(free_now(&s).await, OffAirRoom::Free, "a free one: asked");
+        // One of the service's own connections let go a moment ago: the
+        // provider may still count it.
+        let (url, _) = stream_server().await;
+        let sub = s.hubs.open(
+            8,
+            crate::source::Playable::plain(url),
+            Rider { id: 1, stop: now() + 600, until: now() + 600 },
+        );
+        drop(sub);
+        let t = std::time::Instant::now();
+        while s.hubs.open_count() > 0 {
+            assert!(t.elapsed() < Duration::from_secs(5));
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(free_now(&s).await, OffAirRoom::Settling, "a release still settling: looked at again");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[tokio::test]
+    async fn a_recording_off_air_asks_again_without_closing_padding_or_waiting_for_a_connection() {
+        let d = scratch("off-air-loop");
+        let full = Arc::new(AtomicBool::new(false));
+        let asked_full = Arc::new(AtomicUsize::new(0));
+        let s = server_in(&d, Box::new(Switch(Arc::clone(&full), Arc::clone(&asked_full))));
+        let (clip, clips) = clip_server(stream_of(0.0, 600.0)).await;
+        let (live, _) = stream_server().await;
+        let other = live.clone();
+        s.set_playables(Arc::new(move |id| {
+            Ok(crate::source::Playable::plain(if id == 5 { clip.clone() } else { live.clone() }))
+        }));
+        let id = recording(&s, 5, 300, &d);
+        let (tx, stop) = watch::channel(false);
+        s.live(|m| {
+            m.insert(
+                id,
+                crate::recording::server::Live {
+                    title: "Night Show".into(),
+                    stream_id: 5,
+                    bytes: 0,
+                    since: now(),
+                    waiting: None,
+                    retry_at: None,
+                    until: now() + 300,
+                    finishing: false,
+                    stop: tx.clone(),
+                },
+            )
+        });
+        let task = tokio::spawn({
+            let s = Arc::clone(&s);
+            // A short retry, so the test sees several tries.
+            async move { run_with(&s, id, stop, 2).await }
+        });
+        let notes = |s: &Server| s.db(|c| store::get(c, id)).unwrap().unwrap().notes;
+        // The first try is an ordinary start, and finds the clip.
+        let t = std::time::Instant::now();
+        while !notes(&s).iter().any(|n| n.starts_with("Off air at ")) {
+            assert!(t.elapsed() < Duration::from_secs(10), "{:?}", notes(&s));
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert_eq!(clips.load(Ordering::SeqCst), 1);
+
+        // Then the account is full, its one connection carrying a recording
+        // in its padding after: an ordinary start would close it (sharing,
+        // rule 3). An off-air try does not, nor waits for a connection.
+        full.store(true, Ordering::SeqCst);
+        let padding = s.hubs.open(
+            6,
+            crate::source::Playable::plain(other),
+            Rider { id: 99, stop: now() - 60, until: now() + 600 },
+        );
+        // Its own last try's connection settles first (it looks again every
+        // few seconds meanwhile), then the full account skips its tries.
+        let t = std::time::Instant::now();
+        while asked_full.load(Ordering::SeqCst) < 2 {
+            assert!(t.elapsed() < Duration::from_secs(45), "never asked the account");
+            assert!(s.hubs.has(6), "the padding was closed");
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+        assert!(s.hubs.has(6) && !s.hubs.closing(), "the padding was left alone");
+        assert_eq!(clips.load(Ordering::SeqCst), 1, "no try without a free connection");
+        let said = notes(&s);
+        assert_eq!(said.len(), 1, "one note for the spell: {said:?}");
+        let (waiting, retry_at) = s.live(|m| m.get(&id).map(|l| (l.waiting.clone(), l.retry_at))).unwrap();
+        assert_eq!(waiting, None, "never shown as needing a connection");
+        assert!(retry_at.is_some_and(|r| r > now() - 1), "{retry_at:?}");
+        let rec = s.db(|c| store::get(c, id)).unwrap().unwrap();
+        assert!(rec.parts.is_empty(), "no part for a clip: {:?}", rec.parts);
+
+        tx.send_replace(true);
+        let _ = tokio::time::timeout(Duration::from_secs(10), task).await;
+        drop(padding);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[tokio::test]
+    async fn a_part_begins_when_its_connection_did_and_ends_when_it_did() {
+        let d = scratch("part-times");
+        let s = server_in(&d, Box::new(Switch(Arc::default(), Arc::default())));
+        let id = recording(&s, 5, 300, &d);
+        let connect_ms = now_ms() - 30_000;
+        let mut open: Option<OpenPart> = None;
+        let mut sink = Sink {
+            server: &s,
+            id,
+            folder: &d,
+            base: "Night Show",
+            stream_id: 5,
+            open: &mut open,
+            connect_ms,
+            wrote: false,
+        };
+        // Twenty seconds held back, then written at once.
+        let piece = bytes::Bytes::from(vec![0x47u8; 188 * 4000]);
+        let held = Held {
+            chunks: (0..20).map(|i| (connect_ms + i * 1000, piece.clone())).collect(),
+            bytes: piece.len() * 20,
+        };
+        held.flush(&mut sink).await.unwrap();
+        let part = open.as_mut().unwrap();
+        assert_eq!(part.bytes, (piece.len() * 20) as u64);
+        let started = s.db(|c| store::get(c, id)).unwrap().unwrap().parts[0].started;
+        assert_eq!(started, connect_ms.div_euclid(1000), "when the connection was made");
+        // The arrival log has each piece at its own time, not the write's.
+        let _ = part.log.flush().await;
+        let log = clock::parse_log(&std::fs::read_to_string(log_path(&part.path)).unwrap());
+        assert_eq!(log[0].wall_ms, connect_ms);
+        assert!(log[0].connect);
+        assert_eq!(log.last().unwrap().wall_ms, connect_ms + 19_000);
+        assert_eq!(log.last().unwrap().pos, part.bytes);
+
+        // Its connection ended long before it is closed (another feed's
+        // data held back meanwhile): its end is the connection's.
+        let ended_at = now() - 25;
+        part.last_end = Some(ended_at);
+        close(&s, id, open.take().unwrap()).await.unwrap();
+        let ended = s.db(|c| store::get(c, id)).unwrap().unwrap().parts[0].ended;
+        assert_eq!(ended, Some(ended_at));
         let _ = std::fs::remove_dir_all(&d);
     }
 }

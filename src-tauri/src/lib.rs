@@ -95,6 +95,7 @@ pub fn run() {
             ipc::catalog_cmds::categories,
             ipc::catalog_cmds::channels,
             ipc::catalog_cmds::channels_by_ids,
+            ipc::catalog_cmds::alternatives_for,
             ipc::catalog_cmds::channel_numbers,
             ipc::catalog_cmds::search,
             ipc::catalog_cmds::search_programmes,

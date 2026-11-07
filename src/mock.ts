@@ -9,6 +9,7 @@
 
 import { auditLightSurfaces, auditOverVideo } from "./audit";
 import { alternatives } from "./logic/searchQuery";
+import { rankAlternatives } from "./logic/alternatives";
 import { patternFor, place, validatePattern } from "./logic/naming";
 import { parsePort, passwordProblem } from "./logic/network";
 import { createMockMovies } from "./mockMovies";
@@ -838,12 +839,44 @@ function patchPlayer(p: Partial<PlayerStateDto>) {
   patchPlayer({
     state: "failed",
     error: "the stream ended",
-    ending: { kind, status, limit, slots: kind === "inUse" ? { max: 1, active: 1 } : null },
+    ending: { kind, status, limit, slots: kind === "inUse" ? { max: 1, active: 1 } : null, clipSecs: null },
     reconnect: null,
     bufferedBack: 0,
     behindLive: 0,
   });
 };
+
+/** A driver's way to find the current channel off air, as the backend does
+ *  when the provider sends a placeholder clip (`ending::off_air` in Rust):
+ *  `__mockOffAir()`, or `__mockOffAir(45)` for a clip under a minute. The
+ *  channel's record says so too, as the backend's ledger would. */
+(globalThis as Record<string, unknown>).__mockOffAir = (clipSecs = 600) => {
+  const streamId = playerEmitter.last.streamId;
+  patchPlayer({
+    state: "failed",
+    error: "the provider sent a placeholder instead of the channel",
+    ending: { kind: "offAir", status: null, limit: false, slots: null, clipSecs },
+    reconnect: null,
+    joiningLive: false,
+    bufferedBack: 0,
+    behindLive: 0,
+  });
+  if (streamId !== null) {
+    remember(streamId, (q) => ({
+      failCount: q.failCount + 1,
+      failedAt: Math.floor(Date.now() / 1000),
+      failReason: "off air",
+    }));
+  }
+};
+
+/** The guide id the mock gives a channel: its country and network, without
+ *  the feed's suffix, so the HD, 4K and regional copies of a channel share
+ *  one, as a provider's guide would have them. */
+function mockGuideId(c: ChannelDto): string | null {
+  if (c.isSeparator) return null;
+  return c.name.replace(/ (HD|FHD|4K|RAW|EAST|WEST)$/, "");
+}
 
 /** A driver's way to show the backend reconnecting after a network failure:
  *  `__mockReconnect(2)`, or `__mockReconnect(1, true)` while it asks the
@@ -852,7 +885,7 @@ function patchPlayer(p: Partial<PlayerStateDto>) {
   patchPlayer({
     state: "failed",
     error: "the stream could not be opened",
-    ending: { kind: "network", status: null, limit: false, slots: null },
+    ending: { kind: "network", status: null, limit: false, slots: null, clipSecs: null },
     reconnect: { attempt, of: 4, checking },
     bufferedBack: 0,
     behindLive: 0,
@@ -878,8 +911,14 @@ const qualityEmitter = new Emitter<ChannelQualityDto>({ streamId: -1, quality: n
  *  so pages fetched later carry it, and the change is announced for the
  *  pages already on screen. */
 function remember(streamId: number, change: (q: QualityDto) => Partial<QualityDto>) {
-  const row = getCatalog().rows.find((r) => r.streamId === streamId);
-  if (!row) return;
+  const rows = getCatalog().rows;
+  const at = rows.findIndex((r) => r.streamId === streamId);
+  if (at < 0) return;
+  // A new row rather than the old one changed: the pages on screen hold the
+  // old one, as the backend's would hold what it sent, so the news differs
+  // from it and the row redraws.
+  const row = { ...rows[at] };
+  rows[at] = row;
   const q: QualityDto = row.quality ?? {
     codec: null,
     width: null,
@@ -937,7 +976,7 @@ async function openStream(
     patchPlayer({
       state: "failed",
       error: "the stream could not be opened",
-      ending: { kind: "refused", status: 403, limit: false, slots: null },
+      ending: { kind: "refused", status: 403, limit: false, slots: null, clipSecs: null },
     });
     remember(streamId, (q) => ({
       failCount: q.failCount + 1,
@@ -1525,6 +1564,18 @@ export const mockApi = {
     // Ids that no longer exist are simply absent, same as the backend: a
     // remembered channel can vanish between sessions.
     return getCatalog().rows.filter((r) => !r.isSeparator && want.has(r.streamId));
+  },
+
+  alternativesFor: async (streamId: number) => {
+    await delay(20);
+    const rows = getCatalog().rows;
+    const self = rows.find((r) => r.streamId === streamId);
+    const id = self ? mockGuideId(self) : null;
+    if (!id) return [];
+    return rankAlternatives(
+      rows.filter((r) => mockGuideId(r) === id),
+      streamId,
+    );
   },
 
   channelNumbers: async (): Promise<[string, number][]> => {

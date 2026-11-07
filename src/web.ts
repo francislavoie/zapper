@@ -197,6 +197,11 @@ export const webBackend: typeof api = {
     ids.length === 0
       ? Promise.resolve([])
       : get<ChannelDto[]>(apiUrl("/api/channels/by-id", { ids: idList(ids) })),
+  // The service answers from the app's own read (recording::browse), with
+  // its own logo addresses. A failure is the caller's to treat as none
+  // (components/Alternatives.tsx).
+  alternativesFor: (streamId) =>
+    get<ChannelDto[]>(`/api/channels/${encodeURIComponent(streamId)}/alternatives`),
   channelNumbers: () => get<[string, number][]>("/api/channels/numbers"),
   search: (query, limit) =>
     get<ChannelDto[]>(apiUrl("/api/channels/search", { q: query, limit })),

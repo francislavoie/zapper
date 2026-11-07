@@ -823,6 +823,7 @@ mod tests {
                     bytes: 0,
                     since: now(),
                     waiting: None,
+                    retry_at: None,
                     until: now() + 3600,
                     finishing: false,
                     stop: tx,

@@ -429,12 +429,17 @@ pub struct Probe {
     /// moves with every packet read, so it is what tells how fast data is
     /// arriving — and it moves while playback is paused.
     pub cache_end: Option<f64>,
+    /// The oldest packet mpv still holds, in stream time: the start of its
+    /// seekable window. With `cache_end`, how much stream time has arrived.
+    pub cache_start: Option<f64>,
     /// The demuxer has read the end of the stream: the server finished the
     /// response, or the connection failed. Playback carries on through
     /// what is buffered, so this comes well before `end-file`.
     pub demuxer_eof: bool,
     /// Bytes buffered ahead of the playhead.
     pub fw_bytes: Option<i64>,
+    /// Bytes the demuxer holds in all, behind the playhead and ahead.
+    pub cache_bytes: Option<i64>,
     /// The length of the file, when it has one: a movie's, not a live
     /// stream's, which mpv reports as unknown.
     pub duration: Option<f64>,
@@ -452,6 +457,7 @@ struct CacheWindow {
     cache_end: Option<f64>,
     eof: bool,
     fw_bytes: Option<i64>,
+    total_bytes: Option<i64>,
 }
 
 /// Logged once if mpv will not hand back `demuxer-cache-state`, so the
@@ -551,6 +557,7 @@ impl Player {
             cache_end,
             eof: v.get("eof").and_then(|x| x.as_bool()).unwrap_or(false),
             fw_bytes: v.get("fw-bytes").and_then(|x| x.as_i64()),
+            total_bytes: v.get("total-bytes").and_then(|x| x.as_i64()),
         })
     }
 
@@ -690,8 +697,10 @@ impl Player {
             live_edge: end,
             time_pos,
             cache_end: w.cache_end,
+            cache_start: w.start,
             demuxer_eof: w.eof,
             fw_bytes: w.fw_bytes,
+            cache_bytes: w.total_bytes,
             duration: self
                 .get_f64("duration")
                 .filter(|d| d.is_finite() && *d > 0.0),

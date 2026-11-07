@@ -14,6 +14,7 @@ import {
   conflictLosesProgramme,
   conflictText,
   episodeLabel,
+  notCapturing,
   recordingFacts,
   recordingRowStatus,
   recordingStatus,
@@ -132,7 +133,8 @@ export function RecordingBand({ rec, channel }: { rec: RecordingDto; channel: Ch
   const barred = rec.state === "recording" || rec.state === "finishing";
   const active = barred || rec.state === "scheduled";
   const status = recordingStatus(rec, now);
-  const statusText = rec.state === "recording" && !rec.waiting ? `recording · ${status}` : status;
+  const paused = rec.state === "recording" ? notCapturing(rec) : null;
+  const statusText = rec.state === "recording" && !paused ? `recording · ${status}` : status;
   const openFolder = () =>
     backend
       .openRecordingFolder(rec.id)
@@ -161,7 +163,7 @@ export function RecordingBand({ rec, channel }: { rec: RecordingDto; channel: Ch
                 }}
               />
             </div>
-            <span className={`watch-left ${rec.waiting ? "bad" : ""}`}>{statusText}</span>
+            <span className={`watch-left ${paused ? "bad" : ""}`}>{statusText}</span>
           </div>
         ) : (
           <p className={`watch-state ${rec.state === "failed" ? "bad" : ""}`}>{status}</p>

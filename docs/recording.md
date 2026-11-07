@@ -410,6 +410,12 @@ minutes, the stream is let go (and the account's connection with it), and Play s
 The provider's archive (catch-up) plays in the app, not in the browser. A browser without Media
 Source Extensions (an iPhone or iPad before iOS 17.1) says it cannot play live TV.
 
+**Off air.** A channel the provider answers with a placeholder clip ([off air](#how-it-behaves))
+stops at once in every browser on it, and in any recording sharing its connection, rather than
+playing the clip. The page says "This channel isn't broadcasting right now", as the app does, with
+the clip's length and up to three other channels with the same programmes to try
+(`GET /api/channels/{id}/alternatives`).
+
 **Limits.** A device may hold three streams at once and start forty a minute; the service streams
 to sixteen browsers at most.
 
@@ -604,6 +610,39 @@ same feed is asked again after one minute, doubling to ten. After three switches
 minutes it stops switching, stays on the last feed that delivered and retries with back-off
 (5 s, doubling to a minute), and notes it on the recording. Each switch starts a new part.
 
+**Off air.** Some providers answer a channel that isn't broadcasting with a placeholder clip:
+minutes of black, sent at once, then the end of the stream. The service tells one apart by the
+app's own rule (see `ipc::ending::off_air`): the stream ends cleanly within 20 seconds of the
+connection, having carried at least two minutes of stream time (read from its timestamps) with
+enough data behind it, which no live channel can send that fast.
+
+- The recording notes "Off air at 18:26; retrying" once, and Recordings shows "Off air; trying
+  again at 18:29" in place of its progress. That is not a wait for a connection: nothing else
+  (a browser watching, the app's player) is told the recording needs one.
+- It asks again until its programme ends, never into its padding after. Each feed found off air
+  is asked again three minutes later; with a backup the two take turns, so one of them is asked
+  about every ninety seconds (the backup the first time once the main's connection has settled, up
+  to 20 s). While off air no switch counts towards the flap guard, and each note is given once.
+- A try may always ride a connection the service already has to either feed. It opens one of
+  its own only when the account has one free outright and none of the service's is being closed
+  or was let go moments ago (then it looks again every few seconds until that has settled); on a
+  full account that try is skipped. It never closes another recording's padding for it, and never
+  waits its turn for a connection. The first try, at the recording's start, follows the ordinary
+  rules.
+- The clip is kept out of the recording: each connection's first 20 seconds are held back (in
+  memory) until the service knows they aren't a clip, then written with the times they arrived,
+  so the clock track and the part's start are unchanged. A try that finds the clip again adds
+  nothing, not even an empty part. The limits: what is held is written when the recording is
+  stopped or its window ends while holding, when more than 64 MiB arrives within the 20 seconds,
+  or when the stream ends any other way (a clip cut short by a reset is written, as is one sent
+  so slowly that it takes longer than 20 seconds to arrive, which then also isn't recognised).
+  A crash of the service while holding loses those 20 seconds (or 64 MiB) of the recording.
+- The hold makes each connection's start reach the files 20 seconds late: the visible
+  `(recording).ts` and a `.strm`'s live stream are quiet for that long after the recording
+  starts or reconnects, then catch up.
+- The channel's record says "off air", as the app's does, until the service or the app next
+  finds it broadcasting.
+
 **Schedule.** Recordings are kept in `recordings.db` beside the catalogue, so they survive
 restarts. A start missed while the service was off begins at once if the programme is still on;
 one whose whole window passed is marked failed ("missed"). A recording interrupted by a restart
@@ -783,6 +822,15 @@ Windows, `POST /api/shutdown` "now"), and checks that `… - part1.mkv` was left
 recording still *recording*, and that starting the service again carries on into
 `… - part2.mkv` and finishes it.
 
+`offair_check` (`--bin zapper-server --bin offair_check`, the same features) stands a channel
+behind `tools/fake_stream.py --placeholder-while`, which sends the placeholder clip while a file
+exists. It checks that a recording of it notes "Off air at …; retrying" once, asks again by itself
+(every 25 s, which only a harness build allows) with `retryAt` set and never `waiting`, and keeps
+none of the clip however often it comes; that it records once the file is gone; that two browsers' viewers on the channel are told
+`offAir` with the clip's length while the channel's record says "off air"; and that
+`/api/channels/{id}/alternatives` needs a sign-in and names no provider address. With
+`--serve-until FILE` it leaves everything running afterwards, for a browser to look at.
+
 `handover_check` (built with the app's features: `cargo build --features harness,server --bin
 zapper-server --bin handover_check`) records what a headless, silent mpv set up as the app's
 plays, on a playlist of one stream: it checks that Record moves the player onto the service's
@@ -850,6 +898,7 @@ The catalogue, for the web interface (the app or a device); channels come as the
 | `GET /api/channels/numbers` | `[[number, streamId]]`, in list order |
 | `GET /api/channels/search?q=&limit=` | channels matching `q` (`a\|b` matches either) |
 | `GET /api/channels/{id}/index?category=` | where the channel sits in that listing, or `null` |
+| `GET /api/channels/{id}/alternatives` | up to three other live channels with the same guide channel, not failing or off air, those that last played first: offered under the message for a channel that is off air |
 | `GET /api/programmes/search?q=&offset=&limit=` | airings whose title matches: on now, upcoming, then catch-up |
 | `GET /api/guide?ids=&from=&to=` | `[[streamId, [Programme]]]` overlapping the window (at most 500 channels) |
 | `GET /api/guide/rows?ids=&from=&to=` | the guide's rows: each channel's name, logo and programmes |
@@ -873,7 +922,7 @@ Watching (the app or a device; a viewer is its device's alone, `404` to anyone e
 |---|---|
 | `POST /api/watch` | body `{streamId, anyway?, replaces?, audio?, can?: {hevc, ac3, eac3}, player?, onlyShared?}` (`can`: what the browser decodes beyond H.264 and AAC; `replaces`: the viewer this one follows, which is stopped first; `player`: the app's own player, the app's alone, which is given the stream as it comes with every track and nothing refused for its codecs; `onlyShared`: only a connection the service already has, never a new one) → `{viewer, stream, video, audio: [{index, codec, lang, described, impaired}], audioIndex, converting, silent?, shared, notice?}`. Refused with `{error, reason, anyway, slots?, ending?, watchInstead}`: `409` `recording`, `viewers` or `inUse` (the account is full; `anyway` says whether "Watch here anyway" may be offered), `409` `notOpen` (`onlyShared`, and the service has no connection to the channel), `422` `notPlayable`, `429` `limit`, `502` `feed` (the channel did not start; `ending` as the app's player reports it), `404` `channel`, `403` for `player` from a device |
 | `GET /api/stream/{viewer}?audio=` | the stream, `video/mp2t`, for as long as it is read; `audio` switches to another track (from live). Refused when the browser says the request came from another site |
-| `GET /api/watch/{viewer}` | `{ended?, takenOver, notice?}`: why it stopped, and the recording it is in the way of (`{recordingId, title, channel, streamId, from, start, waiting}`) |
+| `GET /api/watch/{viewer}` | `{ended?, takenOver, notice?}`: why it stopped (`{kind, status, limit, clipSecs}` as the app's player reports it; `clipSecs`, the placeholder's length, for `offAir`), and the recording it is in the way of (`{recordingId, title, channel, streamId, from, start, waiting}`) |
 | `DELETE /api/watch/{viewer}` | stops it at once (`204`) |
 | `POST /api/vod/watch` | body `{movieId, anyway?, replaces?, audio?, from?, can?}` (`replaces`: a channel's viewer or a movie's; `from`: seconds into the movie to start at, for the remuxer) → `{viewer, stream, mode, duration, audio, audioIndex, converting, subtitles, notice?}`. A movie always has a connection of its own, asked of the same budget as a channel's and refused the same ways (`404` `movie` for one not in the catalogue). The file is read once before the answer, on the movie's connection, to learn what it holds: `duration`, `audio` and `subtitles` are the file's. `mode` is `direct` for an MP4 with H.264 video, AAC or MP3 sound and no text subtitles (the browser plays the file as it is), else `remux`, which is also the mode for any `audio` but the first. `subtitles` lists the file's subtitle tracks, `[{index, language?, title?, text}]`, `text: false` for pictures |
 | `GET /api/vod/stream/{viewer}?from=&audio=` | `direct`: the file, by the request's `Range` (passed on to the provider; `206` with `Content-Range`, or `200`), `Accept-Ranges: bytes`. A new request ends the one before, so the account sees one connection per viewer. `remux`: MPEG-TS (`video/mp2t`) from the keyframe at or before `from` (seconds into the movie), with the sound `audio` names; the keyframe it found is in the `X-Start` header (seconds). `HEAD` is refused (`405`). Refused when the browser says the request came from another site |
@@ -905,6 +954,8 @@ as a port taken when the service started, in which case it listens on `127.0.0.1
 turned into its files, which for a long one takes a minute or two; it is `finishing` from the
 moment it is stopped, and `active` in the status says `finishing: true`. `waiting` is set while
 a recording is not capturing, such as "waiting for a free connection (1 of 1 in use)".
+`retryAt` is set instead while a recording of a channel that is [off air](#how-it-behaves) waits
+for its next try (Unix seconds); it needs no connection meanwhile, so it is never `waiting`.
 `conflicts`, when there are any still ahead, is `[Conflict]`: `{title, with, kind, secs,
 streams}`, what recording `title` loses to `with` on another channel when the account allows
 `streams` — `kind` is `cutEnd` (its padding after ends `secs` early), `lateStart` (it starts

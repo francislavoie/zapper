@@ -221,7 +221,8 @@ export type EndingKind =
   | "network"
   | "noVideo"
   | "other"
-  | "inUse";
+  | "inUse"
+  | "offAir";
 
 export interface StreamEnding {
   kind: EndingKind;
@@ -231,6 +232,9 @@ export interface StreamEnding {
   status: number | null;
   /** The server said in words that it was a connection limit. */
   limit: boolean;
+  /** For "offAir": how long the placeholder clip the provider sent instead
+   *  of the channel was, in whole seconds. */
+  clipSecs: number | null;
 }
 
 /** Normalised window coordinates. Video is not a DOM element; the frontend
@@ -627,6 +631,9 @@ export interface RecordingDto {
   backupName?: string;
   /** While recording: why it is not capturing right now. */
   waiting?: string;
+  /** While recording a channel that is off air: when it asks again (Unix
+   *  seconds). Never a wait for a connection. */
+  retryAt?: number;
   /** What it would lose to recordings on other channels when the account
    *  has too few connections for them all; absent when nothing. */
   conflicts?: ConflictDto[];
