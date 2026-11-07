@@ -225,8 +225,80 @@ pub fn run() {
             dev_hooks(app.handle());
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("failed to start zapper");
+        .build(tauri::generate_context!())
+        .expect("failed to start zapper")
+        .run(quit::on_event);
+}
+
+/// Quitting in order.
+///
+/// Left to itself, Tauri ends the process in the same turn of the event loop
+/// that destroys the window: mpv's render context is then freed by a
+/// thread-local destructor after its GL context is gone, and WebKit's web
+/// process is left to notice the app has vanished and exit by itself, which
+/// on Mesa can crash in libEGL's exit handler. So the close and the exit are
+/// both held back until [`surface::shut_down`] has taken playback, the page
+/// and the web process down, and then let through.
+#[cfg(feature = "gui")]
+mod quit {
+    use std::sync::atomic::{AtomicU8, Ordering};
+    use tauri::{AppHandle, Manager, RunEvent, WindowEvent};
+
+    const RUNNING: u8 = 0;
+    const STOPPING: u8 = 1;
+    const STOPPED: u8 = 2;
+    static STATE: AtomicU8 = AtomicU8::new(RUNNING);
+
+    /// What to do once everything is down: close the window (which then
+    /// exits, as the last window), or exit with the code asked for.
+    enum Then {
+        Close,
+        Exit(i32),
+    }
+
+    pub fn on_event(app: &AppHandle, event: RunEvent) {
+        let stopped = STATE.load(Ordering::Acquire) == STOPPED;
+        match event {
+            RunEvent::WindowEvent {
+                label,
+                event: WindowEvent::CloseRequested { api, .. },
+                ..
+            } if label == "main" && !stopped => {
+                api.prevent_close();
+                begin(app, Then::Close);
+            }
+            RunEvent::ExitRequested { code, api, .. } if !stopped => {
+                api.prevent_exit();
+                begin(app, Then::Exit(code.unwrap_or(0)));
+            }
+            _ => {}
+        }
+    }
+
+    fn begin(app: &AppHandle, then: Then) {
+        if STATE
+            .compare_exchange(RUNNING, STOPPING, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return;
+        }
+        tracing::info!("quitting");
+        let app = app.clone();
+        crate::surface::shut_down(move || {
+            STATE.store(STOPPED, Ordering::Release);
+            match (then, app.get_webview_window("main")) {
+                // `destroy`, not `close`: the close was already asked for.
+                (Then::Close, Some(w)) => {
+                    if let Err(e) = w.destroy() {
+                        tracing::warn!("closing the window: {e}");
+                        app.exit(0);
+                    }
+                }
+                (Then::Close, None) => app.exit(0),
+                (Then::Exit(code), _) => app.exit(code),
+            }
+        });
+    }
 }
 
 /// The variables that make this a run nobody is sitting in front of.

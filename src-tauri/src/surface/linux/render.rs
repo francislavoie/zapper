@@ -24,6 +24,10 @@ static FRAME_READY: AtomicBool = AtomicBool::new(true);
 /// One-shot so the render target is reported once, not sixty times a second.
 static FBO_LOGGED: AtomicBool = AtomicBool::new(false);
 
+/// Set once the app is quitting and the render context has been freed, so a
+/// late redraw does not create a new one.
+static SHUT_DOWN: AtomicBool = AtomicBool::new(false);
+
 /// Hand mpv an upside-down target: GL's origin is bottom-left, video's is
 /// top-left.
 ///
@@ -67,6 +71,47 @@ pub fn new_player(area: &gtk::GLArea) -> anyhow::Result<mpv::Player> {
 /// See [`mpv::Player::load`].
 pub(super) fn ready() -> bool {
     CTX.with(|c| c.borrow().is_some())
+}
+
+/// Stops playback and frees mpv's render context, for quitting.
+///
+/// `mpv_render_context_free` deletes mpv's GL objects, so it has to run while
+/// the GLArea's context is current - here, on the main thread, before the
+/// window and its GL context are destroyed. Left alone, the context would be
+/// freed by this thread's thread-local destructors as the process exits,
+/// after GTK had already destroyed the GL context it belongs to.
+///
+/// When the GLArea can no longer be made current (the window is already
+/// gone), the context is leaked instead: no GL call is safer than one into a
+/// destroyed context, and the process is about to end.
+pub(crate) fn shut_down() {
+    if SHUT_DOWN.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    if let Some(mpv) = mpv::handle() {
+        if let Err(e) = mpv.command("stop", &[]) {
+            tracing::warn!("stopping playback to quit: {e}");
+        }
+    }
+    let Some(ctx) = CTX.with(|c| c.borrow_mut().take()) else {
+        return;
+    };
+    let current = AREA.with(|a| {
+        a.borrow().as_ref().is_some_and(|area| {
+            if !area.is_realized() {
+                return false;
+            }
+            area.make_current();
+            area.error().is_none()
+        })
+    });
+    if current {
+        drop(ctx);
+        tracing::info!("freed mpv's render context");
+    } else {
+        std::mem::forget(ctx);
+        tracing::warn!("no GL context to free mpv's render context in; leaving it unfreed");
+    }
 }
 
 /// Asks GTK for a frame, which is what creates the render context.
@@ -151,6 +196,9 @@ fn native_display(area: &gtk::GLArea) -> Option<RenderParam<()>> {
 /// caller can clear instead. Called only from the GLArea render signal, where
 /// a GL context is guaranteed current.
 pub(crate) fn draw(area: &gtk::GLArea) -> bool {
+    if SHUT_DOWN.load(Ordering::Acquire) {
+        return false;
+    }
     let Some(mpv) = mpv::handle() else {
         return false;
     };
