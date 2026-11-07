@@ -22,11 +22,16 @@ outside the repository: they are generated, and tens of megabytes each.
 | `sport720p60.ts` | h264 1280x720@60, **ac3** | 60 fps, high motion, and the only AC-3 audio |
 | `mpeg2sd.ts` | **mpeg2** 720x576@25, **mp2** | Video no browser plays (watching in a browser says so) |
 | `placeholder.ts` | h264 1920x1080@30, aac, 600 s | Black and silence: what a provider sends for a channel that is off the air (`--placeholder`) |
+| `radio.ts` | no video, aac | A radio channel: sound and nothing else, so no frame ever comes |
 
 Between them: 720p and 1080p, 25/50/60 fps, aac, ac3 and mp2, low and high
-motion. All but `mpeg2sd.ts` are H.264 8-bit 4:2:0 in MPEG-TS with a keyframe
+motion. All but `mpeg2sd.ts` and `radio.ts` are H.264 8-bit 4:2:0 in MPEG-TS with a keyframe
 every two seconds, the shape most live IPTV feeds have. Any other `.ts` file dropped into the
 fixtures directory is served too.
+
+`player_check` can zap after its run: `ZAPPER_ZAP_TO=2,3` opens ids 2 and 3 in turn from the
+channel playing, each from its own fixture (`2.ts`, `3.ts`: a fixtures directory of links, say
+`2.ts` to `radio.ts`), and checks each still plays past the first-frame deadline.
 
 `fake_stream.py` sends a fixture as an endless chunked response with no
 length, as a live feed does, paced to its bitrate. Flags imitate how real
@@ -83,6 +88,25 @@ and `--fault-once` applies either (or `--end-after`) to the first stream only,
 so a reconnect plays. `/player_api.php` answers as an Xtream account does,
 with `max_connections` from `--max-connections` (default 1) and `active_cons`
 the streams being served plus `--other-devices`.
+
+It is an archive too. `--panel-utc-offset 1` puts the server's clock an hour
+east of UTC, which `player_api.php`'s `server_info` reports (`time_now`,
+`timestamp_now`) as a real server does; `/streaming/timeshift.php` reads its
+`start` in that zone, logs the moment it names, and lists every catch-up and
+`/live/<user>/<pass>/<id>.ts` request as JSON at `/requests`. A start older
+than `--archive-days` (default 3) is a 404.
+
+`cargo run --features harness --bin catchup_check` plays that archive through
+a scratch account: "five minutes ago" must reach the server as five minutes
+ago, Live must open the channel again rather than seek through the
+programme, a request at the archive's far edge must be moved inside it, and
+one older than the archive must say so. Run it with this computer in another
+zone from the server's:
+
+```sh
+tools/fake_stream.py --panel-utc-offset 1 &
+TZ=America/New_York cargo run --features harness --bin catchup_check
+```
 
 ### Movies
 

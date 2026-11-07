@@ -100,6 +100,10 @@ pub enum EndingKind {
     /// because the channel is not on the air. `clip_secs` says how long the
     /// clip was. See [`off_air`].
     OffAir,
+    /// A catch-up programme the server refused, or answered with nothing,
+    /// before showing a frame: most likely further back than its archive
+    /// keeps. Only ever from [`for_catchup`].
+    BeyondArchive,
     /// None of the above could be told; `error` carries mpv's words.
     Other,
 }
@@ -327,6 +331,39 @@ pub fn classify(how: How, shown: bool, clues: Clues) -> Ending {
     }
 }
 
+/// The same ending, for a catch-up programme.
+///
+/// A server asked for footage older than it keeps answers 404 (or 410, or
+/// 400 for a start it will not read): that is the archive, wherever the
+/// request was. It may also answer 401 or 403, or with nothing — but those
+/// are also how a provider refuses a connection over the account's limit
+/// (a bare 403, a `200` with a line of text), and taking that for the
+/// archive would hide "Watch here anyway". So they are put down to the
+/// archive only for a request `near_edge` (see `player_cmds::CatchUp`).
+/// A refusal that names a limit (in words, or as 429 or 509) is always the
+/// limit, and anything after a frame was shown is left as it was.
+pub fn for_catchup(e: Ending, shown: bool, near_edge: bool) -> Ending {
+    if shown {
+        return e;
+    }
+    let beyond = match (e.kind, e.status) {
+        (EndingKind::Unavailable, _) => true,
+        _ if e.limit => false,
+        (EndingKind::Refused, Some(400)) => true,
+        (EndingKind::Refused, Some(429 | 509)) => false,
+        (EndingKind::Refused, _) | (EndingKind::NotVideo, _) => near_edge,
+        _ => false,
+    };
+    if beyond {
+        Ending {
+            kind: EndingKind::BeyondArchive,
+            ..e
+        }
+    } else {
+        e
+    }
+}
+
 /// Whether a live channel that never showed a picture failed through a
 /// fault of its own — and if so, why, in a few words for the channel list.
 ///
@@ -362,8 +399,13 @@ pub fn against_channel(e: &Ending, error: Option<&str>) -> Option<String> {
         // (src/logic/format.ts reads it back by this text).
         EndingKind::OffAir => Some(OFF_AIR_REASON.to_owned()),
         EndingKind::Other => Some(error.unwrap_or("it could not be played").to_owned()),
-        // Not tried at all: the account was full.
-        EndingKind::Dropped | EndingKind::ServerError | EndingKind::Network | EndingKind::InUse => None,
+        // Not tried at all: the account was full. Or not the channel's
+        // doing: a programme older than its archive keeps.
+        EndingKind::Dropped
+        | EndingKind::ServerError
+        | EndingKind::Network
+        | EndingKind::InUse
+        | EndingKind::BeyondArchive => None,
     }
 }
 
@@ -701,6 +743,61 @@ mod tests {
         assert_eq!(clues(&["Server returned 4XX Client Error, but not one of 40{0,1,3,4}"]).status, None);
     }
 
+    /// A catch-up that never showed a frame, ended with `lines` logged.
+    fn catchup(lines: &[&str], how: How, near_edge: bool) -> Ending {
+        for_catchup(classify(how, false, clues(lines)), false, near_edge)
+    }
+
+    #[test]
+    fn missing_footage_is_beyond_the_archive_wherever_it_was_asked_for() {
+        for near in [true, false] {
+            let e = catchup(&["HTTP error 404 Not Found"], How::Error(-13), near);
+            assert_eq!((e.kind, e.status), (EndingKind::BeyondArchive, Some(404)), "{near}");
+            let e = catchup(&["HTTP error 410 Gone"], How::Error(-13), near);
+            assert_eq!(e.kind, EndingKind::BeyondArchive, "{near}");
+            let e = catchup(&["Server returned 400 Bad Request"], How::Error(-13), near);
+            assert_eq!(e.kind, EndingKind::BeyondArchive, "{near}");
+        }
+    }
+
+    #[test]
+    fn a_bare_refusal_or_an_empty_answer_is_the_archive_only_near_its_edge() {
+        // Near the far end (or of an archive of unknown depth): the archive.
+        let near = |lines: &[&str], how| catchup(lines, how, true).kind;
+        assert_eq!(near(&["HTTP error 403 Forbidden"], How::Error(-13)), EndingKind::BeyondArchive);
+        assert_eq!(near(&["HTTP error 401 Unauthorized"], How::Error(-13)), EndingKind::BeyondArchive);
+        assert_eq!(near(&[], How::Eof), EndingKind::BeyondArchive);
+        assert_eq!(near(&[], How::Error(UNKNOWN_FORMAT)), EndingKind::BeyondArchive);
+        // Well inside it: how providers refuse over the connection limit, and
+        // "Watch here anyway" is kept for it.
+        let far = |lines: &[&str], how| catchup(lines, how, false).kind;
+        assert_eq!(far(&["HTTP error 403 Forbidden"], How::Error(-13)), EndingKind::Refused);
+        assert_eq!(far(&["HTTP error 401 Unauthorized"], How::Error(-13)), EndingKind::Refused);
+        assert_eq!(far(&[], How::Eof), EndingKind::NotVideo);
+        assert_eq!(far(&[], How::Error(UNKNOWN_FORMAT)), EndingKind::NotVideo);
+    }
+
+    #[test]
+    fn a_catch_up_refused_for_the_limit_or_the_network_says_so() {
+        for near in [true, false] {
+            let e = catchup(&["HTTP error 509 Max Connections Reached"], How::Error(-13), near);
+            assert_eq!((e.kind, e.limit), (EndingKind::Refused, true));
+            let kind = |lines: &[&str], how| catchup(lines, how, near).kind;
+            assert_eq!(kind(&["HTTP error 429 Too Many Requests"], How::Error(-13)), EndingKind::Refused);
+            assert_eq!(kind(&["HTTP error 403 Max connections reached"], How::Error(-13)), EndingKind::Refused);
+            assert_eq!(kind(&["HTTP error 502 Bad Gateway"], How::Error(-13)), EndingKind::ServerError);
+            assert_eq!(kind(&["Connection refused"], How::Error(-13)), EndingKind::Network);
+            assert_eq!(kind(&[], How::Deadline), EndingKind::NoVideo);
+            // Once it had played, an ending is about the stream, not the archive.
+            let played = for_catchup(classify(How::Eof, true, Clues::default()), true, near);
+            assert_eq!(played.kind, EndingKind::Dropped);
+        }
+        // And it is never the channel's fault.
+        let e = catchup(&["HTTP error 404 Not Found"], How::Error(-13), false);
+        assert_eq!(against_channel(&e, None), None);
+        assert!(!worth_reconnecting(&e, false));
+    }
+
     #[test]
     fn nonsense_numbers_are_not_statuses() {
         assert_eq!(clues(&["HTTP error 4031 x"]).status, None);
@@ -973,6 +1070,7 @@ mod tests {
             EndingKind::Other,
             EndingKind::InUse,
             EndingKind::OffAir,
+            EndingKind::BeyondArchive,
         ] {
             assert!(!worth_reconnecting(&e(kind, None), true), "{kind:?}");
         }

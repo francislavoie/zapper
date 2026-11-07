@@ -3,7 +3,8 @@
 pub mod client;
 pub mod models;
 
-pub use client::{Credentials, XtreamClient};
+pub use client::{Account, Credentials, XtreamClient};
 pub use models::{
-    Category, Channel, StreamTags, UserInfo, VodInfo, VodInfoBody, VodMovieData, VodStream,
+    Category, Channel, ServerInfo, StreamTags, UserInfo, VodInfo, VodInfoBody, VodMovieData,
+    VodStream,
 };

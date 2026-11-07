@@ -140,6 +140,21 @@ struct Machine {
     /// programme that plays to its end is finished; a live stream that ends
     /// was ended by somebody.
     live: bool,
+    /// Set when this is a programme from a channel's archive, by
+    /// `play_catchup` alone: what Live and an ending mean depend on it.
+    catch_up: Option<CatchUp>,
+    /// Whether this open's file has a video track, once its track list is
+    /// known. A radio channel has none, and never shows a frame.
+    has_video: Option<bool>,
+    /// Whether this open's audio is playing.
+    audio_on: bool,
+    /// How this open was to meet the connect burst ([`Machine::starting`]),
+    /// for an open that failed and then turned out to work.
+    start_mode: LiveStart,
+    /// Live was asked for during a catch-up programme of this channel, and
+    /// the channel is being opened again: a second press is not a second
+    /// open. Cleared when the open begins, or fails.
+    reopening: Option<i64>,
     /// Whether a frame of this stream has been on screen: the difference
     /// between a stream that was taken away and one that never came.
     shown: bool,
@@ -163,7 +178,9 @@ struct Machine {
     /// This open was found off air and that has not yet gone to the
     /// channel's record.
     off_air_unnoted: bool,
-    /// mpv has started a file since this open began (`start-file`).
+    /// mpv has started a file since this open began (`start-file`): a
+    /// picture after that is this stream's, even if the open was given up
+    /// on first.
     started: bool,
     /// The watch for a placeholder is reading this open's own file: one
     /// has started since the open, and mpv's `path` is the address this
@@ -209,6 +226,45 @@ enum Ledger {
     Measure(i64),
 }
 
+/// What the Live button (or `L`) does, for what is open: see
+/// [`Machine::to_live`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ToLive {
+    /// Forward through the open stream, to its live edge.
+    Seek,
+    /// Open this channel again, live: what is open is a catch-up programme
+    /// of it.
+    Reopen(i64),
+    /// Nothing: the channel is being opened again already.
+    Already,
+}
+
+/// What kind of open this is: what Live, an ending and a reconnect mean
+/// depend on it. Not what is opened, which is [`Opened`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OpenKind {
+    /// A channel, live.
+    Live,
+    /// A programme from a channel's archive.
+    CatchUp(CatchUp),
+    /// A movie, on demand: neither live nor from an archive. Only ever
+    /// with [`Opened::Movie`].
+    OnDemand,
+}
+
+/// A catch-up open, as `play_catchup` asked for it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CatchUp {
+    /// Asked for near the far end of the archive (within [`NEAR_EDGE`] of
+    /// the earliest moment worth asking for), or of an archive of unknown
+    /// depth: a refusal or an empty answer is then most likely the archive
+    /// having let it go, rather than the account's connection limit.
+    near_edge: bool,
+}
+
+/// How near the archive's far end a request counts as near it.
+const NEAR_EDGE: i64 = 3600;
+
 /// A reconnect to make, after a wait.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Due {
@@ -235,6 +291,11 @@ impl Machine {
             join: None,
             jumps: 0,
             live: true,
+            catch_up: None,
+            has_video: None,
+            audio_on: false,
+            start_mode: LiveStart::CatchUp,
+            reopening: None,
             shown: false,
             clues: Clues::default(),
             failed_since: None,
@@ -303,8 +364,11 @@ impl Machine {
             if bare_deadline && !settled {
                 return None;
             }
+            // Without an ending there is nothing to judge yet, and nothing
+            // is noted: an open given up on without a word may still play.
+            let e = self.dto.ending?;
             self.noted = true;
-            let why = ending::against_channel(&self.dto.ending?, self.dto.error.as_deref())?;
+            let why = ending::against_channel(&e, self.dto.error.as_deref())?;
             return Some(Ledger::Failed(id, why));
         }
         if matches!(self.dto.state, PlaybackState::Playing | PlaybackState::Paused)
@@ -346,6 +410,10 @@ impl Machine {
         self.dto.error = None;
         self.dto.ending = None;
         self.live = true;
+        self.catch_up = None;
+        self.has_video = None;
+        self.audio_on = false;
+        self.reopening = None;
         self.shown = false;
         self.clues = Clues::default();
         self.failed_since = None;
@@ -386,11 +454,21 @@ impl Machine {
     /// catch-up programme has no burst: it starts where it was asked to,
     /// whatever the setting.
     fn starting(&mut self, mode: LiveStart) {
+        self.start_mode = mode;
         self.joining = self.live && mode == LiveStart::Wait;
         // Staying put means nothing skips ahead by itself — neither the
         // catch-up after the burst nor the one after a long stall. Asking
         // for live (`seek_live`) turns following back on.
-        self.following_live = self.dto.on_demand.is_none() && !(self.live && mode == LiveStart::Stay);
+        //
+        // A catch-up programme never follows anything: the end of what it
+        // has read is not live, and skipping toward it would skip the
+        // programme. Nor is it at the live edge, whatever its buffer says,
+        // so Live is offered from the start. A movie is not live either,
+        // and has no edge to follow.
+        self.following_live = self.live && mode != LiveStart::Stay;
+        if !self.live {
+            self.dto.at_live_edge = false;
+        }
     }
 
     /// The viewer asked for live: stay at the edge from now on. A movie
@@ -404,11 +482,124 @@ impl Machine {
         Ok(())
     }
 
+    /// The live reopen of `stream_id` has begun ([`ToLive::Reopen`]).
+    fn reopen_started(&mut self, stream_id: i64) {
+        self.reopening = Some(stream_id);
+    }
+
+    /// The live reopen of `stream_id` could not be made. Said only if
+    /// nothing has happened since: not over a newer channel, or a stop.
+    fn reopen_failed(&mut self, stream_id: i64, why: &str) {
+        if self.reopening == Some(stream_id) && self.dto.stream_id == Some(stream_id) {
+            self.reopening = None;
+            self.failed(why);
+        }
+    }
+
+    /// What asking for live means for what is open now.
+    fn to_live(&self) -> ToLive {
+        if self.reopening.is_some() {
+            return ToLive::Already;
+        }
+        match self.dto.stream_id {
+            // A catch-up programme has no live edge to seek to: the channel
+            // is opened again, live. Only a programme `play_catchup` opened:
+            // a movie has no channel to go back to.
+            Some(id) if self.catch_up.is_some() && self.dto.state != PlaybackState::Stopped => {
+                ToLive::Reopen(id)
+            }
+            _ => ToLive::Seek,
+        }
+    }
+
+    /// mpv reconfigured its video output, `with_video` when there is a
+    /// picture behind it now. Returns whether it counted as a frame.
+    ///
+    /// Taking the last stream's picture down is a reconfigure too, and it
+    /// can be pumped after the next open began: counted, it made an open
+    /// that went on to be refused read as one that had played.
+    fn reconfigured(&mut self, with_video: bool) -> bool {
+        if with_video {
+            self.playing();
+        }
+        with_video
+    }
+
+    /// The file's track list, when it has one: whether there is video in
+    /// it ([`tracks::has_video`]).
+    fn tracks_known(&mut self, has_video: Option<bool>) {
+        if has_video.is_some() {
+            self.has_video = has_video;
+        }
+        self.audio_only();
+    }
+
+    /// Whether this open's file has video is still to be learnt
+    /// once it has started. mpv says nothing when a track list is the same
+    /// as the last one — two stations from one provider, say — so then the
+    /// heartbeat reads it.
+    fn needs_track_list(&self) -> bool {
+        self.started && self.has_video.is_none()
+    }
+
+    /// Whether audio is playing now (mpv has `audio-params`).
+    fn audio(&mut self, on: bool) {
+        self.audio_on = on;
+        self.audio_only();
+    }
+
+    /// A radio channel never shows a frame, so its first sound is its
+    /// "it works": once this open's file has started, its track list has no
+    /// video in it, and audio is playing. Without this it failed on the
+    /// first-frame deadline every time, with the sound playing behind the
+    /// message, and was marked as a channel that does not load.
+    fn audio_only(&mut self) {
+        if self.started && self.audio_on && self.has_video == Some(false) && !self.shown {
+            self.playing();
+        }
+    }
+
+    /// One of mpv's log lines, kept as evidence while this open can still
+    /// be explained: while it opens or plays, and after the first-frame
+    /// deadline, whose bare "no video" mpv's reason may yet refine — a slow
+    /// archive's 404 arrives after it.
+    fn heard(&mut self, text: &str) {
+        let open = matches!(
+            self.dto.state,
+            PlaybackState::Opening | PlaybackState::Playing | PlaybackState::Paused
+        );
+        if open || self.bare_deadline() {
+            self.clues.observe(text);
+        }
+    }
+
+    /// Failed on the first-frame deadline alone, with mpv still trying.
+    fn bare_deadline(&self) -> bool {
+        self.dto.state == PlaybackState::Failed
+            && self.dto.ending.is_some_and(|e| e.kind == ending::EndingKind::NoVideo)
+    }
+
     /// First frame decoded. The only honest "it works" edge: `file-loaded`
     /// fires on a stream that connects and then stalls.
     fn playing(&mut self) {
         if matches!(self.dto.state, PlaybackState::Stopped) || self.is_off_air() {
             return;
+        }
+        // Failed for a reason mpv gave, the stream is over: a reconfigure
+        // now is the previous stream's picture being taken down, which a
+        // refusal from a nearby server can beat. Only a bare deadline is
+        // still loading, and its first frame is welcome; so is the first
+        // frame of an open given up on without a word (the player did not
+        // answer in time) whose file mpv has since started.
+        if self.dto.state == PlaybackState::Failed {
+            let revivable = match self.dto.ending {
+                Some(_) => self.bare_deadline(),
+                None => self.started,
+            };
+            if !revivable {
+                return;
+            }
+            self.revive();
         }
         if self.joining {
             // Held on the first frame: there is a picture, but it is not
@@ -437,7 +628,9 @@ impl Machine {
         // Only on the way out of Opening: a later reconfigure (a resolution
         // change mid-stream) is not a new connection and has no burst, and
         // has already been measured.
-        if self.opened_at.is_some() {
+        // A catch-up programme has no burst to catch up on: it starts where
+        // it was asked to.
+        if self.opened_at.is_some() && self.live {
             self.settle = Some(Settle::new());
             self.measure_at = Some(Instant::now() + MEASURE_AFTER);
         }
@@ -499,9 +692,11 @@ impl Machine {
     }
 
     /// mpv started a file. The watch is armed once that file is known to be
-    /// this open's: see [`Machine::arm`].
+    /// this open's: see [`Machine::arm`]. A radio channel may be playing
+    /// from here: see [`Machine::audio_only`].
     fn file_started(&mut self) {
         self.started = true;
+        self.audio_only();
     }
 
     /// Arms the placeholder watch if a file has started since this open
@@ -548,6 +743,21 @@ impl Machine {
 
     fn is_off_air(&self) -> bool {
         self.dto.ending.is_some_and(|e| e.kind == EndingKind::OffAir)
+    }
+
+    /// A failed open that turned out to work, put back as its first frame
+    /// would have found it: opening, set up for the start it was asked for
+    /// (held at live and let go by the heartbeat under "wait", caught up
+    /// after its burst, measured), and with its failure no longer on its
+    /// record, so that it is noted as loaded.
+    fn revive(&mut self) {
+        self.dto.state = PlaybackState::Opening;
+        self.dto.error = None;
+        self.dto.ending = None;
+        self.failed_since = None;
+        self.noted = false;
+        self.opened_at = Some(Instant::now());
+        self.starting(self.start_mode);
     }
 
     /// The hold on the first frame is over and the caller is starting
@@ -604,6 +814,7 @@ impl Machine {
 
     fn stopped(&mut self) {
         self.carry_unwritten_load();
+        self.reopening = None;
         self.dto.at_live_edge = true;
         self.following_live = false;
         self.reconnects = 0;
@@ -656,7 +867,8 @@ impl Machine {
         {
             return;
         }
-        self.dto.at_live_edge = true;
+        // A catch-up programme that failed still has live to go back to.
+        self.dto.at_live_edge = self.live;
         self.following_live = false;
         // A movie is over only when it got to its end: an EOF anywhere else
         // is the provider dropping the connection, which must keep the
@@ -679,7 +891,10 @@ impl Machine {
         self.failed(why);
         let mut clues = self.clues;
         clues.stalled = self.flow.stalled();
-        let e = ending::classify(how, self.shown, clues);
+        let mut e = ending::classify(how, self.shown, clues);
+        if let Some(c) = self.catch_up {
+            e = ending::for_catchup(e, self.shown, c.near_edge);
+        }
         self.dto.ending = Some(e);
         self.plan_reconnect(e, clues.unreached && !self.shown);
     }
@@ -816,10 +1031,10 @@ impl Machine {
                 self.dto.at_live_edge = false;
             } else {
                 self.dto.behind_live = round_tenth(p.behind_live);
-                self.dto.at_live_edge = live_edge_with_hysteresis(
-                    self.dto.at_live_edge,
-                    self.dto.behind_live,
-                );
+                // A catch-up programme is never live, however close the
+                // playhead is to the end of what it has read.
+                self.dto.at_live_edge = self.live
+                    && live_edge_with_hysteresis(self.dto.at_live_edge, self.dto.behind_live);
             }
             self.dto.buffered_back = round_tenth(p.buffered_back);
             self.set_paused(p.paused);
@@ -1029,7 +1244,7 @@ static THROUGH_SERVICE: AtomicBool = AtomicBool::new(false);
 
 /// What was last opened, so that a reconnect can open it again. Kept here,
 /// in memory only: the URL carries the account.
-static LAST_OPEN: Mutex<Option<(Opened, Playable, bool, Via)>> = Mutex::new(None);
+static LAST_OPEN: Mutex<Option<(Opened, Playable, OpenKind, Via)>> = Mutex::new(None);
 
 /// Whether a reconnect decided under `token` is still wanted.
 fn still_wanted(token: u64) -> bool {
@@ -1059,11 +1274,11 @@ fn spawn_reconnect(app: &AppHandle, due: Due, token: u64, stream_id: i64) {
             .ok()
             .and_then(|l| l.clone())
             .filter(|(id, ..)| *id == Opened::Channel(stream_id))
-            .and_then(|(_, _, live, via)| match via {
-                Via::Service { .. } => Some(live),
+            .and_then(|(_, _, kind, via)| match via {
+                Via::Service { .. } => Some(kind),
                 Via::Direct => None,
             });
-        if let Some(live) = through_service {
+        if let Some(kind) = through_service {
             if let Some((target, via)) = through_service_target(stream_id).await {
                 if !still_wanted(token) {
                     return;
@@ -1072,7 +1287,7 @@ fn spawn_reconnect(app: &AppHandle, due: Due, token: u64, stream_id: i64) {
                     .lock()
                     .map(|m| m.reconnects + 1)
                     .unwrap_or(1);
-                if let Err(e) = open_as(&app, Opened::Channel(stream_id), target, live, Some(attempt), via, None, None).await {
+                if let Err(e) = open_as(&app, Opened::Channel(stream_id), target, kind, Some(attempt), via, None, None).await {
                     tracing::warn!("reconnect could not be sent: {e}");
                 }
                 return;
@@ -1082,7 +1297,7 @@ fn spawn_reconnect(app: &AppHandle, due: Due, token: u64, stream_id: i64) {
             match direct_target(stream_id) {
                 Ok(t) => {
                     if let Ok(mut last) = LAST_OPEN.lock() {
-                        *last = Some((Opened::Channel(stream_id), t, live, Via::Direct));
+                        *last = Some((Opened::Channel(stream_id), t, kind, Via::Direct));
                     }
                 }
                 Err(e) => {
@@ -1117,7 +1332,7 @@ fn spawn_reconnect(app: &AppHandle, due: Due, token: u64, stream_id: i64) {
             .and_then(|l| l.clone())
             .filter(|(id, ..)| *id == Opened::Channel(stream_id));
         match (verdict, target) {
-            (Verdict::Go, Some((id, target, live, via))) => {
+            (Verdict::Go, Some((id, target, kind, via))) => {
                 let attempt = {
                     let m = STATE.lock().expect("player state mutex poisoned");
                     if m.reconnect_token != token {
@@ -1125,7 +1340,7 @@ fn spawn_reconnect(app: &AppHandle, due: Due, token: u64, stream_id: i64) {
                     }
                     m.reconnects + 1
                 };
-                if let Err(e) = open_as(&app, id, target, live, Some(attempt), via, None, None).await {
+                if let Err(e) = open_as(&app, id, target, kind, Some(attempt), via, None, None).await {
                     tracing::warn!("reconnect could not be sent: {e}");
                 }
             }
@@ -1231,6 +1446,20 @@ fn ensure_ticker(app: &AppHandle) {
     }
 }
 
+/// A heartbeat's signals in the order they happened, as near as can be told.
+///
+/// mpv hands out every queued event before any log line waiting beside it
+/// (`mpv_wait_event` drains its event queue first), so when a stream is
+/// refused between two heartbeats — at once, by a server nearby — its end
+/// comes out of the pump before the line that says why, and the line would
+/// arrive with the stream already failed and unexplained. The lines were
+/// logged first, so they are read first.
+fn logs_first(signals: &[Signal]) -> Vec<&Signal> {
+    let (logs, events): (Vec<&Signal>, Vec<&Signal>) =
+        signals.iter().partition(|s| matches!(s, Signal::Log(_)));
+    logs.into_iter().chain(events).collect()
+}
+
 /// One heartbeat, on the main thread.
 fn tick(app: &AppHandle, p: &Player) {
     let signals = p.pump();
@@ -1240,6 +1469,7 @@ fn tick(app: &AppHandle, p: &Player) {
     // happened rather than an empty box. Four property reads, on a tick that
     // was going to run anyway.
     let health = p.health();
+    let audio_on = p.get_string("audio-params/format").is_some();
     // Assigned inside the block below, where the state lock is held.
     let earned;
     let loaded;
@@ -1274,10 +1504,12 @@ fn tick(app: &AppHandle, p: &Player) {
     let payload = {
         let mut m = STATE.lock().expect("player state mutex poisoned");
         let was_failed = m.dto.state == PlaybackState::Failed;
-        for s in &signals {
+        for s in logs_first(&signals) {
             match s {
                 Signal::VideoReconfig => {
-                    m.playing();
+                    if !m.reconfigured(probe.width.is_some()) {
+                        continue;
+                    }
                     // Which decoder is doing the work, once per reconfigure.
                     // Software decoding is the difference between a busy CPU
                     // being unnoticeable and it dropping frames and starving
@@ -1307,21 +1539,21 @@ fn tick(app: &AppHandle, p: &Player) {
                         }
                     }
                 }
-                // Evidence for why it might end; see `ipc::ending`. Only while
-                // a stream is current: once it has stopped there is nothing
-                // left to explain.
-                Signal::Log(text) => {
-                    if matches!(
-                        m.dto.state,
-                        PlaybackState::Opening | PlaybackState::Playing | PlaybackState::Paused
-                    ) {
-                        m.clues.observe(text);
-                    }
-                }
+                // Evidence for why it might end; see `ipc::ending` and
+                // `Machine::heard`.
+                Signal::Log(text) => m.heard(text),
                 Signal::StartFile => m.file_started(),
                 Signal::FileLoaded | Signal::Tracks(_) => {}
             }
         }
+        // A radio channel's "it works"; see `Machine::audio_only`.
+        let listed = match tracks {
+            Some(json) => tracks::has_video(json),
+            None if m.needs_track_list() => p.get_string("track-list").as_deref().and_then(tracks::has_video),
+            None => None,
+        };
+        m.tracks_known(listed);
+        m.audio(audio_on);
         m.apply(&probe);
         m.check_deadline();
         // Wall time since the last heartbeat, which is never exactly TICK.
@@ -1665,21 +1897,26 @@ pub fn source() -> Result<&'static Source, String> {
 
 #[tauri::command]
 pub async fn play(app: AppHandle, stream_id: i64) -> Result<(), String> {
+    play_channel(&app, stream_id).await
+}
+
+/// A channel, live, the way picking it does: see [`play`].
+async fn play_channel(app: &AppHandle, stream_id: i64) -> Result<(), String> {
     // A channel the recording service on this computer is recording: a
     // place on its connection, which costs the account nothing, rather than
     // a second connection to the same channel.
     if crate::ipc::handover::captured(stream_id) {
         if let Some((target, via)) = through_service_target(stream_id).await {
-            return open_as(&app, Opened::Channel(stream_id), target, true, None, via, None, None).await;
+            return open_as(app, Opened::Channel(stream_id), target, OpenKind::Live, None, via, None, None).await;
         }
     }
-    play_direct(&app, stream_id).await
+    play_direct(app, stream_id).await
 }
 
 /// The channel on the player's own connection to the provider.
 async fn play_direct(app: &AppHandle, stream_id: i64) -> Result<(), String> {
     let target = direct_target(stream_id)?;
-    open(app, stream_id, target, true).await
+    open(app, stream_id, target, OpenKind::Live).await
 }
 
 /// Where the provider serves a live channel.
@@ -1712,7 +1949,7 @@ fn movie_target(movie_id: i64) -> Result<Playable, String> {
 #[tauri::command]
 pub async fn play_movie(app: AppHandle, movie_id: i64, start: Option<f64>) -> Result<(), String> {
     let target = movie_target(movie_id)?;
-    open_as(&app, Opened::Movie(movie_id), target, false, None, Via::Direct, None, start).await
+    open_as(&app, Opened::Movie(movie_id), target, OpenKind::OnDemand, None, Via::Direct, None, start).await
 }
 
 /// The player's current place on the recording service's connection, if
@@ -1779,7 +2016,7 @@ pub fn now_playing() -> Option<NowPlaying> {
     let last = LAST_OPEN.lock().ok()?.clone()?;
     (last.0 == Opened::Channel(open)).then_some(NowPlaying {
         stream_id: open,
-        live: last.2,
+        live: last.2 == OpenKind::Live,
         through_service: matches!(last.3, Via::Service { .. }),
     })
 }
@@ -1830,7 +2067,7 @@ pub async fn move_to_service(app: &AppHandle, client: &Client, stream_id: i64) -
     match answer {
         Ok(w) => {
             let (target, via) = service_target(client, &w);
-            open_as(app, Opened::Channel(stream_id), target, true, None, via, tracks, None).await
+            open_as(app, Opened::Channel(stream_id), target, OpenKind::Live, None, via, tracks, None).await
         }
         Err(r) => {
             tracing::warn!("the player could not move onto the recording service: {}", r.error);
@@ -1851,16 +2088,22 @@ pub async fn play_catchup(
     start: i64,
     duration_minutes: u32,
 ) -> Result<(), String> {
+    let (start, duration_minutes, near_edge) = within_archive(stream_id, start, duration_minutes);
     let target = match source()? {
         Source::Xtream(server) => {
-            // The server reads the timestamp in its own wall clock, which is
-            // the machine's: sending UTC replays the wrong hour for most of
-            // the world.
-            let stamp = timeshift_stamp(start, crate::localtime::utc_offset(start));
+            // The server reads the timestamp as wall time in its own time
+            // zone, which need not be this computer's: see
+            // `catalog::panel_clock`.
+            let offset = crate::catalog::panel_clock::offset_for(server.credentials(), start);
+            let stamp = timeshift_stamp(start, offset);
             Playable::plain(server.timeshift_url(stream_id, &stamp, duration_minutes))
         }
         // A playlist's archive is whatever its entry's template says; the
         // local offset is there for templates written in wall-clock time.
+        // `{utc}`, `{lutc}` and the rest are Unix time and need no zone. A
+        // playlist has no account call that says which zone its server's
+        // clock is in, so the wall-clock fields stay in this computer's,
+        // as IPTV Simple writes them — `xc` entries included.
         Source::M3u(m) => m
             .catchup(
                 stream_id,
@@ -1877,7 +2120,51 @@ pub async fn play_catchup(
             return Err("this account has no catch-up".to_owned());
         }
     };
-    open(&app, stream_id, target, false).await
+    open(&app, stream_id, target, OpenKind::CatchUp(CatchUp { near_edge })).await
+}
+
+/// A catch-up request moved inside the channel's archive, by
+/// [`clamp_to_archive`], when its depth is known; and whether it is near
+/// the archive's far end ([`near_edge`]).
+fn within_archive(stream_id: i64, start: i64, minutes: u32) -> (i64, u32, bool) {
+    let days: Option<i64> = crate::catalog::db::with_db(|conn| {
+        Ok(conn
+            .query_row(
+                "SELECT archive_days FROM channels WHERE stream_id = ?1",
+                [stream_id],
+                |r| r.get(0),
+            )
+            .ok()
+            .flatten())
+    })
+    .ok()
+    .flatten();
+    let earliest = days
+        .filter(|d| *d > 0)
+        .map(|d| crate::catalog::guide_search::earliest_catchup(activity::now_secs(), d));
+    let (start, minutes) = clamp_to_archive(start, minutes, earliest);
+    (start, minutes, near_edge(start, earliest))
+}
+
+/// Whether a request starting at `start` is near the far end of an archive
+/// whose earliest moment worth asking for is `earliest`: within
+/// [`NEAR_EDGE`] of it, or anywhere when the archive's depth is not known.
+fn near_edge(start: i64, earliest: Option<i64>) -> bool {
+    earliest.is_none_or(|e| start < e + NEAR_EDGE)
+}
+
+/// Moves a request that starts before `earliest` up to it (to the next
+/// whole minute, the server's resolution), keeping where it ends. A request
+/// for footage the server has dropped fails outright; starting a little
+/// later plays.
+fn clamp_to_archive(start: i64, minutes: u32, earliest: Option<i64>) -> (i64, u32) {
+    let Some(earliest) = earliest.filter(|e| start < *e) else {
+        return (start, minutes);
+    };
+    let end = start + i64::from(minutes) * 60;
+    let from = earliest.div_euclid(60) * 60 + if earliest.rem_euclid(60) == 0 { 0 } else { 60 };
+    let left = (end - from).max(60);
+    (from, u32::try_from((left + 59) / 60).unwrap_or(1))
 }
 
 /// Whether the last stream opened set its own HTTP headers. See
@@ -1947,8 +2234,8 @@ fn live_start_mode() -> LiveStart {
 }
 
 /// Shared by live and catchup: state first, then the one connection.
-async fn open(app: &AppHandle, stream_id: i64, target: Playable, live: bool) -> Result<(), String> {
-    open_as(app, Opened::Channel(stream_id), target, live, None, Via::Direct, None, None).await
+async fn open(app: &AppHandle, stream_id: i64, target: Playable, kind: OpenKind) -> Result<(), String> {
+    open_as(app, Opened::Channel(stream_id), target, kind, None, Via::Direct, None, None).await
 }
 
 /// [`open`], as automatic reconnect number `reconnect` when it is one,
@@ -1963,14 +2250,14 @@ async fn open_as(
     app: &AppHandle,
     what: Opened,
     target: Playable,
-    live: bool,
+    kind: OpenKind,
     reconnect: Option<u32>,
     via: Via,
     tracks: Option<(String, String)>,
     start: Option<f64>,
 ) -> Result<(), String> {
     let left = LAST_OPEN.lock().ok().and_then(|mut last| {
-        let before = last.replace((what, target.clone(), live, via.clone()));
+        let before = last.replace((what, target.clone(), kind, via.clone()));
         match before {
             Some((_, _, _, Via::Service { viewer, .. })) if !matches!(&via, Via::Service { viewer: v, .. } if *v == viewer) => {
                 Some(viewer)
@@ -2003,7 +2290,11 @@ async fn open_as(
     commit(app, |m| {
         was_holding = m.joining;
         m.opening(what);
-        m.live = live;
+        m.live = kind == OpenKind::Live;
+        m.catch_up = match kind {
+            OpenKind::CatchUp(c) => Some(c),
+            OpenKind::Live | OpenKind::OnDemand => None,
+        };
         m.starting(mode);
         join = m.joining;
         match reconnect {
@@ -2245,8 +2536,41 @@ const MIN_REPORTED_JUMP: f64 = 1.0;
 #[tauri::command]
 pub async fn seek_live(app: AppHandle) -> Result<(), String> {
     // Asking for live means staying there, not visiting once.
-    {
-        STATE.lock().expect("player state mutex poisoned").follow_live()?;
+    // A movie has no live edge, and says so.
+    let to = {
+        let mut m = STATE.lock().expect("player state mutex poisoned");
+        let to = m.to_live();
+        match to {
+            ToLive::Seek => m.follow_live()?,
+            ToLive::Reopen(id) => m.reopen_started(id),
+            ToLive::Already => {}
+        }
+        to
+    };
+    if to == ToLive::Already {
+        return Ok(());
+    }
+    if let ToLive::Reopen(stream_id) = to {
+        // A catch-up programme's end is not live: forward through it is
+        // only further into the programme. The channel is opened again, as
+        // picking it would, once the programme's connection is closed — an
+        // account allowed one stream has it back for the channel.
+        //
+        // The open's own state begins when the open does (`open_as`), not
+        // here: a channel that is only being asked for — the recording
+        // service may take a while to answer — is not yet an open on the
+        // clock, and one that never starts must not end up counted against
+        // the channel. Should it not start, the programme is gone either
+        // way, and that is said.
+        tracing::info!("back to live from a catch-up programme");
+        let r = match on_player(&app, |p| p.command("stop", &[]).map_err(|e| e.to_string())).await {
+            Ok(()) => play_channel(&app, stream_id).await,
+            Err(e) => Err(e),
+        };
+        if let Err(e) = &r {
+            commit(&app, |m| m.reopen_failed(stream_id, e));
+        }
+        return r;
     }
     let by = on_player(&app, |p| {
         let probe = p.probe();
@@ -2829,6 +3153,31 @@ mod tests {
     }
 
     #[test]
+    fn a_movie_is_never_taken_for_a_catch_up_programme() {
+        // Not live, as a programme from an archive is not, but not from one
+        // either: Live has no channel to reopen, and a refusal is the
+        // movie's, never the archive's.
+        let mut m = a_playing_movie(7);
+        assert_eq!(m.catch_up, None);
+        assert_eq!(m.to_live(), ToLive::Seek);
+        assert!(m.follow_live().is_err());
+        m.clues.observe("http: HTTP error 404 Not Found");
+        m.ended_with(How::Error(-13));
+        assert_eq!(m.dto.ending.map(|e| e.kind), Some(EndingKind::Unavailable));
+        assert_eq!(m.to_live(), ToLive::Seek);
+        // One slow to its first frame plays when it comes, with nothing of
+        // a live open about it.
+        let mut m = Machine::new();
+        m.opening(Opened::Movie(7));
+        m.live = false;
+        m.starting(LiveStart::Wait);
+        m.ended_with(How::Deadline);
+        assert!(m.reconfigured(true));
+        assert_eq!(m.dto.state, PlaybackState::Playing);
+        assert!(m.join.is_none() && m.settle.is_none() && !m.following_live);
+    }
+
+    #[test]
     fn a_seek_to_stays_inside_the_title() {
         assert_eq!(clamp_to_title(-5.0, Some(100.0)), 0.0);
         assert_eq!(clamp_to_title(500.0, Some(100.0)), 100.0);
@@ -2987,6 +3336,335 @@ mod tests {
             m.playing();
             assert_eq!(m.dto.state, PlaybackState::Playing, "{mode:?}");
         }
+    }
+
+    /// A catch-up programme opened as `play_catchup` opens it.
+    fn catchup(id: i64, mode: LiveStart) -> Machine {
+        catchup_at(id, mode, true)
+    }
+
+    /// The same, asked for near the archive's far end or not.
+    fn catchup_at(id: i64, mode: LiveStart, near_edge: bool) -> Machine {
+        let mut m = Machine::new();
+        m.opening(Opened::Channel(id));
+        m.live = false;
+        m.catch_up = Some(CatchUp { near_edge });
+        m.starting(mode);
+        m
+    }
+
+    #[test]
+    fn a_bare_refusal_well_inside_the_archive_is_still_the_limits() {
+        let mut m = catchup_at(42, LiveStart::CatchUp, false);
+        m.clues.observe("http: HTTP error 403 Forbidden");
+        m.ended_with(How::Error(-13));
+        assert_eq!(m.dto.ending.map(|e| e.kind), Some(EndingKind::Refused));
+        let mut m = catchup_at(42, LiveStart::CatchUp, true);
+        m.clues.observe("http: HTTP error 403 Forbidden");
+        m.ended_with(How::Error(-13));
+        assert_eq!(m.dto.ending.map(|e| e.kind), Some(EndingKind::BeyondArchive));
+    }
+
+    #[test]
+    fn near_the_edge_is_the_archives_first_hour_or_any_of_one_of_unknown_depth() {
+        let earliest = 1_000_000;
+        assert!(near_edge(earliest, Some(earliest)));
+        assert!(near_edge(earliest + NEAR_EDGE - 60, Some(earliest)));
+        assert!(!near_edge(earliest + NEAR_EDGE, Some(earliest)));
+        assert!(!near_edge(earliest + 86_400, Some(earliest)));
+        assert!(near_edge(earliest + 86_400, None));
+    }
+
+    #[test]
+    fn only_a_catch_up_programme_is_explained_by_the_archive_or_reopened_live() {
+        // Not live, but not from an archive either (a film, say).
+        let mut m = Machine::new();
+        m.opening(Opened::Channel(42));
+        m.live = false;
+        m.starting(LiveStart::CatchUp);
+        assert_eq!(m.to_live(), ToLive::Seek);
+        m.clues.observe("http: HTTP error 404 Not Found");
+        m.ended_with(How::Error(-13));
+        assert_eq!(m.dto.ending.map(|e| e.kind), Some(EndingKind::Unavailable));
+        // And a live open clears what the last one was.
+        let mut m = catchup(42, LiveStart::CatchUp);
+        m.opening(Opened::Channel(42));
+        assert_eq!(m.catch_up, None);
+    }
+
+    #[test]
+    fn a_live_reopen_that_never_starts_leaves_nothing_against_the_channel() {
+        // `seek_live` from a catch-up commits nothing before the channel's
+        // own open; if that never comes, the programme is reported failed.
+        let mut m = catchup(42, LiveStart::CatchUp);
+        m.playing();
+        m.reopen_started(42);
+        m.reopen_failed(42, "the recording service did not answer");
+        assert_eq!(m.dto.state, PlaybackState::Failed);
+        assert!(!m.live, "still the programme's state, not a live open's");
+        m.failed_since = Some(Instant::now() - FAILURE_SETTLE - Duration::from_secs(1));
+        m.opened_at = Some(Instant::now() - FIRST_FRAME_DEADLINE - Duration::from_secs(1));
+        m.check_deadline();
+        assert_eq!(m.ledger(Instant::now()), None, "a catch-up says nothing of the channel");
+        assert_eq!(m.to_live(), ToLive::Reopen(42), "and Live can try again");
+    }
+
+    #[test]
+    fn a_second_live_press_during_the_reopen_is_nothing() {
+        let mut m = catchup(42, LiveStart::CatchUp);
+        m.playing();
+        assert_eq!(m.to_live(), ToLive::Reopen(42));
+        m.reopen_started(42);
+        assert_eq!(m.to_live(), ToLive::Already);
+        // The channel's open begins: Live is a seek again.
+        m.opening(Opened::Channel(42));
+        m.starting(LiveStart::CatchUp);
+        assert_eq!(m.to_live(), ToLive::Seek);
+    }
+
+    #[test]
+    fn a_failed_reopen_does_not_land_on_what_came_after_it() {
+        // Another channel picked while the reopen was being asked for.
+        let mut m = catchup(42, LiveStart::CatchUp);
+        m.playing();
+        m.reopen_started(42);
+        m.opening(Opened::Channel(7));
+        m.starting(LiveStart::CatchUp);
+        m.reopen_failed(42, "too late");
+        assert_eq!(m.dto.state, PlaybackState::Opening);
+        assert_eq!(m.dto.stream_id, Some(7));
+        // Or the player stopped.
+        let mut m = catchup(42, LiveStart::CatchUp);
+        m.playing();
+        m.reopen_started(42);
+        m.stopped();
+        m.reopen_failed(42, "too late");
+        assert_eq!(m.dto.state, PlaybackState::Stopped);
+    }
+
+    #[test]
+    fn a_revived_open_starts_as_its_first_frame_would_have() {
+        // Under "wait": held at live once it comes, and noted as loaded.
+        let mut m = held(7);
+        m.ended_with(How::Deadline);
+        m.failed_since = Some(Instant::now() - FAILURE_SETTLE - Duration::from_secs(1));
+        assert!(matches!(m.ledger(Instant::now()), Some(Ledger::Failed(7, _))));
+        assert!(m.reconfigured(true));
+        assert!(m.join.is_some() && m.dto.joining_live, "held, to be let go at live");
+        assert_eq!(m.dto.state, PlaybackState::Opening);
+        assert!(m.dto.ending.is_none() && m.dto.error.is_none());
+        m.joined();
+        assert_eq!(m.dto.state, PlaybackState::Playing);
+        assert!(m.settle.is_some() && m.measure_at.is_some() && m.following_live);
+        assert_eq!(m.ledger(Instant::now()), Some(Ledger::Loaded(7)));
+        // Played at once: caught up after its burst, and measured.
+        let mut m = Machine::new();
+        m.opening(Opened::Channel(7));
+        m.starting(LiveStart::CatchUp);
+        m.ended_with(How::Deadline);
+        m.playing();
+        assert_eq!(m.dto.state, PlaybackState::Playing);
+        assert!(m.settle.is_some() && m.measure_at.is_some() && m.following_live);
+        assert_eq!(m.ledger(Instant::now()), Some(Ledger::Loaded(7)));
+    }
+
+    #[test]
+    fn an_open_given_up_on_without_a_word_is_noted_when_it_plays() {
+        let mut m = Machine::new();
+        m.opening(Opened::Channel(7));
+        m.starting(LiveStart::CatchUp);
+        m.failed("the player did not answer");
+        m.failed_since = Some(Instant::now() - FAILURE_SETTLE - Duration::from_secs(1));
+        assert_eq!(m.ledger(Instant::now()), None, "nothing to judge without an ending");
+        m.file_started();
+        assert!(m.reconfigured(true));
+        assert_eq!(m.ledger(Instant::now()), Some(Ledger::Loaded(7)));
+    }
+
+    #[test]
+    fn a_station_whose_track_list_mpv_never_resends_is_read_for_it() {
+        // Radio to radio from one provider: the same track list, so no
+        // change is reported, and the heartbeat has to ask.
+        let mut m = Machine::new();
+        m.opening(Opened::Channel(2));
+        m.starting(LiveStart::CatchUp);
+        m.file_started();
+        m.tracks_known(None);
+        m.audio(true);
+        assert!(m.needs_track_list());
+        assert_eq!(m.dto.state, PlaybackState::Opening);
+        // What the heartbeat reads instead.
+        m.tracks_known(tracks::has_video(r#"[{"id":1,"type":"audio","codec":"aac"}]"#));
+        assert!(!m.needs_track_list());
+        assert_eq!(m.dto.state, PlaybackState::Playing);
+        // Not asked before the file has started, nor once known.
+        let mut m = Machine::new();
+        m.opening(Opened::Channel(2));
+        assert!(!m.needs_track_list());
+    }
+
+    #[test]
+    fn a_slow_archives_refusal_after_the_deadline_still_explains_it() {
+        let mut m = catchup(42, LiveStart::CatchUp);
+        m.ended_with(How::Deadline);
+        assert_eq!(m.dto.ending.map(|e| e.kind), Some(EndingKind::NoVideo));
+        m.heard("http: HTTP error 404 Not Found");
+        m.ended_with(How::Error(-13));
+        let e = m.dto.ending.unwrap();
+        assert_eq!((e.kind, e.status), (EndingKind::BeyondArchive, Some(404)));
+        // Once explained, later lines are not evidence of anything.
+        m.heard("http: HTTP error 509 Max Connections Reached");
+        assert_eq!(m.clues.status, Some(404));
+    }
+
+    #[test]
+    fn a_radio_channel_plays_on_its_sound() {
+        for mode in [LiveStart::CatchUp, LiveStart::Stay] {
+            let mut m = Machine::new();
+            m.opening(Opened::Channel(7));
+            m.starting(mode);
+            m.file_started();
+            m.tracks_known(Some(false));
+            assert_eq!(m.dto.state, PlaybackState::Opening, "{mode:?}: not before the sound");
+            m.audio(true);
+            assert_eq!(m.dto.state, PlaybackState::Playing, "{mode:?}");
+            assert!(m.opened_at.is_none(), "{mode:?}: the deadline is disarmed");
+            assert_eq!(m.ledger(Instant::now()), Some(Ledger::Loaded(7)), "{mode:?}");
+        }
+        // Started at live: the hold begins on the first sound.
+        let mut m = held(7);
+        m.file_started();
+        m.audio(true);
+        m.tracks_known(Some(false));
+        assert!(m.join.is_some() && m.dto.joining_live);
+    }
+
+    #[test]
+    fn sound_alone_is_not_a_tv_channels_picture() {
+        // A channel with video that has sound but no frame yet is opening.
+        let mut m = Machine::new();
+        m.opening(Opened::Channel(7));
+        m.file_started();
+        m.tracks_known(Some(true));
+        m.audio(true);
+        assert_eq!(m.dto.state, PlaybackState::Opening);
+        // Nor before this open's file started, nor before its tracks are
+        // known: the last stream's sound may still be going.
+        let mut m = Machine::new();
+        m.opening(Opened::Channel(7));
+        m.tracks_known(Some(false));
+        m.audio(true);
+        assert_eq!(m.dto.state, PlaybackState::Opening);
+        let mut m = Machine::new();
+        m.opening(Opened::Channel(7));
+        m.file_started();
+        m.audio(true);
+        m.tracks_known(None);
+        assert_eq!(m.dto.state, PlaybackState::Opening);
+        // A radio channel that only got going after the deadline plays.
+        m.ended_with(How::Deadline);
+        m.tracks_known(Some(false));
+        assert_eq!(m.dto.state, PlaybackState::Playing);
+    }
+
+    #[test]
+    fn an_open_given_up_on_without_a_word_plays_when_its_picture_comes() {
+        // The player did not answer in time, so the open was reported
+        // failed, but mpv went on and started the file.
+        let mut m = Machine::new();
+        m.opening(Opened::Channel(7));
+        m.failed("the player did not answer");
+        m.file_started();
+        assert!(m.reconfigured(true));
+        assert_eq!(m.dto.state, PlaybackState::Playing);
+    }
+
+    #[test]
+    fn a_catch_up_programme_is_never_caught_up_to_its_end() {
+        for mode in [LiveStart::Stay, LiveStart::CatchUp, LiveStart::Wait] {
+            let mut m = catchup(1, mode);
+            assert!(!m.following_live, "{mode:?}: nothing follows the end of a programme");
+            m.playing();
+            assert!(m.settle.is_none(), "{mode:?}: no catch-up after a burst it does not have");
+            assert!(!m.following_live, "{mode:?}");
+            // Its buffer reads deep, as an archive served faster than
+            // realtime does: still nothing to chase.
+            m.apply(&Probe {
+                behind_live: 29.7,
+                ..Probe::default()
+            });
+            assert!(!m.following_live && m.settle.is_none(), "{mode:?}");
+        }
+        // A live channel still gets both.
+        let mut m = Machine::new();
+        m.opening(Opened::Channel(1));
+        m.starting(LiveStart::CatchUp);
+        m.playing();
+        assert!(m.following_live && m.settle.is_some());
+    }
+
+    #[test]
+    fn a_catch_up_programme_is_never_at_the_live_edge() {
+        let mut m = catchup(1, LiveStart::CatchUp);
+        assert!(!m.dto.at_live_edge, "Live is offered while it opens");
+        m.playing();
+        m.apply(&Probe {
+            behind_live: 1.0,
+            ..Probe::default()
+        });
+        assert!(!m.dto.at_live_edge, "however near the end of what it has read");
+        // Nor when it fails, so Live can still leave it.
+        m.ended_with(How::Error(-13));
+        assert!(!m.dto.at_live_edge);
+    }
+
+    #[test]
+    fn live_from_a_catch_up_programme_opens_the_channel_again() {
+        for mode in [LiveStart::Stay, LiveStart::CatchUp, LiveStart::Wait] {
+            let mut m = catchup(42, mode);
+            assert_eq!(m.to_live(), ToLive::Reopen(42), "{mode:?}: while it opens");
+            m.playing();
+            assert_eq!(m.to_live(), ToLive::Reopen(42), "{mode:?}: while it plays");
+            m.ended_with(How::Error(-13));
+            assert_eq!(m.to_live(), ToLive::Reopen(42), "{mode:?}: after it failed");
+        }
+        // Live, it is a seek within the stream, as it always was.
+        let mut m = Machine::new();
+        m.opening(Opened::Channel(42));
+        m.starting(LiveStart::CatchUp);
+        m.playing();
+        assert_eq!(m.to_live(), ToLive::Seek);
+        // And with nothing open there is nothing to reopen.
+        let mut m = catchup(42, LiveStart::CatchUp);
+        m.stopped();
+        assert_eq!(m.to_live(), ToLive::Seek);
+    }
+
+    #[test]
+    fn reopening_live_from_a_catch_up_is_a_live_open() {
+        let mut m = catchup(42, LiveStart::CatchUp);
+        m.playing();
+        // What `seek_live` does before the channel opens again.
+        m.opening(Opened::Channel(42));
+        m.starting(LiveStart::CatchUp);
+        assert!(m.live && m.following_live && m.dto.at_live_edge);
+        m.playing();
+        assert!(m.settle.is_some(), "the channel's connect burst is caught up as on any open");
+        assert_eq!(m.to_live(), ToLive::Seek);
+    }
+
+    #[test]
+    fn a_catch_up_too_old_for_the_archive_says_so() {
+        let mut m = catchup(42, LiveStart::CatchUp);
+        m.clues.observe("http: HTTP error 404 Not Found");
+        m.ended_with(How::Error(-13));
+        assert_eq!(m.dto.ending.map(|e| e.kind), Some(EndingKind::BeyondArchive));
+        // The same answer to a live channel is about the channel.
+        let mut m = Machine::new();
+        m.opening(Opened::Channel(42));
+        m.clues.observe("http: HTTP error 404 Not Found");
+        m.ended_with(How::Error(-13));
+        assert_eq!(m.dto.ending.map(|e| e.kind), Some(EndingKind::Unavailable));
     }
 
     #[test]
@@ -3766,6 +4444,72 @@ mod tests {
     }
 
     #[test]
+    fn mpvs_words_are_read_before_the_ending_they_explain() {
+        // mpv hands out queued events before the log lines waiting beside
+        // them, so a refusal pumped in one go arrives as its end, then why.
+        let batch = vec![
+            Signal::StartFile,
+            Signal::EndFile { error: Some(-13), replaced: false },
+            Signal::Log("http: HTTP error 404 Not Found".into()),
+            Signal::Log("Failed to open the stream.".into()),
+        ];
+        let ordered: Vec<&Signal> = logs_first(&batch);
+        assert_eq!(
+            ordered,
+            [&batch[2], &batch[3], &batch[0], &batch[1]],
+            "the words first, in their order, then the events in theirs"
+        );
+        let mut m = catchup(42, LiveStart::CatchUp);
+        for s in ordered {
+            match s {
+                Signal::Log(text) => m.clues.observe(text),
+                Signal::EndFile { error: Some(code), .. } => m.ended_with(How::Error(*code)),
+                _ => {}
+            }
+        }
+        let e = m.dto.ending.unwrap();
+        assert_eq!((e.kind, e.status), (EndingKind::BeyondArchive, Some(404)));
+    }
+
+    #[test]
+    fn the_last_streams_picture_going_away_does_not_revive_a_failed_open() {
+        // A refusal from a server on the LAN arrives before mpv has taken
+        // the previous stream's picture down, and that teardown is a video
+        // reconfigure too. It is no frame of this stream.
+        let mut m = catchup(42, LiveStart::CatchUp);
+        m.clues.observe("http: HTTP error 404 Not Found");
+        m.ended_with(How::Error(-13));
+        m.playing();
+        assert_eq!(m.dto.state, PlaybackState::Failed);
+        assert_eq!(m.dto.ending.map(|e| e.kind), Some(EndingKind::BeyondArchive));
+        // Nor before it failed: the teardown, pumped after the next open
+        // began, is no picture of it.
+        let mut m = catchup(42, LiveStart::CatchUp);
+        assert!(!m.reconfigured(false));
+        assert_eq!(m.dto.state, PlaybackState::Opening);
+        m.clues.observe("http: HTTP error 404 Not Found");
+        m.ended_with(How::Error(-13));
+        assert_eq!(m.dto.ending.map(|e| e.kind), Some(EndingKind::BeyondArchive));
+        // A reconfigure with a picture is the first frame.
+        let mut m = catchup(42, LiveStart::CatchUp);
+        assert!(m.reconfigured(true));
+        assert_eq!(m.dto.state, PlaybackState::Playing);
+        // Nor an open that could not be sent.
+        let mut m = Machine::new();
+        m.opening(Opened::Channel(1));
+        m.failed("could not open");
+        m.playing();
+        assert_eq!(m.dto.state, PlaybackState::Failed);
+        // A stream that was only slow — failed on the deadline, still
+        // loading — is playing when its first frame comes.
+        let mut m = Machine::new();
+        m.opening(Opened::Channel(1));
+        m.ended_with(How::Deadline);
+        m.playing();
+        assert_eq!(m.dto.state, PlaybackState::Playing);
+    }
+
+    #[test]
     fn stopping_clears_the_explanation() {
         let mut m = Machine::new();
         m.opening(Opened::Channel(1));
@@ -3918,6 +4662,59 @@ mod tests {
         assert_eq!(timeshift_stamp(t, -4 * 3600), "2026-09-07:21-30");
         // UTC+5:30, to prove the minute field is not just the UTC minute.
         assert_eq!(timeshift_stamp(t, 5 * 3600 + 1800), "2026-09-08:07-00");
+    }
+
+    #[test]
+    fn timeshift_stamp_is_the_servers_wall_clock_not_the_viewers() {
+        // As measured: the server an hour east of UTC, the viewer five
+        // hours west, at 20:17:17 UTC. "Five minutes ago" is asked for from
+        // 20:12 UTC (the scrubber rounds down to the minute).
+        let now = 1_794_082_637;
+        let five_ago = (now - 300) / 60 * 60;
+        let server = timeshift_stamp(five_ago, 3600);
+        assert_eq!(server, "2026-11-07:21-12");
+        // The viewer's wall clock, which the server reads as its own: the
+        // same digits mean six hours earlier there.
+        let viewer = timeshift_stamp(five_ago, -5 * 3600);
+        assert_eq!(viewer, "2026-11-07:15-12");
+        // Read back in the server's zone, the right stamp is the right
+        // moment, and the wrong one is six hours off.
+        let read_back = |stamp: &str| {
+            let (date, hm) = stamp.split_once(':').unwrap();
+            let mut d = date.split('-').map(|p| p.parse::<i64>().unwrap());
+            let (y, m, dd) = (d.next().unwrap(), d.next().unwrap(), d.next().unwrap());
+            let (h, mi) = hm.split_once('-').unwrap();
+            crate::localtime::days_from_civil(y, m as u32, dd as u32) * 86_400
+                + h.parse::<i64>().unwrap() * 3600
+                + mi.parse::<i64>().unwrap() * 60
+                - 3600
+        };
+        assert_eq!(read_back(&server), five_ago);
+        assert_eq!(five_ago - read_back(&viewer), 6 * 3600);
+        // Half and quarter hours east of UTC.
+        assert_eq!(timeshift_stamp(five_ago, 5 * 3600 + 1800), "2026-11-08:01-42");
+        assert_eq!(timeshift_stamp(five_ago, 9 * 3600 + 2700), "2026-11-08:05-57");
+    }
+
+    #[test]
+    fn a_request_older_than_the_archive_keeps_starts_inside_it() {
+        let now = 1_794_082_637;
+        let earliest = crate::catalog::guide_search::earliest_catchup(now, 3);
+        assert_eq!(earliest, now - 3 * 86_400 + 600);
+        // At the very edge: moved ten minutes in, to the next whole minute,
+        // still ending where it would have.
+        let edge = (now - 3 * 86_400) / 60 * 60;
+        let (start, minutes) = clamp_to_archive(edge, 60, Some(earliest));
+        assert!(start >= earliest && start - earliest < 60, "{start} vs {earliest}");
+        assert_eq!(start % 60, 0);
+        assert_eq!(start + i64::from(minutes) * 60, edge + 60 * 60);
+        // Inside the margin already, or of unknown depth: left alone.
+        assert_eq!(clamp_to_archive(earliest + 60, 30, Some(earliest)), (earliest + 60, 30));
+        assert_eq!(clamp_to_archive(edge, 30, None), (edge, 30));
+        // A request that ended before the margin still asks for a minute.
+        let (start, minutes) = clamp_to_archive(edge - 3600, 5, Some(earliest));
+        assert!(start >= earliest);
+        assert_eq!(minutes, 1);
     }
 
     #[test]

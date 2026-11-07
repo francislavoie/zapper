@@ -149,6 +149,7 @@ const ENDING_KINDS: readonly EndingKind[] = [
   "other",
   "inUse",
   "offAir",
+  "beyondArchive",
 ];
 
 function ending(kind: EndingKind, from: Partial<StreamEnding> = {}): StreamEnding {

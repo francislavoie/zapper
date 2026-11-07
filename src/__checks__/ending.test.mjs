@@ -7,7 +7,15 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { endedActions, endedMessage, reconnectMessage, retryStart, retryTarget, startingLine } from "../logic/ending.ts";
+import {
+  endedActions,
+  endedMessage,
+  primaryLabel,
+  reconnectMessage,
+  retryStart,
+  retryTarget,
+  startingLine,
+} from "../logic/ending.ts";
 
 test("a retried movie resumes where the player was", () => {
   const at = (position) => ({ onDemand: { kind: "movie", id: 3, position, duration: 6540 } });
@@ -58,12 +66,29 @@ test("every kind of ending has a headline and something to go on", () => {
     "network",
     "noVideo",
     "other",
+    "beyondArchive",
   ]) {
     const m = endedMessage(failed({ kind, status: null, limit: false }));
     assert.ok(m, kind);
     assert.ok(m.title.length > 0, kind);
     assert.ok(m.detail && m.detail.length > 0, kind);
   }
+});
+
+test("a catch-up older than the archive keeps says so, plainly", () => {
+  const m = endedMessage(failed({ kind: "beyondArchive", status: 404, limit: false }));
+  assert.equal(m.title, "That's further back than your provider keeps for this channel.");
+  assert.equal(m.code, "HTTP 404");
+  // Not the connection limit, and nothing about another device.
+  assert.doesNotMatch(m.title + m.detail, /connection|device/i);
+  // Tuning again plays the channel live, and the button says so.
+  const a = endedActions(failed({ kind: "beyondArchive", status: 404, limit: false }));
+  assert.equal(a.primary, "watchLive");
+  assert.equal(a.note, null);
+  assert.equal(a.dismiss, true);
+  assert.equal(primaryLabel("watchLive"), "Watch live");
+  assert.equal(primaryLabel("watchHere"), "Watch here anyway");
+  assert.equal(primaryLabel("retry"), "Retry");
 });
 
 test("the network is not blamed on the provider", () => {
