@@ -80,6 +80,7 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
   epg_fts_stale.id". A guide that listed one programme twice under different titles stopped the
   whole update, so the guide kept going stale. The guide search now handles that, and an existing
   catalogue is repaired the next time it opens.
+- The log no longer says "hardware (no)" when video is decoded in software.
 
 ## [0.3.0] - 2026-11-02
 
