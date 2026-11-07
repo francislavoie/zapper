@@ -3153,6 +3153,31 @@ mod tests {
     }
 
     #[test]
+    fn a_movie_is_never_taken_for_a_catch_up_programme() {
+        // Not live, as a programme from an archive is not, but not from one
+        // either: Live has no channel to reopen, and a refusal is the
+        // movie's, never the archive's.
+        let mut m = a_playing_movie(7);
+        assert_eq!(m.catch_up, None);
+        assert_eq!(m.to_live(), ToLive::Seek);
+        assert!(m.follow_live().is_err());
+        m.clues.observe("http: HTTP error 404 Not Found");
+        m.ended_with(How::Error(-13));
+        assert_eq!(m.dto.ending.map(|e| e.kind), Some(EndingKind::Unavailable));
+        assert_eq!(m.to_live(), ToLive::Seek);
+        // One slow to its first frame plays when it comes, with nothing of
+        // a live open about it.
+        let mut m = Machine::new();
+        m.opening(Opened::Movie(7));
+        m.live = false;
+        m.starting(LiveStart::Wait);
+        m.ended_with(How::Deadline);
+        assert!(m.reconfigured(true));
+        assert_eq!(m.dto.state, PlaybackState::Playing);
+        assert!(m.join.is_none() && m.settle.is_none() && !m.following_live);
+    }
+
+    #[test]
     fn a_seek_to_stays_inside_the_title() {
         assert_eq!(clamp_to_title(-5.0, Some(100.0)), 0.0);
         assert_eq!(clamp_to_title(500.0, Some(100.0)), 100.0);
