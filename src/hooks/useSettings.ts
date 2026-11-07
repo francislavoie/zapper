@@ -12,6 +12,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { backend } from "../backend";
 import { errorMessage, failed, loading, ready, type Async } from "../logic/async";
 import { clampSettings, planSave } from "../logic/settings";
+import { trackSave } from "../quit";
 import { useApp, useDispatch } from "../store";
 import type { SettingsDto, SubtitleStyleDto } from "../types";
 
@@ -65,8 +66,9 @@ export function useSettings(loadOnMount = false): SettingsControl {
     const next = latest.current;
     const plan = planSave(saved.current, next);
     setSaving(true);
-    backend
-      .setSettings(next)
+    // Tracked so that quitting waits for the write itself (not for applying
+    // it to the player, which a quitting app no longer needs).
+    trackSave(backend.setSettings(next))
       .then(() =>
         Promise.all([
           plan.applyPlayback ? backend.applyPlaybackSettings(next) : undefined,
