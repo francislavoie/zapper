@@ -496,16 +496,22 @@ impl Placeholder {
             return None;
         }
         self.done = true;
-        let span = match (self.first, self.end) {
-            (Some(f), Some(e)) => (e - f).max(0.0),
-            _ => 0.0,
-        };
-        Some(Read { at: self.t, span, bytes: self.bytes })
+        Some(Read { at: self.t, span: self.span(), bytes: self.bytes })
     }
 
     /// Whether the end has been read, and judged, already.
     pub fn judged(&self) -> bool {
         self.done
+    }
+
+    /// Stream time received so far: the newest timestamp less the oldest
+    /// seen, zero before any. A clip-shaped buffer is one this deep within
+    /// seconds of the open.
+    pub fn span(&self) -> f64 {
+        match (self.first, self.end) {
+            (Some(f), Some(e)) => (e - f).max(0.0),
+            _ => 0.0,
+        }
     }
 }
 
