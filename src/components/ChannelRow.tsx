@@ -9,6 +9,7 @@ import {
   failedTip,
   failedToLoad,
   looksBroken,
+  offAirLabel,
   programmeProgress,
   qualityBadge,
   qualityDetail,
@@ -79,6 +80,9 @@ export const ChannelRow = memo(function ChannelRow({
   // Dimmed, never hidden: a channel that failed last night may well play
   // now, and the only way to find out is to be able to try it.
   const failed = failedToLoad(channel.quality);
+  // Off air is a failure too, and says so on the row itself: when, so that
+  // "try again later" has something to go on.
+  const off = offAirLabel(channel.quality, nowSec);
 
   return (
     <button
@@ -116,6 +120,7 @@ export const ChannelRow = memo(function ChannelRow({
               ⏱ {channel.archiveDays ?? "?"}d
             </span>
           ) : null}
+          {off ? <span className="badge offair">{off}</span> : null}
           {looksBroken(channel.quality) ? (
             <span
               className="badge broken"

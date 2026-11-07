@@ -61,6 +61,11 @@ export const api = {
 
   channelsByIds: (ids: number[]) => invoke<ChannelDto[]>("channels_by_ids", { ids }),
 
+  /** Other channels carrying the same programmes as this one (the same
+   *  guide id), to try when it is off air: those that last played first, at
+   *  most three, none that last failed. Empty when there are none. */
+  alternativesFor: (streamId: number) => invoke<ChannelDto[]>("alternatives_for", { streamId }),
+
   /** Every channel number as the list writes it ("12", "5.1") and the channel
    *  it tunes, in list order; see logic/zap.ts. */
   channelNumbers: () => invoke<[string, number][]>("channel_numbers"),

@@ -38,6 +38,11 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
   otherwise converted on the way without re-encoding the picture. Text subtitles show there,
   MP4 ones included; subtitles stored as pictures (DVD, Blu-ray, DVB) can't, and the player's
   menu says so.
+- A channel that isn't broadcasting, where your provider sends a placeholder clip (minutes of
+  black) instead, now says so: "This channel isn't broadcasting right now", with how long the
+  clip was. It stops there instead of skipping to the clip's end and blaming another device, and
+  never retries by itself. The channel list dims it with "Off air · 18:26" until it next plays,
+  and the message offers up to three other channels with the same programmes to try instead.
 
 ## [0.3.0] - 2026-11-02
 

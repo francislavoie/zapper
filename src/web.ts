@@ -197,6 +197,13 @@ export const webBackend: typeof api = {
     ids.length === 0
       ? Promise.resolve([])
       : get<ChannelDto[]>(apiUrl("/api/channels/by-id", { ids: idList(ids) })),
+  // A service that does not answer this yet (one older than the browser's
+  // interface) has no suggestions: an empty list, never an error.
+  alternativesFor: (streamId) =>
+    get<ChannelDto[]>(`/api/channels/${encodeURIComponent(streamId)}/alternatives`).then(
+      (r) => (Array.isArray(r) ? r : []),
+      () => [],
+    ),
   channelNumbers: () => get<[string, number][]>("/api/channels/numbers"),
   search: (query, limit) =>
     get<ChannelDto[]>(apiUrl("/api/channels/search", { q: query, limit })),

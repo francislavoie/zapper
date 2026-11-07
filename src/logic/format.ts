@@ -103,9 +103,35 @@ export function failedToLoad(q: QualityDto | null): boolean {
   return q?.failedAt != null;
 }
 
+/** The reason the backend records a channel that was off air with
+ *  (`ending::OFF_AIR_REASON` in Rust): the provider sent a placeholder clip
+ *  instead of it. Spelled the same on both sides. */
+export const OFF_AIR_REASON = "off air";
+
+/** Whether a channel's last live open found it off air, and nothing has
+ *  played on it since. */
+export function offAir(q: QualityDto | null): boolean {
+  return q?.failedAt != null && q.failReason === OFF_AIR_REASON;
+}
+
+/** Past this, the clock time alone would read as today's. */
+const OFF_AIR_CLOCK_FOR = 18 * 3600;
+
+/** "Off air · 18:26": when a channel was found off air, for its row and the
+ *  band. A clock time while that is unambiguous, how long ago after that.
+ *  `null` unless the channel is off air. */
+export function offAirLabel(q: QualityDto | null, nowSeconds: number): string | null {
+  if (!q || q.failedAt == null || !offAir(q)) return null;
+  const when =
+    nowSeconds - q.failedAt < OFF_AIR_CLOCK_FOR ? hhmm(q.failedAt) : ago(q.failedAt, nowSeconds);
+  return `Off air · ${when}`;
+}
+
 /** What a dimmed row says on hover: when it last failed and why. */
 export function failedTip(q: QualityDto | null, nowSeconds: number): string | null {
   if (!q || q.failedAt == null) return null;
+  const off = offAirLabel(q, nowSeconds);
+  if (off) return `${off} — your provider sent a placeholder instead of the channel`;
   const why = q.failReason ? ` — ${q.failReason}` : "";
   return `Didn't load ${ago(q.failedAt, nowSeconds)}${why}`;
 }

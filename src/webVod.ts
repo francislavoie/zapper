@@ -548,6 +548,7 @@ const endedBy = (kind: StreamEnding["kind"]): StreamEnding => ({
   slots: null,
   status: null,
   limit: false,
+  clipSecs: null,
 });
 
 /** The film stopped for a reason, shown over the picture, its place kept

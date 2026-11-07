@@ -70,6 +70,16 @@ pub fn channels_by_ids(ids: &[i64]) -> Result<Vec<ChannelDto>> {
     })
 }
 
+/// Other sources for a channel's programmes, with their now-playing
+/// attached. See [`store::alternatives_for`].
+pub fn alternatives_for(stream_id: i64) -> Result<Vec<ChannelDto>> {
+    db::with_db(|conn| {
+        let mut rows = store::alternatives_for(conn, stream_id)?;
+        attach_now_playing(conn, &mut rows)?;
+        Ok(rows)
+    })
+}
+
 /// Every channel number and the channel it tunes. See
 /// [`store::channel_numbers`].
 pub fn channel_numbers() -> Result<Vec<(String, i64)>> {

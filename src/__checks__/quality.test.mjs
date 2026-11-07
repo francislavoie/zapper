@@ -10,8 +10,13 @@ import {
   ago,
   failedTip,
   failedToLoad,
+  hhmm,
+  OFF_AIR_REASON,
+  offAir,
+  offAirLabel,
   qualityBadge,
   qualityDetail,
+  setTimeFormat,
 } from "../logic/format.ts";
 
 const NOW = 1_800_000_000;
@@ -82,4 +87,32 @@ test("a channel never tried, or that played since, is not dimmed", () => {
   assert.equal(failedToLoad(null), false);
   assert.equal(failedToLoad(record()), false);
   assert.equal(failedTip(record(), NOW), null);
+});
+
+test("a channel found off air says so on its row, with when", () => {
+  setTimeFormat("24h");
+  const at = NOW - 2 * 3600;
+  const off = record({ failedAt: at, failReason: OFF_AIR_REASON, failCount: 1 });
+  assert.equal(OFF_AIR_REASON, "off air", "spelled as ending::OFF_AIR_REASON in Rust");
+  assert.equal(offAir(off), true);
+  assert.equal(failedToLoad(off), true, "dimmed like any failure");
+  assert.match(offAirLabel(off, NOW), /^Off air · \d\d:\d\d$/);
+  assert.equal(offAirLabel(off, NOW), `Off air · ${hhmm(at)}`);
+  assert.equal(
+    failedTip(off, NOW),
+    `Off air · ${hhmm(at)} — your provider sent a placeholder instead of the channel`,
+  );
+  // A day later the clock time alone would read as today's.
+  const old = record({ failedAt: NOW - 30 * 3600, failReason: OFF_AIR_REASON });
+  assert.equal(offAirLabel(old, NOW), "Off air · yesterday");
+  setTimeFormat("auto");
+});
+
+test("only an off-air failure is labelled off air, and a play clears it", () => {
+  const refused = record({ failedAt: NOW - 60, failReason: "refused by the provider (HTTP 403)" });
+  assert.equal(offAir(refused), false);
+  assert.equal(offAirLabel(refused, NOW), null);
+  assert.equal(offAirLabel(record(), NOW), null, "the next live play cleared failedAt");
+  assert.equal(offAirLabel(record({ failedAt: null, failReason: OFF_AIR_REASON }), NOW), null);
+  assert.equal(offAirLabel(null, NOW), null);
 });

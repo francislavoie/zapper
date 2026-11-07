@@ -429,6 +429,9 @@ pub struct Probe {
     /// moves with every packet read, so it is what tells how fast data is
     /// arriving — and it moves while playback is paused.
     pub cache_end: Option<f64>,
+    /// The oldest packet mpv still holds, in stream time: the start of its
+    /// seekable window. With `cache_end`, how much stream time has arrived.
+    pub cache_start: Option<f64>,
     /// The demuxer has read the end of the stream: the server finished the
     /// response, or the connection failed. Playback carries on through
     /// what is buffered, so this comes well before `end-file`.
@@ -690,6 +693,7 @@ impl Player {
             live_edge: end,
             time_pos,
             cache_end: w.cache_end,
+            cache_start: w.start,
             demuxer_eof: w.eof,
             fw_bytes: w.fw_bytes,
             duration: self

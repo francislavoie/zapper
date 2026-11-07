@@ -1782,6 +1782,13 @@ select option {
   border-color: #45262a;
 }
 
+/* "Off air · 18:26": the channel answered with a placeholder last time. */
+.badge.offair {
+  color: var(--dim);
+  border-style: dashed;
+  white-space: nowrap;
+}
+
 .row.sep {
   background: var(--bg-3);
   color: var(--dim);
@@ -4881,6 +4888,63 @@ textarea.field {
   margin: 0.5rem 0 0;
   font-size: 0.75rem;
   color: var(--dim);
+}
+
+/* "Try another source:" under an off-air message: channels with the same
+   programmes, one per line, each a button that plays it. */
+.alternatives {
+  margin-top: 0.75rem;
+  text-align: left;
+}
+
+.alternatives-head {
+  margin: 0 0 0.25rem;
+  font-size: 0.75rem;
+  color: var(--dim);
+}
+
+.alternatives-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.alternative {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  min-width: 0;
+  padding: 0.25rem 0.375rem;
+  border: 1px solid transparent;
+  border-radius: 0.25rem;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.8125rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.alternative:hover,
+.alternative:focus-visible {
+  background: var(--bg-3);
+  border-color: var(--line);
+}
+
+.alternative-num {
+  flex: 0 0 2.5rem;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.alternative-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* The docked picture is a few rem tall: the headline and the two buttons,
