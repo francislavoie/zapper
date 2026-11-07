@@ -255,6 +255,28 @@ fn unattended() -> bool {
 /// `ZAPPER_ALLOW_REAL_ACCOUNT=1` says so.
 #[cfg(feature = "gui")]
 fn dev_hooks(app: &tauri::AppHandle) {
+    // `ZAPPER_QUIT_AFTER=<seconds>` closes the window the way its close
+    // button does, so a harness can check that quitting is clean. Only for an
+    // unattended run.
+    if unattended() {
+        if let Some(secs) = std::env::var("ZAPPER_QUIT_AFTER")
+            .ok()
+            .and_then(|s| s.parse::<f64>().ok())
+        {
+            let handle = app.clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_secs_f64(secs.max(0.0))).await;
+                use tauri::Manager;
+                if let Some(w) = handle.get_webview_window("main") {
+                    tracing::info!("closing the window for ZAPPER_QUIT_AFTER");
+                    if let Err(e) = w.close() {
+                        tracing::warn!("ZAPPER_QUIT_AFTER: {e}");
+                    }
+                }
+            });
+        }
+    }
+
     let wanted = |k: &str| std::env::var_os(k).is_some_and(|v| !v.is_empty());
     if !["ZAPPER_AUTOPLAY", "ZAPPER_CAPTURE", "ZAPPER_MUTE"]
         .into_iter()
