@@ -54,6 +54,91 @@ pub(super) fn install(window: &tauri::WebviewWindow) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// How long each step of quitting may take before the next one goes ahead
+/// anyway. Each normally takes a few milliseconds.
+const QUIT_STEP: Duration = Duration::from_millis(1500);
+
+/// Ends playback, then the page, then WebKit's web process, and calls `then`
+/// once they are gone. See [`crate::surface::shut_down`].
+///
+/// The page is unloaded first (`about:blank`), so it gets its `pagehide` and
+/// writes what it keeps in local storage while the app is still there. The
+/// web process is then ended through WebKit's own API rather than left to
+/// notice that the app has gone and exit by itself. Exiting by itself, it
+/// runs its libraries' exit handlers while its own threads may still be
+/// letting go of their EGL state, and libEGL's handler has been seen to crash
+/// there: heap corruption found by `free` under `_dl_fini`, with another
+/// WebKit thread inside Mesa's EGL in its thread-exit destructors. The
+/// desktop reports that as a crash. A process WebKit ends runs no exit
+/// handlers at all.
+pub(super) fn shut_down(then: impl FnOnce() + 'static) {
+    render::shut_down();
+    match with_overlay(|o| o.webview.clone()) {
+        Some(webview) => end_page(webview, Box::new(then)),
+        None => then(),
+    }
+}
+
+/// Once-only continuation shared by a signal handler and its timeout.
+type Step = std::rc::Rc<RefCell<Option<Box<dyn FnOnce()>>>>;
+
+fn once(f: Box<dyn FnOnce()>) -> Step {
+    std::rc::Rc::new(RefCell::new(Some(f)))
+}
+
+fn advance(step: &Step) {
+    let f = step.borrow_mut().take();
+    if let Some(f) = f {
+        f();
+    }
+}
+
+fn end_page(webview: webkit2gtk::WebView, then: Box<dyn FnOnce()>) {
+    use gtk::glib::object::ObjectExt;
+    use webkit2gtk::{LoadEvent, WebViewExt};
+
+    let handler: std::rc::Rc<RefCell<Option<gtk::glib::SignalHandlerId>>> = Default::default();
+    let next = {
+        let (webview, handler) = (webview.clone(), handler.clone());
+        once(Box::new(move || {
+            if let Some(id) = handler.borrow_mut().take() {
+                webview.disconnect(id);
+            }
+            end_web_process(webview, then);
+        }))
+    };
+    let on_load = next.clone();
+    *handler.borrow_mut() = Some(webview.connect_load_changed(move |v, event| {
+        if event == LoadEvent::Finished && v.uri().is_some_and(|u| u == "about:blank") {
+            advance(&on_load);
+        }
+    }));
+    let late = next.clone();
+    gtk::glib::timeout_add_local_once(QUIT_STEP, move || {
+        if late.borrow().is_some() {
+            tracing::warn!("the page did not unload in time; quitting anyway");
+        }
+        advance(&late);
+    });
+    webview.load_uri("about:blank");
+}
+
+fn end_web_process(webview: webkit2gtk::WebView, then: Box<dyn FnOnce()>) {
+    use webkit2gtk::WebViewExt;
+
+    let done = once(then);
+    let on_end = done.clone();
+    webview.connect_web_process_terminated(move |_, _| advance(&on_end));
+    let late = done.clone();
+    gtk::glib::timeout_add_local_once(QUIT_STEP, move || {
+        if late.borrow().is_some() {
+            tracing::warn!("the web process did not end in time; quitting anyway");
+        }
+        advance(&late);
+    });
+    webview.terminate_web_process();
+}
+
 pub(super) fn set_video_rect(rect: VideoRect) -> Result<(), String> {
     with_overlay(|o| o.set_video_rect(rect))
         .ok_or_else(|| "the video surface is not installed".to_owned())

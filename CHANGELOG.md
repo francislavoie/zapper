@@ -81,6 +81,11 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
   whole update, so the guide kept going stale. The guide search now handles that, and an existing
   catalogue is repaired the next time it opens.
 - The log no longer says "hardware (no)" when video is decoded in software.
+- Linux: quitting could end with the desktop reporting that something crashed (on Ubuntu, a
+  "Sorry, Ubuntu has experienced an internal error" dialog for `WebKitWebProcess`). zapper now
+  quits in order: it stops playback and releases the video surface, lets the interface's page
+  unload, and ends the page's process before it exits, instead of leaving that process to wind
+  itself down after zapper had already gone.
 
 ## [0.3.0] - 2026-11-02
 

@@ -32,6 +32,9 @@ thread_local! {
 pub struct Overlay {
     pub overlay: gtk::Overlay,
     pub gl_area: gtk::GLArea,
+    /// Tauri's webview, floating over the surface. Held so that quitting can
+    /// end its page and process in order ([`super::shut_down`]).
+    pub webview: webkit2gtk::WebView,
     /// Where the surface goes, normalised. Read back by the overlay's
     /// `get-child-position` handler, which is the only thing that positions
     /// the GL surface - see [`Overlay::set_video_rect`].
@@ -307,6 +310,7 @@ pub fn install(window: &tauri::WebviewWindow) -> Result<Overlay> {
                 Ok(Overlay {
                     overlay,
                     gl_area,
+                    webview: webview.clone(),
                     placed,
                     renders,
                     mpv_draws,
