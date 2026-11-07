@@ -19,22 +19,12 @@
 //! is a discontinuity no live channel has. One made with
 //! `ffmpeg -stream_loop 5 -i motion1080p.ts -c copy long.ts`, in a directory
 //! named by `ZAPPER_FIXTURES`, is two minutes of continuous timestamps.
-//!
-//! `LIVE_START_ONLY=burst` runs only the scenarios with that in their name,
-//! and `LIVE_START_PORT=19300` serves from that port up (one per scenario)
-//! rather than from any free one, and `LIVE_START_FLAGS="--burst 3"` runs
-//! the one server given those flags instead of the list.
-//!
-//! The last columns: how far behind it was when the start or the catch-up
-//! decided (starred when that depth was more than the bytes received could
-//! be, a jump in the timestamps, and so was not skipped), how much of the
-//! stream played while it was watched, and whether the video track stayed.
 
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use zapper_lib::ipc::live_start::{Join, Reading, Settle};
+use zapper_lib::ipc::live_start::{Join, Settle};
 use zapper_lib::ipc::player_cmds::LIVE_CUSHION;
 use zapper_lib::surface::mpv::NO_RECONNECT;
 
@@ -71,15 +61,6 @@ struct Run {
     start_behind: Option<f64>,
     /// A forward jump after the picture was moving: when, and how far.
     jump: Option<(f64, f64)>,
-    /// How far behind live it was when the start or the catch-up decided.
-    decided_behind: Option<f64>,
-    /// When the video track went away after the first frame, if it did.
-    video_lost: Option<f64>,
-    /// Seconds of the stream that played, seeks aside, once it was moving.
-    played: f64,
-    /// Whether the start or the catch-up found a depth its bytes could not
-    /// be (a jump in the timestamps), and so did not skip it.
-    phantom: bool,
 }
 
 impl Run {
@@ -95,45 +76,11 @@ fn main() {
     let fixture = std::env::args().nth(1).unwrap_or_else(|| "motion1080p.ts".into());
     println!("fixture {fixture}; times in seconds from the open; cushion {LIVE_CUSHION}s\n");
     println!(
-        "{:32} {:8} {:>6} {:>7} {:>8} {:>13} {:>8} {:>8} {:>7} {:>11}",
-        "server",
-        "mode",
-        "frame",
-        "moving",
-        "behind",
-        "then jumped",
-        "at live",
-        "decided",
-        "played",
-        "video"
+        "{:32} {:8} {:>6} {:>7} {:>8} {:>13} {:>8}",
+        "server", "mode", "frame", "moving", "behind", "then jumped", "at live"
     );
-    let only = std::env::var("LIVE_START_ONLY").ok();
-    let mut next_port = std::env::var("LIVE_START_PORT")
-        .ok()
-        .and_then(|p| p.parse::<u16>().ok());
-    // `LIVE_START_FLAGS="--burst 3"`: that server alone, instead of the list.
-    let custom = std::env::var("LIVE_START_FLAGS").ok();
-    let custom: Vec<(String, Vec<&str>)> = custom
-        .as_deref()
-        .map(|f| vec![(f.to_owned(), f.split_whitespace().collect())])
-        .unwrap_or_default();
-    let scenarios: Vec<(&str, &[&str])> = if custom.is_empty() {
-        SCENARIOS.to_vec()
-    } else {
-        custom.iter().map(|(n, f)| (n.as_str(), f.as_slice())).collect()
-    };
-    for (name, flags) in scenarios {
-        if only.as_deref().is_some_and(|o| !name.contains(o)) {
-            continue;
-        }
-        let port = match next_port.as_mut() {
-            Some(p) => {
-                *p += 1;
-                Ok(*p - 1)
-            }
-            None => free_port(),
-        };
-        let port = match port {
+    for (name, flags) in SCENARIOS {
+        let port = match free_port() {
             Ok(p) => p,
             Err(e) => fail(&e),
         };
@@ -149,7 +96,7 @@ fn main() {
             };
             let f = |v: Option<f64>| v.map_or("-".to_owned(), |v| format!("{v:.2}"));
             println!(
-                "{:32} {:8} {:>6} {:>7} {:>8} {:>13} {:>8} {:>8} {:>7} {:>11}",
+                "{:32} {:8} {:>6} {:>7} {:>8} {:>13} {:>8}",
                 name,
                 if mode == Mode::CatchUp { "catch up" } else { "wait" },
                 f(r.first_frame),
@@ -157,13 +104,6 @@ fn main() {
                 f(r.start_behind),
                 r.jump.map_or("-".to_owned(), |(t, by)| format!("{by:.1}s at {t:.1}")),
                 f(r.live_at()),
-                match (r.decided_behind, r.phantom) {
-                    (Some(d), true) => format!("{d:.0}*"),
-                    (d, _) => f(d),
-                },
-                format!("{:.1}", r.played),
-                r.video_lost
-                    .map_or("kept".to_owned(), |t| format!("lost at {t:.1}")),
             );
             // A moment between opens, as a person zapping would leave.
             std::thread::sleep(Duration::from_millis(500));
@@ -196,9 +136,14 @@ fn player() -> Result<libmpv2::Mpv, String> {
 }
 
 /// The numbers `Player::probe` derives, from the same properties: the end
-/// of the seekable window, the end of the cache, where playback is, and the
-/// bytes buffered; and whether it is paused.
-fn read(mpv: &libmpv2::Mpv) -> (Reading, bool) {
+/// of the seekable window, the end of the cache, and where playback is.
+struct Reading {
+    behind: f64,
+    cache_end: Option<f64>,
+    paused: bool,
+}
+
+fn read(mpv: &libmpv2::Mpv) -> Reading {
     let pos: Option<f64> = mpv.get_property("time-pos").ok();
     let raw: Option<String> = mpv.get_property("demuxer-cache-state").ok();
     let v: Option<serde_json::Value> = raw.and_then(|r| serde_json::from_str(&r).ok());
@@ -213,17 +158,14 @@ fn read(mpv: &libmpv2::Mpv) -> (Reading, bool) {
         .and_then(serde_json::Value::as_f64)
         .or(cache_end);
     let at = get("reader-pts").or(pos);
-    let bytes = |k: &str| v.as_ref().and_then(|v| v.get(k)).and_then(serde_json::Value::as_i64);
-    let reading = Reading {
+    Reading {
         behind: match (end, at) {
             (Some(e), Some(p)) => (e - p).max(0.0),
             _ => 0.0,
         },
         cache_end,
-        bytes_ahead: bytes("fw-bytes"),
-        bytes_total: bytes("total-bytes"),
-    };
-    (reading, mpv.get_property("pause").unwrap_or(false))
+        paused: mpv.get_property("pause").unwrap_or(false),
+    }
 }
 
 fn play(url: &str, mode: Mode) -> Result<Run, String> {
@@ -242,7 +184,6 @@ fn play(url: &str, mode: Mode) -> Result<Run, String> {
     let mut join: Option<Join> = None;
     let mut settle: Option<Settle> = None;
     let mut next_tick = Instant::now() + TICK;
-    let mut last_pos: Option<f64> = None;
     let mut last_tick = Instant::now();
     loop {
         if opened.elapsed() > Duration::from_secs(40) {
@@ -251,24 +192,10 @@ fn play(url: &str, mode: Mode) -> Result<Run, String> {
         if run.moving.is_some_and(|m| secs() > m + WATCH_AFTER.as_secs_f64()) {
             return Ok(run);
         }
-        if run.first_frame.is_some() && run.video_lost.is_none() {
-            // The track the first frame came from, still there? A seek to
-            // where the cache holds no video leaves mpv with the sound alone.
-            let codec: Option<String> = mpv.get_property("video-codec").ok();
-            if codec.is_none_or(|c| c.is_empty()) {
-                run.video_lost = Some(secs());
-            }
-        }
         let wait = next_tick.saturating_duration_since(Instant::now()).as_secs_f64();
         if let Some(ev) = mpv.wait_event(wait) {
             match ev {
-                Ok(libmpv2::events::Event::VideoReconfig) if run.first_frame.is_some() => {
-                    if trace {
-                        let codec: Option<String> = mpv.get_property("video-codec").ok();
-                        println!("      {:5.2} video reconfigured: {codec:?}", secs());
-                    }
-                }
-                Ok(libmpv2::events::Event::VideoReconfig) => {
+                Ok(libmpv2::events::Event::VideoReconfig) if run.first_frame.is_none() => {
                     run.first_frame = Some(secs());
                     match mode {
                         Mode::CatchUp => {
@@ -289,23 +216,19 @@ fn play(url: &str, mode: Mode) -> Result<Run, String> {
         next_tick += TICK;
         let dt = last_tick.elapsed().as_secs_f64();
         last_tick = Instant::now();
-        let (r, paused) = read(&mpv);
+        let r = read(&mpv);
         if trace {
             println!(
-                "      {:5.2} behind {:6.2} cache-end {:?} ahead {:?} total {:?} paused {}",
+                "      {:5.2} behind {:6.2} cache-end {:?} paused {}",
                 secs(),
                 r.behind,
                 r.cache_end.map(|e| (e * 100.0).round() / 100.0),
-                r.bytes_ahead,
-                r.bytes_total,
-                paused
+                r.paused
             );
         }
         if let Some(j) = join.as_mut() {
-            debug_assert!(paused);
-            if let Some(by) = j.observe(dt, &r) {
-                run.decided_behind = Some(r.behind);
-                run.phantom |= j.saw_phantom();
+            debug_assert!(r.paused);
+            if let Some(by) = j.observe(dt, r.cache_end, r.behind) {
                 if by > 0.05 {
                     mpv.command("seek", &[&format!("{by:.3}"), "relative"])
                         .map_err(|e| e.to_string())?;
@@ -321,18 +244,10 @@ fn play(url: &str, mode: Mode) -> Result<Run, String> {
             if run.start_behind.is_none() && secs() >= m + 1.0 {
                 run.start_behind = Some(r.behind);
             }
-            // Playing, not seeking: a heartbeat's worth of advance at most.
-            let pos: Option<f64> = mpv.get_property("time-pos").ok();
-            if let (Some(was), Some(now)) = (last_pos, pos) {
-                run.played += (now - was).clamp(0.0, dt * 1.5);
-            }
-            last_pos = pos;
         }
         if let Some(s) = settle.as_mut() {
-            if let Some(by) = s.observe(dt, &r) {
-                run.phantom |= s.saw_phantom();
+            if let Some(by) = s.observe(dt, r.behind) {
                 settle = None;
-                run.decided_behind.get_or_insert(r.behind);
                 if by > 0.05 {
                     run.jump = Some((secs(), by));
                     mpv.command("seek", &[&format!("{by:.3}"), "relative"])

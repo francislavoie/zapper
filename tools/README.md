@@ -21,18 +21,11 @@ outside the repository: they are generated, and tens of megabytes each.
 | `motion1080p.ts` | h264 1920x1080@25, aac | 1080p with the whole frame moving |
 | `sport720p60.ts` | h264 1280x720@60, **ac3** | 60 fps, high motion, and the only AC-3 audio |
 | `mpeg2sd.ts` | **mpeg2** 720x576@25, **mp2** | Video no browser plays (watching in a browser says so) |
-| `tsjump.ts` | h264 1280x720@25, aac | Opens with two seconds stamped ten minutes before the rest |
 
 Between them: 720p and 1080p, 25/50/60 fps, aac, ac3 and mp2, low and high
 motion. All but `mpeg2sd.ts` are H.264 8-bit 4:2:0 in MPEG-TS with a keyframe
 every two seconds, the shape most live IPTV feeds have. Any other `.ts` file dropped into the
 fixtures directory is served too.
-
-`tsjump.ts` is a stream whose timestamps jump: its first GOP is stamped from zero and the two
-minutes after it from 600 s. Read in stream time that is ten minutes of data in two seconds after
-it opens, which is what starting at live and catching up must not skip. A `<fixture>.seconds`
-file beside a fixture tells `fake_stream.py` how long it really runs, for pacing: ffprobe
-measures from the first timestamp to the last, ten minutes too many here.
 
 `fake_stream.py` sends a fixture as an endless chunked response with no
 length, as a live feed does, paced to its bitrate. Flags imitate how real
@@ -66,15 +59,7 @@ moved, how far behind live it was, and any jump after. Give it a fixture
 longer than the burst plus twenty seconds (`ffmpeg -stream_loop 5 -i
 motion1080p.ts -c copy long.ts`, served from a `ZAPPER_FIXTURES` directory):
 the server loops its file, and the timestamps going back at each loop are a
-discontinuity no live channel has. `LIVE_START_FLAGS="--burst 10"` runs one server with
-those flags instead of the list, `LIVE_START_ONLY=burst` only the scenarios naming it, and
-`LIVE_START_PORT=19300` serves from that port up. Its last columns say how far behind the
-decision was (starred when the bytes received could not be that much, so nothing was skipped),
-how much of the stream played, and whether the video track stayed:
-
-```sh
-LIVE_START_FLAGS="--burst 10" cargo run --features harness --bin live_start_bench tsjump.ts
-```
+discontinuity no live channel has.
 
 `cargo run --features harness --bin ending_check` runs those cases end to end:
 it starts the server with each set of flags, plays it in a headless, silent
@@ -102,9 +87,7 @@ ZAPPER_STREAM_ID=1 cargo run --bin player_check
 ```
 
 `player_check` sets the first two itself when they are unset (to the server
-above and `sample1080.ts`). `ZAPPER_LIVE_START=wait` (or `catchUp`, `stay`) opens the
-channel as that setting does, and the picture is watched while it settles: the video track
-has to stay and the stream has to keep playing. In the app they are inert when unset, and the
+above and `sample1080.ts`). In the app they are inert when unset, and the
 configured source is used. Play, seek back, return to live and stop all work
 this way with no account at all, so nothing about the surface, player or
 interface needs a provider to test.
