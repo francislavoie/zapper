@@ -486,10 +486,11 @@ async fn receive(
 }
 
 /// How long a recording whose channel is off air waits before asking again:
-/// [`OFF_AIR_RETRY_SECS`], or for a harness build (and the unit tests),
-/// `ZAPPER_OFF_AIR_RETRY_SECS` (a check cannot wait minutes for each try).
+/// [`OFF_AIR_RETRY_SECS`], or for a harness build, `ZAPPER_OFF_AIR_RETRY_SECS`
+/// (a check cannot wait minutes for each try). Unit tests pass theirs to
+/// [`run_with`] instead.
 fn off_air_retry() -> i64 {
-    #[cfg(any(test, feature = "harness"))]
+    #[cfg(feature = "harness")]
     if let Some(s) = std::env::var("ZAPPER_OFF_AIR_RETRY_SECS")
         .ok()
         .and_then(|v| v.trim().parse::<i64>().ok())
@@ -506,13 +507,23 @@ fn clock_time(unix: i64) -> String {
 }
 
 /// Captures recording `id` until its window ends or it is stopped.
-pub async fn run(server: &Arc<Server>, id: i64, mut stop: watch::Receiver<bool>) {
-    if let Err(e) = run_inner(server, id, &mut stop).await {
+pub async fn run(server: &Arc<Server>, id: i64, stop: watch::Receiver<bool>) {
+    run_with(server, id, stop, off_air_retry()).await
+}
+
+/// [`run`], asking a channel that is off air again every `retry` seconds.
+async fn run_with(server: &Arc<Server>, id: i64, mut stop: watch::Receiver<bool>, retry: i64) {
+    if let Err(e) = run_inner(server, id, &mut stop, retry).await {
         server.note(id, &format!("the capture stopped: {e:#}"));
     }
 }
 
-async fn run_inner(server: &Arc<Server>, id: i64, stop: &mut watch::Receiver<bool>) -> Result<()> {
+async fn run_inner(
+    server: &Arc<Server>,
+    id: i64,
+    stop: &mut watch::Receiver<bool>,
+    retry: i64,
+) -> Result<()> {
     let Some(rec) = server.db(|c| store::get(c, id))? else {
         return Ok(());
     };
@@ -537,7 +548,7 @@ async fn run_inner(server: &Arc<Server>, id: i64, stop: &mut watch::Receiver<boo
     if let Some(b) = rec.backup_stream_id.filter(|&b| b != rec.stream_id) {
         feeds.push(b);
     }
-    let mut fallback = Fallback::new(feeds.len()).with_off_air_retry(off_air_retry());
+    let mut fallback = Fallback::new(feeds.len()).with_off_air_retry(retry);
     let mut open: Option<OpenPart> = None;
     // When the channel was found off air, until a connection writes again:
     // one note for the spell, however often it is asked.
@@ -1226,8 +1237,6 @@ mod tests {
 
     #[tokio::test]
     async fn a_recording_off_air_asks_again_without_closing_padding_or_waiting_for_a_connection() {
-        // A harness's retry, so the test sees several tries.
-        std::env::set_var("ZAPPER_OFF_AIR_RETRY_SECS", "2");
         let d = scratch("off-air-loop");
         let full = Arc::new(AtomicBool::new(false));
         let asked_full = Arc::new(AtomicUsize::new(0));
@@ -1258,7 +1267,8 @@ mod tests {
         });
         let task = tokio::spawn({
             let s = Arc::clone(&s);
-            async move { run(&s, id, stop).await }
+            // A short retry, so the test sees several tries.
+            async move { run_with(&s, id, stop, 2).await }
         });
         let notes = |s: &Server| s.db(|c| store::get(c, id)).unwrap().unwrap().notes;
         // The first try is an ordinary start, and finds the clip.
@@ -1299,7 +1309,6 @@ mod tests {
         tx.send_replace(true);
         let _ = tokio::time::timeout(Duration::from_secs(10), task).await;
         drop(padding);
-        std::env::remove_var("ZAPPER_OFF_AIR_RETRY_SECS");
         let _ = std::fs::remove_dir_all(&d);
     }
 
