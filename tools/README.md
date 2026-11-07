@@ -66,6 +66,17 @@ reconnected, and was written to the channel's record as off air.
 Against `--burst 20 --end-after 8`, `--ending dropped` checks a takeover still
 ends as one.
 
+`--placeholder-while FILE` sends the clip only while FILE exists: delete it and
+the channel comes on the air, as a broadcast that starts. `offair_check` uses
+it to check the recording service end to end (docs/recording.md, "Checking
+it"):
+
+```sh
+cd src-tauri
+cargo build --no-default-features --features harness,server --bin zapper-server --bin offair_check
+target/debug/offair_check 19700
+```
+
 And the network failing instead: `--drop-after 5` resets the connection after
 5 s with no end of stream, `--stall-after 5` stops sending and leaves it open,
 and `--fault-once` applies either (or `--end-after`) to the first stream only,

@@ -125,6 +125,20 @@ test("a feed that failed is told as the app tells it", () => {
   assert.equal(refusalState(0, null).ending.kind, "network");
 });
 
+test("a channel the service found off air says so, with its sources, as the app does", () => {
+  // As the status route says it (recording::watch).
+  const said = { kind: "offAir", status: null, limit: false, clipSecs: 600 };
+  const e = endingOf(said);
+  assert.deepEqual(e, { kind: "offAir", slots: null, status: null, limit: false, clipSecs: 600 });
+  const m = endedMessage({ state: "failed", ending: e, error: "The stream stopped." });
+  assert.equal(m.title, "This channel isn't broadcasting right now.");
+  assert.match(m.detail, /a 10-minute placeholder/);
+  assert.equal(m.alternatives, true);
+  // Found before the page had its viewer: the refusal carries the same.
+  const r = refusalState(502, { error: "The channel didn't start.", reason: "feed", anyway: false, ending: said });
+  assert.deepEqual(r.ending, e);
+});
+
 test("the warning names the recording, its channel and its time", () => {
   const n = {
     recordingId: 3,

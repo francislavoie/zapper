@@ -43,6 +43,10 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
   clip was. It stops there instead of skipping to the clip's end and blaming another device, and
   never retries by itself. The channel list dims it with "Off air · 18:26" until it next plays,
   and the message offers up to three other channels with the same programmes to try instead.
+  The browser, through the recording service, says the same and offers the same channels. A
+  recording of a channel that is off air notes "Off air at 18:26; retrying" and tries again every
+  three minutes until the programme ends, so it starts when the broadcast does; the placeholder
+  never ends up in the recording.
 
 ## [0.3.0] - 2026-11-02
 

@@ -25,6 +25,7 @@ placeholder clip instead (needs placeholder.ts from make_fixtures.sh):
 
   tools/fake_stream.py --placeholder         # every stream: the whole 600 s clip at once, then closed
   tools/fake_stream.py --placeholder --burst-rate 200   # ...over about three seconds
+  tools/fake_stream.py --placeholder-while /tmp/off   # ...until /tmp/off is deleted, then live
 
 Imitating the network failing rather than the provider:
 
@@ -91,6 +92,8 @@ class Handler(BaseHTTPRequestHandler):
     movies = 0
     # Answer every live stream with placeholder.ts, all at once, then close.
     placeholder = False
+    # ...only while this file exists: deleting it puts the channel on the air.
+    placeholder_while = None
     # Set once a stream has been ended by --end-after, so --after-end knows
     # the slot is now "taken".
     ended = threading.Event()
@@ -144,7 +147,8 @@ class Handler(BaseHTTPRequestHandler):
         # The faults below apply to every stream, or only to the first.
         faulty = first or not Handler.fault_once
 
-        if Handler.placeholder:
+        if Handler.placeholder or (
+                Handler.placeholder_while is not None and Handler.placeholder_while.exists()):
             self._placeholder(name)
             return
 
@@ -570,6 +574,9 @@ def main():
     ap.add_argument("--placeholder", action="store_true",
                     help="answer every live stream with placeholder.ts (a 600 s black clip) "
                          "all at once, then close: a provider's reply for a channel off the air")
+    ap.add_argument("--placeholder-while", metavar="FILE",
+                    help="--placeholder only while FILE exists; delete it and the channel "
+                         "comes on the air")
     ap.add_argument("--verbose", action="store_true")
     a = ap.parse_args()
     Handler.burst = a.burst
@@ -581,6 +588,8 @@ def main():
     Handler.other_devices = a.other_devices
     Handler.movies = a.movies
     Handler.placeholder = a.placeholder
+    if a.placeholder_while:
+        Handler.placeholder_while = pathlib.Path(a.placeholder_while)
 
     Handler.rate = a.rate
     Handler.gap_every = a.gap_every
@@ -600,7 +609,7 @@ def main():
               file=sys.stderr)
         return 1
 
-    if a.placeholder and not (FIXTURES / "placeholder.ts").is_file():
+    if (a.placeholder or a.placeholder_while) and not (FIXTURES / "placeholder.ts").is_file():
         print(f"no placeholder.ts in {FIXTURES}; run tools/make_fixtures.sh", file=sys.stderr)
         return 1
 
