@@ -22,6 +22,11 @@
 //!
 //! Audio is disabled outright (`ao=null`) before anything is loaded, not
 //! muted: this runs unattended and must never make noise.
+//!
+//! `ZAPPER_LIVE_START=wait` (or `stay`, `catchUp`) opens the channel the way
+//! that setting does; the default is the app's. Either way the picture is
+//! watched while it settles: the video track has to stay, and the stream has
+//! to keep playing.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -144,6 +149,55 @@ const LIVE: f64 = zapper_lib::ipc::player_cmds::LIVE_CUSHION + 2.5;
 #[cfg(target_os = "linux")]
 const AFTER_LIVE: u64 = 15;
 
+/// Watches the picture for `for_how_long` after it started: the video track
+/// must stay, and the stream must keep playing rather than sit at the edge
+/// of what it has. A start that seeks somewhere the cache holds no video
+/// fails both.
+#[cfg(target_os = "linux")]
+async fn watch_picture(
+    app: &tauri::AppHandle,
+    for_how_long: std::time::Duration,
+) -> Result<(), String> {
+    use std::time::{Duration, Instant};
+    let started = Instant::now();
+    let (mut played, mut last): (f64, Option<(Instant, f64)>) = (0.0, None);
+    while started.elapsed() < for_how_long {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let _ = app.run_on_main_thread(move || {
+            let r = zapper_lib::surface::mpv::with_player(|p| {
+                (p.get_string("video-codec"), p.get_f64("time-pos"))
+            });
+            let _ = tx.send(r);
+        });
+        let Ok(Some((codec, pos))) = rx.recv_timeout(Duration::from_secs(5)) else {
+            return Err("no answer from the player on the main thread".into());
+        };
+        let at = started.elapsed().as_secs_f64();
+        if codec.is_none_or(|c| c.is_empty()) {
+            return Err(format!(
+                "the video track went away {at:.1}s after the picture started"
+            ));
+        }
+        if let Some(pos) = pos {
+            // Seeks aside: at most a little more than the clock's share.
+            if let Some((then, was)) = last {
+                let dt = then.elapsed().as_secs_f64();
+                played += (pos - was).clamp(0.0, dt * 1.5);
+            }
+            last = Some((Instant::now(), pos));
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    let wall = started.elapsed().as_secs_f64();
+    println!("[picture] video kept; played {played:.1}s of stream in {wall:.1}s");
+    if played < wall * 0.6 {
+        return Err(format!(
+            "the picture barely moved: {played:.1}s of stream played in {wall:.1}s"
+        ));
+    }
+    Ok(())
+}
+
 /// Polls the player for `for_how_long`, counting the times playback stopped
 /// to wait for the cache (each one a visible stutter), and the thinnest the
 /// buffer ahead of the playhead got.
@@ -174,7 +228,6 @@ async fn watch_for_stalls(
 #[cfg(target_os = "linux")]
 async fn run(app: &tauri::AppHandle) -> Result<String, String> {
     use std::time::Duration;
-    use tokio::time::sleep;
     use zapper_lib::ipc::player_cmds as cmds;
     use zapper_lib::ipc::types::PlaybackState;
 
@@ -184,6 +237,14 @@ async fn run(app: &tauri::AppHandle) -> Result<String, String> {
     println!("[open] stream_id={stream_id}");
 
     // --- play -------------------------------------------------------------
+    if let Ok(mode) = std::env::var("ZAPPER_LIVE_START") {
+        let settings = zapper_lib::ipc::types::SettingsDto {
+            live_start: mode.into(),
+            ..Default::default()
+        };
+        println!("[open] live start {:?}", settings.live_start);
+        cmds::apply_playback_settings(app.clone(), settings).await?;
+    }
     cmds::play(app.clone(), stream_id).await?;
     let opened = await_state(Duration::from_secs(25), |s| {
         !matches!(s.state, PlaybackState::Opening)
@@ -206,7 +267,7 @@ async fn run(app: &tauri::AppHandle) -> Result<String, String> {
     note(app, "playing").await;
 
     // --- seek back --------------------------------------------------------
-    sleep(Duration::from_secs(SETTLE)).await;
+    watch_picture(app, Duration::from_secs(SETTLE)).await?;
     note(app, "settled").await;
     let before = cmds::player_state().await?;
     // Tuning in lands on the server's connect burst — the oldest of what it

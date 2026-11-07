@@ -435,6 +435,10 @@ pub struct Probe {
     pub demuxer_eof: bool,
     /// Bytes buffered ahead of the playhead.
     pub fw_bytes: Option<i64>,
+    /// Bytes in the whole cache, behind the playhead and ahead. It grows
+    /// with every packet that arrives until the back buffer is full, so its
+    /// growth against `cache_end`'s is the stream's bytes per second.
+    pub total_bytes: Option<i64>,
 }
 
 /// `demuxer-cache-state`, the parts of it that are read.
@@ -449,6 +453,7 @@ struct CacheWindow {
     cache_end: Option<f64>,
     eof: bool,
     fw_bytes: Option<i64>,
+    total_bytes: Option<i64>,
 }
 
 /// Logged once if mpv will not hand back `demuxer-cache-state`, so the
@@ -548,6 +553,7 @@ impl Player {
             cache_end,
             eof: v.get("eof").and_then(|x| x.as_bool()).unwrap_or(false),
             fw_bytes: v.get("fw-bytes").and_then(|x| x.as_i64()),
+            total_bytes: v.get("total-bytes").and_then(|x| x.as_i64()),
         })
     }
 
@@ -689,6 +695,7 @@ impl Player {
             cache_end: w.cache_end,
             demuxer_eof: w.eof,
             fw_bytes: w.fw_bytes,
+            total_bytes: w.total_bytes,
         }
     }
 

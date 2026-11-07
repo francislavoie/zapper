@@ -12,10 +12,17 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
 
 ### Fixed
 
+- Channels whose stream opens with its timestamps minutes apart play again. Some servers send a
+  few seconds of old video ahead of live, stamped as if it were minutes earlier, and zapper read
+  that as minutes of video already received. *Wait and start at live* skipped "to live" into
+  video that was never sent and lost the picture, and *Play right away, then catch up* jumped the
+  same way. Now a burst is checked against the bytes that actually arrived, and when they can't
+  account for it the channel starts where the stream is, with nothing skipped.
 - The guide update no longer fails on most passes with "UNIQUE constraint failed:
   epg_fts_stale.id". A guide that listed one programme twice under different titles stopped the
   whole update, so the guide kept going stale. The guide search now handles that, and an existing
   catalogue is repaired the next time it opens.
+- The log no longer says "hardware (no)" when video is decoded in software.
 
 ## [0.3.0] - 2026-11-02
 

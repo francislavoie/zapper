@@ -23,7 +23,7 @@ use crate::catalog::credentials;
 use crate::catalog::store;
 use crate::connections::{self, Limit, Verdict};
 use crate::ipc::ending::{self, Clues, Ending, EndingKind, Flow, How};
-use crate::ipc::live_start::{Join, Settle};
+use crate::ipc::live_start::{ByteRate, Join, Reading, Settle};
 use crate::ipc::tracks;
 use crate::ipc::types::{
     events, AspectMode, ChannelQualityDto, ConnectionsDto, DeinterlaceMode, LiveJumpDto,
@@ -131,6 +131,10 @@ struct Machine {
     joining: bool,
     /// The hold itself, from the first frame until it lets go.
     join: Option<Join>,
+    /// This stream's bytes per second of stream time, so that a distance
+    /// behind live its bytes cannot account for — a jump in the timestamps —
+    /// is not chased. See [`ByteRate`].
+    bytes: ByteRate,
     /// Automatic catch-ups so far this session, for [`LiveJumpDto::seq`].
     jumps: u64,
     /// Whether this stream is live rather than a catch-up programme. A
@@ -209,6 +213,7 @@ impl Machine {
             settle: None,
             joining: false,
             join: None,
+            bytes: ByteRate::new(),
             jumps: 0,
             live: true,
             shown: false,
@@ -303,6 +308,7 @@ impl Machine {
         self.dto.buffered_back = 0.0;
         self.opened_at = Some(Instant::now());
         self.settle = None;
+        self.bytes = ByteRate::new();
         // Asked for by the caller, after this, for a live channel.
         self.joining = false;
         self.join = None;
@@ -1015,8 +1021,7 @@ fn tick(app: &AppHandle, p: &Player) {
                     tracing::info!(
                         "decoding {} with {}",
                         p.get_string("video-codec").unwrap_or_else(|| "video".into()),
-                        p.get_string("hwdec-current")
-                            .map_or_else(|| "software (no hardware decoder)".into(), |h| format!("hardware ({h})"))
+                        decoder_words(p.get_string("hwdec-current").as_deref())
                     );
                 }
                 Signal::EndFile { error: Some(code), .. } => m.ended_with(How::Error(*code)),
@@ -1053,6 +1058,9 @@ fn tick(app: &AppHandle, p: &Player) {
             .last_tick_at
             .map_or(TICK.as_secs_f64(), |t| t.elapsed().as_secs_f64());
 
+        let reading = reading(&probe);
+        m.bytes.observe(reading.cache_end, reading.bytes_total);
+
         // Starting at live: the picture is held on its first frame until the
         // connect burst is in, then started at the cushion. See `Join`.
         if m.join.is_some() {
@@ -1060,17 +1068,24 @@ fn tick(app: &AppHandle, p: &Player) {
                 // Somebody pressed play during the hold. That is an answer
                 // too: play from here, and `Settle` catches it up after.
                 m.joined();
-            } else if let Some(by) = m
-                .join
-                .as_mut()
-                .and_then(|j| j.observe(elapsed, probe.cache_end, probe.behind_live))
-            {
-                let burst = m.join.as_ref().is_some_and(Join::saw_burst);
-                tracing::info!(
-                    "starting at live: {:.1}s of data in, {}; skipping {by:.1}s of it",
-                    probe.behind_live,
-                    if burst { "the connect burst is over" } else { "no connect burst" },
-                );
+            } else if let Some(by) = m.join.as_mut().and_then(|j| j.observe(elapsed, &reading)) {
+                if let Some(j) = m.join.as_ref().filter(|j| j.saw_phantom()) {
+                    // The timestamps jumped: skipping "to live" would land
+                    // where nothing was ever received.
+                    tracing::info!(
+                        "starting where the stream is: it reads {:.1}s of data in, but the bytes \
+                         received are {}; its timestamps jump, so none of it is skipped",
+                        probe.behind_live,
+                        seconds_words(j.byte_rate().seconds_in(reading.bytes_ahead)),
+                    );
+                } else {
+                    let burst = m.join.as_ref().is_some_and(Join::saw_burst);
+                    tracing::info!(
+                        "starting at live: {:.1}s of data in, {}; skipping {by:.1}s of it",
+                        probe.behind_live,
+                        if burst { "the connect burst is over" } else { "no connect burst" },
+                    );
+                }
                 if by > 0.05 {
                     // Paused, so this is unseen: the first frame that moves
                     // is the one it lands on.
@@ -1116,7 +1131,15 @@ fn tick(app: &AppHandle, p: &Player) {
             // Once per tune-in: up to live after the connect burst, see
             // `Settle`. It runs before the drift rule below and resets it,
             // so the two cannot both seek on one tick.
-            if let Some(decision) = m.settle.as_mut().and_then(|s| s.observe(elapsed, probe.behind_live)) {
+            if let Some(decision) = m.settle.as_mut().and_then(|s| s.observe(elapsed, &reading)) {
+                if let Some(s) = m.settle.as_ref().filter(|s| s.saw_phantom()) {
+                    tracing::info!(
+                        "tuned in reading {:.1}s behind live, but the bytes received are {}; \
+                         its timestamps jump, so not catching up",
+                        probe.behind_live,
+                        seconds_words(s.byte_rate().seconds_in(reading.bytes_ahead)),
+                    );
+                }
                 m.settle = None;
                 if decision > 0.05 {
                     tracing::info!(
@@ -1131,7 +1154,13 @@ fn tick(app: &AppHandle, p: &Player) {
             let settled = m
                 .last_live_nudge
                 .is_none_or(|t| t.elapsed() >= LIVE_NUDGE_INTERVAL);
-            if m.drift_secs > MAX_DRIFT_SECS && settled && probe.behind_live > LIVE_CUSHION + 1.0 {
+            // Never across a jump in the timestamps: there is no data there.
+            let real = m.bytes.explains(probe.behind_live, probe.fw_bytes);
+            if m.drift_secs > MAX_DRIFT_SECS
+                && settled
+                && real
+                && probe.behind_live > LIVE_CUSHION + 1.0
+            {
                 let by = (probe.behind_live - LIVE_CUSHION).max(0.0);
                 m.caught_up(by);
                 // Best-effort: failing to catch up is not a reason to fail a
@@ -2141,6 +2170,30 @@ pub async fn set_deinterlace(
 // Pure helpers
 // ---------------------------------------------------------------------------
 
+/// What [`Join`] and [`Settle`] read off a probe.
+fn reading(p: &crate::surface::mpv::Probe) -> Reading {
+    Reading {
+        behind: p.behind_live,
+        cache_end: p.cache_end,
+        bytes_ahead: p.fw_bytes,
+        bytes_total: p.total_bytes,
+    }
+}
+
+/// "about 3.2s of it", or that there was nothing to measure by.
+fn seconds_words(secs: Option<f64>) -> String {
+    secs.map_or_else(|| "unmeasured".to_owned(), |s| format!("about {s:.1}s of it"))
+}
+
+/// Which decoder the log says is at work, from mpv's `hwdec-current`: absent,
+/// empty or `"no"` is software.
+fn decoder_words(hwdec_current: Option<&str>) -> String {
+    match hwdec_current.map(str::trim) {
+        None | Some("" | "no") => "software (no hardware decoder)".to_owned(),
+        Some(h) => format!("hardware ({h})"),
+    }
+}
+
 /// Clamps a relative seek to what is actually buffered.
 ///
 /// Seeking past either end of the demuxer cache on a live stream drops the
@@ -2242,6 +2295,15 @@ fn timeshift_stamp(unix: i64, offset: i64) -> String {
 mod tests {
     use super::*;
     use crate::ipc::types::{SettingsDto, SubtitleBackdrop, SubtitleStyleDto};
+
+    #[test]
+    fn the_decoder_log_reads_hwdec_no_as_software() {
+        let software = "software (no hardware decoder)";
+        assert_eq!(decoder_words(None), software);
+        assert_eq!(decoder_words(Some("no")), software);
+        assert_eq!(decoder_words(Some("")), software);
+        assert_eq!(decoder_words(Some("vaapi")), "hardware (vaapi)");
+    }
 
     #[test]
     fn state_walks_stopped_to_opening_to_playing() {
@@ -2480,7 +2542,8 @@ mod tests {
     fn a_reconfigure_during_the_hold_does_not_restart_it() {
         let mut m = held(1);
         m.playing();
-        let _ = m.join.as_mut().unwrap().observe(0.25, Some(20.0), 20.0);
+        let reading = Reading { behind: 20.0, cache_end: Some(20.0), ..Reading::default() };
+        let _ = m.join.as_mut().unwrap().observe(0.25, &reading);
         m.playing();
         let j = m.join.as_ref().unwrap();
         assert!(j.saw_burst(), "the same hold, with what it has seen");

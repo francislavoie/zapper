@@ -261,7 +261,17 @@ _durations: dict[pathlib.Path, float] = {}
 
 
 def _duration(path: pathlib.Path) -> float:
+    """The fixture's running time, for pacing. A `<name>.seconds` file next
+    to it wins: a fixture whose timestamps jump has a running time ffprobe
+    cannot see (it measures from the first timestamp to the last)."""
     if path not in _durations:
+        side = path.with_name(path.name + ".seconds")
+        if side.is_file():
+            try:
+                _durations[path] = float(side.read_text().strip())
+                return _durations[path]
+            except ValueError:
+                pass
         import subprocess
 
         r = subprocess.run(
