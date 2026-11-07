@@ -257,12 +257,19 @@ pub const ALTERNATIVES_MAX: u32 = 3;
 /// same guide id (`epg_channel_id`) — for when it is off air or will not
 /// play: "Try another source".
 ///
-/// Those that last played first, the most recently measured leading, then
-/// the rest by number. A channel whose last open failed, or was off air, is
+/// Those that last played first (`ok_count` above zero), the newest
+/// `measured_at` leading, then the rest by number. A channel whose last open failed, or was off air, is
 /// left out: it is the last thing to suggest. None for a channel with no
 /// guide id. Served by `channels_by_epg`.
 pub fn alternatives_for(conn: &Connection, stream_id: i64) -> Result<Vec<ChannelDto>> {
-    let sql = format!(
+    let mut stmt = conn.prepare(&alternatives_sql())?;
+    let rows = stmt.query_map(rusqlite::params![stream_id, ALTERNATIVES_MAX], channel_from_row)?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
+/// [`alternatives_for`]'s query: `?1` the channel, `?2` how many.
+fn alternatives_sql() -> String {
+    format!(
         "SELECT {CHANNEL_COLUMNS}
          FROM channels ch {QUALITY_JOIN}
          WHERE ch.epg_channel_id = (
@@ -276,10 +283,7 @@ pub fn alternatives_for(conn: &Connection, stream_id: i64) -> Result<Vec<Channel
                   CASE WHEN COALESCE(q.ok_count, 0) > 0 THEN COALESCE(q.measured_at, 0) END DESC,
                   ch.num IS NULL, ch.num, ch.stream_id
          LIMIT ?2"
-    );
-    let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map(rusqlite::params![stream_id, ALTERNATIVES_MAX], channel_from_row)?;
-    Ok(rows.collect::<rusqlite::Result<_>>()?)
+    )
 }
 
 /// Programmes overlapping `[from, to)` for each channel, in the order the ids
@@ -1009,14 +1013,14 @@ mod tests {
     #[test]
     fn alternatives_are_found_by_the_guide_index() {
         let c = open_in_memory().unwrap();
-        let plan: String = c
-            .query_row(
-                "EXPLAIN QUERY PLAN SELECT stream_id FROM channels WHERE epg_channel_id = 'x'",
-                [],
-                |r| r.get(3),
-            )
+        let mut stmt = c.prepare(&format!("EXPLAIN QUERY PLAN {}", alternatives_sql())).unwrap();
+        let plan: Vec<String> = stmt
+            .query_map(rusqlite::params![1, ALTERNATIVES_MAX], |r| r.get(3))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
             .unwrap();
-        assert!(plan.contains("channels_by_epg"), "{plan}");
+        let plan = plan.join("\n");
+        assert!(plan.contains("SEARCH ch USING INDEX channels_by_epg"), "{plan}");
     }
 
     #[test]

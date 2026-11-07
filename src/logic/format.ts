@@ -114,16 +114,18 @@ export function offAir(q: QualityDto | null): boolean {
   return q?.failedAt != null && q.failReason === OFF_AIR_REASON;
 }
 
-/** Past this, the clock time alone would read as today's. */
-const OFF_AIR_CLOCK_FOR = 18 * 3600;
+/** Whether two instants fall on the same local calendar day. */
+function sameLocalDay(a: number, b: number): boolean {
+  return new Date(a * 1000).toDateString() === new Date(b * 1000).toDateString();
+}
 
 /** "Off air · 18:26": when a channel was found off air, for its row and the
- *  band. A clock time while that is unambiguous, how long ago after that.
- *  `null` unless the channel is off air. */
+ *  band. The clock time on the day it happened, which is when it reads as
+ *  today's; how long ago after that ("Off air · yesterday"). `null` unless
+ *  the channel is off air. */
 export function offAirLabel(q: QualityDto | null, nowSeconds: number): string | null {
   if (!q || q.failedAt == null || !offAir(q)) return null;
-  const when =
-    nowSeconds - q.failedAt < OFF_AIR_CLOCK_FOR ? hhmm(q.failedAt) : ago(q.failedAt, nowSeconds);
+  const when = sameLocalDay(q.failedAt, nowSeconds) ? hhmm(q.failedAt) : ago(q.failedAt, nowSeconds);
   return `Off air · ${when}`;
 }
 
