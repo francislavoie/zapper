@@ -377,8 +377,8 @@ pub const OFF_AIR_REASON: &str = "off air";
 ///
 /// The captured case sent its whole ten-minute clip in about three seconds.
 /// Twenty leaves room for a link six or seven times slower than that, and is
-/// still far too soon for any live stream to have produced
-/// [`OFF_AIR_MIN_CLIP`] of video: see there.
+/// still far too soon for a live stream with ordinary timestamps to have
+/// produced [`OFF_AIR_MIN_CLIP`] of video: see there.
 pub const OFF_AIR_WINDOW: f64 = 20.0;
 
 /// The least stream time a placeholder clip must have delivered by its end,
@@ -387,20 +387,47 @@ pub const OFF_AIR_WINDOW: f64 = 20.0;
 /// A live server can only send what it already holds — its connect burst,
 /// at most about sixty seconds on the providers measured — and then what
 /// happens, one second per second. So by the end of [`OFF_AIR_WINDOW`] a
-/// live channel has delivered at most about 60 + 20 = 80 seconds, and a
-/// takeover or a dropped connection right after a long burst stays well
-/// under this. Twice the longest burst, so nothing live reaches it; the
-/// placeholders seen are several minutes long, so none falls short.
+/// live channel with continuous timestamps has delivered at most about
+/// 60 + 20 = 80 seconds, and a takeover or a dropped connection right after
+/// a long burst stays under this, with a margin. A stream whose timestamps
+/// jump forward can appear to have delivered more; the other guards in
+/// [`off_air`] are for that. The placeholders seen are several minutes long,
+/// so none falls short.
 pub const OFF_AIR_MIN_CLIP: f64 = 120.0;
 
-/// What an open showed when the end of its data was read: when, and how
-/// much stream time had arrived by then.
+/// The most stream time a placeholder clip is believed to span, in seconds.
+/// Placeholders are minutes long; a span of hours within seconds of the open
+/// is a timestamp jump, not a clip.
+pub const OFF_AIR_MAX_CLIP: f64 = 4.0 * 3600.0;
+
+/// The least data a placeholder clip carries per second of its span, in
+/// bytes: black and silence still costs something to send (the captured
+/// clip about 24 KB/s, the fixture about 11 KB/s). A span that arrived with
+/// far fewer bytes than that is timestamps that jumped, not video.
+pub const OFF_AIR_MIN_BYTES_PER_SEC: f64 = 2_000.0;
+
+/// What an open showed when the end of its data was read: when, how much
+/// stream time had arrived by then, and how many bytes mpv held.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Read {
     /// Seconds since the open.
     pub at: f64,
     /// Stream time received: the newest timestamp less the oldest seen.
     pub span: f64,
+    /// `demuxer-cache-state`'s `total-bytes` at the end; `None` when mpv did
+    /// not say.
+    pub bytes: Option<i64>,
+}
+
+/// What else is known about an open whose end was read, for [`off_air`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Context<'a> {
+    /// A live channel, not a catch-up programme or a movie.
+    pub live: bool,
+    /// mpv's `file-format`: the demuxer that read it.
+    pub format: Option<&'a str>,
+    /// mpv logged the network failing (see [`Clues::network`]).
+    pub network: bool,
 }
 
 /// Watches an open for the end of the provider's data, so that a
@@ -426,17 +453,29 @@ pub struct Placeholder {
     end: Option<f64>,
     /// The end has been read and judged; once per open.
     done: bool,
+    /// `total-bytes` at the last reading.
+    bytes: Option<i64>,
 }
 
 impl Placeholder {
     /// One heartbeat: `dt` seconds since the last, the start of mpv's cache
-    /// (or the playhead, failing that), its end, both in stream time, and
-    /// whether the demuxer has read the end of the stream. `Some` once, on
-    /// the heartbeat the end is first read.
-    pub fn observe(&mut self, dt: f64, start: Option<f64>, cache_end: Option<f64>, eof: bool) -> Option<Read> {
+    /// (or the playhead, failing that), its end, both in stream time,
+    /// whether the demuxer has read the end of the stream, and the bytes it
+    /// holds. `Some` once, on the heartbeat the end is first read.
+    pub fn observe(
+        &mut self,
+        dt: f64,
+        start: Option<f64>,
+        cache_end: Option<f64>,
+        eof: bool,
+        bytes: Option<i64>,
+    ) -> Option<Read> {
         self.t += dt;
         if self.done {
             return None;
+        }
+        if bytes.is_some() {
+            self.bytes = bytes;
         }
         if let Some(end) = cache_end.filter(|e| e.is_finite()) {
             // Timestamps that went back started a new timeline (a reset, a
@@ -461,17 +500,48 @@ impl Placeholder {
             (Some(f), Some(e)) => (e - f).max(0.0),
             _ => 0.0,
         };
-        Some(Read { at: self.t, span })
+        Some(Read { at: self.t, span, bytes: self.bytes })
     }
+
+    /// Whether the end has been read, and judged, already.
+    pub fn judged(&self) -> bool {
+        self.done
+    }
+}
+
+/// Whether mpv's `file-format` is one a live channel arrives in: MPEG-TS,
+/// or HLS. A file in a container made for files (MP4, Matroska) is an
+/// episode or a film, however it was listed, and being sent fast and then
+/// ending is what a file does.
+pub fn live_container(format: &str) -> bool {
+    format
+        .split(',')
+        .any(|f| matches!(f.trim(), "mpegts" | "mpegtsraw" | "hls" | "applehttp"))
 }
 
 /// Whether an open whose data ended as `read` says was a placeholder clip,
 /// and if so its length in seconds.
 ///
-/// Only a live channel: a catch-up programme and a movie are files, sent as
-/// fast as the link allows and then ended, which is exactly this shape.
-pub fn off_air(live: bool, read: Read) -> Option<f64> {
-    (live && read.at <= OFF_AIR_WINDOW && read.span >= OFF_AIR_MIN_CLIP).then_some(read.span)
+/// - Only a live channel: a catch-up programme and a movie are files, sent
+///   as fast as the link allows and then ended, which is exactly this shape.
+///   And only in a live container ([`live_container`]): a playlist's
+///   episodes are listed among its channels.
+/// - The end within [`OFF_AIR_WINDOW`] of the open, after between
+///   [`OFF_AIR_MIN_CLIP`] and [`OFF_AIR_MAX_CLIP`] of stream time, carried by
+///   at least [`OFF_AIR_MIN_BYTES_PER_SEC`]: a span with too few bytes behind
+///   it, or one of hours, is timestamps that jumped.
+/// - Never when mpv logged the network failing: that ending is the network's.
+pub fn off_air(read: Read, cx: Context<'_>) -> Option<f64> {
+    if !cx.live || cx.network || !cx.format.is_some_and(live_container) {
+        return None;
+    }
+    let dense = read
+        .bytes
+        .is_some_and(|b| b as f64 >= OFF_AIR_MIN_BYTES_PER_SEC * read.span);
+    (read.at <= OFF_AIR_WINDOW
+        && (OFF_AIR_MIN_CLIP..=OFF_AIR_MAX_CLIP).contains(&read.span)
+        && dense)
+        .then_some(read.span)
 }
 
 /// How long the data must have stopped before the stream ended for the
@@ -913,9 +983,19 @@ mod tests {
         let mut seen = None;
         while t < until {
             t += 0.25;
-            seen = seen.or(p.observe(0.25, start, end_at(t), t >= eof));
+            let end = end_at(t);
+            // The fixture's rate: about 11 KB a second of stream.
+            let bytes = end.map(|e| ((e - start.unwrap_or(0.0)).max(0.0) * 11_000.0) as i64);
+            seen = seen.or(p.observe(0.25, start, end, t >= eof, bytes));
         }
         seen
+    }
+
+    /// A live channel in MPEG-TS, with nothing from the network.
+    const TS: Context<'static> = Context { live: true, format: Some("mpegts"), network: false };
+
+    fn ts(read: Read) -> Option<f64> {
+        off_air(read, TS)
     }
 
     #[test]
@@ -926,7 +1006,7 @@ mod tests {
             .expect("the end was read");
         assert!((read.at - 3.0).abs() < 0.01, "{read:?}");
         assert!((read.span - 600.0).abs() < 0.01, "{read:?}");
-        assert_eq!(off_air(true, read), Some(600.0));
+        assert_eq!(ts(read), Some(600.0));
         let e = Ending::off_air(600.4);
         assert_eq!((e.kind, e.clip_secs, e.status, e.limit), (EndingKind::OffAir, Some(600), None, false));
     }
@@ -936,7 +1016,7 @@ mod tests {
         // On a fast link the whole file is in before anything is read: the
         // span is the cache's start to its end, not the first reading's.
         let read = placeholder_run(Some(0.0), |_| Some(598.0), 0.25, 1.0).unwrap();
-        assert_eq!(off_air(true, read), Some(598.0));
+        assert_eq!(ts(read), Some(598.0));
         // No seekable range reported: the playhead's first reading stands in.
         let read = placeholder_run(None, |_| Some(598.0), 0.25, 1.0).unwrap();
         assert_eq!(read.span, 0.0, "nothing earlier than the end was ever seen");
@@ -948,7 +1028,7 @@ mod tests {
         // ending it (a takeover) or the network dropping it seconds later.
         for (burst, eof) in [(60.0, 4.0), (30.0, 2.0), (60.0, 19.0), (20.0, 12.0)] {
             let read = placeholder_run(Some(0.0), |t| Some(burst + t), eof, eof + 1.0).unwrap();
-            assert_eq!(off_air(true, read), None, "burst {burst}s, ended at {eof}s");
+            assert_eq!(ts(read), None, "burst {burst}s, ended at {eof}s");
         }
         // And whatever ended it is classified exactly as before.
         assert_eq!(classify(How::Eof, true, Clues::default()).kind, EndingKind::Dropped);
@@ -959,18 +1039,18 @@ mod tests {
     #[test]
     fn an_end_after_the_window_is_not_off_air() {
         let read = placeholder_run(Some(0.0), |_| Some(600.0), OFF_AIR_WINDOW + 0.5, 30.0).unwrap();
-        assert_eq!(off_air(true, read), None);
+        assert_eq!(ts(read), None);
         // At the window's edge it still counts.
         let read = placeholder_run(Some(0.0), |_| Some(600.0), OFF_AIR_WINDOW, 30.0).unwrap();
-        assert_eq!(off_air(true, read), Some(600.0));
+        assert_eq!(ts(read), Some(600.0));
     }
 
     #[test]
     fn a_clip_shorter_than_the_minimum_is_not_off_air() {
         let read = placeholder_run(Some(0.0), |_| Some(OFF_AIR_MIN_CLIP - 1.0), 2.0, 5.0).unwrap();
-        assert_eq!(off_air(true, read), None);
+        assert_eq!(ts(read), None);
         let read = placeholder_run(Some(0.0), |_| Some(OFF_AIR_MIN_CLIP), 2.0, 5.0).unwrap();
-        assert_eq!(off_air(true, read), Some(OFF_AIR_MIN_CLIP));
+        assert_eq!(ts(read), Some(OFF_AIR_MIN_CLIP));
     }
 
     #[test]
@@ -978,7 +1058,7 @@ mod tests {
         // A programme from the archive, or a film, arrives this way by
         // design: as fast as the link allows, and then it ends.
         let read = placeholder_run(Some(0.0), |_| Some(600.0), 3.0, 5.0).unwrap();
-        assert_eq!(off_air(false, read), None);
+        assert_eq!(off_air(read, Context { live: false, ..TS }), None);
     }
 
     #[test]
@@ -988,14 +1068,49 @@ mod tests {
         assert_eq!(placeholder_run(None, |_| None, f64::INFINITY, 30.0), None);
         // An end read with no timestamps at all says nothing either.
         let read = placeholder_run(None, |_| None, 2.0, 5.0).unwrap();
-        assert_eq!(off_air(true, read), None);
+        assert_eq!(ts(read), None);
+    }
+
+    #[test]
+    fn a_file_container_is_an_episode_not_a_placeholder() {
+        // A playlist's episodes are listed among its channels: an MP4 or a
+        // Matroska file sent fast and then ended is a file doing what files
+        // do.
+        let read = placeholder_run(Some(0.0), |_| Some(600.0), 2.0, 5.0).unwrap();
+        assert_eq!(off_air(read, Context { format: Some("mov,mp4,m4a,3gp,3g2,mj2"), ..TS }), None);
+        assert_eq!(off_air(read, Context { format: Some("matroska,webm"), ..TS }), None);
+        assert_eq!(off_air(read, Context { format: None, ..TS }), None, "unknown: no verdict");
+        assert_eq!(off_air(read, Context { format: Some("hls"), ..TS }), Some(600.0));
+        assert!(live_container("mpegts") && !live_container("mp3"));
+    }
+
+    #[test]
+    fn a_timestamp_jump_is_not_a_clip() {
+        // A live stream whose timestamps jump forward by hours, then ends
+        // cleanly: a span of hours, with a few seconds' bytes behind it.
+        let read = Read { at: 6.0, span: 26_000.0, bytes: Some(3_000_000) };
+        assert_eq!(ts(read), None, "longer than any placeholder");
+        // A smaller jump: ten minutes of span carried by the bytes of a
+        // few seconds of video.
+        let read = Read { at: 6.0, span: 600.0, bytes: Some(600_000) };
+        assert_eq!(ts(read), None, "1 KB a second of stream is not video");
+        let read = Read { at: 6.0, span: 600.0, bytes: None };
+        assert_eq!(ts(read), None, "no byte count: no verdict");
+        let read = Read { at: 6.0, span: OFF_AIR_MAX_CLIP, bytes: Some(i64::MAX) };
+        assert_eq!(ts(read), Some(OFF_AIR_MAX_CLIP));
+    }
+
+    #[test]
+    fn the_network_failing_is_never_off_air() {
+        let read = placeholder_run(Some(0.0), |_| Some(600.0), 2.0, 5.0).unwrap();
+        assert_eq!(off_air(read, Context { network: true, ..TS }), None);
     }
 
     #[test]
     fn the_end_is_judged_once() {
         let mut p = Placeholder::default();
-        assert!(p.observe(0.25, Some(0.0), Some(600.0), true).is_some());
-        assert!(p.observe(0.25, Some(0.0), Some(600.0), true).is_none());
+        assert!(p.observe(0.25, Some(0.0), Some(600.0), true, Some(6_600_000)).is_some());
+        assert!(p.observe(0.25, Some(0.0), Some(600.0), true, Some(6_600_000)).is_none());
     }
 
     #[test]
@@ -1003,9 +1118,9 @@ mod tests {
         // A live stream whose timestamps reset (a splice) and which then
         // ends: the jump is not stream time received.
         let mut p = Placeholder::default();
-        p.observe(0.25, Some(95_000.0), Some(95_010.0), false);
-        p.observe(0.25, Some(95_000.0), Some(95_020.0), false);
-        let read = p.observe(0.25, Some(0.0), Some(8.0), true).unwrap();
+        p.observe(0.25, Some(95_000.0), Some(95_010.0), false, None);
+        p.observe(0.25, Some(95_000.0), Some(95_020.0), false, None);
+        let read = p.observe(0.25, Some(0.0), Some(8.0), true, None).unwrap();
         assert_eq!(read.span, 8.0);
     }
 

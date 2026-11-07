@@ -4897,6 +4897,44 @@ textarea.field {
   text-align: left;
 }
 
+/* In the band, the off-air message and its sources sit under the channel's
+   line, above the programme's details, so the first is in view. */
+.watch-notice {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.alternatives.inline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.5rem;
+  margin-top: 0;
+}
+
+.alternatives.inline .alternatives-head {
+  margin: 0;
+}
+
+.alternatives.inline .alternatives-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.375rem;
+  min-width: 0;
+}
+
+.alternatives.inline .alternative {
+  width: auto;
+  max-width: 18rem;
+  padding: 0.0625rem 0.375rem;
+  border-color: var(--line);
+}
+
+.alternatives.inline .alternative-num {
+  flex: 0 0 auto;
+}
+
 .alternatives-head {
   margin: 0 0 0.25rem;
   font-size: 0.75rem;
