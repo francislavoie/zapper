@@ -148,6 +148,13 @@ struct Machine {
     has_video: Option<bool>,
     /// Whether this open's audio is playing.
     audio_on: bool,
+    /// How this open was to meet the connect burst ([`Machine::starting`]),
+    /// for an open that failed and then turned out to work.
+    start_mode: LiveStart,
+    /// Live was asked for during a catch-up programme of this channel, and
+    /// the channel is being opened again: a second press is not a second
+    /// open. Cleared when the open begins, or fails.
+    reopening: Option<i64>,
     /// Whether a frame of this stream has been on screen: the difference
     /// between a stream that was taken away and one that never came.
     shown: bool,
@@ -205,11 +212,13 @@ enum ToLive {
     /// Open this channel again, live: what is open is a catch-up programme
     /// of it.
     Reopen(i64),
+    /// Nothing: the channel is being opened again already.
+    Already,
 }
 
 /// What an open is of.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Opened {
+enum OpenKind {
     /// A channel, live.
     Live,
     /// A programme from a channel's archive.
@@ -259,6 +268,8 @@ impl Machine {
             started: false,
             has_video: None,
             audio_on: false,
+            start_mode: LiveStart::CatchUp,
+            reopening: None,
             shown: false,
             clues: Clues::default(),
             failed_since: None,
@@ -301,8 +312,11 @@ impl Machine {
             if bare_deadline && !settled {
                 return None;
             }
+            // Without an ending there is nothing to judge yet, and nothing
+            // is noted: an open given up on without a word may still play.
+            let e = self.dto.ending?;
             self.noted = true;
-            let why = ending::against_channel(&self.dto.ending?, self.dto.error.as_deref())?;
+            let why = ending::against_channel(&e, self.dto.error.as_deref())?;
             return Some(Ledger::Failed(id, why));
         }
         if matches!(self.dto.state, PlaybackState::Playing | PlaybackState::Paused)
@@ -332,6 +346,7 @@ impl Machine {
         self.started = false;
         self.has_video = None;
         self.audio_on = false;
+        self.reopening = None;
         self.shown = false;
         self.clues = Clues::default();
         self.failed_since = None;
@@ -367,6 +382,7 @@ impl Machine {
     /// catch-up programme has no burst: it starts where it was asked to,
     /// whatever the setting.
     fn starting(&mut self, mode: LiveStart) {
+        self.start_mode = mode;
         self.joining = self.live && mode == LiveStart::Wait;
         // Staying put means nothing skips ahead by itself — neither the
         // catch-up after the burst nor the one after a long stall. Asking
@@ -382,8 +398,25 @@ impl Machine {
         }
     }
 
+    /// The live reopen of `stream_id` has begun ([`ToLive::Reopen`]).
+    fn reopen_started(&mut self, stream_id: i64) {
+        self.reopening = Some(stream_id);
+    }
+
+    /// The live reopen of `stream_id` could not be made. Said only if
+    /// nothing has happened since: not over a newer channel, or a stop.
+    fn reopen_failed(&mut self, stream_id: i64, why: &str) {
+        if self.reopening == Some(stream_id) && self.dto.stream_id == Some(stream_id) {
+            self.reopening = None;
+            self.failed(why);
+        }
+    }
+
     /// What asking for live means for what is open now.
     fn to_live(&self) -> ToLive {
+        if self.reopening.is_some() {
+            return ToLive::Already;
+        }
         match self.dto.stream_id {
             // A catch-up programme has no live edge to seek to: the channel
             // is opened again, live.
@@ -420,6 +453,14 @@ impl Machine {
             self.has_video = has_video;
         }
         self.audio_only();
+    }
+
+    /// Whether this open's file has video is still to be learnt
+    /// once it has started. mpv says nothing when a track list is the same
+    /// as the last one — two stations from one provider, say — so then the
+    /// heartbeat reads it.
+    fn needs_track_list(&self) -> bool {
+        self.started && self.has_video.is_none()
     }
 
     /// Whether audio is playing now (mpv has `audio-params`).
@@ -479,6 +520,7 @@ impl Machine {
             if !revivable {
                 return;
             }
+            self.revive();
         }
         if self.joining {
             // Held on the first frame: there is a picture, but it is not
@@ -514,6 +556,21 @@ impl Machine {
             self.measure_at = Some(Instant::now() + MEASURE_AFTER);
         }
         self.opened_at = None;
+    }
+
+    /// A failed open that turned out to work, put back as its first frame
+    /// would have found it: opening, set up for the start it was asked for
+    /// (held at live and let go by the heartbeat under "wait", caught up
+    /// after its burst, measured), and with its failure no longer on its
+    /// record, so that it is noted as loaded.
+    fn revive(&mut self) {
+        self.dto.state = PlaybackState::Opening;
+        self.dto.error = None;
+        self.dto.ending = None;
+        self.failed_since = None;
+        self.noted = false;
+        self.opened_at = Some(Instant::now());
+        self.starting(self.start_mode);
     }
 
     /// The hold on the first frame is over and the caller is starting
@@ -569,6 +626,7 @@ impl Machine {
     }
 
     fn stopped(&mut self) {
+        self.reopening = None;
         self.dto.at_live_edge = true;
         self.following_live = false;
         self.reconnects = 0;
@@ -929,7 +987,7 @@ static THROUGH_SERVICE: AtomicBool = AtomicBool::new(false);
 
 /// What was last opened, so that a reconnect can open it again. Kept here,
 /// in memory only: the URL carries the account.
-static LAST_OPEN: Mutex<Option<(i64, Playable, Opened, Via)>> = Mutex::new(None);
+static LAST_OPEN: Mutex<Option<(i64, Playable, OpenKind, Via)>> = Mutex::new(None);
 
 /// Whether a reconnect decided under `token` is still wanted.
 fn still_wanted(token: u64) -> bool {
@@ -1214,7 +1272,12 @@ fn tick(app: &AppHandle, p: &Player) {
             }
         }
         // A radio channel's "it works"; see `Machine::audio_only`.
-        m.tracks_known(tracks.and_then(tracks::has_video));
+        let listed = match tracks {
+            Some(json) => tracks::has_video(json),
+            None if m.needs_track_list() => p.get_string("track-list").as_deref().and_then(tracks::has_video),
+            None => None,
+        };
+        m.tracks_known(listed);
         m.audio(audio_on);
         m.apply(&probe);
         m.check_deadline();
@@ -1522,7 +1585,7 @@ async fn play_channel(app: &AppHandle, stream_id: i64) -> Result<(), String> {
     // a second connection to the same channel.
     if crate::ipc::handover::captured(stream_id) {
         if let Some((target, via)) = through_service_target(stream_id).await {
-            return open_as(app, stream_id, target, Opened::Live, None, via, None).await;
+            return open_as(app, stream_id, target, OpenKind::Live, None, via, None).await;
         }
     }
     play_direct(app, stream_id).await
@@ -1531,7 +1594,7 @@ async fn play_channel(app: &AppHandle, stream_id: i64) -> Result<(), String> {
 /// The channel on the player's own connection to the provider.
 async fn play_direct(app: &AppHandle, stream_id: i64) -> Result<(), String> {
     let target = direct_target(stream_id)?;
-    open(app, stream_id, target, Opened::Live).await
+    open(app, stream_id, target, OpenKind::Live).await
 }
 
 /// Where the provider serves a live channel.
@@ -1608,7 +1671,7 @@ pub fn now_playing() -> Option<NowPlaying> {
     let last = LAST_OPEN.lock().ok()?.clone()?;
     (last.0 == open).then_some(NowPlaying {
         stream_id: open,
-        live: last.2 == Opened::Live,
+        live: last.2 == OpenKind::Live,
         through_service: matches!(last.3, Via::Service { .. }),
     })
 }
@@ -1659,7 +1722,7 @@ pub async fn move_to_service(app: &AppHandle, client: &Client, stream_id: i64) -
     match answer {
         Ok(w) => {
             let (target, via) = service_target(client, &w);
-            open_as(app, stream_id, target, Opened::Live, None, via, tracks).await
+            open_as(app, stream_id, target, OpenKind::Live, None, via, tracks).await
         }
         Err(r) => {
             tracing::warn!("the player could not move onto the recording service: {}", r.error);
@@ -1712,7 +1775,7 @@ pub async fn play_catchup(
             return Err("this account has no catch-up".to_owned());
         }
     };
-    open(&app, stream_id, target, Opened::CatchUp(CatchUp { near_edge })).await
+    open(&app, stream_id, target, OpenKind::CatchUp(CatchUp { near_edge })).await
 }
 
 /// A catch-up request moved inside the channel's archive, by
@@ -1826,7 +1889,7 @@ fn live_start_mode() -> LiveStart {
 }
 
 /// Shared by live and catchup: state first, then the one connection.
-async fn open(app: &AppHandle, stream_id: i64, target: Playable, what: Opened) -> Result<(), String> {
+async fn open(app: &AppHandle, stream_id: i64, target: Playable, what: OpenKind) -> Result<(), String> {
     open_as(app, stream_id, target, what, None, Via::Direct, None).await
 }
 
@@ -1838,7 +1901,7 @@ async fn open_as(
     app: &AppHandle,
     stream_id: i64,
     target: Playable,
-    what: Opened,
+    what: OpenKind,
     reconnect: Option<u32>,
     via: Via,
     tracks: Option<(String, String)>,
@@ -1877,10 +1940,10 @@ async fn open_as(
     commit(app, |m| {
         was_holding = m.joining;
         m.opening(stream_id);
-        m.live = what == Opened::Live;
+        m.live = what == OpenKind::Live;
         m.catch_up = match what {
-            Opened::CatchUp(c) => Some(c),
-            Opened::Live => None,
+            OpenKind::CatchUp(c) => Some(c),
+            OpenKind::Live => None,
         };
         m.starting(mode);
         join = m.joining;
@@ -2083,12 +2146,19 @@ pub async fn seek_live(app: AppHandle) -> Result<(), String> {
     let to = {
         let mut m = STATE.lock().expect("player state mutex poisoned");
         let to = m.to_live();
-        if to == ToLive::Seek {
-            m.following_live = true;
-            m.last_live_nudge = None;
+        match to {
+            ToLive::Seek => {
+                m.following_live = true;
+                m.last_live_nudge = None;
+            }
+            ToLive::Reopen(id) => m.reopen_started(id),
+            ToLive::Already => {}
         }
         to
     };
+    if to == ToLive::Already {
+        return Ok(());
+    }
     if let ToLive::Reopen(stream_id) = to {
         // A catch-up programme's end is not live: forward through it is
         // only further into the programme. The channel is opened again, as
@@ -2107,7 +2177,7 @@ pub async fn seek_live(app: AppHandle) -> Result<(), String> {
             Err(e) => Err(e),
         };
         if let Err(e) = &r {
-            commit(&app, |m| m.failed(e.clone()));
+            commit(&app, |m| m.reopen_failed(stream_id, e));
         }
         return r;
     }
@@ -2756,7 +2826,8 @@ mod tests {
         // own open; if that never comes, the programme is reported failed.
         let mut m = catchup(42, LiveStart::CatchUp);
         m.playing();
-        m.failed("the recording service did not answer");
+        m.reopen_started(42);
+        m.reopen_failed(42, "the recording service did not answer");
         assert_eq!(m.dto.state, PlaybackState::Failed);
         assert!(!m.live, "still the programme's state, not a live open's");
         m.failed_since = Some(Instant::now() - FAILURE_SETTLE - Duration::from_secs(1));
@@ -2764,6 +2835,100 @@ mod tests {
         m.check_deadline();
         assert_eq!(m.ledger(Instant::now()), None, "a catch-up says nothing of the channel");
         assert_eq!(m.to_live(), ToLive::Reopen(42), "and Live can try again");
+    }
+
+    #[test]
+    fn a_second_live_press_during_the_reopen_is_nothing() {
+        let mut m = catchup(42, LiveStart::CatchUp);
+        m.playing();
+        assert_eq!(m.to_live(), ToLive::Reopen(42));
+        m.reopen_started(42);
+        assert_eq!(m.to_live(), ToLive::Already);
+        // The channel's open begins: Live is a seek again.
+        m.opening(42);
+        m.starting(LiveStart::CatchUp);
+        assert_eq!(m.to_live(), ToLive::Seek);
+    }
+
+    #[test]
+    fn a_failed_reopen_does_not_land_on_what_came_after_it() {
+        // Another channel picked while the reopen was being asked for.
+        let mut m = catchup(42, LiveStart::CatchUp);
+        m.playing();
+        m.reopen_started(42);
+        m.opening(7);
+        m.starting(LiveStart::CatchUp);
+        m.reopen_failed(42, "too late");
+        assert_eq!(m.dto.state, PlaybackState::Opening);
+        assert_eq!(m.dto.stream_id, Some(7));
+        // Or the player stopped.
+        let mut m = catchup(42, LiveStart::CatchUp);
+        m.playing();
+        m.reopen_started(42);
+        m.stopped();
+        m.reopen_failed(42, "too late");
+        assert_eq!(m.dto.state, PlaybackState::Stopped);
+    }
+
+    #[test]
+    fn a_revived_open_starts_as_its_first_frame_would_have() {
+        // Under "wait": held at live once it comes, and noted as loaded.
+        let mut m = held(7);
+        m.ended_with(How::Deadline);
+        m.failed_since = Some(Instant::now() - FAILURE_SETTLE - Duration::from_secs(1));
+        assert!(matches!(m.ledger(Instant::now()), Some(Ledger::Failed(7, _))));
+        assert!(m.reconfigured(true));
+        assert!(m.join.is_some() && m.dto.joining_live, "held, to be let go at live");
+        assert_eq!(m.dto.state, PlaybackState::Opening);
+        assert!(m.dto.ending.is_none() && m.dto.error.is_none());
+        m.joined();
+        assert_eq!(m.dto.state, PlaybackState::Playing);
+        assert!(m.settle.is_some() && m.measure_at.is_some() && m.following_live);
+        assert_eq!(m.ledger(Instant::now()), Some(Ledger::Loaded(7)));
+        // Played at once: caught up after its burst, and measured.
+        let mut m = Machine::new();
+        m.opening(7);
+        m.starting(LiveStart::CatchUp);
+        m.ended_with(How::Deadline);
+        m.playing();
+        assert_eq!(m.dto.state, PlaybackState::Playing);
+        assert!(m.settle.is_some() && m.measure_at.is_some() && m.following_live);
+        assert_eq!(m.ledger(Instant::now()), Some(Ledger::Loaded(7)));
+    }
+
+    #[test]
+    fn an_open_given_up_on_without_a_word_is_noted_when_it_plays() {
+        let mut m = Machine::new();
+        m.opening(7);
+        m.starting(LiveStart::CatchUp);
+        m.failed("the player did not answer");
+        m.failed_since = Some(Instant::now() - FAILURE_SETTLE - Duration::from_secs(1));
+        assert_eq!(m.ledger(Instant::now()), None, "nothing to judge without an ending");
+        m.file_started();
+        assert!(m.reconfigured(true));
+        assert_eq!(m.ledger(Instant::now()), Some(Ledger::Loaded(7)));
+    }
+
+    #[test]
+    fn a_station_whose_track_list_mpv_never_resends_is_read_for_it() {
+        // Radio to radio from one provider: the same track list, so no
+        // change is reported, and the heartbeat has to ask.
+        let mut m = Machine::new();
+        m.opening(2);
+        m.starting(LiveStart::CatchUp);
+        m.file_started();
+        m.tracks_known(None);
+        m.audio(true);
+        assert!(m.needs_track_list());
+        assert_eq!(m.dto.state, PlaybackState::Opening);
+        // What the heartbeat reads instead.
+        m.tracks_known(tracks::has_video(r#"[{"id":1,"type":"audio","codec":"aac"}]"#));
+        assert!(!m.needs_track_list());
+        assert_eq!(m.dto.state, PlaybackState::Playing);
+        // Not asked before the file has started, nor once known.
+        let mut m = Machine::new();
+        m.opening(2);
+        assert!(!m.needs_track_list());
     }
 
     #[test]
