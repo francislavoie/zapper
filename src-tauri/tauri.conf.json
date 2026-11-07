@@ -45,7 +45,7 @@
         "desktopTemplate": "../packaging/zapper.desktop.hbs",
         "preRemoveScript": "../packaging/linux/deb-prerm",
         "depends": [
-          "libwebkit2gtk-4.1-0",
+          "libwebkit2gtk-4.1-0 (>= 2.40)",
           "libgtk-3-0",
           "libva2",
           "libva-drm2",
