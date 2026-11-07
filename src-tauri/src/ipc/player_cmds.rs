@@ -282,9 +282,10 @@ impl Machine {
         // A picture, and a measurement of it, are held back while the open
         // could still turn out to be a placeholder clip: its first frame is
         // a frame, and its black 1080p a reading, of nothing. Written once
-        // the watch can no longer fire, so that a load never lands after
-        // (and undoes) an off-air record.
-        if !self.watch_settled(now) {
+        // it can no longer, so that a load never lands after (and undoes)
+        // an off-air record. See `could_be_off_air` for why a normal
+        // channel is never held.
+        if self.could_be_off_air(now) {
             return None;
         }
         if self.shown && !self.noted {
@@ -511,18 +512,26 @@ impl Machine {
         }
     }
 
-    /// Whether the watch for a placeholder can no longer fire for this open:
-    /// its end has been judged, the window is over, or the stream is no
-    /// longer open. Loads and measurements wait for this.
-    fn watch_settled(&self, now: Instant) -> bool {
-        self.placeholder.judged()
-            || !matches!(
+    /// Whether this open could still turn out to be a placeholder clip: the
+    /// watch is reading this open's file, its buffer is clip-shaped (at
+    /// least [`ending::OFF_AIR_MIN_CLIP`] of stream already in), its end has
+    /// not been judged, the window is not over, and the stream is open.
+    ///
+    /// Loads and measurements wait while it is. A normal live channel never
+    /// has a buffer that deep that soon, so it is never held: its load is
+    /// written at its first frame and its measurement after
+    /// [`MEASURE_AFTER`], as before.
+    fn could_be_off_air(&self, now: Instant) -> bool {
+        self.armed
+            && !self.placeholder.judged()
+            && self.placeholder.span() >= ending::OFF_AIR_MIN_CLIP
+            && matches!(
                 self.dto.state,
                 PlaybackState::Opening | PlaybackState::Playing | PlaybackState::Paused
             )
-            || self
+            && self
                 .began
-                .is_none_or(|t| now.saturating_duration_since(t).as_secs_f64() > ending::OFF_AIR_WINDOW)
+                .is_some_and(|t| now.saturating_duration_since(t).as_secs_f64() <= ending::OFF_AIR_WINDOW)
     }
 
     /// A live channel that showed a picture and is being replaced or
@@ -3516,21 +3525,27 @@ mod tests {
         assert_eq!(m.dto.state, PlaybackState::Playing);
     }
 
+    /// One heartbeat with ten minutes of stream already in and no end yet:
+    /// a clip-shaped buffer.
+    fn a_clip_is_in(m: &mut Machine) {
+        assert_eq!(m.watch_for_placeholder(0.25, &clip_read(false), None), None);
+    }
+
     #[test]
     fn off_air_is_written_against_the_channel_and_its_frame_never_as_a_load() {
         let mut m = live(7, LiveStart::CatchUp);
         m.playing();
+        a_clip_is_in(&mut m);
         let t0 = Instant::now();
-        assert_eq!(m.ledger(t0), None, "the first frame may be the clip's");
+        assert_eq!(m.ledger(t0), None, "a clip-shaped buffer: the first frame may be the clip's");
+        assert_eq!(m.ledger(t0 + MEASURE_AFTER), None, "nor its black picture measured");
         a_clip_arrives(&mut m);
         assert_eq!(m.ledger(t0), Some(Ledger::Failed(7, "off air".into())));
         assert_eq!(m.ledger(settled()), None, "once per open, and no load after it");
-        // The next live play clears it, as any other failure, once it is
-        // past the window.
+        // The next live play clears it, as any other failure.
         let mut m = live(7, LiveStart::CatchUp);
         m.playing();
-        assert_eq!(m.ledger(Instant::now()), None);
-        assert_eq!(m.ledger(settled()), Some(Ledger::Loaded(7)));
+        assert_eq!(m.ledger(Instant::now()), Some(Ledger::Loaded(7)));
     }
 
     #[test]
@@ -3543,34 +3558,70 @@ mod tests {
     }
 
     #[test]
+    fn a_normal_live_channel_writes_as_it_always_did() {
+        // A 20 s connect burst, then live: never clip-shaped, never held.
+        let mut m = live(7, LiveStart::CatchUp);
+        let burst = Probe {
+            cache_start: Some(0.0),
+            cache_end: Some(20.0),
+            time_pos: Some(0.0),
+            cache_bytes: Some(20 * 750_000),
+            ..Probe::default()
+        };
+        assert_eq!(m.watch_for_placeholder(0.25, &burst, None), None);
+        m.playing();
+        let t0 = Instant::now();
+        assert_eq!(m.ledger(t0), Some(Ledger::Loaded(7)), "at the first frame");
+        assert_eq!(m.ledger(t0 + MEASURE_AFTER / 2), None);
+        let at = Instant::now() + MEASURE_AFTER;
+        assert_eq!(m.ledger(at), Some(Ledger::Measure(7)), "at MEASURE_AFTER");
+        assert_eq!(m.ledger(at), None);
+        // The same before the watch is armed, or with no cache state at all.
+        let mut m = Machine::new();
+        m.opening(Opened::Channel(8));
+        m.playing();
+        assert_eq!(m.ledger(Instant::now()), Some(Ledger::Loaded(8)));
+    }
+
+    #[test]
     fn a_load_waits_until_the_end_is_judged_not_a_placeholder() {
-        // A live stream that ends in a takeover after its burst: the end is
-        // read, judged, and the load is written at once.
+        // A clip-shaped buffer that ends as something else (an episode in
+        // MP4): judged, and the load written at once.
         let mut m = live(7, LiveStart::CatchUp);
         m.playing();
+        a_clip_is_in(&mut m);
         assert_eq!(m.ledger(Instant::now()), None);
-        let burst = Probe { cache_start: Some(0.0), cache_end: Some(60.0), demuxer_eof: true, ..Probe::default() };
-        assert_eq!(m.watch_for_placeholder(2.0, &burst, TS), None);
+        assert_eq!(m.watch_for_placeholder(0.25, &clip_read(true), Some("mov,mp4,m4a,3gp,3g2,mj2")), None);
         assert_eq!(m.ledger(Instant::now()), Some(Ledger::Loaded(7)));
+        // Or the window passes with no end: written then.
+        let mut m = live(8, LiveStart::CatchUp);
+        m.playing();
+        a_clip_is_in(&mut m);
+        assert_eq!(m.ledger(Instant::now()), None);
+        assert_eq!(m.ledger(settled()), Some(Ledger::Loaded(8)));
     }
 
     #[test]
     fn a_load_held_back_is_written_when_the_channel_is_left_early() {
-        // A picture, then a zap within the window: the load stands.
+        // A picture, held, then a zap within the window: the load stands.
         let mut m = live(7, LiveStart::CatchUp);
         m.playing();
+        a_clip_is_in(&mut m);
         assert_eq!(m.ledger(Instant::now()), None);
         m.opening(Opened::Channel(8));
         assert_eq!(m.ledger(Instant::now()), Some(Ledger::Loaded(7)));
-        assert_eq!(m.ledger(Instant::now()), None, "and the new one waits its turn");
+        assert_eq!(m.ledger(Instant::now()), None, "and the new one has shown nothing yet");
         // Stopping, the same.
         armed(&mut m);
         m.playing();
+        a_clip_is_in(&mut m);
+        assert_eq!(m.ledger(Instant::now()), None);
         m.stopped();
         assert_eq!(m.ledger(Instant::now()), Some(Ledger::Loaded(8)));
         // A provider ending it within the window: written then.
         let mut m = live(9, LiveStart::CatchUp);
         m.playing();
+        a_clip_is_in(&mut m);
         m.ended();
         assert_eq!(m.ledger(Instant::now()), Some(Ledger::Loaded(9)));
         // An off-air channel left early has nothing to carry.
@@ -3587,12 +3638,12 @@ mod tests {
         let mut m = Machine::new();
         m.opening(Opened::Channel(7));
         m.joining = true;
+        let t0 = Instant::now();
         m.playing();
-        assert_eq!(m.ledger(Instant::now()), None, "not while it could be a placeholder");
-        let t0 = settled();
         assert_eq!(m.ledger(t0), Some(Ledger::Loaded(7)), "the held frame is the open");
         m.joined();
-        let later = t0 + MEASURE_AFTER;
+        assert_eq!(m.ledger(Instant::now() + MEASURE_AFTER / 2), None);
+        let later = Instant::now() + MEASURE_AFTER;
         assert_eq!(m.ledger(later), Some(Ledger::Measure(7)));
         assert_eq!(m.ledger(later), None, "measured once per open");
     }
@@ -3604,12 +3655,12 @@ mod tests {
         let t0 = Instant::now();
         assert_eq!(m.ledger(t0), None, "opening is not loading");
         m.playing();
-        assert_eq!(m.ledger(t0 + MEASURE_AFTER), None, "nor measured, while it could be a placeholder");
-        let later = settled();
-        assert_eq!(m.ledger(later), Some(Ledger::Loaded(7)));
-        // One thing per heartbeat: the measurement, due long since, next.
+        assert_eq!(m.ledger(t0), Some(Ledger::Loaded(7)));
+        assert_eq!(m.ledger(t0), None, "once per open");
+        assert_eq!(m.ledger(Instant::now() + MEASURE_AFTER / 2), None);
+        let later = Instant::now() + MEASURE_AFTER;
         assert_eq!(m.ledger(later), Some(Ledger::Measure(7)));
-        assert_eq!(m.ledger(later), None, "each once per open");
+        assert_eq!(m.ledger(later), None, "measured once per open");
         // A resolution change later in the stream is not a second open.
         m.playing();
         assert_eq!(m.ledger(later + MEASURE_AFTER), None);
