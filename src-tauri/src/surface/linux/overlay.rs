@@ -32,6 +32,11 @@ thread_local! {
 pub struct Overlay {
     pub overlay: gtk::Overlay,
     pub gl_area: gtk::GLArea,
+    /// Tauri's webview, floating over the surface, so that quitting can end
+    /// its page and process in order ([`super::shut_down`]). Weak: this lives
+    /// in a thread-local, and a strong reference there would finalize the
+    /// WebKitWebView from the thread-local destructors at exit.
+    pub webview: glib::WeakRef<webkit2gtk::WebView>,
     /// Where the surface goes, normalised. Read back by the overlay's
     /// `get-child-position` handler, which is the only thing that positions
     /// the GL surface - see [`Overlay::set_video_rect`].
@@ -307,6 +312,7 @@ pub fn install(window: &tauri::WebviewWindow) -> Result<Overlay> {
                 Ok(Overlay {
                     overlay,
                     gl_area,
+                    webview: webview.downgrade(),
                     placed,
                     renders,
                     mpv_draws,
@@ -496,6 +502,11 @@ fn survive_a_failed_interface(webview: &webkit2gtk::WebView, win: &gtk::Window) 
     webview.connect_load_failed(move |_, _event, uri, error| {
         // The URI is ours — a file path or the dev server — and carries no
         // credentials, unlike a stream URL.
+        // A load that was cancelled did not fail: something replaced it, and
+        // that is not the interface failing to load.
+        if error.matches(webkit2gtk::NetworkError::Cancelled) {
+            return false;
+        }
         tracing::error!("the interface failed to load from {uri}: {error}");
         if told.replace(true) {
             return false;

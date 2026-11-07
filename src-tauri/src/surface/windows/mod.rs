@@ -312,6 +312,11 @@ pub(super) fn video_ready() -> bool {
 
 pub(super) fn request_frame() {}
 
+/// Nothing to take down in order here yet; see `surface::shut_down`.
+pub(super) fn shut_down(then: impl FnOnce() + 'static) {
+    then()
+}
+
 /// The development capture reconstructs GTK's two layers and has no Windows
 /// counterpart yet.
 pub(super) fn request_capture(_path: PathBuf, _after: Duration) {

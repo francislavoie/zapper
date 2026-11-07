@@ -228,6 +228,7 @@ pub fn run() {
             }
 
             chrome::install_menu(app.handle());
+            quit::on_signals(app.handle());
 
             // Development hooks. Nothing here runs in a normal launch: they
             // exist because the composited window cannot be screenshotted on
@@ -236,8 +237,130 @@ pub fn run() {
             dev_hooks(app.handle());
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("failed to start zapper");
+        .build(tauri::generate_context!())
+        .expect("failed to start zapper")
+        .run(quit::on_event);
+}
+
+/// Quitting in order.
+///
+/// Left to itself, Tauri ends the process in the same turn of the event loop
+/// that destroys the window: mpv's render context is then freed by a
+/// thread-local destructor after its GL context is gone, and WebKit's web
+/// process is left to notice the app has vanished and exit by itself, which
+/// on Mesa can crash in libEGL's exit handler. So the close and the exit are
+/// both held back until [`surface::shut_down`] has taken playback, the page
+/// and the web process down, and then let through.
+///
+/// Waiting on the page and on its process is bounded inside the surface;
+/// stopping mpv and freeing its render context are calls into libmpv that
+/// cannot be. So a watchdog ends the process outright if quitting has not
+/// finished `WATCHDOG` after it began: a quit that hangs is worse than one
+/// that skips the tidying.
+#[cfg(feature = "gui")]
+mod quit {
+    use std::sync::atomic::{AtomicU8, Ordering};
+    use tauri::{AppHandle, Manager, RunEvent, WindowEvent};
+
+    /// How long quitting may take before the watchdog ends the process.
+    const WATCHDOG: std::time::Duration = std::time::Duration::from_secs(5);
+
+    const RUNNING: u8 = 0;
+    const STOPPING: u8 = 1;
+    const STOPPED: u8 = 2;
+    static STATE: AtomicU8 = AtomicU8::new(RUNNING);
+
+    /// What to do once everything is down: close the window (which then
+    /// exits, as the last window), or exit with the code asked for.
+    enum Then {
+        Close,
+        Exit(i32),
+    }
+
+    pub fn on_event(app: &AppHandle, event: RunEvent) {
+        let stopped = STATE.load(Ordering::Acquire) == STOPPED;
+        match event {
+            RunEvent::WindowEvent {
+                label,
+                event: WindowEvent::CloseRequested { api, .. },
+                ..
+            } if label == "main" && !stopped => {
+                api.prevent_close();
+                begin(app, Then::Close);
+            }
+            RunEvent::ExitRequested { code, api, .. } if !stopped => {
+                api.prevent_exit();
+                begin(app, Then::Exit(code.unwrap_or(0)));
+            }
+            _ => {}
+        }
+    }
+
+    fn begin(app: &AppHandle, then: Then) {
+        if STATE
+            .compare_exchange(RUNNING, STOPPING, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return;
+        }
+        tracing::info!("quitting");
+        let code = match then {
+            Then::Close => 0,
+            Then::Exit(code) => code,
+        };
+        std::thread::spawn(move || {
+            std::thread::sleep(WATCHDOG);
+            tracing::error!("quitting took longer than {WATCHDOG:?}; exiting now");
+            exit_now(code);
+        });
+        // Before playback is stopped: where a movie got to, as the stop
+        // command would have written it.
+        crate::ipc::player_cmds::save_progress_now();
+        let app = app.clone();
+        crate::surface::shut_down(move || {
+            STATE.store(STOPPED, Ordering::Release);
+            match (then, app.get_webview_window("main")) {
+                // `destroy`, not `close`: the close was already asked for.
+                (Then::Close, Some(w)) => {
+                    if let Err(e) = w.destroy() {
+                        tracing::warn!("closing the window: {e}");
+                        app.exit(0);
+                    }
+                }
+                (Then::Close, None) => app.exit(0),
+                (Then::Exit(code), _) => app.exit(code),
+            }
+        });
+    }
+
+    /// Ends the process without running anything more: no exit handlers, no
+    /// destructors, which is the point when the orderly path is what hung.
+    fn exit_now(code: i32) -> ! {
+        #[cfg(unix)]
+        unsafe {
+            libc::_exit(code)
+        }
+        #[cfg(not(unix))]
+        std::process::exit(code)
+    }
+
+    /// SIGTERM, SIGINT and SIGHUP (a logout, `kill`, Ctrl+C in a terminal,
+    /// the terminal closing) quit the same way as closing the window, rather
+    /// than ending the process where it stands.
+    #[cfg(target_os = "linux")]
+    pub fn on_signals(app: &AppHandle) {
+        for signal in [libc::SIGTERM, libc::SIGINT, libc::SIGHUP] {
+            let app = app.clone();
+            gtk::glib::unix_signal_add_local(signal, move || {
+                tracing::info!("signal {signal}: quitting");
+                app.exit(0);
+                gtk::glib::ControlFlow::Continue
+            });
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub fn on_signals(_app: &AppHandle) {}
 }
 
 /// The variables that make this a run nobody is sitting in front of.
@@ -266,6 +389,59 @@ fn unattended() -> bool {
 /// `ZAPPER_ALLOW_REAL_ACCOUNT=1` says so.
 #[cfg(feature = "gui")]
 fn dev_hooks(app: &tauri::AppHandle) {
+    // `ZAPPER_QUIT_AFTER=<seconds>` closes the window the way its close
+    // button does, so a harness can check that quitting is clean. Only for an
+    // unattended run.
+    if unattended() {
+        if let Some(after) = std::env::var("ZAPPER_QUIT_AFTER")
+            .ok()
+            .and_then(|s| s.parse::<f64>().ok())
+            .and_then(|secs| std::time::Duration::try_from_secs_f64(secs).ok())
+        {
+            let handle = app.clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(after).await;
+                use tauri::Manager;
+                if let Some(w) = handle.get_webview_window("main") {
+                    // `ZAPPER_QUIT_NONCE` checks what the page saves as it
+                    // goes. A `pagehide` handler stores the nonce in local
+                    // storage. Settings › Playback is opened, and then, 150 ms
+                    // before the close (inside both write delays, 400 ms
+                    // each), the rail is folded away (the session) and
+                    // hardware decoding is turned off (a setting). The
+                    // harness then looks for all three.
+                    if let Ok(nonce) = std::env::var("ZAPPER_QUIT_NONCE") {
+                        let nonce = serde_json::to_string(&nonce).unwrap_or_default();
+                        let open = format!(
+                            "addEventListener('pagehide', () => \
+                             localStorage.setItem('zapper.quit-check', {nonce})); \
+                             document.querySelector('button[aria-label=\"Settings\"]')?.click(); \
+                             setTimeout(() => [...document.querySelectorAll(\
+                             'nav[aria-label=\"Settings pages\"] button')]\
+                             .find((b) => b.textContent.trim() === 'Playback')?.click(), 100);"
+                        );
+                        let change = "{ document.querySelector('button[aria-label=\"Hide the \
+                             rail\"]')?.click(); \
+                             const hw = document.getElementById('set-hwdec'); \
+                             localStorage.setItem('zapper.quit-check-switch', \
+                             String(hw?.getAttribute('aria-checked'))); \
+                             if (hw?.getAttribute('aria-checked') === 'true') hw.click(); }";
+                        for (js, then) in [(open.as_str(), 1200), (change, 150)] {
+                            if let Err(e) = w.eval(js) {
+                                tracing::warn!("ZAPPER_QUIT_NONCE: {e}");
+                            }
+                            tokio::time::sleep(std::time::Duration::from_millis(then)).await;
+                        }
+                    }
+                    tracing::info!("closing the window for ZAPPER_QUIT_AFTER");
+                    if let Err(e) = w.close() {
+                        tracing::warn!("ZAPPER_QUIT_AFTER: {e}");
+                    }
+                }
+            });
+        }
+    }
+
     let wanted = |k: &str| std::env::var_os(k).is_some_and(|v| !v.is_empty());
     if !["ZAPPER_AUTOPLAY", "ZAPPER_CAPTURE", "ZAPPER_MUTE"]
         .into_iter()

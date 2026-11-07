@@ -1121,13 +1121,39 @@ fn clock_secs() -> f64 {
 /// [`persist`].
 fn persist_progress(w: ProgressWrite) {
     tauri::async_runtime::spawn_blocking(move || {
-        let r = crate::catalog::db::with_db(|c| {
-            vod_store::record_progress(c, ItemKind::Movie, w.id, w.position, w.duration, activity::now_secs())
-        });
+        let r = crate::catalog::db::with_db(|c| write_progress(c, w).map(|_| ()));
         if let Err(e) = r {
             tracing::warn!("could not record how far into a movie playback got: {e}");
         }
     });
+}
+
+fn write_progress(c: &rusqlite::Connection, w: ProgressWrite) -> anyhow::Result<vod_store::Marks> {
+    vod_store::record_progress(c, ItemKind::Movie, w.id, w.position, w.duration, activity::now_secs())
+}
+
+/// Writes the place `saver` holds that is not written yet, if any.
+fn flush_progress(
+    saver: &mut ProgressSaver,
+    c: &rusqlite::Connection,
+) -> anyhow::Result<Option<vod_store::Marks>> {
+    saver.flush().map(|w| write_progress(c, w)).transpose()
+}
+
+/// Where a movie got to, written before the app quits.
+///
+/// The part of the stop command that matters at quit: its other part, giving
+/// the recording service's connection back, is not needed, since the service
+/// sees the app's connection close. Written here and now rather than on a
+/// worker thread, because the process is about to end and a write queued for
+/// later might not happen. Main thread, from the quit.
+pub fn save_progress_now() {
+    let Ok(mut saver) = PROGRESS.lock() else {
+        return;
+    };
+    if let Err(e) = crate::catalog::db::with_db(|c| flush_progress(&mut saver, c)) {
+        tracing::warn!("could not record how far into a movie playback got: {e}");
+    }
 }
 
 /// Writes earned watch time, off the main thread.
@@ -2980,6 +3006,24 @@ fn timeshift_stamp(unix: i64, offset: i64) -> String {
 mod tests {
     use super::*;
     use crate::ipc::types::{SettingsDto, SubtitleBackdrop, SubtitleStyleDto};
+
+    #[test]
+    fn quitting_writes_the_place_a_movie_got_to_and_only_once() {
+        let c = crate::catalog::open_in_memory().unwrap();
+        let mut saver = ProgressSaver::new();
+        // Two seconds into a movie: well short of a periodic save, so only a
+        // flush at quit would keep this place.
+        assert!(saver.observe(Some(7), Some(1234.5), Some(5400.0), true, 100.0).is_none());
+        assert!(saver.observe(Some(7), Some(1236.5), Some(5400.0), true, 102.0).is_none());
+        let marks = flush_progress(&mut saver, &c).unwrap().expect("a write at quit");
+        assert_eq!((marks.position, marks.duration), (Some(1236.5), Some(5400.0)));
+        let stored: f64 = c
+            .query_row("SELECT position FROM vod_marks WHERE item_id = 7", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(stored, 1236.5);
+        // Nothing new since: nothing more to write.
+        assert!(flush_progress(&mut saver, &c).unwrap().is_none());
+    }
 
     #[test]
     fn the_decoder_log_reads_hwdec_no_as_software() {

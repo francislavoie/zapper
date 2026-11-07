@@ -175,6 +175,37 @@ ZAPPER_MUTE=1 ZAPPER_FIXTURE_BASE=http://127.0.0.1:8788 \
 ZAPPER_FIXTURE_NAME=sample1080.ts ZAPPER_AUTOPLAY=1 cargo run
 ```
 
+### Quitting cleanly
+
+`ZAPPER_QUIT_AFTER=<seconds>` closes the window that long after startup, through
+the same call as its close button. It works only in an unattended run (one of
+the variables above, or `ZAPPER_HARNESS`).
+
+`tools/quit_check.py` uses it to open and quit a release build over and over
+(`--runs 30` by default) while it plays a fixture, and checks how zapper and
+every process it started ended: an exit status or a signal, still running
+long after zapper had gone, or a segfault in the kernel log. It runs entirely
+in a headless GNOME Shell on a private session bus, so nothing shows on the
+desktop, and with a core size limit of one byte, which keeps any crash away
+from the desktop's crash reporter. It starts `fake_stream.py` itself:
+
+```sh
+npm run build
+(cd src-tauri && cargo build --release --features tauri/custom-protocol)
+tools/quit_check.py --runs 30 --port 19601
+```
+
+It also requires exactly one web process per run, ended by WebKit at zapper's
+request (zapper's log says `TerminatedByApi`; `--baseline` drops that, for a
+build from before the orderly quit), and checks that what the page writes as
+it closes reaches local storage. With `ZAPPER_QUIT_NONCE` set, the hook
+registers a `pagehide` handler that stores the nonce, opens Settings ›
+Playback, and 150 ms before the close (inside both 400 ms write delays) folds
+the rail away and turns hardware decoding off. Each run has its own XDG
+directories; the check reads the nonce and the session back from WebKit's
+local-storage database, and the setting from zapper's own. `--quit-by
+sigterm` ends each run with SIGTERM instead of the close.
+
 ## Never the real account
 
 Many providers allow one connection per account, and end the older one when

@@ -54,6 +54,117 @@ pub(super) fn install(window: &tauri::WebviewWindow) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// How long the page may take to save what it keeps, and then its process to
+/// end, before quitting goes ahead without it. Each normally takes a few
+/// milliseconds.
+const QUIT_STEP: Duration = Duration::from_millis(1500);
+
+/// Ends playback, then the page, then WebKit's web process, and calls `then`
+/// once they are gone. See [`crate::surface::shut_down`].
+///
+/// The window is hidden first, so the close looks immediate even when mpv is
+/// slow to stop: hiding unmaps it but does not unrealize it, so the GLArea's
+/// context can still be made current to free mpv's, and the page sees
+/// `visibilitychange` to hidden. The page is then asked to say goodbye
+/// (`window.__zapperQuit`, src/quit.ts): it dispatches `pagehide`, whose
+/// handlers save what the page keeps (the session in local storage, a
+/// pending settings change through the backend), and resolves once the saves
+/// it started have been answered. A settings save is an IPC call, and the
+/// app answers it only after the database write, so waiting for it is what
+/// keeps the change. The page is not navigated away for this: a navigation
+/// to `about:blank` was measured to start a second web process now and then,
+/// and sometimes not to finish within the step's time limit.
+///
+/// The web process is then ended through WebKit's own API rather than left
+/// to notice that the app has gone and exit by itself. Exiting by itself, it
+/// runs its libraries' exit handlers while its own threads may still be
+/// letting go of their EGL state, and libEGL's handler has been seen to crash
+/// there: heap corruption found by `free` under `_dl_fini`, with another
+/// WebKit thread inside Mesa's EGL in its thread-exit destructors. The
+/// desktop reports that as a crash. A process WebKit ends runs no exit
+/// handlers at all.
+pub(super) fn shut_down(then: impl FnOnce() + 'static) {
+    use gtk::prelude::WidgetExt;
+
+    let webview = with_overlay(|o| o.webview.upgrade()).flatten();
+    if let Some(window) = webview.as_ref().and_then(|w| w.toplevel()) {
+        window.hide();
+    }
+    render::shut_down();
+    match webview {
+        Some(webview) => end_page(webview, Box::new(then)),
+        None => then(),
+    }
+}
+
+/// Once-only continuation shared by a signal handler and its timeout.
+type Step = std::rc::Rc<RefCell<Option<Box<dyn FnOnce()>>>>;
+
+fn once(f: Box<dyn FnOnce()>) -> Step {
+    std::rc::Rc::new(RefCell::new(Some(f)))
+}
+
+fn advance(step: &Step) {
+    let f = step.borrow_mut().take();
+    if let Some(f) = f {
+        f();
+    }
+}
+
+/// The page's goodbye (src/quit.ts), awaited. A page without it (one that
+/// failed to load) has nothing to save.
+const GOODBYE: &str = "await window.__zapperQuit?.(); return true;";
+
+fn end_page(webview: webkit2gtk::WebView, then: Box<dyn FnOnce()>) {
+    use webkit2gtk::WebViewExt;
+
+    let next = {
+        let webview = webview.clone();
+        once(Box::new(move || end_web_process(webview, then)))
+    };
+    let saved = next.clone();
+    webview.call_async_javascript_function(
+        GOODBYE,
+        None,
+        None,
+        None,
+        None::<&gtk::gio::Cancellable>,
+        move |result| {
+            match result {
+                Ok(_) => tracing::info!("the page has saved what it keeps"),
+                Err(e) => tracing::warn!("the page's goodbye: {e}"),
+            }
+            advance(&saved);
+        },
+    );
+    let late = next.clone();
+    gtk::glib::timeout_add_local_once(QUIT_STEP, move || {
+        if late.borrow().is_some() {
+            tracing::warn!("the page did not finish saving in time; quitting anyway");
+        }
+        advance(&late);
+    });
+}
+
+fn end_web_process(webview: webkit2gtk::WebView, then: Box<dyn FnOnce()>) {
+    use webkit2gtk::WebViewExt;
+
+    let done = once(then);
+    let on_end = done.clone();
+    webview.connect_web_process_terminated(move |_, reason| {
+        tracing::info!("web process ended: {reason:?}");
+        advance(&on_end)
+    });
+    let late = done.clone();
+    gtk::glib::timeout_add_local_once(QUIT_STEP, move || {
+        if late.borrow().is_some() {
+            tracing::warn!("the web process did not end in time; quitting anyway");
+        }
+        advance(&late);
+    });
+    webview.terminate_web_process();
+}
+
 pub(super) fn set_video_rect(rect: VideoRect) -> Result<(), String> {
     with_overlay(|o| o.set_video_rect(rect))
         .ok_or_else(|| "the video surface is not installed".to_owned())
