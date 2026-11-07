@@ -199,11 +199,12 @@ It also requires exactly one web process per run, ended by WebKit at zapper's
 request (zapper's log says `TerminatedByApi`; `--baseline` drops that, for a
 build from before the orderly quit), and checks that what the page writes as
 it closes reaches local storage. With `ZAPPER_QUIT_NONCE` set, the hook
-registers a `pagehide` handler that stores the nonce, and folds the rail
-away 150 ms before the close, inside the session's 400 ms write delay; each
-run has its own XDG directories, and the check reads both back from WebKit's
-local-storage database afterwards. `--quit-by sigterm` ends each run with
-SIGTERM instead of the close.
+registers a `pagehide` handler that stores the nonce, opens Settings ›
+Playback, and 150 ms before the close (inside both 400 ms write delays) folds
+the rail away and turns hardware decoding off. Each run has its own XDG
+directories; the check reads the nonce and the session back from WebKit's
+local-storage database, and the setting from zapper's own. `--quit-by
+sigterm` ends each run with SIGTERM instead of the close.
 
 ## Never the real account
 
