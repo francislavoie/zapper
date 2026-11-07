@@ -32,6 +32,7 @@ import { useApp, useDispatch } from "./store";
 import { useCanStack } from "./hooks/useCanStack";
 import { useFullscreen } from "./hooks/useFullscreen";
 import { loadSession, saveSession, watchForExit } from "./session";
+import { installQuitHook } from "./quit";
 import { applyVideoWidth, saveVideoWidth } from "./videoSize";
 import { fittedVideoWidth } from "./logic/videoSize";
 import { useVideoRoom } from "./hooks/useVideoRoom";
@@ -156,6 +157,8 @@ export function App() {
   // Closing mid-scroll must still remember where you were; writes are
   // otherwise coalesced and the last one would be lost.
   useEffect(watchForExit, []);
+  // What the desktop app calls before it ends this page's process.
+  useEffect(installQuitHook, []);
 
   // The channel from last time, restored as metadata and nothing else.
   //

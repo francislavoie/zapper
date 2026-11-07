@@ -62,15 +62,18 @@ const QUIT_STEP: Duration = Duration::from_millis(1500);
 /// Ends playback, then the page, then WebKit's web process, and calls `then`
 /// once they are gone. See [`crate::surface::shut_down`].
 ///
-/// The window is hidden as soon as the video is down, so the close looks
-/// immediate: it stays realized, so nothing about it is torn down early, and
-/// the page sees `visibilitychange` to hidden. The page is then sent
-/// `pagehide`, the event its handlers save what it keeps in local storage on
-/// (the session, a pending settings change), and quitting waits for those
-/// handlers to have run. The event is dispatched rather than caused by
-/// navigating away: a navigation to `about:blank` was measured to start a
-/// second web process now and then, and sometimes not to finish within the
-/// step's time limit, which skipped the handlers.
+/// The window is hidden first, so the close looks immediate even when mpv is
+/// slow to stop: hiding unmaps it but does not unrealize it, so the GLArea's
+/// context can still be made current to free mpv's, and the page sees
+/// `visibilitychange` to hidden. The page is then asked to say goodbye
+/// (`window.__zapperQuit`, src/quit.ts): it dispatches `pagehide`, whose
+/// handlers save what the page keeps (the session in local storage, a
+/// pending settings change through the backend), and resolves once the saves
+/// it started have been answered. A settings save is an IPC call, and the
+/// app answers it only after the database write, so waiting for it is what
+/// keeps the change. The page is not navigated away for this: a navigation
+/// to `about:blank` was measured to start a second web process now and then,
+/// and sometimes not to finish within the step's time limit.
 ///
 /// The web process is then ended through WebKit's own API rather than left
 /// to notice that the app has gone and exit by itself. Exiting by itself, it
@@ -83,14 +86,13 @@ const QUIT_STEP: Duration = Duration::from_millis(1500);
 pub(super) fn shut_down(then: impl FnOnce() + 'static) {
     use gtk::prelude::WidgetExt;
 
+    let webview = with_overlay(|o| o.webview.upgrade()).flatten();
+    if let Some(window) = webview.as_ref().and_then(|w| w.toplevel()) {
+        window.hide();
+    }
     render::shut_down();
-    match with_overlay(|o| o.webview.upgrade()).flatten() {
-        Some(webview) => {
-            if let Some(window) = webview.toplevel() {
-                window.hide();
-            }
-            end_page(webview, Box::new(then))
-        }
+    match webview {
+        Some(webview) => end_page(webview, Box::new(then)),
         None => then(),
     }
 }
@@ -109,10 +111,9 @@ fn advance(step: &Step) {
     }
 }
 
-/// The page's goodbye: `pagehide`, as when it is navigated away from. The
-/// handlers run synchronously inside the dispatch, so once this script has
-/// returned they have.
-const PAGEHIDE: &str = "dispatchEvent(new PageTransitionEvent('pagehide', { persisted: false })); true";
+/// The page's goodbye (src/quit.ts), awaited. A page without it (one that
+/// failed to load) has nothing to save.
+const GOODBYE: &str = "await window.__zapperQuit?.(); return true;";
 
 fn end_page(webview: webkit2gtk::WebView, then: Box<dyn FnOnce()>) {
     use webkit2gtk::WebViewExt;
@@ -122,14 +123,16 @@ fn end_page(webview: webkit2gtk::WebView, then: Box<dyn FnOnce()>) {
         once(Box::new(move || end_web_process(webview, then)))
     };
     let saved = next.clone();
-    webview.evaluate_javascript(
-        PAGEHIDE,
+    webview.call_async_javascript_function(
+        GOODBYE,
+        None,
         None,
         None,
         None::<&gtk::gio::Cancellable>,
         move |result| {
-            if let Err(e) = result {
-                tracing::warn!("the page's pagehide: {e}");
+            match result {
+                Ok(_) => tracing::info!("the page has saved what it keeps"),
+                Err(e) => tracing::warn!("the page's goodbye: {e}"),
             }
             advance(&saved);
         },
@@ -137,7 +140,7 @@ fn end_page(webview: webkit2gtk::WebView, then: Box<dyn FnOnce()>) {
     let late = next.clone();
     gtk::glib::timeout_add_local_once(QUIT_STEP, move || {
         if late.borrow().is_some() {
-            tracing::warn!("the page did not finish its pagehide in time; quitting anyway");
+            tracing::warn!("the page did not finish saving in time; quitting anyway");
         }
         advance(&late);
     });
