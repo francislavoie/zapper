@@ -153,6 +153,7 @@ fn from_row(r: &Row<'_>) -> rusqlite::Result<RecordingDto> {
         folder: r.get(16)?,
         backup_name: None,
         waiting: None,
+        retry_at: None,
         conflicts: Vec::new(),
     })
 }

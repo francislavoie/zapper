@@ -268,7 +268,13 @@ impl StreamClock {
         }
         // A PES header starting here, with a PTS.
         let h = p.get(payload..)?;
-        if h.len() < 14 || h[..3] != [0, 0, 1] || h[7] & 0x80 == 0 {
+        if h.len() < 14 || h[..3] != [0, 0, 1] {
+            return None;
+        }
+        // Streams whose PES has no optional header, so no PTS where one is
+        // looked for: the program stream map, padding, private stream 2,
+        // ECM, EMM, the DSM-CC, H.222.1 type E and the directory.
+        if matches!(h[3], 0xbc | 0xbe | 0xbf | 0xf0 | 0xf1 | 0xf2 | 0xf8 | 0xff) || h[7] & 0x80 == 0 {
             return None;
         }
         if self.pts_pid.is_some_and(|w| w != pid) {
@@ -868,6 +874,11 @@ pub(crate) mod tests {
     fn without_a_pcr_the_clock_is_read_from_the_pts() {
         let seen = clock_of(&[pes_packet(0x101, 3.0), pes_packet(0x102, 50.0), pes_packet(0x101, 3.04)]);
         assert_eq!(seen, vec![3.0, 3.04]);
+        // A padding stream's PES has no optional header: the bytes where a
+        // PTS would be are its payload, and not read as one.
+        let mut padding = pes_packet(0x103, 70.0);
+        padding[7] = 0xbe;
+        assert_eq!(clock_of(&[padding, pes_packet(0x101, 3.0)]), vec![3.0]);
     }
 
     #[test]

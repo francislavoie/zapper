@@ -631,6 +631,9 @@ export interface RecordingDto {
   backupName?: string;
   /** While recording: why it is not capturing right now. */
   waiting?: string;
+  /** While recording a channel that is off air: when it asks again (Unix
+   *  seconds). Never a wait for a connection. */
+  retryAt?: number;
   /** What it would lose to recordings on other channels when the account
    *  has too few connections for them all; absent when nothing. */
   conflicts?: ConflictDto[];

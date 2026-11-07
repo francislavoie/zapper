@@ -45,8 +45,12 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
   and the message offers up to three other channels with the same programmes to try instead.
   The browser, through the recording service, says the same and offers the same channels. A
   recording of a channel that is off air notes "Off air at 18:26; retrying" and tries again every
-  three minutes until the programme ends, so it starts when the broadcast does; the placeholder
-  never ends up in the recording.
+  three minutes (taking turns with its backup channel) until the programme ends, on a connection
+  that is free, so it starts when the broadcast does. The placeholder is kept out of the
+  recording, except when the recording is stopped within 20 seconds of a try, when more than
+  64 MB arrives in those 20 seconds, or when the clip is cut short or takes longer than that to
+  arrive. Because of this, each connection's first 20 seconds reach the recording's file (and a
+  Jellyfin .strm) 20 seconds late, and a crash in those seconds loses them.
 
 ## [0.3.0] - 2026-11-02
 
