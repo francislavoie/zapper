@@ -294,10 +294,16 @@ try:
             setting_kept = saved.get("hardwareDecode", saved.get("hardware_decode")) is False
         except (sqlite3.Error, ValueError):
             pass
+        # The hook found the switch on (and so turned it off). If it did not,
+        # the run says nothing about saving at quit: the setting was never
+        # changed. Counted apart, as a miss.
+        switch_was = items.get("zapper.quit-check-switch")
+        if switch_was != "true":
+            setting_kept = None
         freed = "freed mpv's render context" in log
         if args.quit_by == "close":
             r.update(nonce_kept=nonce_kept, session_kept=session_kept, setting_kept=setting_kept,
-                     switch_was=items.get("zapper.quit-check-switch"))
+                     switch_was=switch_was)
         r.update(render_context_freed=freed)
         results.append(r)
         print(json.dumps(r), flush=True)
@@ -322,8 +328,9 @@ unclean = sum(not r["clean"] for r in results)
 played = sum(r["played"] for r in results)
 kept = sum(r.get("nonce_kept", True) for r in results)
 session = sum(r.get("session_kept", True) for r in results)
-setting = sum(r.get("setting_kept", True) for r in results)
+lost = sum(r.get("setting_kept") is False for r in results)
+missed = sum(r.get("setting_kept", True) is None for r in results)
 print(f"{len(results)} runs: {crashed} crashed, {unclean} not clean, {played} played, "
-      f"nonce kept in {kept}, session change kept in {session}, setting kept in {setting} "
-      f"(logs in {work})")
-sys.exit(1 if unclean or min(played, kept, session, setting) < len(results) else 0)
+      f"nonce kept in {kept}, session change kept in {session}, setting lost in {lost} "
+      f"(switch not found in {missed}) (logs in {work})")
+sys.exit(1 if unclean or lost or min(played, kept, session) < len(results) else 0)
