@@ -401,7 +401,7 @@ fn dev_hooks(app: &tauri::AppHandle) {
                         if let Err(e) = w.eval(js) {
                             tracing::warn!("ZAPPER_QUIT_NONCE: {e}");
                         }
-                        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
                     }
                     tracing::info!("closing the window for ZAPPER_QUIT_AFTER");
                     if let Err(e) = w.close() {

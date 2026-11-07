@@ -14,7 +14,7 @@ that with `--baseline`, for a build that does not), and that what the page
 wrote to local storage as it was closing is there afterwards:
 
 - a nonce, which a `pagehide` handler stores (`ZAPPER_QUIT_NONCE`);
-- the session's folded rail, changed 50 ms before the close, inside the
+- the session's folded rail, changed 150 ms before the close, inside the
   session's 400 ms write delay, so only its `pagehide` flush can save it.
 
 `--quit-by sigterm` sends SIGTERM instead of closing the window (and checks
@@ -83,6 +83,15 @@ def comm(pid):
             return f.read().strip()
     except OSError:
         return "?"
+
+
+def ppid(pid):
+    try:
+        with open(f"/proc/{pid}/stat") as f:
+            st = f.read()
+        return int(st[st.rindex(")") + 2:].split()[1])
+    except (OSError, ValueError):
+        return None
 
 
 def descendants(root):
@@ -180,10 +189,21 @@ try:
         since = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(t0 - 1))
         z = subprocess.Popen([args.bin], env=zenv, stdout=open(f"{zhome}/zapper.out", "w"),
                              stderr=subprocess.STDOUT)
-        kids, zst, played, signalled = {}, None, None, False
+        kids, seen, gone, parent, zst, played, signalled = {}, {}, {}, {}, None, None, False
         while time.time() - t0 < quit_after + 30:
-            for d in descendants(z.pid):
-                kids.setdefault(d, comm(d))
+            now = descendants(z.pid)
+            for d in now:
+                # Read again each time: a child forked to run another program
+                # carries its parent's name until its exec.
+                name = comm(d)
+                if name != "?":
+                    kids[d] = name
+                if d not in seen:
+                    seen[d] = round(time.time() - t0 - quit_after, 2)
+                    parent[d] = ppid(d)
+            for d in kids:
+                if d not in now and d not in gone:
+                    gone[d] = round(time.time() - t0 - quit_after, 2)
             # Just before the close: is the fixture being played?
             if played is None and time.time() - t0 > quit_after - 1:
                 played = streams(args.port) > 0
@@ -233,7 +253,10 @@ try:
         played = bool(played)
         with open(f"{zhome}/zapper.out", errors="replace") as f:
             log = f.read()
-        web = sum(c.startswith("WebKitWebProc") for c in kids.values())
+        # When each web process appeared and went, in seconds from the close.
+        web_seen = [[seen[k], gone.get(k)] for k, c in kids.items()
+                    if c.startswith("WebKitWebProc") and parent.get(k) == z.pid]
+        web = len(web_seen)
         by_api = "web process ended: TerminatedByApi" in log
         items = stored(xdg)
         nonce_kept = items.get("zapper.quit-check") == nonce
@@ -245,6 +268,7 @@ try:
                  and web == 1 and (by_api or args.baseline))
         r = dict(run=i, quit_after=quit_after, quit_secs=quit_secs, zapper=describe(zst),
                  hung=hung, processes=ended, kernel=kernel, played=played, web_processes=web,
+                 web_seen=web_seen,
                  terminated_by_api=by_api, crashed=crashed, clean=clean)
         if args.quit_by == "close":
             r.update(nonce_kept=nonce_kept, session_kept=session_kept)
