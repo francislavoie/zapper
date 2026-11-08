@@ -109,6 +109,13 @@ interface have their own page: [recording.md](recording.md).
   sideways, that play on a click or `Enter` and open the same menu. It is left out of the list
   view, of Continue watching itself, of a search, and of a window too short to leave the posters
   room.
+- Playing a movie or episode left partway opens it paused at your place and asks **Resume** or
+  **Start over**, with the time left (`Enter` resumes, `Esc` closes the question); the title keeps its connection for both answers. A
+  question left for a minute lets the connection go, and Resume watches again from the place. On
+  a row in the Shows pane, `Enter` asks the same.
+- The list and the places are shared: the app on the computer that runs the recording service and
+  every browser signed in to it show the same Continue watching. A computer running the app
+  without the service keeps its own.
 
 ## Playback
 
@@ -120,7 +127,7 @@ interface have their own page: [recording.md](recording.md).
   channel's. The picture gets a seek bar with the time played and left, `←`/`→` skip 10 seconds,
   Space or a click pauses. How far you got is kept, and a title played past 92 % counts as
   watched. A title that stops or can't start says why and can be played again from where it
-  stopped. Episodes play from their beginning, with the show as the title and the episode beneath
+  stopped. An episode you left partway asks whether to resume or start over (see Continue watching). Episodes play with the show as the title and the episode beneath
   (`S2 E4 · Night Shift · 52m`).
 - `P` switches to the previous channel; typing a channel number tunes it.
 - Volume up to 200 %, on a perceptual scale, remembered between launches.
