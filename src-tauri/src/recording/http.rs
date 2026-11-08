@@ -441,6 +441,7 @@ pub fn router(server: Shared) -> Router {
         .merge(browse::routes())
         .merge(vod_browse::routes())
         .merge(series_browse::routes())
+        .merge(super::continue_browse::routes())
         .merge(account::routes())
         .merge(watch::routes())
         .merge(vodwatch::routes())
@@ -2548,6 +2549,211 @@ pub(crate) mod tests {
                 assert_eq!(st, StatusCode::OK, "{body}");
             }
         });
+    }
+
+    // --------------------------------------------------- continue watching
+
+    /// The movies and shows above, their pictures at the provider's
+    /// addresses, with nothing played or removed: other tests' marks on the
+    /// one test catalogue are cleared. The signed-in browser's cookie.
+    async fn seed_continue(s: &Shared) -> String {
+        let at = "http://provider.example/u/secret-user/p/secret-pass";
+        seed_movies(&format!("{at}/poster.jpg"), &format!("{at}/back.jpg"));
+        seed_series(
+            &format!("{at}/poster.jpg"),
+            &format!("{at}/back.jpg"),
+            &format!("{at}/still.jpg"),
+        );
+        crate::catalog::db::with_db(|c| {
+            c.execute("DELETE FROM vod_marks", [])?;
+            Ok(())
+        })
+        .unwrap();
+        enable(s, true).await;
+        browser_login(s).await
+    }
+
+    /// Plays `uri`'s movie or episode to 40 seconds of 100, as a page does.
+    async fn play_to_40(s: &Shared, token: &str, uri: &str) {
+        let body = serde_json::json!({"position": 40, "duration": 100});
+        let (st, m) = call(s, from_page("PUT", uri, Some(token), Some(body))).await;
+        assert_eq!(st, StatusCode::OK, "{uri}: {m}");
+    }
+
+    /// Each entry of a Continue watching answer as its kind and the id of
+    /// what it plays, in order.
+    fn entries(list: &serde_json::Value) -> Vec<(String, i64)> {
+        list.as_array()
+            .unwrap()
+            .iter()
+            .map(|e| {
+                let kind = e["kind"].as_str().unwrap().to_owned();
+                let id = match kind.as_str() {
+                    "movie" => e["movie"]["movieId"].as_i64(),
+                    _ => e["episode"]["episodeId"].as_i64(),
+                };
+                (kind, id.unwrap())
+            })
+            .collect()
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn continue_watching_over_http_names_no_provider() {
+        let _catalogue = movie_catalogue();
+        let s = server("continue");
+        let token = seed_continue(&s).await;
+        play_to_40(&s, &token, "/api/vod/movies/9100001/progress").await;
+        play_to_40(&s, &token, "/api/vod/episodes/9200101/progress").await;
+        let get = |uri: &str| from_page("GET", uri, Some(&token), None);
+
+        let (st, list) = call(&s, get("/api/vod/continue")).await;
+        assert_eq!(st, StatusCode::OK, "{list}");
+        assert_eq!(list.as_array().unwrap().len(), 2, "{list}");
+        let mut pictures = Vec::new();
+        for e in list.as_array().unwrap() {
+            for p in [&e["movie"]["posterUrl"], &e["series"]["posterUrl"], &e["episode"]["stillUrl"]] {
+                if let Some(p) = p.as_str() {
+                    pictures.push(p.to_owned());
+                }
+            }
+        }
+        assert_eq!(pictures.len(), 3, "{list}");
+        for p in &pictures {
+            assert!(p.starts_with("/api/") && !p.starts_with("http"), "{p}");
+        }
+        let (_, _, body) = call_raw(&s, get("/api/vod/continue")).await;
+        let text = String::from_utf8(body).unwrap();
+        assert!(!text.contains("provider.example") && !text.contains("secret"), "{text}");
+
+        // As many as asked for, never more than the list holds.
+        let (st, one) = call(&s, get("/api/vod/continue?limit=1")).await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(one.as_array().unwrap().len(), 1, "{one}");
+        let (st, all) = call(&s, get("/api/vod/continue?limit=100000")).await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(all, list);
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn a_browser_and_the_app_see_the_same_list() {
+        let _catalogue = movie_catalogue();
+        let s = server("continue-same");
+        let token = seed_continue(&s).await;
+        play_to_40(&s, &token, "/api/vod/movies/9100002/progress").await;
+        play_to_40(&s, &token, "/api/vod/episodes/9200102/progress").await;
+        play_to_40(&s, &token, "/api/vod/movies/9100001/progress").await;
+
+        let (st, list) = call(&s, from_page("GET", "/api/vod/continue", Some(&token), None)).await;
+        assert_eq!(st, StatusCode::OK, "{list}");
+        let app: Vec<(String, i64)> = crate::catalog::continue_reads::continue_watching(100)
+            .unwrap()
+            .into_iter()
+            .map(|e| match e {
+                crate::ipc::types::ContinueItemDto::Movie { movie, .. } => ("movie".into(), movie.movie_id),
+                crate::ipc::types::ContinueItemDto::Episode { episode, .. } => {
+                    ("episode".into(), episode.episode_id)
+                }
+            })
+            .collect();
+        assert_eq!(app.len(), 3, "{app:?}");
+        assert_eq!(entries(&list), app);
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn remove_over_http_keeps_the_place() {
+        let _catalogue = movie_catalogue();
+        let s = server("continue-remove");
+        let token = seed_continue(&s).await;
+        play_to_40(&s, &token, "/api/vod/movies/9100001/progress").await;
+        play_to_40(&s, &token, "/api/vod/episodes/9200101/progress").await;
+        let get = |uri: &str| from_page("GET", uri, Some(&token), None);
+        let del = |uri: &str| from_page("DELETE", uri, Some(&token), None);
+        let listed = |list: &serde_json::Value, kind: &str, id: i64| {
+            entries(list).contains(&(kind.to_owned(), id))
+        };
+
+        let (_, list) = call(&s, get("/api/vod/continue")).await;
+        assert!(listed(&list, "movie", 9_100_001), "{list}");
+        let (st, _, body) = call_raw(&s, del("/api/vod/continue/movie/9100001")).await;
+        assert_eq!(st, StatusCode::NO_CONTENT);
+        assert!(body.is_empty());
+        let (_, list) = call(&s, get("/api/vod/continue")).await;
+        assert!(!listed(&list, "movie", 9_100_001), "{list}");
+        assert!(listed(&list, "episode", 9_200_101), "{list}");
+        // Its place is kept.
+        let (st, m) = call(&s, get("/api/vod/movies/9100001/marks")).await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(m["position"], 40.0, "{m}");
+
+        // A show is removed by the show.
+        let (st, _, _) = call_raw(&s, del("/api/vod/continue/series/9200001")).await;
+        assert_eq!(st, StatusCode::NO_CONTENT);
+        let (_, list) = call(&s, get("/api/vod/continue")).await;
+        assert_eq!(list, serde_json::json!([]));
+
+        // Nothing else is a kind; a title not here is a 404.
+        let (st, e) = call(&s, del("/api/vod/continue/film/1")).await;
+        assert_eq!(st, StatusCode::BAD_REQUEST);
+        assert!(!e["error"].as_str().unwrap().contains("film"), "{e}");
+        for uri in ["/api/vod/continue/movie/9199999", "/api/vod/continue/series/9299999"] {
+            assert_eq!(call(&s, del(uri)).await.0, StatusCode::NOT_FOUND, "{uri}");
+        }
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn marks_can_be_read() {
+        let _catalogue = movie_catalogue();
+        let s = server("continue-marks");
+        let token = seed_continue(&s).await;
+        let get = |uri: &str| from_page("GET", uri, Some(&token), None);
+        let (st, m) = call(&s, get("/api/vod/episodes/9200101/marks")).await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(m["position"], serde_json::Value::Null, "{m}");
+        play_to_40(&s, &token, "/api/vod/episodes/9200101/progress").await;
+        let (st, m) = call(&s, get("/api/vod/episodes/9200101/marks")).await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(m["id"], 9_200_101);
+        assert_eq!(m["position"], 40.0, "{m}");
+        assert!(m["playedAt"].as_i64().is_some_and(|t| t > 0), "{m}");
+        play_to_40(&s, &token, "/api/vod/movies/9100001/progress").await;
+        let (st, m) = call(&s, get("/api/vod/movies/9100001/marks")).await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(m["position"], 40.0, "{m}");
+        assert!(m["playedAt"].is_i64(), "{m}");
+        for uri in ["/api/vod/episodes/9299999/marks", "/api/vod/movies/9199999/marks"] {
+            assert_eq!(call(&s, get(uri)).await.0, StatusCode::NOT_FOUND, "{uri}");
+        }
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn continue_watching_needs_a_sign_in() {
+        let _catalogue = movie_catalogue();
+        let s = server("continue-auth");
+        let token = seed_continue(&s).await;
+        play_to_40(&s, &token, "/api/vod/movies/9100001/progress").await;
+        for (method, uri) in [
+            ("GET", "/api/vod/continue"),
+            ("DELETE", "/api/vod/continue/movie/9100001"),
+            ("GET", "/api/vod/movies/9100001/marks"),
+            ("GET", "/api/vod/episodes/9200101/marks"),
+        ] {
+            assert_eq!(
+                call(&s, from_page(method, uri, None, None)).await.0,
+                StatusCode::UNAUTHORIZED,
+                "{method} {uri}"
+            );
+        }
+        // A removal by cookie needs the page's header, as every change does.
+        let mut r = from_page("DELETE", "/api/vod/continue/movie/9100001", Some(&token), None);
+        r.headers_mut().remove("x-zapper");
+        assert_eq!(call(&s, r).await.0, StatusCode::FORBIDDEN);
+        let (_, list) = call(&s, from_page("GET", "/api/vod/continue", Some(&token), None)).await;
+        assert_eq!(entries(&list), [("movie".to_owned(), 9_100_001)]);
     }
 
     // ------------------------------------------------------------- account
