@@ -22,7 +22,9 @@
 //! S01E02 - Title`), and [`find_in_name`] finds it there, with the same
 //! numbers and limits. It reads more than a guide's whole field may say, as
 //! media servers do: `S01E02` with `[ ._x-]` between the two, `1x02` (only
-//! after a show's name, so a `4x4` film stays a film), `Season 1 Episode 2`,
+//! after a show's name and with the episode zero-padded, so `4x4` and `Film
+//! 16x9` stay films; the guide's whole-field `3x5` is read as before),
+//! `Season 1 Episode 2`,
 //! and ranges straight after the episode (`-E02`, `-02`, `E02`, `-02-03`,
 //! `-S01E02`, `x02`; a spaced ` - ` only into a whole code, so `S01E02 -
 //! Title 3` is no range). The first from the left wins; it must not start
@@ -273,8 +275,10 @@ fn code_at(s: &str, i: usize) -> Option<(u32, u32, usize)> {
             if x - i > 2 || !b.get(x).is_some_and(|c| c.eq_ignore_ascii_case(&b'x')) {
                 return None;
             }
+            // The episode zero-padded, as such codes are written: `1x02`,
+            // where `4x4` and `16x9` are names.
             let (end, episode) = digits_at(s, x + 1);
-            if end - (x + 1) > 3 {
+            if !(2..=3).contains(&(end - (x + 1))) {
                 return None;
             }
             let (season, episode) = (season?, episode?);
@@ -447,6 +451,11 @@ mod tests {
         assert_eq!(m("A Show S01E02nd"), None);
         // The first from the left wins.
         assert_eq!(m("A Show S01E02 S03E04"), Some(("S01E02", 1, 2, None)));
+        // A playlist's `NxM` has its episode zero-padded; a guide's field
+        // is read as it always was.
+        assert_eq!(m("A Show 10x103"), Some(("10x103", 10, 103, None)));
+        assert_eq!(m("Desert 4x4"), None);
+        assert_eq!(from_onscreen("3x5"), se(Some(3), 5));
     }
 
     #[test]

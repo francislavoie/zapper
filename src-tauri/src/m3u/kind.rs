@@ -204,9 +204,9 @@ mod tests {
     /// dates, parts, absolute numbers, a resolution, a film.
     const NOT_EPISODES: &[&str] = &[
         "A Show S2024E01",
-        "SPORT 1",
+        "SUNDIAL 1",
         "Film 2019",
-        "BBC 1x",
+        "KTV 1x",
         "S1",
         "News 2024.11.07",
         "07.11.2024",
@@ -216,6 +216,8 @@ mod tests {
         "Film 1920x1080",
         "4x4",
         "4x4 Adventures",
+        "Film 16x9",
+        "Desert 4x4",
         "A Film (2021)",
     ];
 
