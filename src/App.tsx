@@ -146,7 +146,7 @@ export function App() {
   // Up next counts and moves on from here, whichever view is up; the cards
   // and the keys are handed where it stands.
   const upNext = useUpNext();
-  useGlobalKeys(state, dispatch, upNext);
+  useGlobalKeys(state, dispatch, upNext, stacked);
   useMenuCommands(dispatch);
   // The desktop's media keys, when Settings › Playback turns them on.
   useMediaControls(state, dispatch);

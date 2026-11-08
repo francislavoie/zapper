@@ -3,7 +3,7 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createAdvanceGuard, nextEpisode, upNextState } from "../logic/upNext.ts";
+import { createAdvanceGuard, nextEpisode, upNextState, upNextTakesEnter } from "../logic/upNext.ts";
 
 const ep = (id, season, episode, { end = null } = {}) => ({
   episodeId: id, seriesId: 1, season, episode, episodeEnd: end, title: null, plot: null, durationSecs: 120,
@@ -59,6 +59,26 @@ test("never for a movie, a special, a stop, an opening, or nothing known of what
   assert.equal(up({ ...finished(), finished: { ...finished().finished, id: 999 } }).kind, "none");
   // A cancel for another episode is not this one's.
   assert.equal(up(playing(100), { cancelled: 999 }).kind, "counting");
+});
+test("Enter is Play now only in the full player, and only when nothing else answers it", () => {
+  // A stand-in for an element: `owner` is what closest() finds (by the
+  // selector it is given), matching `is`.
+  const el = (owner) => ({
+    closest: (sel) => {
+      assert.match(sel, /button/);
+      return owner === null ? null : { matches: (s) => s.split(", ").includes(owner) };
+    },
+  });
+  const key = (target, o = {}) => ({ key: "Enter", defaultPrevented: false, target, ...o });
+  assert.equal(upNextTakesEnter(key(el(null)), true), true, "focus on nothing in particular");
+  assert.equal(upNextTakesEnter(key(el("body")), true), true, "the page");
+  assert.equal(upNextTakesEnter(key(el(".chrome")), true), true, "the player itself");
+  assert.equal(upNextTakesEnter(key(null), true), true);
+  assert.equal(upNextTakesEnter(key(el("button")), true), false, "Pause, focused after a click");
+  assert.equal(upNextTakesEnter(key(el("[role=option]")), true), false, "a list's row");
+  assert.equal(upNextTakesEnter(key(el(null), { defaultPrevented: true }), true), false, "already handled");
+  assert.equal(upNextTakesEnter(key(el(null)), false), false, "docked, stacked, or no card");
+  assert.equal(upNextTakesEnter(key(el(null), { key: " " }), true), false);
 });
 test("the advance is claimed once per episode moved on from", () => {
   const g = createAdvanceGuard();

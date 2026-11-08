@@ -723,8 +723,13 @@ export async function playNextEpisode(from: number, next: number): Promise<void>
   try {
     const r = await fetch(`/api/vod/episodes/${from}/marks`, requestInit("PUT", { watched: true }));
     if (r.status === 401) signedOutNow();
+    else if (!r.ok) {
+      // Not worth holding the next one for: its place, reported as it
+      // played, still says how far it got.
+      console.warn(`Up next: the episode moved on from was not marked watched (${r.status})`);
+    }
   } catch {
-    // Its place, reported as it played, still says how far it got.
+    console.warn("Up next: the episode moved on from could not be marked watched");
   }
   // Stopped, or something else played, while it was being marked.
   if (session !== s || !upNextAllowed(subject(), from)) throw refused;

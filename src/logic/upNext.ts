@@ -73,6 +73,33 @@ export function upNextState(
   return secondsLeft <= 0 ? { kind: "due", next } : { kind: "counting", next, secondsLeft };
 }
 
+/** What answers Enter itself when it has focus: a control, a link, a field,
+ *  a list's row or option, a tab, anything focusable. Enter there is its. */
+export const ENTER_OWNERS =
+  "button, a, input, textarea, select, [role=button], [role=option], [role=row], [role=tab], " +
+  "[contenteditable], [tabindex]";
+/** Where focus rests without a control of its own: the page, the player. */
+const NO_OWNER = "body, .chrome";
+
+interface KeyTarget {
+  closest(selector: string): { matches(selector: string): boolean } | null;
+}
+
+/** Whether Enter is Up next's Play now: only while the card shows in the
+ *  full player (not docked, not stacked over a list), and only when nothing
+ *  else has taken the key — not already handled, and not pressed on
+ *  something that answers Enter itself (Pause after a click, a list's row). */
+export function upNextTakesEnter(
+  e: { key: string; defaultPrevented: boolean; target: unknown },
+  cardInFullPlayer: boolean,
+): boolean {
+  if (e.key !== "Enter" || !cardInFullPlayer || e.defaultPrevented) return false;
+  const t = e.target as Partial<KeyTarget> | null;
+  if (!t || typeof t.closest !== "function") return true;
+  const owner = t.closest(ENTER_OWNERS);
+  return owner === null || owner.matches(NO_OWNER);
+}
+
 /** Moving on from an episode is claimed once: the countdown, Play now and
  *  Enter may all ask, and only the first is acted on. Opening the episode
  *  again (`reset`) is another playing of it, which may move on again. */

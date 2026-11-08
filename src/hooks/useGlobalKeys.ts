@@ -18,7 +18,7 @@ import { moviesAvailable, playingKind } from "../logic/movies";
 import { showsAvailable } from "../logic/shows";
 import { ALL_CATEGORIES, railItemKind } from "../logic/railItems";
 import { playerRecord } from "../logic/recordings";
-import type { UpNext } from "../logic/upNext";
+import { upNextTakesEnter, type UpNext } from "../logic/upNext";
 import { VOD_SKIP_SECONDS, isOnDemandKind } from "../logic/vodTransport";
 import { IS_MAC } from "../platform";
 import { run } from "../store";
@@ -26,13 +26,30 @@ import type { State } from "../store";
 import type { Action } from "../store";
 import type { Dispatch } from "react";
 
-export function useGlobalKeys(state: State, dispatch: Dispatch<Action>, upNext: UpNext) {
+export function useGlobalKeys(
+  state: State,
+  dispatch: Dispatch<Action>,
+  upNext: UpNext,
+  /** The player is across the top with a list under it (App's `stacked`). */
+  stacked: boolean,
+) {
   // The episode Up next would play: the same object while the count runs.
   const upNextEpisode = upNext.kind === "none" ? null : upNext.next;
   useEffect(() => {
     // The Up next card in the full player (docked, no key is taken from the
     // lists beside it: its buttons are in the tab order).
     const card = state.mode === "watch" && upNextEpisode ? state.shows.playing : null;
+    // Enter only where the card is the player's whole business: not over
+    // a list (stacked), where Enter is the list's, nor under anything open.
+    const cardInFullPlayer =
+      card !== null &&
+      !stacked &&
+      !state.paletteOpen &&
+      !state.settingsOpen &&
+      !state.aboutOpen &&
+      !state.updateOpen &&
+      !state.menuOpen &&
+      !state.videoMenu;
 
     const onKey = (e: KeyboardEvent) => {
       if (shortcutModifier(e, IS_MAC) && (e.key === "p" || e.key === "P")) {
@@ -142,22 +159,10 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>, upNext: 
       if (typingInto(e.target)) return;
       if (blocksPlainKey(e, IS_MAC)) return;
 
-      // Up next's Play now, in the full player, wherever focus is — except
-      // on the card's own buttons, which answer for themselves — and with
-      // nothing open over the player.
-      if (
-        e.key === "Enter" &&
-        card &&
-        upNextEpisode &&
-        !(e.target instanceof Element && e.target.closest(".upnext")) &&
-        !state.paletteOpen &&
-        !state.settingsOpen &&
-        !state.aboutOpen &&
-        !state.updateOpen &&
-        !state.menuOpen &&
-        !state.videoMenu
-      ) {
-        // Not also the click of whichever control has focus.
+      // Up next's Play now, in the full player, when nothing else has taken
+      // the key: a focused control (the card's own buttons, Pause after a
+      // click) or a list answers its Enter itself.
+      if (e.key === "Enter" && card && upNextEpisode && upNextTakesEnter(e, cardInFullPlayer)) {
         e.preventDefault();
         void playNextEpisode(dispatch, card, upNextEpisode);
         return;
@@ -326,6 +331,7 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>, upNext: 
     state.shows.summary,
     state.shows.playing,
     upNextEpisode,
+    stacked,
     state.settings.guideHours,
     state.settingsOpen,
     state.menuOpen,

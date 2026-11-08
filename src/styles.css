@@ -5091,6 +5091,16 @@ textarea.field {
   cursor: auto;
 }
 
+/* Read out, not seen. */
+.upnext-announce {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 .upnext-still {
   flex: none;
   align-self: flex-start;
