@@ -65,6 +65,14 @@ test("every letter shortcut the app handles is listed", () => {
   for (const k of new Set(handled)) assert.ok(listed.has(k), `${k} is handled but not listed`);
 });
 
+test("N goes to Shows, where the app has on-demand", () => {
+  const n = SHORTCUT_GROUPS.flatMap((g) => g.items).find((it) => it.keys.some((c) => c.includes("N")));
+  assert.ok(n, "N is listed");
+  assert.match(n.does, /Shows/);
+  assert.equal(n.needs, "onDemand");
+  assert.ok(keysSource.includes('e.key === "n"'), "N is handled");
+});
+
 test("rows read cleanly: something to press and something it does", () => {
   for (const g of SHORTCUT_GROUPS) {
     assert.ok(g.items.length > 0, g.title);
@@ -107,4 +115,11 @@ test("a browser lists the player's keys but not mpv's or the window's, and the a
   for (const gone of ["Previous channel", "volume", "the picture"]) {
     assert.ok(!cannotDo.includes(gone), gone);
   }
+});
+
+test("the arrows' step names both kinds of title", () => {
+  const does = SHORTCUT_GROUPS.flatMap((g) => g.items)
+    .filter((it) => it.keys.some((c) => c[0] === "←"))
+    .map((it) => it.does);
+  assert.ok(does.includes("Back or forward 5 seconds (10 in a movie or episode)"), does.join("; "));
 });

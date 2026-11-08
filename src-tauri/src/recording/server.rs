@@ -75,8 +75,8 @@ pub struct Server {
     stopping: AtomicBool,
     /// Browsers watching channels (`watch`).
     pub viewers: Viewers,
-    /// Browsers watching movies (`vodwatch`), each on a connection of its
-    /// own.
+    /// Browsers watching movies and episodes (`vodwatch`), each on a
+    /// connection of its own.
     pub vod: Arc<MovieViewers>,
     /// Where a channel's stream is, in place of the account's own answer:
     /// tests' fixture servers.
@@ -585,15 +585,15 @@ impl Server {
 
     /// Connections to the provider this service holds open right now: its
     /// feeds' (recordings and browsers watching channels) and the movies'
-    /// browsers watch. What the budget is asked with.
+    /// and episodes' browsers watch. What the budget is asked with.
     pub fn open_streams(&self) -> usize {
         self.hubs.open_count() + self.vod.conns().len()
     }
 
     /// The service's own connections as the sharing rules and the budget's
-    /// decisions see them: one per feed open, and one per movie viewer
-    /// (on its movie's feed, `vodwatch::movie_feed`, which never names a
-    /// channel).
+    /// decisions see them: one per feed open, and one per movie or episode
+    /// viewer (on its title's feed, `vodwatch::vod_feed`, which never names
+    /// a channel, and a movie's never an episode's).
     pub fn own_conns(&self) -> Vec<Conn> {
         let mut own = self.hubs.conns();
         own.extend(self.vod.conns());

@@ -12,7 +12,7 @@
 // Retry (see logic/ending.ts). A reconnect the backend is making by itself
 // can be cancelled.
 
-import { playChannel, playMovie } from "../actions";
+import { playChannel, playEpisode, playMovie } from "../actions";
 import { backend } from "../backend";
 import { endedActions, endedMessage, primaryLabel, reconnectMessage, retryStart, retryTarget } from "../logic/ending";
 import { run, useApp, useDispatch } from "../store";
@@ -27,7 +27,7 @@ export interface StreamEndedProps {
 }
 
 export function StreamEnded({ compact = false, onDismissed }: StreamEndedProps) {
-  const { player, nowChannel, movies } = useApp();
+  const { player, nowChannel, movies, shows } = useApp();
   const dispatch = useDispatch();
   const message = reconnectMessage(player) ?? endedMessage(player);
   const actions = endedActions(player);
@@ -41,6 +41,14 @@ export function StreamEnded({ compact = false, onDismissed }: StreamEndedProps) 
       const id = player.onDemand?.id ?? -1;
       if (movies.playing?.movieId === id) void playMovie(dispatch, movies.playing, retryStart(player));
       else void run(dispatch, "retry", backend.playMovie(id, retryStart(player)));
+      return;
+    }
+    if (target === "episode") {
+      // The same for an episode: the show and episode the store knows, so
+      // the titles and the marks follow; else by id. Where it was, either way.
+      const id = player.onDemand?.id ?? -1;
+      if (shows.playing?.episode.episodeId === id) void playEpisode(dispatch, shows.playing, retryStart(player));
+      else void run(dispatch, "retry", backend.playEpisode(id, retryStart(player)));
       return;
     }
     const id = player.streamId;

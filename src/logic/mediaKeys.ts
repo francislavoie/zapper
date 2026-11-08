@@ -8,9 +8,11 @@ import type {
   MediaPlayback,
   MediaSessionDto,
   PlaybackState,
+  PlayingEpisodeDto,
   ProgrammeDto,
 } from "../types";
 import { movieFacts } from "./movies.ts";
+import { episodeCode } from "./shows.ts";
 
 /** How the player's state reads to the desktop. Opening counts as playing,
  *  since that is what was asked for and it is a second away; a failed open
@@ -57,6 +59,26 @@ export function movieSessionOf(
   return {
     title: (movie.cleanName || movie.name).trim(),
     subtitle: facts || null,
+    artUrl: null,
+    playback: playbackOf(state),
+  };
+}
+
+/** The same for an episode: "{show} · S2 E4" as the title, the episode's own
+ *  title beneath. No art, for the poster's reason. */
+export function episodeSessionOf(
+  playing: {
+    series: Pick<PlayingEpisodeDto["series"], "cleanName" | "name">;
+    episode: Pick<PlayingEpisodeDto["episode"], "season" | "episode" | "episodeEnd" | "title">;
+  } | null,
+  state: PlaybackState,
+): MediaSessionDto | null {
+  if (!playing || state === "stopped") return null;
+  const { series, episode: e } = playing;
+  const show = (series.cleanName || series.name).trim();
+  return {
+    title: `${show} · ${episodeCode(e.season, e.episode, e.episodeEnd)}`,
+    subtitle: e.title?.trim() || null,
     artUrl: null,
     playback: playbackOf(state),
   };

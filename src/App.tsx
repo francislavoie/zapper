@@ -18,8 +18,16 @@ import {
   subscribeSync,
 } from "./backend";
 import { paintMockStill } from "./mock";
-import { loadCategories, loadMovieCategories, loadMoviesSummary, loadWatchLists } from "./actions";
+import {
+  loadCategories,
+  loadMovieCategories,
+  loadMoviesSummary,
+  loadShowCategories,
+  loadShowsSummary,
+  loadWatchLists,
+} from "./actions";
 import { moviesAvailable } from "./logic/movies";
+import { heldEpisode, showsAvailable } from "./logic/shows";
 import { errorMessage } from "./logic/async";
 import { useGlobalKeys } from "./hooks/useGlobalKeys";
 import { useMenuCommands } from "./hooks/useMenuCommands";
@@ -44,6 +52,9 @@ import { ProgrammeMenu } from "./components/ProgrammeMenu";
 import { MoviesList } from "./components/MoviesList";
 import { MovieSheet } from "./components/MovieSheet";
 import { MoviesRail } from "./components/MoviesRail";
+import { ShowsList } from "./components/ShowsList";
+import { ShowSheet } from "./components/ShowSheet";
+import { ShowsRail } from "./components/ShowsRail";
 import { RecordingsView } from "./components/RecordingsView";
 import { RecordingsWatcher } from "./components/RecordingsWatcher";
 import { Rail } from "./components/Rail";
@@ -87,11 +98,14 @@ export function App() {
   // The Movies tab, where the account has movies. The tab itself goes when it
   // has none, and a section left selected falls back to Live TV (below).
   const moviesOn = state.section === "movies" && moviesAvailable(state.movies.summary);
+  // And the Shows tab the same way.
+  const showsOn = state.section === "shows" && showsAvailable(state.shows.summary);
+  const onDemandOn = moviesOn || showsOn;
   // Recordings has no grid, so it only ever shows in the list view.
-  const recordingsShown = railItemKind(state.categoryId) === "recordings" && !guiding && !moviesOn;
+  const recordingsShown = railItemKind(state.categoryId) === "recordings" && !guiding && !onDemandOn;
   // The band is the playing channel, and the selected recording where
   // Recordings shows: a browser has no picture but still has recordings.
-  const bandShown = capabilities.playback || recordingsShown || moviesOn;
+  const bandShown = capabilities.playback || recordingsShown || moviesOn || showsOn;
 
   // The stacked layout is a preference, not a mode: it applies while watching,
   // and only when the window has the room. Too small a window falls back to
@@ -357,11 +371,83 @@ export function App() {
     hadMovie.current = openMovie !== null;
   }, [openMovie, dispatch]);
 
-  // Whether the account has movies decides if the Movies tab is shown at
-  // all, so it is asked for at launch and again after a sync (marks refresh
-  // it themselves).
+  // An episode is playing that the store does not know (a reloaded window),
+  // so it is looked up for its show's name and its own, with the movie's
+  // guards above: only while the store has none, and the answer dropped if
+  // the player has moved on (a second episode played quickly) or the store
+  // has learnt of one while it was on its way.
+  const openEpisode =
+    state.player.onDemand?.kind === "episode" ? state.player.onDemand.id : null;
+  const storeEpisode = state.shows.playing;
+  const knownEpisode = storeEpisode?.episode.episodeId ?? null;
+  const knownEpisodeNow = useRef(knownEpisode);
+  knownEpisodeNow.current = knownEpisode;
+  useEffect(() => {
+    if (openEpisode === null || knownEpisode !== null) return;
+    let live = true;
+    backend
+      .playingEpisode(openEpisode)
+      .then((p) => {
+        if (live && knownEpisodeNow.current === null && p.episode.episodeId === openEpisode) {
+          dispatch({ type: "shows/playing", playing: p });
+        }
+      })
+      .catch(() => {
+        // Without its names the player still plays it.
+      });
+    return () => {
+      live = false;
+    };
+  }, [openEpisode, knownEpisode, dispatch]);
+
+  // An episode the player stopped, or put another in place of: where it was
+  // left and whether it now counts as watched were written as it played, so
+  // its show's details, the lists and the rail's counts are read again. Its
+  // show is remembered while it plays, since by the time it stops the store
+  // may already hold the next one.
+  const lastEpisode = useRef<{ episodeId: number; seriesId: number | null } | null>(null);
+  useEffect(() => {
+    const was = lastEpisode.current;
+    if (was !== null && was.episodeId !== openEpisode) {
+      if (was.seriesId !== null) dispatch({ type: "shows/played", seriesId: was.seriesId });
+      else dispatch({ type: "shows/catalogue" });
+      void loadShowsSummary(dispatch, true);
+    }
+    if (openEpisode === null) {
+      lastEpisode.current = null;
+    } else {
+      const seriesId =
+        storeEpisode?.episode.episodeId === openEpisode
+          ? storeEpisode.series.seriesId
+          : was?.episodeId === openEpisode
+            ? was.seriesId
+            : null;
+      lastEpisode.current = { episodeId: openEpisode, seriesId };
+    }
+  }, [openEpisode, storeEpisode, dispatch]);
+
+  // The store's episode lasts while the player holds it: open, or just
+  // played to its end (what comes next needs it then). The player letting go
+  // of it (stopped, a channel, a movie, another episode) leaves the store
+  // with none, so the next one the player reports is looked up. Only on that
+  // transition, and only if it is still the store's: one this window has
+  // just asked for is not the one the player let go of.
+  const held = heldEpisode(state.player);
+  const heldBefore = useRef(held);
+  useEffect(() => {
+    const was = heldBefore.current;
+    heldBefore.current = held;
+    if (was !== null && was !== held && knownEpisodeNow.current === was) {
+      dispatch({ type: "shows/playing", playing: null });
+    }
+  }, [held, dispatch]);
+
+  // Whether the account has movies, or shows, decides if their tab is shown
+  // at all, so it is asked for at launch and again after a sync (marks
+  // refresh it themselves).
   useEffect(() => {
     void loadMoviesSummary(dispatch, catalogueRev > 0);
+    void loadShowsSummary(dispatch, catalogueRev > 0);
   }, [catalogueRev, dispatch]);
 
   // The Movies rail's categories, loaded when the tab first shows (a catalogue
@@ -384,6 +470,27 @@ export function App() {
   useEffect(() => {
     if (moviesKnownAbsent && state.section === "movies") dispatch({ type: "section", section: "live" });
   }, [moviesKnownAbsent, state.section, dispatch]);
+
+  // The Shows rail's categories, the same way: when the tab first shows, and
+  // again whenever the shows' lists are read again (a sync that changed them,
+  // another account's shows).
+  const showCategoriesStatus = state.shows.categories.status;
+  useEffect(() => {
+    if (showsOn && showCategoriesStatus === "idle") void loadShowCategories(dispatch);
+  }, [showsOn, showCategoriesStatus, dispatch]);
+  const showsRevision = state.shows.revision;
+  useEffect(() => {
+    if (showsRevision > 0 && showCategoriesStatus !== "idle") void loadShowCategories(dispatch, true);
+    // Only a new revision: the status changing is the load above, not news.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showsRevision, dispatch]);
+
+  // And an account with no shows has no tab for them either.
+  const showsKnownAbsent =
+    state.shows.summary.status === "ready" && !state.shows.summary.data.available;
+  useEffect(() => {
+    if (showsKnownAbsent && state.section === "shows") dispatch({ type: "section", section: "live" });
+  }, [showsKnownAbsent, state.section, dispatch]);
 
   // Only browse has a slot to dock into. The guide covers the stage with an
   // opaque grid, so the video goes back to filling the stage underneath it —
@@ -546,7 +653,7 @@ export function App() {
                 plays (a browser, for now) there is no picture to show, and
                 the list and the guide take its room. */}
             {bandShown ? <WatchBand videoRef={dockRef} picture={capabilities.playback} /> : null}
-            <Activity mode={state.railCollapsed || moviesOn ? "hidden" : "visible"}>
+            <Activity mode={state.railCollapsed || onDemandOn ? "hidden" : "visible"}>
               <Rail />
             </Activity>
             <Activity mode={state.railCollapsed || !moviesOn ? "hidden" : "visible"}>
@@ -554,11 +661,19 @@ export function App() {
                 <MoviesRail />
               </Rail>
             </Activity>
-            <Activity mode={guiding || recordingsShown || moviesOn ? "hidden" : "visible"}>
+            <Activity mode={state.railCollapsed || !showsOn ? "hidden" : "visible"}>
+              <Rail>
+                <ShowsRail />
+              </Rail>
+            </Activity>
+            <Activity mode={guiding || recordingsShown || onDemandOn ? "hidden" : "visible"}>
               <ChannelList />
             </Activity>
             <Activity mode={moviesOn ? "visible" : "hidden"}>
               <MoviesList />
+            </Activity>
+            <Activity mode={showsOn ? "visible" : "hidden"}>
+              <ShowsList />
             </Activity>
             <Activity mode={recordingsShown ? "visible" : "hidden"}>
               <RecordingsView />
@@ -569,6 +684,9 @@ export function App() {
             {/* Over the rail and the list, under the band. */}
             {moviesOn && !guiding && state.movies.sheetId !== null ? (
               <MovieSheet id={state.movies.sheetId} />
+            ) : null}
+            {showsOn && !guiding && state.shows.sheetId !== null ? (
+              <ShowSheet key={state.shows.sheetId} id={state.shows.sheetId} />
             ) : null}
           </div>
         </Activity>
@@ -600,7 +718,13 @@ export function App() {
               <PlayerChrome />
             </div>
             <div className="stacked-guide">
-              {moviesOn ? <MoviesList besideRail={false} /> : <GuideGrid />}
+              {moviesOn ? (
+                <MoviesList besideRail={false} />
+              ) : showsOn ? (
+                <ShowsList besideRail={false} />
+              ) : (
+                <GuideGrid />
+              )}
             </div>
           </div>
         ) : null}

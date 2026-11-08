@@ -50,8 +50,10 @@ import { listedFor, railItemKind } from "../logic/railItems";
 import { categoryNames } from "../logic/searchGroups";
 import { RecordingBand } from "./RecordingBand";
 import { moviesAvailable, playingKind } from "../logic/movies";
+import { showsAvailable } from "../logic/shows";
 import { run, useApp, useDispatch } from "../store";
 import { MovieBand, PlayingEnd } from "./MovieBand";
+import { ShowBand } from "./ShowBand";
 import { Fullscreen, ResizeHandle, Stop } from "./icons";
 import { MiniControls } from "./MiniControls";
 import { StreamEnded } from "./StreamEnded";
@@ -88,13 +90,19 @@ export function WatchBand({ videoRef, picture }: WatchBandProps) {
   const recordingChannel = useRecordingChannels(recordingList).get(recording?.streamId ?? -1) ?? null;
 
   // Which body the band has, first match: the picked recording; in the
-  // Movies tab the selected movie; a movie that is playing; the channel.
-  // Choosing a movie to look at changes this and nothing else — the picture
-  // beside it is whatever was already on.
+  // Movies tab the selected movie; in the Shows tab the selected show; a
+  // movie that is playing; an episode that is playing (its show's band);
+  // the channel.
+  // Choosing a movie or a show to look at changes this and nothing else —
+  // the picture beside it is whatever was already on.
   const inMovies = app.section === "movies" && moviesAvailable(app.movies.summary);
   const selectedMovie = inMovies ? app.movies.selected : null;
+  const inShows = app.section === "shows" && showsAvailable(app.shows.summary);
+  const selectedShow = inShows ? app.shows.selected : null;
   const movieOpen = playingKind(player) === "movie";
   const openMovieId = player.onDemand?.kind === "movie" ? player.onDemand.id : null;
+  const episodeOpen = playingKind(player) === "episode";
+  const playingEpisode = episodeOpen ? app.shows.playing : null;
 
   const live = player.state !== "stopped";
   const toWatch = () => dispatch({ type: "mode", mode: "watch" });
@@ -183,6 +191,12 @@ export function WatchBand({ videoRef, picture }: WatchBandProps) {
             movie={selectedMovie}
             playing={movieOpen && openMovieId === selectedMovie.movieId}
           />
+        ) : selectedShow ? (
+          <ShowBand
+            key={selectedShow.seriesId}
+            show={selectedShow}
+            playing={playingEpisode?.series.seriesId === selectedShow.seriesId ? playingEpisode : null}
+          />
         ) : movieOpen ? (
           app.movies.playing ? (
             <MovieBand key={app.movies.playing.movieId} movie={app.movies.playing} playing />
@@ -191,6 +205,24 @@ export function WatchBand({ videoRef, picture }: WatchBandProps) {
             <>
               <div className="watch-body">
                 <h2 className="watch-title-h">Playing a movie</h2>
+              </div>
+              <div className="watch-actions">
+                <PlayingEnd />
+              </div>
+            </>
+          )
+        ) : episodeOpen ? (
+          playingEpisode ? (
+            <ShowBand
+              key={playingEpisode.series.seriesId}
+              show={playingEpisode.series}
+              playing={playingEpisode}
+            />
+          ) : (
+            // Open, but not looked up yet: still stoppable.
+            <>
+              <div className="watch-body">
+                <h2 className="watch-title-h">Playing an episode</h2>
               </div>
               <div className="watch-actions">
                 <PlayingEnd />
@@ -217,7 +249,7 @@ export function WatchBand({ videoRef, picture }: WatchBandProps) {
             onPlay={() => void playChannel(dispatch, nowChannel)}
           />
         ) : (
-          <Idle picture={picture} movies={inMovies} />
+          <Idle picture={picture} movies={inMovies} shows={inShows} />
         )}
       </div>
 
@@ -310,7 +342,15 @@ export function WatchBand({ videoRef, picture }: WatchBandProps) {
 
 /** Nothing playing. The band explains what it is for rather than leaving an
  *  empty frame and letting the user guess. */
-function Idle({ picture, movies = false }: { picture: boolean; movies?: boolean }) {
+function Idle({
+  picture,
+  movies = false,
+  shows = false,
+}: {
+  picture: boolean;
+  movies?: boolean;
+  shows?: boolean;
+}) {
   if (!picture) {
     return (
       <div className="watch-idle">
@@ -318,7 +358,9 @@ function Idle({ picture, movies = false }: { picture: boolean; movies?: boolean 
         <p>
           {movies
             ? "Choose a movie to see its details."
-            : "Choose a recording to see what can be done with it."}
+            : shows
+              ? "Choose a show to see its details."
+              : "Choose a recording to see what can be done with it."}
         </p>
       </div>
     );

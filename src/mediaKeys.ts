@@ -13,6 +13,7 @@ import { backend, subscribeMediaKey } from "./backend";
 import { useClock } from "./hooks/useClock";
 import { useNowNext } from "./hooks/useNowNext";
 import {
+  episodeSessionOf,
   indexOfStream,
   intentOf,
   mediaSessionOf,
@@ -96,8 +97,8 @@ export function handleMediaKey(
   state: Pick<State, "player" | "nowChannel" | "pendingStreamId">,
   dispatch: Dispatch<Action>,
 ): void {
-  // Next and previous step through channels; with a movie on there is no
-  // channel to step from, and the one last browsed is not what is playing.
+  // Next and previous step through channels; with a movie or an episode on
+  // there is no channel to step from, and the one last browsed is not what is playing.
   const playing =
     state.player.onDemand !== null
       ? null
@@ -127,12 +128,16 @@ export function useMediaControls(state: State, dispatch: Dispatch<Action>): void
   // the desktop's panel to follow.
   const now = useClock(30_000);
   const { now: programme } = useNowNext(on ? state.nowChannel : null, now);
-  const movie = playingKind(state.player) === "movie" ? state.movies.playing : null;
+  const kind = playingKind(state.player);
+  const movie = kind === "movie" ? state.movies.playing : null;
+  const episode = kind === "episode" ? state.shows.playing : null;
   const session = !on
     ? null
     : movie
       ? movieSessionOf(movie, state.player.state)
-      : mediaSessionOf(state.nowChannel, programme, state.player.state);
+      : episode
+        ? episodeSessionOf(episode, state.player.state)
+        : mediaSessionOf(state.nowChannel, programme, state.player.state);
   const key = sessionKey(session);
   const latest = useRef(session);
   latest.current = session;

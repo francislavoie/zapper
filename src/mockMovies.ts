@@ -328,7 +328,7 @@ export function createMockMovies(host: MoviePlayerHost) {
     clock = window.setInterval(() => {
       const p = host.state();
       const m = p.onDemand;
-      if (p.state !== "playing" || !m) return;
+      if (p.state !== "playing" || m?.kind !== "movie") return;
       const position = Math.min(MOCK_DURATION, m.position + 1);
       positions.set(m.id, position);
       host.patch({ onDemand: onDemand(m.id, position, true) });
@@ -337,7 +337,7 @@ export function createMockMovies(host: MoviePlayerHost) {
 
   function seek(to: number) {
     const m = host.state().onDemand;
-    if (!m) return;
+    if (m?.kind !== "movie") return;
     const position = Math.max(0, Math.min(MOCK_DURATION, to));
     positions.set(m.id, position);
     host.patch({ onDemand: onDemand(m.id, position, true) });

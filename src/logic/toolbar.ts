@@ -136,14 +136,17 @@ export const SECTION_LABEL: Record<Section, string> = {
   shows: "Shows",
 };
 
-/** The sections beyond Live TV that the app has. Shows joins them later. */
-export const ON_DEMAND_SECTIONS: readonly Section[] = ["movies"];
+/** The sections beyond Live TV that the app has. */
+export const ON_DEMAND_SECTIONS = ["movies", "shows"] as const satisfies readonly Section[];
 
-/** The tabs to draw: Live TV always, and Movies where the app can show them
- *  and the account has some (the movies summary's `available`). */
-export function titleTabs(caps: Pick<Capabilities, "onDemand">, moviesAvailable: boolean): Section[] {
+/** The tabs to draw: Live TV always, and Movies and Shows where the app can
+ *  show them and the account has some (each summary's `available`). */
+export function titleTabs(
+  caps: Pick<Capabilities, "onDemand">,
+  available: { movies: boolean; shows: boolean },
+): Section[] {
   if (!caps.onDemand) return ["live"];
-  return ["live", ...ON_DEMAND_SECTIONS.filter((s) => s !== "movies" || moviesAvailable)];
+  return ["live", ...ON_DEMAND_SECTIONS.filter((s) => available[s])];
 }
 
 /** The view that goes with a section. The guide is Live TV's alone, and the

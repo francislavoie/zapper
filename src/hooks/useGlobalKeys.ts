@@ -15,9 +15,10 @@ import { exitFullscreen, toggleFullscreen } from "../fullscreen";
 import { fullscreenNow, refreshFullscreen } from "./useFullscreen";
 import { blocksPlainKey, shortcutModifier } from "../logic/keys";
 import { moviesAvailable, playingKind } from "../logic/movies";
+import { showsAvailable } from "../logic/shows";
 import { ALL_CATEGORIES, railItemKind } from "../logic/railItems";
 import { playerRecord } from "../logic/recordings";
-import { VOD_SKIP_SECONDS } from "../logic/vodTransport";
+import { VOD_SKIP_SECONDS, isOnDemandKind } from "../logic/vodTransport";
 import { IS_MAC } from "../platform";
 import { run } from "../store";
 import type { State } from "../store";
@@ -63,6 +64,9 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
         } else if (state.movies.menu) {
           // The Movies list's sort or years menu.
           dispatch({ type: "movies/menu", menu: null });
+        } else if (state.shows.menu) {
+          // The Shows list's.
+          dispatch({ type: "shows/menu", menu: null });
         } else if (state.videoMenu) {
           // The picture's menu: opened last, like the others. A submenu
           // inside it that has focus closes itself first (see SubMenu).
@@ -87,6 +91,14 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
           // A movie's Details, over the rail and the list: the first of the
           // panes to go (and only while it shows, not behind the player).
           dispatch({ type: "movies/sheet", id: null });
+        } else if (
+          state.mode === "browse" &&
+          state.section === "shows" &&
+          state.shows.sheetId !== null &&
+          showsAvailable(state.shows.summary)
+        ) {
+          // A show's sheet, the same way.
+          dispatch({ type: "shows/sheet", id: null });
         } else if (fullscreenNow()) {
           // Fullscreen is the one thing Escape means everywhere else on the
           // desktop, so it is the whole meaning here: leave fullscreen and
@@ -101,7 +113,9 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
         } else if (state.section === "movies" && state.movies.query !== "") {
           // A search belongs to the tab it was typed on.
           dispatch({ type: "movies/query", text: "" });
-        } else if (state.section !== "movies" && state.query !== "") {
+        } else if (state.section === "shows" && state.shows.query !== "") {
+          dispatch({ type: "shows/query", text: "" });
+        } else if (state.section !== "movies" && state.section !== "shows" && state.query !== "") {
           dispatch({ type: "query", text: "" });
         } else if (state.mode === "guide") {
           dispatch({ type: "mode", mode: "browse" });
@@ -123,9 +137,13 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
         // focus on the next frame, once it is mounted.
         if (state.mode !== "browse") dispatch({ type: "mode", mode: "browse" });
         // Recordings has no channel search: the list is hidden behind it, so
-        // go to the channels first. The Movies tab has a search of its own,
-        // which is the one this reaches while that tab shows.
-        if (state.section !== "movies" && railItemKind(state.categoryId) === "recordings") {
+        // go to the channels first. The Movies and Shows tabs have a search
+        // of their own, which is the one this reaches while that tab shows.
+        if (
+          state.section !== "movies" &&
+          state.section !== "shows" &&
+          railItemKind(state.categoryId) === "recordings"
+        ) {
           dispatch({ type: "selectCategory", id: ALL_CATEGORIES });
         }
         requestAnimationFrame(focusSearch);
@@ -137,6 +155,13 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
       if ((e.key === "m" || e.key === "M") && capabilities.onDemand && moviesAvailable(state.movies.summary)) {
         e.preventDefault();
         dispatch({ type: "section", section: "movies" });
+        return;
+      }
+
+      // The Shows tab, the same way.
+      if ((e.key === "n" || e.key === "N") && capabilities.onDemand && showsAvailable(state.shows.summary)) {
+        e.preventDefault();
+        dispatch({ type: "section", section: "shows" });
         return;
       }
 
@@ -198,7 +223,8 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
 
       // The rest only mean anything with a stream open.
       if (state.player.state === "stopped") return;
-      const movie = playingKind(state.player) === "movie";
+      // A movie or an episode: longer skips, and no live edge or programme.
+      const movie = isOnDemandKind(playingKind(state.player));
 
       // Theater: the picture filling the window, without going fullscreen
       // (that is F). YouTube's key for the same idea, so the hand already
@@ -238,7 +264,7 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
           break;
         case "l":
         case "L":
-          // A movie has no live edge.
+          // A movie or an episode has no live edge.
           if (movie) break;
           e.preventDefault();
           void run(dispatch, "seek to live", backend.seekLive());
@@ -262,6 +288,10 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
     state.movies.sheetId,
     state.movies.query,
     state.movies.summary,
+    state.shows.menu,
+    state.shows.sheetId,
+    state.shows.query,
+    state.shows.summary,
     state.settings.guideHours,
     state.settingsOpen,
     state.menuOpen,

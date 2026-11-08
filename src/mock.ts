@@ -13,6 +13,7 @@ import { rankAlternatives } from "./logic/alternatives";
 import { patternFor, place, validatePattern } from "./logic/naming";
 import { parsePort, passwordProblem } from "./logic/network";
 import { createMockMovies } from "./mockMovies";
+import { createMockShows } from "./mockShows";
 import type {
   AccountCandidateDto,
   AccountDto,
@@ -1540,10 +1541,13 @@ const mockMovies = createMockMovies({
   current: () => openSeq,
 });
 
-/** The shows' calls until the mock has shows: refused, as a backend without
- *  them would. */
-const showsNotYet = (..._args: unknown[]): Promise<never> =>
-  Promise.reject(new Error("not yet"));
+/** The show catalogue and what plays an episode, on the same player. */
+const mockShows = createMockShows({
+  state: () => playerEmitter.last,
+  patch: patchPlayer,
+  open: () => ++openSeq,
+  current: () => openSeq,
+});
 
 export const mockApi = {
   categories: async () => {
@@ -1809,6 +1813,7 @@ export const mockApi = {
 
   seekRelative: async (seconds: number) => {
     const p = playerEmitter.last;
+    if (p.onDemand?.kind === "episode") return mockShows.seekRelative(seconds);
     if (p.onDemand) return mockMovies.seekRelative(seconds);
     const behindLive = Math.max(
       0,
@@ -2110,18 +2115,21 @@ export const mockApi = {
   similarMovies: mockMovies.similarMovies,
   setMovieMarks: mockMovies.setMovieMarks,
   playMovie: mockMovies.playMovie,
-  seekTo: mockMovies.seekTo,
+  // Whichever kind of title is open moves.
+  seekTo: (seconds: number) =>
+    playerEmitter.last.onDemand?.kind === "episode"
+      ? mockShows.seekTo(seconds)
+      : mockMovies.seekTo(seconds),
 
-  // Shows: the mock's catalogue of them is still to come.
-  showsSummary: showsNotYet,
-  seriesCategories: showsNotYet,
-  series: showsNotYet,
-  searchSeries: showsNotYet,
-  seriesDetails: showsNotYet,
-  setSeriesMarks: showsNotYet,
-  setEpisodeMarks: showsNotYet,
-  playingEpisode: showsNotYet,
-  playEpisode: showsNotYet,
+  showsSummary: mockShows.showsSummary,
+  seriesCategories: mockShows.seriesCategories,
+  series: mockShows.series,
+  searchSeries: mockShows.searchSeries,
+  seriesDetails: mockShows.seriesDetails,
+  setSeriesMarks: mockShows.setSeriesMarks,
+  setEpisodeMarks: mockShows.setEpisodeMarks,
+  playingEpisode: mockShows.playingEpisode,
+  playEpisode: mockShows.playEpisode,
 
   forgetActivity: async (streamId: number) => {
     await delay(20);

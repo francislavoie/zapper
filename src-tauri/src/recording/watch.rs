@@ -45,14 +45,16 @@
 //! on the channel it plays on an account with no connection to spare, after
 //! it has let its own connection go.
 //!
-//! **Movies** are watched through [`super::vodwatch`], on connections of
-//! their own that count among the service's ([`Server::own_conns`]): the
-//! budget, "anyway" and the limits below are the same for both.
+//! **Movies and episodes** are watched through [`super::vodwatch`], on
+//! connections of their own that count among the service's
+//! ([`Server::own_conns`]), on feeds that never name a channel
+//! ([`vod_item_of`]): the budget, "anyway" and the limits below are the
+//! same for all.
 //!
 //! **Limits.** A device may hold [`PER_DEVICE`] viewers and start
 //! [`STARTS_PER_MINUTE`] a minute; the service holds [`MAX_VIEWERS`] in
-//! all, channels and movies together. A viewer nobody reads from for
-//! [`IDLE`] is let go.
+//! all, channels, movies and episodes together. A viewer nobody reads from
+//! for [`IDLE`] is let go.
 
 use std::collections::{HashMap, VecDeque};
 use std::pin::Pin;
@@ -80,8 +82,9 @@ use super::schedule::window;
 use super::server::Server;
 use super::sharing::{Conn, Rider};
 use super::tsprobe::{self, Can, How, Plan, StreamInfo, Tables};
-use super::vodwatch::movie_of;
+use super::vodwatch::vod_item_of;
 use super::{livemux, now, store};
+use crate::catalog::vod_store::ItemKind;
 
 /// Viewers one device may hold at once: a page, and a second tab or a
 /// moment of overlap while changing channel.
@@ -305,7 +308,7 @@ impl Viewers {
     }
 
     /// Whether `device` may start another viewer now, with `more_here` and
-    /// `more_in_all` movie viewers besides these (`super::vodwatch`): the
+    /// `more_in_all` on-demand viewers besides these (`super::vodwatch`): the
     /// limits count both. Counts the start.
     pub(super) fn admit(
         &self,
@@ -598,14 +601,28 @@ pub fn routes() -> Router<Arc<Server>> {
         .route("/api/stream/{id}", get(stream))
 }
 
-/// A channel's name, or a movie's for a movie viewer's feed, for a
-/// sentence.
+/// A channel's name, or a movie's or an episode's for an on-demand
+/// viewer's feed (`“A Show” S2 E4`), for a sentence.
 fn channel_name(stream_id: i64) -> String {
-    if let Some(movie) = movie_of(stream_id) {
-        return crate::catalog::reads::movies_by_ids(&[movie])
+    match vod_item_of(stream_id) {
+        Some(item) if item.kind == ItemKind::Episode => {
+            return crate::catalog::db::with_db(|c| {
+                crate::catalog::series_store::episode_by_id(c, item.id)
+            })
             .ok()
-            .and_then(|v| v.into_iter().next())
-            .map_or_else(|| "a movie".to_string(), |m| format!("“{}”", m.clean_name));
+            .flatten()
+            .map_or_else(
+                || "an episode".to_string(),
+                |(show, e)| format!("“{}” S{} E{}", show.clean_name, e.season, e.episode),
+            );
+        }
+        Some(item) => {
+            return crate::catalog::reads::movies_by_ids(&[item.id])
+                .ok()
+                .and_then(|v| v.into_iter().next())
+                .map_or_else(|| "a movie".to_string(), |m| format!("“{}”", m.clean_name));
+        }
+        None => {}
     }
     crate::catalog::reads::channels_by_ids(&[stream_id])
         .ok()
@@ -618,12 +635,13 @@ fn names(feeds: &[i64]) -> String {
     n.join(", ")
 }
 
-/// The feeds among `feeds` a viewer could join: channels, not movies.
+/// The feeds among `feeds` a viewer could join: channels, not movies or
+/// episodes.
 fn channels(feeds: &[i64]) -> Vec<i64> {
     feeds
         .iter()
         .copied()
-        .filter(|&f| movie_of(f).is_none())
+        .filter(|&f| vod_item_of(f).is_none())
         .collect()
 }
 
@@ -688,8 +706,8 @@ fn refusal_response(s: &Server, r: Refusal) -> Response {
 }
 
 /// Whether a viewer may have a connection of its own: the budget asked with
-/// every connection the service holds, channels' and movies' alike
-/// ([`Server::own_conns`]). On "anyway" (or for this device's own other
+/// every connection the service holds, channels', movies' and episodes'
+/// alike ([`Server::own_conns`]). On "anyway" (or for this device's own other
 /// viewer) the viewers in the way are ended first, and their connection
 /// given a moment to close. `Err`: the answer to send instead.
 pub(super) async fn may_connect(
@@ -703,8 +721,9 @@ pub(super) async fn may_connect(
     let mut decision = decide(slots, &conns, released, anyway);
     // This browser's own other viewer (a page reloaded, a second tab) is
     // not another device to ask about: the newer one has it, as the app's
-    // one player would. A movie's is named by its rider: another device
-    // may watch the same movie, and is never the one ended for this.
+    // one player would. A movie's or an episode's is named by its rider:
+    // another device may watch the same title, and is never the one ended
+    // for this.
     let mut my_movie = None;
     if let Decision::Refuse(Refusal::Viewers { .. }) = decision {
         if let Some(feed) = s.viewers.only_mine(&conns, device) {
@@ -717,13 +736,13 @@ pub(super) async fn may_connect(
     match decision {
         Decision::Go => Ok(()),
         Decision::TakeOver(feed) => {
-            // Two browsers may each watch the same movie, each on a
-            // connection of its own: one is ended, so wait for one fewer.
+            // Two browsers may each watch the same movie or episode, each on
+            // a connection of its own: one is ended, so wait for one fewer.
             let on_it = |s: &Server| s.own_conns().iter().filter(|c| c.feed == feed).count();
             let before = on_it(s);
             match my_movie {
                 Some(rider) => s.vod.end_rider(rider),
-                None if movie_of(feed).is_some() => s.vod.end(feed),
+                None if vod_item_of(feed).is_some() => s.vod.end(feed),
                 None => s.viewers.take_over(feed),
             }
             // The connection closes once its viewers have let go; the
@@ -1467,5 +1486,28 @@ mod tests {
         // One in its padding after would have given way: the viewer is.
         let padding = conn(7, vec![rec(2, 1000, 1300), Rider::viewer(-1)]);
         assert_eq!(notice(900, &padding, &[7], &d, Some(1), 1), Some(&d[0]));
+    }
+
+    #[test]
+    fn an_episode_viewers_feed_is_named_by_its_show_season_and_episode() {
+        use crate::catalog::db;
+        use crate::catalog::vod_store::VodItem;
+        use crate::recording::vodwatch::vod_feed;
+        let _catalogue = db::movie_catalogue();
+        db::install_test_db();
+        db::with_db(|c| {
+            c.execute_batch(
+                "INSERT OR REPLACE INTO series (series_id, name, clean_name, added)
+                   VALUES (9130900, 'A Show', 'A Show', 0);
+                 INSERT OR REPLACE INTO episodes (episode_id, series_id, season, episode, title)
+                   VALUES (9130904, 9130900, 2, 4, 'Night Shift');",
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        let feed = vod_feed(VodItem::episode(9_130_904));
+        assert_eq!(channel_name(feed), "“A Show” S2 E4");
+        assert_eq!(channels(&[5, feed, -9]), vec![5], "never one to join");
+        assert_eq!(channel_name(vod_feed(VodItem::episode(9_139_999))), "an episode");
     }
 }

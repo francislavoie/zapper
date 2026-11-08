@@ -73,6 +73,10 @@ export interface OnDemandListProps<T> {
   besideRail: boolean;
   /** "movie" | "show": the start of the row ids, made unique per list. */
   idPrefix: string;
+  /** "movies" | "shows": the pane's and the list's own classes
+   *  (`movies-pane`, `movies-viewport`), so each kind's can be told apart
+   *  when both are in the page. */
+  kindClass: string;
   /** The .list-cols / row grid class. */
   colsClass: string;
   /** What the error line says before the error: "Movies unavailable". */
@@ -111,8 +115,8 @@ export interface OnDemandListProps<T> {
     select(t: T): void;
     open(t: T): void;
     /** Enter: open the selected title's sheet, wherever it was selected
-     *  from. Without it Enter opens the selected title if the list holds it. */
-    openSelected?(): void;
+     *  from (a sheet's shelf picks titles this list may not hold). */
+    openSelected(): void;
     query(text: string): void;
     menu(m: MoviesMenu | null): void;
     view(v: MoviesView): void;
@@ -284,17 +288,8 @@ export function OnDemandList<T extends object>(p: OnDemandListProps<T>) {
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     if (e.key === "Enter") {
       if (selectedId !== null) {
-        if (on.openSelected) {
-          e.preventDefault();
-          on.openSelected();
-        } else {
-          const i = currentIndex(true);
-          const t = i >= 0 ? rowAt(i) : undefined;
-          if (t !== undefined) {
-            e.preventDefault();
-            on.open(t);
-          }
-        }
+        e.preventDefault();
+        on.openSelected();
       }
       return;
     }
@@ -424,7 +419,7 @@ export function OnDemandList<T extends object>(p: OnDemandListProps<T>) {
   const empty = total === 0 && !loading && !error;
 
   return (
-    <main className="list-pane movies-pane">
+    <main className={`list-pane ${p.kindClass}-pane`}>
       <div className="list-head">
         {p.besideRail ? <RailToggle /> : null}
         <span className="list-title" data-tip-overflow="">
@@ -512,7 +507,7 @@ export function OnDemandList<T extends object>(p: OnDemandListProps<T>) {
       ) : null}
 
       <div
-        className={`viewport movies-viewport ${posters ? "posters" : ""} ${selectedId !== null ? "has-sel" : ""}`}
+        className={`viewport ${p.kindClass}-viewport ${posters ? "posters" : ""} ${selectedId !== null ? "has-sel" : ""}`}
         ref={viewportRef}
         role="listbox"
         aria-label={heading}

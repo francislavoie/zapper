@@ -4,6 +4,11 @@
 //! hear about it rarely, but never lose more than a few seconds of it. The
 //! saver watches those reports and says when a write is due.
 
+use anyhow::Result;
+use rusqlite::Connection;
+
+use crate::catalog::vod_store::{self, Marks, VodItem};
+
 /// How much play passes between writes.
 pub const SAVE_EVERY_SECS: f64 = 10.0;
 /// Past this fraction of a title it counts as started ("in progress").
@@ -29,16 +34,18 @@ pub fn is_started(position: f64, duration: Option<f64>) -> bool {
     }
 }
 
+/// A place to write down: a movie's or an episode's, never mistaken for
+/// the other kind's with the same id.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ProgressWrite {
-    pub id: i64,
+    pub item: VodItem,
     pub position: f64,
     pub duration: Option<f64>,
 }
 
 #[derive(Debug, Default)]
 pub struct ProgressSaver {
-    id: Option<i64>,
+    item: Option<VodItem>,
     position: Option<f64>,
     duration: Option<f64>,
     /// The position has moved since the last write.
@@ -62,17 +69,17 @@ impl ProgressSaver {
     /// pauses, and once when the title changes (for the one just left).
     pub fn observe(
         &mut self,
-        id: Option<i64>,
+        item: Option<VodItem>,
         position: Option<f64>,
         duration: Option<f64>,
         playing: bool,
         now: f64,
     ) -> Option<ProgressWrite> {
         let mut out = None;
-        if id != self.id {
+        if item != self.item {
             out = self.flush();
             *self = Self {
-                id,
+                item,
                 ..Self::default()
             };
         } else if self.playing {
@@ -112,11 +119,17 @@ impl ProgressSaver {
         }
         self.dirty = false;
         Some(ProgressWrite {
-            id: self.id?,
+            item: self.item?,
             position: self.position?,
             duration: self.duration,
         })
     }
+}
+
+/// Writes `w` down as of `at` (seconds): a movie's place on the movie, an
+/// episode's on the episode (and, through it, its show).
+pub fn write_progress(conn: &Connection, w: ProgressWrite, at: i64) -> Result<Marks> {
+    vod_store::record_progress(conn, w.item.kind, w.item.id, w.position, w.duration, at)
 }
 
 #[cfg(test)]
@@ -128,7 +141,7 @@ mod tests {
         let mut s = ProgressSaver::new();
         let mut at = Vec::new();
         for t in 0..=25 {
-            if s.observe(Some(1), Some(t as f64), Some(100.0), true, t as f64)
+            if s.observe(Some(VodItem::movie(1)), Some(t as f64), Some(100.0), true, t as f64)
                 .is_some()
             {
                 at.push(t);
@@ -141,31 +154,69 @@ mod tests {
     fn a_pause_saves_once_and_a_new_title_saves_the_last_one() {
         let mut s = ProgressSaver::new();
         assert!(s
-            .observe(Some(1), Some(5.0), Some(100.0), true, 0.0)
+            .observe(Some(VodItem::movie(1)), Some(5.0), Some(100.0), true, 0.0)
             .is_none());
         let w = s
-            .observe(Some(1), Some(6.0), Some(100.0), false, 1.0)
+            .observe(Some(VodItem::movie(1)), Some(6.0), Some(100.0), false, 1.0)
             .unwrap();
-        assert_eq!((w.id, w.position), (1, 6.0));
+        assert_eq!((w.item, w.position), (VodItem::movie(1), 6.0));
         assert!(s
-            .observe(Some(1), Some(6.0), Some(100.0), false, 2.0)
+            .observe(Some(VodItem::movie(1)), Some(6.0), Some(100.0), false, 2.0)
             .is_none());
         assert!(s.flush().is_none());
 
-        s.observe(Some(1), Some(7.0), Some(100.0), true, 3.0);
+        s.observe(Some(VodItem::movie(1)), Some(7.0), Some(100.0), true, 3.0);
         let w = s
-            .observe(Some(2), Some(0.0), Some(50.0), true, 4.0)
+            .observe(Some(VodItem::movie(2)), Some(0.0), Some(50.0), true, 4.0)
             .unwrap();
-        assert_eq!((w.id, w.position, w.duration), (1, 7.0, Some(100.0)));
+        assert_eq!((w.item, w.position, w.duration), (VodItem::movie(1), 7.0, Some(100.0)));
     }
 
     #[test]
     fn stopping_flushes_what_was_not_yet_saved() {
         let mut s = ProgressSaver::new();
-        s.observe(Some(3), Some(4.0), None, true, 0.0);
-        s.observe(Some(3), Some(5.0), None, true, 1.0);
-        assert_eq!(s.flush().map(|w| (w.id, w.position)), Some((3, 5.0)));
+        s.observe(Some(VodItem::movie(3)), Some(4.0), None, true, 0.0);
+        s.observe(Some(VodItem::movie(3)), Some(5.0), None, true, 1.0);
+        assert_eq!(s.flush().map(|w| (w.item, w.position)), Some((VodItem::movie(3), 5.0)));
         assert!(s.flush().is_none());
+    }
+
+    #[test]
+    fn movie_7_then_episode_7_is_a_change_of_title() {
+        let mut s = ProgressSaver::new();
+        let movie = VodItem::movie(7);
+        let episode = VodItem::episode(7);
+        assert!(s.observe(Some(movie), Some(30.0), Some(100.0), true, 0.0).is_none());
+        let w = s
+            .observe(Some(episode), Some(0.0), Some(50.0), true, 1.0)
+            .expect("the movie's place, written as the episode takes over");
+        assert_eq!((w.item, w.position, w.duration), (movie, 30.0, Some(100.0)));
+        s.observe(Some(episode), Some(5.0), Some(50.0), true, 2.0);
+        assert_eq!(s.flush().map(|w| w.item), Some(episode));
+    }
+
+    #[test]
+    fn progress_of_episode_7_never_touches_movie_7() {
+        let c = crate::catalog::open_in_memory().unwrap();
+        let marks = write_progress(
+            &c,
+            ProgressWrite {
+                item: VodItem::episode(7),
+                position: 95.0,
+                duration: Some(100.0),
+            },
+            1,
+        )
+        .unwrap();
+        assert!(marks.watched);
+        let rows: Vec<(String, i64, bool)> = c
+            .prepare("SELECT kind, item_id, watched_at IS NOT NULL FROM vod_marks")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(rows, [("episode".to_string(), 7, true)]);
     }
 
     #[test]

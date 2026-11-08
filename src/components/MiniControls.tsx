@@ -27,7 +27,7 @@ import { refreshFullscreen } from "../hooks/useFullscreen";
 import { useVideoGestures } from "../hooks/useVideoGestures";
 import { DOUBLE_CLICK_MS, clickIntent } from "../logic/gestures";
 import { playingKind } from "../logic/movies";
-import { VOD_SKIP_SECONDS } from "../logic/vodTransport";
+import { VOD_SKIP_SECONDS, isOnDemandKind } from "../logic/vodTransport";
 import { volumeAfterWheel } from "../logic/volume";
 import { run, useApp, useDispatch } from "../store";
 import { TransportBar } from "./TransportBar";
@@ -42,7 +42,7 @@ export interface MiniControlsProps {
 
 export function MiniControls({ onActivate }: MiniControlsProps) {
   const { player, mode } = useApp();
-  const isMovie = playingKind(player) === "movie";
+  const isMovie = isOnDemandKind(playingKind(player));
   const dispatch = useDispatch();
   // Hidden until the pointer arrives: a stream starting is not a reason to
   // put a panel over the picture.
@@ -69,7 +69,8 @@ export function MiniControls({ onActivate }: MiniControlsProps) {
   };
 
   const gestures = useVideoGestures({
-    // A movie has no live edge to be held back by: forward always seeks.
+    // A movie or an episode has no live edge to be held back by: forward
+    // always seeks.
     atLiveEdge: isMovie ? false : player.atLiveEdge,
     muted: player.muted,
     onFullscreen: toFullscreen,

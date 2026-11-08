@@ -1947,6 +1947,47 @@ select option {
   color: var(--good);
 }
 
+/* A show's row: the movie row's layout, with the seasons where the length
+   was. */
+.show-cols,
+.show-row {
+  --list-cols: 1.625rem minmax(0, 1fr) 3.5rem 4.5rem 4rem 2.75rem;
+}
+
+.show-cols > :nth-child(3),
+.show-cols > :nth-child(4),
+.show-cols > :nth-child(5),
+.show-row-year,
+.show-row-seasons,
+.show-row-rating {
+  text-align: right;
+}
+
+.show-row {
+  cursor: default;
+}
+
+.show-row-year,
+.show-row-seasons,
+.show-row-rating {
+  font-size: 0.75rem;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.show-row-marks {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.25rem;
+  font-size: 0.75rem;
+  color: var(--dimmer);
+}
+
+.show-row-mark.watched {
+  color: var(--good);
+}
+
 .movie-badge {
   font-size: 0.5625rem;
 }
@@ -2069,12 +2110,14 @@ select option {
 /* The list is one focus stop with the keys moving the selection inside it;
    the outline would ring the whole pane once a row is selected, and that row says
    where the keys are; until then the ring is all there is. */
-.movies-viewport.has-sel:focus-visible {
+.movies-viewport.has-sel:focus-visible,
+.shows-viewport.has-sel:focus-visible {
   outline: none;
 }
 
 /* Stacked under the picture, in the guide's place. */
-.stacked-guide > .movies-pane {
+.stacked-guide > .movies-pane,
+.stacked-guide > .shows-pane {
   position: absolute;
   inset: 0;
 }
@@ -6669,6 +6712,7 @@ html[data-backend="web"] {
 /* ------------------------------------------------------ movie band, sheet */
 
 .movie-band-facts,
+.show-band-facts,
 .sheet-facts {
   display: flex;
   flex-wrap: wrap;
@@ -6706,19 +6750,23 @@ html[data-backend="web"] {
 }
 
 .movie-band-plot,
-.movie-band-people {
+.movie-band-people,
+.show-band-plot,
+.show-band-people {
   max-width: 70ch;
 }
 
 /* Over the rail and the list, both columns of the grid and its second row:
    the band above stays in sight. */
-.browse > .movie-sheet {
+.browse > .movie-sheet,
+.browse > .show-sheet {
   grid-row: 2;
   grid-column: 1 / -1;
   z-index: 2;
 }
 
-.movie-sheet {
+.movie-sheet,
+.show-sheet {
   position: relative;
   min-height: 0;
   overflow-x: hidden;
@@ -6871,4 +6919,243 @@ html[data-backend="web"] {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* ------------------------------------------------------- show band, sheet */
+
+/* Beside a Play that cannot play: why. */
+.show-band-none,
+.show-sheet-none {
+  font-size: 0.75rem;
+  color: var(--dimmer);
+}
+
+.show-sheet-none {
+  position: relative;
+  margin: 0;
+  padding: 1.5rem 2rem;
+}
+
+/* The seasons stay at the top of the sheet while a long season scrolls
+   under them; the episode list keeps the row it moves to clear of them
+   (scroll-padding-top, which it reads). */
+.show-sheet {
+  scroll-padding-top: 3.25rem;
+}
+
+.seasons {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  height: 3.25rem;
+  margin-top: 1.25rem;
+  padding: 0 2rem;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--line);
+}
+
+/* More seasons than fit scroll sideways; the counts stay at the end. */
+.seasons-tabs {
+  display: flex;
+  gap: 0.375rem;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  padding: 0.125rem;
+}
+
+.seasons-tab {
+  flex: 0 0 auto;
+  max-width: 12rem;
+  padding: 0.25rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 0.75rem;
+  color: var(--dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.seasons-tab:hover {
+  color: var(--text);
+}
+
+.seasons-tab.on {
+  background: var(--accent-dim);
+  border-color: var(--accent-dim);
+  color: var(--text);
+}
+
+.season-meta {
+  flex: 0 0 auto;
+  margin-left: auto;
+  font-size: 0.75rem;
+  color: var(--dim);
+  white-space: nowrap;
+}
+
+.show-sheet-eps {
+  position: relative;
+  padding: 0.375rem 2rem 1.5rem;
+}
+
+/* The rows are absolutely placed in a box of the whole season's height. */
+.ep-list {
+  position: relative;
+  outline: none;
+}
+
+.ep {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: grid;
+  grid-template-columns: 2.5rem 7rem minmax(0, 1fr) auto auto;
+  column-gap: 0.875rem;
+  align-items: center;
+  padding: 0 0.5rem;
+  border-bottom: 1px solid #1d2129;
+  cursor: default;
+}
+
+.ep:hover {
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.ep.next {
+  background: linear-gradient(90deg, rgba(106, 169, 255, 0.08), transparent);
+}
+
+.ep-list:focus-visible .ep.sel,
+.ep-list:focus .ep.sel {
+  background: var(--accent-dim);
+}
+
+.ep-num {
+  font-size: 1.125rem;
+  color: var(--dimmer);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.ep.next .ep-num {
+  color: var(--accent);
+}
+
+.ep-still {
+  position: relative;
+  width: 7rem;
+  height: 3.9375rem;
+  border-radius: 0.25rem;
+  overflow: hidden;
+  background: var(--bg-3);
+  cursor: pointer;
+}
+
+.ep-still-img {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  font-size: 1.25rem;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.ep-seen {
+  position: absolute;
+  top: 0.375rem;
+  right: 0.375rem;
+  width: 1.125rem;
+  height: 1.125rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--good);
+  color: #08130c;
+  font-size: 0.6875rem;
+  font-weight: 700;
+}
+
+.ep-play {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.35);
+  color: #fff;
+  font-size: 1.125rem;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+.ep:hover .ep-play,
+.ep-list:focus .ep.sel .ep-play {
+  opacity: 1;
+}
+
+.ep-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 0.1875rem;
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.ep-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+.ep-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.ep-title {
+  font-size: 0.84375rem;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ep-plot {
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: var(--dimmer);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+
+.ep-len {
+  font-size: 0.75rem;
+  color: var(--dim);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.ep-check {
+  color: var(--dimmer);
+}
+
+.ep-check.on {
+  border-color: transparent;
+  color: var(--good);
 }

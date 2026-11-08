@@ -61,6 +61,7 @@ export function PosterGrid<T>({
       cards.push(
         <Card
           key={id}
+          id={id}
           item={t}
           card={card as CardOf}
           index={i}
@@ -83,6 +84,9 @@ export function PosterGrid<T>({
 type CardOf = (t: unknown, now: number) => PosterCard;
 
 interface CardProps {
+  /** `idOf(item)`: the element's id, so the list's active descendant (made
+   *  from the same function) always names a card that is there. */
+  id: number;
   item: unknown;
   card: CardOf;
   index: number;
@@ -97,6 +101,7 @@ interface CardProps {
 }
 
 const Card = memo(function Card({
+  id,
   item,
   card,
   index,
@@ -113,7 +118,7 @@ const Card = memo(function Card({
   return (
     <div
       className={`poster-card ${selected ? "sel" : ""}`}
-      id={`${idPrefix}-${c.id}`}
+      id={`${idPrefix}-${id}`}
       role="option"
       aria-selected={selected}
       style={{ left, top, width }}

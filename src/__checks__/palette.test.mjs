@@ -178,17 +178,31 @@ test("'end of this programme' needs the guide to know the end, and 'off' needs a
   assert.equal(off.sleep, null);
 });
 
-test("Movies and Live TV are offered where there is something to switch between", () => {
+test("Movies, Shows and Live TV are offered where there is something to switch between", () => {
   const on = { ...DESKTOP, onDemand: true };
   const off = { ...DESKTOP, onDemand: false };
   const movies = ACTIONS.find((a) => a.id === "movies");
   assert.equal(movies.label, "Movies");
   assert.equal(movies.hint, "M");
+  const shows = ACTIONS.find((a) => a.id === "shows");
+  assert.equal(shows.label, "Shows");
+  assert.equal(shows.hint, "N");
+  assert.equal(shows.needsCapability, "onDemand");
   assert.ok(ACTIONS.some((a) => a.id === "liveTv" && a.label === "Live TV"));
-  for (const id of ["movies", "liveTv"]) {
-    assert.ok(availableActions(false, { capabilities: on }).some((a) => a.id === id), id);
-    assert.ok(!availableActions(false, { capabilities: off }).some((a) => a.id === id), id);
-    // An account without movies has no Movies tab, so no way to it here either.
-    assert.ok(!availableActions(false, { capabilities: on, movies: false }).some((a) => a.id === id), id);
+  const has = (id, conditions) => availableActions(false, conditions).some((a) => a.id === id);
+  for (const id of ["movies", "shows", "liveTv"]) {
+    assert.ok(has(id, { capabilities: on }), id);
+    assert.ok(!has(id, { capabilities: off }), id);
   }
+  // An account without movies has no Movies tab, so no way to it here
+  // either; nor to Shows without shows.
+  assert.ok(!has("movies", { capabilities: on, movies: false, shows: true }));
+  assert.ok(has("shows", { capabilities: on, movies: false, shows: true }));
+  assert.ok(!has("shows", { capabilities: on, movies: true, shows: false }));
+  assert.ok(has("movies", { capabilities: on, movies: true, shows: false }));
+  // Live TV is the way back from Shows as from Movies; an account with live
+  // TV alone has no other tab to come back from.
+  assert.ok(has("liveTv", { capabilities: on, movies: false, shows: true }));
+  assert.ok(has("liveTv", { capabilities: on, movies: true, shows: false }));
+  assert.ok(!has("liveTv", { capabilities: on, movies: false, shows: false }));
 });

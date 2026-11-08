@@ -138,6 +138,7 @@ pub fn run() {
             ipc::player_cmds::seek_relative,
             ipc::player_cmds::seek_to,
             ipc::player_cmds::play_movie,
+            ipc::player_cmds::play_episode,
             ipc::player_cmds::thumbnail_at,
             ipc::player_cmds::seek_live,
             ipc::player_cmds::set_volume,
@@ -321,8 +322,8 @@ mod quit {
             tracing::error!("quitting took longer than {WATCHDOG:?}; exiting now");
             exit_now(code);
         });
-        // Before playback is stopped: where a movie got to, as the stop
-        // command would have written it.
+        // Before playback is stopped: where a movie or an episode got to,
+        // as the stop command would have written it.
         crate::ipc::player_cmds::save_progress_now();
         let app = app.clone();
         crate::surface::shut_down(move || {

@@ -24,9 +24,9 @@ use crate::ipc::types::{
 use super::browse::{bad_request, proxy_image, read, Failed};
 
 /// The most movies one page or one lookup returns.
-const PAGE_MAX: u32 = 1000;
+pub(super) const PAGE_MAX: u32 = 1000;
 /// The most a poster or a backdrop may weigh.
-const POSTER_MAX_BYTES: usize = 4 << 20;
+pub(super) const POSTER_MAX_BYTES: usize = 4 << 20;
 
 pub fn poster_path(id: i64) -> String {
     format!("/api/poster/movie/{id}")
@@ -59,15 +59,15 @@ fn local_details(d: &mut MovieDetailsDto) {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct ListParams {
+pub(super) struct ListParams {
     list: MovieListKind,
     category: Option<String>,
     sort: Option<MovieSort>,
     from: Option<i32>,
     to: Option<i32>,
     #[serde(default)]
-    offset: u32,
-    limit: u32,
+    pub(super) offset: u32,
+    pub(super) limit: u32,
 }
 
 #[derive(Deserialize)]
@@ -96,7 +96,7 @@ struct ProgressBody {
 
 /// The query the words ask for. A category list without its category is the
 /// caller's mistake, said before the catalogue is asked.
-fn movie_query(p: &ListParams) -> Result<MovieQueryDto, Failed> {
+pub(super) fn movie_query(p: &ListParams) -> Result<MovieQueryDto, Failed> {
     if p.list == MovieListKind::Category && p.category.is_none() {
         return Err(bad_request("category: a category list needs its category"));
     }

@@ -25,6 +25,12 @@
 //! with ranges at `movie/<user>/<pass>/2.mp4`) and checks its clock,
 //! `seek_to`, a relative seek past what was buffered, pause and stop.
 //!
+//! `--episode` plays an episode through `play_episode`
+//! (`ZAPPER_FIXTURE_EPISODE` on the fixture server, default `movie.mkv`;
+//! `fake_stream.py --series 1` serves one at
+//! `series/<user>/<pass>/100111.mkv`) and checks it reports itself as an
+//! episode with its length, then `seek_to`, pause and stop.
+//!
 //! `--ending <kind>` plays a channel that is expected to stop by itself, and
 //! checks it stops the way the app explains it (`offAir`, `dropped`, …), as
 //! the ending kinds are spelled to the interface. Against
@@ -135,6 +141,8 @@ fn main() {
                     run_keeps_playing(&handle, secs, args.iter().any(|a| a == "--after-movie")).await
                 } else if args.iter().any(|a| a == "--movie") {
                     run_movie(&handle).await
+                } else if args.iter().any(|a| a == "--episode") {
+                    run_episode(&handle).await
                 } else {
                     run(&handle).await
                 };
@@ -635,6 +643,66 @@ async fn run_movie(app: &tauri::AppHandle) -> Result<String, String> {
         at(&there),
         at(&back),
         at(&early)
+    ))
+}
+
+/// The `--episode` run: an episode opens as an episode (not a channel, not
+/// a movie), reports its length, seeks, pauses and stops.
+#[cfg(target_os = "linux")]
+async fn run_episode(app: &tauri::AppHandle) -> Result<String, String> {
+    use std::time::Duration;
+    use zapper_lib::ipc::player_cmds as cmds;
+    use zapper_lib::ipc::types::{OnDemandKind, PlaybackState, PlayerStateDto};
+
+    fn at(s: &PlayerStateDto) -> f64 {
+        s.on_demand.map_or(-1.0, |o| o.position)
+    }
+
+    cmds::play_episode(app.clone(), 100_111, None).await?;
+    let opened = await_state(Duration::from_secs(25), |s| {
+        s.state == PlaybackState::Playing && s.on_demand.is_some_and(|o| o.duration.is_some())
+    })
+    .await;
+    if opened.state != PlaybackState::Playing {
+        return Err(format!(
+            "play_episode() ended in {:?}: {}",
+            opened.state,
+            opened.error.as_deref().unwrap_or("no reason given")
+        ));
+    }
+    if opened.stream_id.is_some() {
+        return Err("an episode reported a channel".into());
+    }
+    let od = opened.on_demand.ok_or("an episode that is playing reported no title")?;
+    if (od.kind, od.id) != (OnDemandKind::Episode, 100_111) {
+        return Err(format!("an episode reported itself as {:?} {}", od.kind, od.id));
+    }
+    let length = od.duration.ok_or("an episode that is playing reported no length")?;
+    if !(115.0..=125.0).contains(&length) {
+        return Err(format!("the episode is about 120s long, but it reported {length}s"));
+    }
+
+    cmds::seek_to(app.clone(), 60.0).await?;
+    let there = await_state(Duration::from_secs(8), |s| (58.0..=62.0).contains(&at(s))).await;
+    if !(58.0..=62.0).contains(&at(&there)) {
+        return Err(format!("seek_to(60) landed at {:.1}s", at(&there)));
+    }
+
+    cmds::toggle_pause(app.clone()).await?;
+    let paused = await_state(Duration::from_secs(5), |s| s.state == PlaybackState::Paused).await;
+    if paused.state != PlaybackState::Paused {
+        return Err(format!("toggle_pause() left the player in {:?}", paused.state));
+    }
+    cmds::toggle_pause(app.clone()).await?;
+
+    cmds::stop(app.clone()).await?;
+    let stopped = cmds::player_state().await?;
+    if stopped.state != PlaybackState::Stopped || stopped.on_demand.is_some() {
+        return Err(format!("stop() left the player in {:?}", stopped.state));
+    }
+    Ok(format!(
+        "a {length}s episode played as an episode, seek_to(60) landed at {:.1}s, paused and stopped",
+        at(&there)
     ))
 }
 

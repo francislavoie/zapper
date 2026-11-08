@@ -1,26 +1,35 @@
-//! Watching a movie in a browser signed in to the service
+//! Watching a movie or an episode in a browser signed in to the service
 //! (docs/recording.md, "Watching in the browser").
 //!
 //! As with a channel ([`super::watch`]), the browser never sees a provider
-//! address: it asks to watch a movie by its id (`POST /api/vod/watch`), is
-//! given a viewer of its own, and reads that viewer's stream from here
-//! (`GET /api/vod/stream/{viewer}`).
+//! address: it asks to watch a movie or an episode by its id
+//! (`POST /api/vod/watch`, `{movieId}` or `{episodeId}`), is given a viewer
+//! of its own, and reads that viewer's stream from here
+//! (`GET /api/vod/stream/{viewer}`). An episode plays exactly as a movie
+//! does; only the catalogue row it is read from and the words that name it
+//! differ.
 //!
-//! **Connections.** A movie viewer always has a connection of its own:
+//! **Connections.** An on-demand viewer always has a connection of its own:
 //! nobody is ever at the same place in a film as somebody else, so there is
 //! nothing to share. It is asked of the same budget as a channel's
 //! ([`watch::decide`]), as one of the service's own connections
-//! ([`Server::own_conns`]), on a feed of its own ([`movie_feed`], which
-//! never names a channel) with a rider whose programme never ends, so the
-//! sharing rules never close it. What is the same as live:
+//! ([`Server::own_conns`]), on a feed of its own ([`vod_feed`]) with a rider
+//! whose programme never ends, so the sharing rules never close it. What is
+//! the same as live:
 //!
 //! - on a full account it is refused with the reason, and "Watch here
-//!   anyway" takes the place of another browser's viewer (a channel's or a
-//!   movie's), or, when the service holds nothing, connects as the app's
-//!   player would. A recording's connection is never taken;
+//!   anyway" takes the place of another browser's viewer (a channel's, a
+//!   movie's or an episode's), or, when the service holds nothing, connects
+//!   as the app's player would. A recording's connection is never taken;
 //! - a recording due on another channel waits for it, and its page is told
 //!   ([`watch::notice`]);
 //! - a viewer that leaves gives the connection up.
+//!
+//! **Feeds.** Channel ids are positive, so every on-demand feed is negative:
+//! a movie's is `-id`, an episode's `-(EPISODE_FEED_BASE + id)`. A movie
+//! and an episode with the same id never share a feed, so "anyway" never
+//! ends the one for the other, and neither ever names a channel
+//! ([`vod_item_of`] reads one back).
 //!
 //! The account sees one connection per viewer: the file is read one
 //! response at a time ([`HttpUpstream`]), and a new request on a viewer (the
@@ -54,11 +63,11 @@
 //!
 //! **Limits** are live's, counted together: a device's
 //! [`watch::PER_DEVICE`] viewers and [`watch::STARTS_PER_MINUTE`] starts,
-//! and the service's [`watch::MAX_VIEWERS`], channels and movies alike. A
-//! viewer nobody has read from for [`IDLE`] is let go, unless its page has
-//! asked after it (`GET /api/vod/watch/{viewer}`) within [`ASKED_IDLE`]: a
-//! browser that holds all it needs for now reads nothing, but its page still
-//! asks.
+//! and the service's [`watch::MAX_VIEWERS`], channels, movies and episodes
+//! alike. A viewer nobody has read from for [`IDLE`] is let go, unless its
+//! page has asked after it (`GET /api/vod/watch/{viewer}`) within
+//! [`ASKED_IDLE`]: a browser that holds all it needs for now reads nothing,
+//! but its page still asks.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
@@ -81,7 +90,7 @@ use super::access::Caller;
 use super::fallback::Failure;
 use super::hub::SETTLE_SECS;
 use super::livemux::can_encode_aac;
-use super::server::{Resolve, Server};
+use super::server::Server;
 use super::sharing::{Conn, Rider};
 use super::tsprobe::{Can, Video};
 use super::upstream::HttpUpstream;
@@ -91,21 +100,60 @@ use super::watch::{
     RefusalDto, StatusDto, IDLE, KEEP_ENDED,
 };
 use crate::catalog::sync_engine::scrub;
-use crate::catalog::{db, reads, vod_store};
+use crate::catalog::vod_store::{ItemKind, VodItem};
+use crate::catalog::{db, reads, series_store, vod_store};
 use crate::source::{Playable, Source};
 
 // ------------------------------------------------------------- the rules
 
-/// The feed a viewer of movie `movie_id` is on, as the sharing rules see
-/// it: channel ids are positive, so a movie's connection never names a
-/// channel.
-pub fn movie_feed(movie_id: i64) -> i64 {
-    -movie_id
+/// Where episodes' feeds start, past the movies': a catalogue's ids are far
+/// smaller than this, so a movie's feed and an episode's never meet.
+pub const EPISODE_FEED_BASE: i64 = 1 << 54;
+
+/// The feed a viewer of `item` is on, as the sharing rules see it: channel
+/// ids are positive, so an on-demand connection never names a channel. A
+/// movie's is `-id`; an episode's `-(EPISODE_FEED_BASE + id)`, never a
+/// movie's.
+pub fn vod_feed(item: VodItem) -> i64 {
+    // A show is never played itself: only a watch's movie or episode makes
+    // a viewer (`VodWatchRequest::item`). Should one ever reach here, its
+    // feed would be in the movies' space, so a debug build says so at once;
+    // a release build is not stopped over it.
+    debug_assert_ne!(item.kind, ItemKind::Series, "a show has no feed of its own");
+    match item.kind {
+        ItemKind::Episode => -(EPISODE_FEED_BASE.saturating_add(item.id)),
+        ItemKind::Movie | ItemKind::Series => -item.id,
+    }
 }
 
-/// The movie a feed is, when it is one.
+/// The movie or episode a feed is, when it is one; `None` for a channel's.
+pub fn vod_item_of(feed: i64) -> Option<VodItem> {
+    let n = feed.checked_neg().filter(|&n| n > 0)?;
+    Some(if n > EPISODE_FEED_BASE {
+        VodItem::episode(n - EPISODE_FEED_BASE)
+    } else {
+        VodItem::movie(n)
+    })
+}
+
+/// The feed a viewer of movie `movie_id` is on ([`vod_feed`]).
+pub fn movie_feed(movie_id: i64) -> i64 {
+    vod_feed(VodItem::movie(movie_id))
+}
+
+/// The movie a feed is, when it is one ([`vod_item_of`]).
 pub fn movie_of(feed: i64) -> Option<i64> {
-    feed.checked_neg().filter(|&m| m > 0)
+    vod_item_of(feed)
+        .filter(|i| i.kind == ItemKind::Movie)
+        .map(|i| i.id)
+}
+
+/// What `item` is called in a sentence: "movie" or "episode".
+fn noun(item: VodItem) -> &'static str {
+    match item.kind {
+        ItemKind::Episode => "episode",
+        ItemKind::Movie | ItemKind::Series => "movie",
+    }
 }
 
 /// How a movie reaches the browser.
@@ -283,7 +331,8 @@ enum Ended {
 
 struct MovieViewer {
     device: String,
-    movie_id: i64,
+    /// The movie or episode it plays.
+    item: VodItem,
     rider: i64,
     mode: VodMode,
     /// The file, while nobody reads it (`None` while a reading has it).
@@ -309,7 +358,7 @@ struct MovieViewer {
     ended: Option<(Ended, Instant)>,
 }
 
-/// The browsers watching movies.
+/// The browsers watching movies and episodes.
 #[derive(Default)]
 pub struct MovieViewers {
     map: Mutex<HashMap<String, MovieViewer>>,
@@ -319,10 +368,13 @@ pub struct MovieViewers {
     /// worth: a provider's count may still include them.
     released: Mutex<VecDeque<Instant>>,
     reaper: OnceLock<()>,
-    /// Where a movie's file is, in place of the account's own answer: the
-    /// tests' fixture servers.
-    playables: Mutex<Option<Arc<Resolve>>>,
+    /// Where a movie's or an episode's file is, in place of the account's
+    /// own answer: the tests' fixture servers.
+    playables: Mutex<Option<Arc<VodResolve>>>,
 }
+
+/// A movie's or an episode's file, by the item.
+pub type VodResolve = dyn Fn(VodItem) -> Result<Playable> + Send + Sync;
 
 impl MovieViewers {
     fn map(&self) -> std::sync::MutexGuard<'_, HashMap<String, MovieViewer>> {
@@ -337,7 +389,7 @@ impl MovieViewers {
             .values()
             .filter(|v| v.ended.is_none() || v.reading)
             .map(|v| Conn {
-                feed: movie_feed(v.movie_id),
+                feed: vod_feed(v.item),
                 riders: if v.ended.is_none() {
                     vec![Rider::viewer(v.rider)]
                 } else {
@@ -399,26 +451,27 @@ impl MovieViewers {
         v.turn.send_replace(u64::MAX);
     }
 
-    /// Ends a viewer on `feed` (a movie's), saying another browser took its
-    /// place ("Watch here anyway"). One, whichever: each has a connection of
-    /// its own, and "anyway" may take any other browser's.
+    /// Ends a viewer on `feed` (a movie's or an episode's, [`vod_feed`];
+    /// never one of another title's), saying another browser took its place
+    /// ("Watch here anyway"). One, whichever: each has a connection of its
+    /// own, and "anyway" may take any other browser's.
     pub fn end(&self, feed: i64) {
         let mut map = self.map();
         if let Some(v) = map
             .values_mut()
-            .filter(|v| v.ended.is_none() && movie_feed(v.movie_id) == feed)
+            .filter(|v| v.ended.is_none() && vod_feed(v.item) == feed)
             .min_by_key(|v| v.idle_since)
         {
             self.finish(v, Ended::TakenOver);
         }
     }
 
-    /// Viewer `id` of `device`, as its page asks after it: its movie, its
+    /// Viewer `id` of `device`, as its page asks after it: its title, its
     /// rider and why it ended. A page that asks is still open, so its viewer
     /// is kept for [`ASKED_IDLE`] even when nothing reads from it: a browser
     /// that holds all it needs for now (a short film read to its end, a file
     /// read well ahead) keeps its place.
-    fn asked(&self, device: &str, id: &str) -> Option<(i64, i64, Option<Ended>)> {
+    fn asked(&self, device: &str, id: &str) -> Option<(VodItem, i64, Option<Ended>)> {
         let mut map = self.map();
         let v = map
             .get_mut(id)
@@ -426,7 +479,7 @@ impl MovieViewers {
         if v.ended.is_none() {
             v.asked_at = Some(Instant::now());
         }
-        Some((v.movie_id, v.rider, v.ended.map(|(why, _)| why)))
+        Some((v.item, v.rider, v.ended.map(|(why, _)| why)))
     }
 
     /// Ends viewer `id` of `device`, if it is that device's. Its rider.
@@ -501,22 +554,32 @@ impl MovieViewers {
     }
 
     /// Answers [`Self::playable`] with `f` instead of the account.
-    pub fn set_playables(&self, f: Arc<Resolve>) {
+    pub fn set_playables(&self, f: Arc<VodResolve>) {
         *self.playables.lock().unwrap_or_else(|e| e.into_inner()) = Some(f);
     }
 
-    /// Where movie `movie_id`'s file is, and how to ask for it: the
-    /// account's answer, read afresh.
-    fn playable(&self, movie_id: i64) -> Result<Playable> {
+    /// Where `item`'s file is, and how to ask for it: the account's
+    /// answer, read afresh.
+    fn playable(&self, item: VodItem) -> Result<Playable> {
         let over = self
             .playables
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
         match over {
-            Some(f) => f(movie_id),
-            None => Source::load().and_then(|s| s.movie(movie_id)),
+            Some(f) => f(item),
+            None => Source::load().and_then(|s| match item.kind {
+                ItemKind::Movie => s.movie(item.id),
+                ItemKind::Episode => s.episode(item.id),
+                ItemKind::Series => Err(anyhow!("a show is not played itself")),
+            }),
         }
+    }
+
+    /// What viewer `id` plays, for the words that name it: "movie" when
+    /// there is no such viewer.
+    fn noun_of(&self, id: &str) -> &'static str {
+        self.map().get(id).map_or("movie", |v| noun(v.item))
     }
 
     #[cfg(test)]
@@ -528,15 +591,15 @@ impl MovieViewers {
     }
 
     #[cfg(test)]
-    /// A viewer of `movie_id` for `device` holding no file, as the rules see
+    /// A viewer of `item` for `device` holding no file, as the rules see
     /// one.
-    pub(super) fn add_for_test(&self, device: &str, movie_id: i64, rider: i64) -> String {
+    pub(super) fn add_for_test(&self, device: &str, item: VodItem, rider: i64) -> String {
         let id = new_id();
         self.map().insert(
             id.clone(),
             MovieViewer {
                 device: device.into(),
-                movie_id,
+                item,
                 rider,
                 mode: VodMode::Direct,
                 up: None,
@@ -562,11 +625,17 @@ impl MovieViewers {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct VodWatchRequest {
-    movie_id: i64,
+    /// The movie to watch, or
+    #[serde(default)]
+    movie_id: Option<i64>,
+    /// the episode: one of the two.
+    #[serde(default)]
+    episode_id: Option<i64>,
     #[serde(default)]
     anyway: bool,
-    /// The viewer this one takes over from (a channel's or a movie's): it
-    /// is stopped first, so its connection is free for this one.
+    /// The viewer this one takes over from (a channel's, a movie's or an
+    /// episode's): it is stopped first, so its connection is free for this
+    /// one.
     #[serde(default)]
     replaces: Option<String>,
     /// The sound to play: an index into the file's list, as the answer
@@ -580,6 +649,20 @@ struct VodWatchRequest {
     from: f64,
     #[serde(default)]
     can: CanDto,
+}
+
+/// A watch that names neither a movie nor an episode, or both.
+const NOT_A_WATCH: &str = "Not a request to watch a movie or an episode.";
+
+impl VodWatchRequest {
+    /// The one title it asks for; `None` when it names none, or two.
+    fn item(&self) -> Option<VodItem> {
+        match (self.movie_id, self.episode_id) {
+            (Some(id), None) => Some(VodItem::movie(id)),
+            (None, Some(id)) => Some(VodItem::episode(id)),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -675,28 +758,75 @@ fn start_reaper(s: &Arc<Server>) {
     });
 }
 
-/// What the catalogue says of a movie: its container and its length.
-async fn movie_row(movie_id: i64) -> Result<Option<(Option<String>, Option<i64>)>> {
-    tokio::task::spawn_blocking(move || {
-        let Some(src) = db::with_db(|c| vod_store::movie_source(c, movie_id))? else {
-            return Ok(None);
-        };
-        let length = reads::movies_by_ids(&[movie_id])?
-            .into_iter()
-            .next()
-            .and_then(|m| m.duration_secs);
-        Ok(Some((src.container, length)))
+/// What the catalogue says of a movie or an episode: its container and its
+/// length. `None` for one that is not there.
+async fn item_row(item: VodItem) -> Result<Option<(Option<String>, Option<i64>)>> {
+    let VodItem { kind, id } = item;
+    tokio::task::spawn_blocking(move || match kind {
+        ItemKind::Movie => {
+            let Some(src) = db::with_db(|c| vod_store::movie_source(c, id))? else {
+                return Ok(None);
+            };
+            let length = reads::movies_by_ids(&[id])?
+                .into_iter()
+                .next()
+                .and_then(|m| m.duration_secs);
+            Ok(Some((src.container, length)))
+        }
+        ItemKind::Episode => db::with_db(|c| {
+            let Some(src) = series_store::episode_source(c, id)? else {
+                return Ok(None);
+            };
+            let length = series_store::episode_by_id(c, id)?.and_then(|(_, e)| e.duration_secs);
+            Ok(Some((src.container, length)))
+        }),
+        ItemKind::Series => Ok(None),
     })
     .await
     .map_err(|e| anyhow!("{e}"))?
 }
 
-/// Why the provider would not give the file, as live's "didn't start".
-fn feed_refusal(f: Failure) -> Response {
+/// The account's own words, whole, for why it cannot say where a title's
+/// file is: only these reach the page. Anything else (a database's error,
+/// an account file's) is logged, and said as [`NO_FILE`].
+const CANT_PLAY_SAID: [&str; 7] = [
+    "that movie is not in the catalogue any more",
+    "this movie has no address in the playlist",
+    "this account has no movies",
+    "that episode is not in the catalogue any more",
+    "this episode has no address in the playlist",
+    "this account has no shows",
+    "no account configured. Set one in Settings → Account.",
+];
+/// Why a title cannot be played, when the account's words are not among
+/// [`CANT_PLAY_SAID`].
+const NO_FILE: &str = "where its file is could not be read";
+
+/// `item`'s file could not be found: `404`, in words of our own; why in
+/// full (scrubbed of the account) goes to the service's log.
+fn cant_play(item: VodItem, e: &anyhow::Error) -> Response {
+    let why = scrub(&format!("{e:#}"));
+    tracing::warn!("finding {} {}'s file: {why}", noun(item), item.id);
+    let lead = why.split(": ").next().unwrap_or_default();
+    let said = CANT_PLAY_SAID
+        .iter()
+        .copied()
+        .find(|s| *s == lead || *s == why)
+        .unwrap_or(NO_FILE);
+    plain(
+        StatusCode::NOT_FOUND,
+        "movie",
+        format!("Can't play this {}: {said}", noun(item)),
+    )
+}
+
+/// Why the provider would not give the file, as live's "didn't start",
+/// naming what it is ("movie", "episode").
+fn feed_refusal(noun: &str, f: Failure) -> Response {
     refused(
         StatusCode::BAD_GATEWAY,
         RefusalDto {
-            error: format!("The movie didn't start: {}.", f.describe()),
+            error: format!("The {noun} didn't start: {}.", f.describe()),
             reason: "feed",
             anyway: f.is_limit(),
             slots: None,
@@ -712,17 +842,17 @@ async fn start(
     body: Result<Json<VodWatchRequest>, axum::extract::rejection::JsonRejection>,
 ) -> Response {
     let Ok(Json(req)) = body else {
-        return plain(
-            StatusCode::BAD_REQUEST,
-            "movie",
-            "Not a request to watch a movie.",
-        );
+        return plain(StatusCode::BAD_REQUEST, "movie", NOT_A_WATCH);
     };
+    let Some(item) = req.item() else {
+        return plain(StatusCode::BAD_REQUEST, "movie", NOT_A_WATCH);
+    };
+    let noun = noun(item);
     if !req.from.is_finite() || req.from < 0.0 {
         return plain(
             StatusCode::BAD_REQUEST,
             "movie",
-            "from: seconds from the start of the movie.",
+            format!("from: seconds from the start of the {noun}."),
         );
     }
     let device = device_of(&caller);
@@ -737,19 +867,24 @@ async fn start(
     }
     start_reaper(&s);
 
-    // What it is, before any connection.
-    let movie_id = req.movie_id;
-    let (container, length) = match movie_row(movie_id).await {
+    // What it is, before any connection. An id no catalogue holds is not
+    // looked for: its feed would not be its own.
+    let row = if (1..EPISODE_FEED_BASE).contains(&item.id) {
+        item_row(item).await
+    } else {
+        Ok(None)
+    };
+    let (container, length) = match row {
         Ok(Some(row)) => row,
         Ok(None) => {
             return plain(
                 StatusCode::NOT_FOUND,
                 "movie",
-                "That movie is not in the catalogue any more.",
+                format!("That {noun} is not in the catalogue any more."),
             )
         }
         Err(e) => {
-            tracing::warn!("reading movie {movie_id}: {}", scrub(&format!("{e:#}")));
+            tracing::warn!("reading {noun} {}: {}", item.id, scrub(&format!("{e:#}")));
             return plain(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "movie",
@@ -761,15 +896,9 @@ async fn start(
     // A browser's player plays a file's first sound: another is the
     // remuxer's to pick.
     let pick_sound = req.audio.is_some_and(|a| a > 0);
-    let playable = match s.vod.playable(movie_id) {
+    let playable = match s.vod.playable(item) {
         Ok(p) => p,
-        Err(e) => {
-            return plain(
-                StatusCode::NOT_FOUND,
-                "movie",
-                format!("Can't play this movie: {}", scrub(&format!("{e:#}"))),
-            )
-        }
+        Err(e) => return cant_play(item, &e),
     };
 
     // A connection of its own.
@@ -778,7 +907,7 @@ async fn start(
     }
     let mut up = match HttpUpstream::new(playable) {
         Ok(u) => u,
-        Err(_) => return feed_refusal(Failure::Unreachable),
+        Err(_) => return feed_refusal(noun, Failure::Unreachable),
     };
     let rider = s.viewers.rider_id();
     let id = new_id();
@@ -789,7 +918,7 @@ async fn start(
         id.clone(),
         MovieViewer {
             device: device.clone(),
-            movie_id,
+            item,
             rider,
             mode: VodMode::Remux,
             up: None,
@@ -870,7 +999,7 @@ async fn start(
     });
     let (mode, media) = match opening.await {
         Ok(Ok(opened)) => opened,
-        Ok(Err(Some(f))) => return feed_refusal(f),
+        Ok(Err(Some(f))) => return feed_refusal(noun, f),
         Ok(Err(None)) | Err(_) => return plain(StatusCode::GONE, "feed", "This stream has ended."),
     };
 
@@ -899,7 +1028,7 @@ async fn start(
         }
     };
 
-    let notice = watch::notice_for(&s, movie_feed(movie_id), rider).await;
+    let notice = watch::notice_for(&s, vod_feed(item), rider).await;
     let dto = VodWatchDto {
         viewer: id.clone(),
         stream: format!("/api/vod/stream/{id}"),
@@ -928,7 +1057,7 @@ async fn status(
     Path(id): Path<String>,
 ) -> Response {
     let found = s.vod.asked(&device_of(&caller), &id);
-    let Some((movie_id, rider, ended)) = found else {
+    let Some((item, rider, ended)) = found else {
         return plain(StatusCode::NOT_FOUND, "movie", "No such viewer.");
     };
     let dropped = EndingDto {
@@ -951,7 +1080,7 @@ async fn status(
         None => StatusDto {
             ended: None,
             taken_over: false,
-            notice: watch::notice_for(&s, movie_feed(movie_id), rider).await,
+            notice: watch::notice_for(&s, vod_feed(item), rider).await,
         },
     };
     (
@@ -1024,7 +1153,10 @@ async fn stream(
             return plain(
                 StatusCode::BAD_REQUEST,
                 "movie",
-                "from: seconds from the start of the movie; audio: a sound's index.",
+                format!(
+                    "from: seconds from the start of the {}; audio: a sound's index.",
+                    s.vod.noun_of(&id)
+                ),
             )
         }
     };
@@ -1034,7 +1166,7 @@ async fn stream(
     // Take the file: from the viewer, or from an older reading, which is
     // told to stop and gives it back, its response dropped.
     let deadline = Instant::now() + Duration::from_secs(3);
-    let (mut up, turn, mine, remuxing) = loop {
+    let (mut up, turn, mine, remuxing, noun) = loop {
         let waiter = s.vod.returned.notified();
         {
             let mut map = s.vod.map();
@@ -1052,7 +1184,7 @@ async fn stream(
                 return plain(
                     StatusCode::BAD_REQUEST,
                     "movie",
-                    "audio: the index of one of the movie's sounds.",
+                    format!("audio: the index of one of the {}'s sounds.", noun(v.item)),
                 );
             }
             let next = v.turn.borrow().wrapping_add(1);
@@ -1070,7 +1202,7 @@ async fn stream(
                         can: v.can,
                     }
                 });
-                break (up, v.turn.subscribe(), next, remuxing);
+                break (up, v.turn.subscribe(), next, remuxing, noun(v.item));
             }
         }
         if Instant::now() >= deadline {
@@ -1084,7 +1216,7 @@ async fn stream(
     };
 
     if let Some(ask) = remuxing {
-        return remux_stream(s, id, up, turn, mine, ask).await;
+        return remux_stream(s, id, up, turn, mine, ask, noun).await;
     }
 
     // The provider asked, then the reading, on a task of their own: a
@@ -1125,7 +1257,7 @@ async fn stream(
     });
     let span = match answered.await {
         Ok(Ok(span)) => span,
-        Ok(Err(Some(f))) => return feed_refusal(f),
+        Ok(Err(Some(f))) => return feed_refusal(noun, f),
         Ok(Err(None)) => {
             return plain(
                 StatusCode::CONFLICT,
@@ -1133,7 +1265,7 @@ async fn stream(
                 "A newer request took this stream.",
             )
         }
-        Err(_) => return feed_refusal(Failure::Unreachable),
+        Err(_) => return feed_refusal(noun, Failure::Unreachable),
     };
     if span.beyond {
         let mut r = StatusCode::RANGE_NOT_SATISFIABLE.into_response();
@@ -1206,7 +1338,8 @@ enum Began {
 const START_WAIT: Duration = Duration::from_secs(60);
 
 /// A remux's answer: MPEG-TS from the film's keyframe at or before `from`,
-/// once the remuxer has found it, named in `X-Start`.
+/// once the remuxer has found it, named in `X-Start`. Its refusals name the
+/// title as `noun` ("movie", "episode").
 async fn remux_stream(
     s: Arc<Server>,
     id: String,
@@ -1214,6 +1347,7 @@ async fn remux_stream(
     turn: tokio_watch::Receiver<u64>,
     mine: u64,
     ask: RemuxAsk,
+    noun: &str,
 ) -> Response {
     let (tx, rx) = mpsc::channel::<Bytes>(16);
     let (answer, answered) = oneshot::channel();
@@ -1227,7 +1361,7 @@ async fn remux_stream(
                 "A newer request took this stream.",
             )
         }
-        Ok(Began::Feed(f)) => return feed_refusal(f),
+        Ok(Began::Feed(f)) => return feed_refusal(noun, f),
         Ok(Began::NotPlayable(why)) => {
             return plain(StatusCode::UNPROCESSABLE_ENTITY, "notPlayable", why)
         }
@@ -1235,14 +1369,14 @@ async fn remux_stream(
             return plain(
                 StatusCode::GATEWAY_TIMEOUT,
                 "feed",
-                "The movie took too long to start from there.",
+                format!("The {noun} took too long to start from there."),
             )
         }
         Ok(Began::Failed) | Err(_) => {
             return plain(
                 StatusCode::BAD_GATEWAY,
                 "feed",
-                "The movie could not be converted from there.",
+                format!("The {noun} could not be converted from there."),
             )
         }
     };
@@ -1455,7 +1589,7 @@ async fn learn(
     });
     if let Ok(Err(why)) = said.await {
         if !why.is_empty() && !*stop.borrow() {
-            tracing::warn!("reading a movie's file for a browser: {why}");
+            tracing::warn!("reading a title's file for a browser: {why}");
         }
     }
     drop(vod);
@@ -1503,7 +1637,10 @@ async fn subtitles(
             return plain(
                 StatusCode::BAD_REQUEST,
                 "movie",
-                "after: seconds from the start of the movie.",
+                format!(
+                    "after: seconds from the start of the {}.",
+                    s.vod.noun_of(&id)
+                ),
             )
         }
     };
@@ -1613,6 +1750,22 @@ mod tests {
     use crate::recording::watch::{decide, Decision, Refusal};
 
     #[test]
+    fn episode_and_movie_feeds_never_meet() {
+        for id in [1, 7, (1 << 53) - 1] {
+            let (m, e) = (vod_feed(VodItem::movie(id)), vod_feed(VodItem::episode(id)));
+            assert!(m < 0 && e < 0 && m != e);
+            assert_eq!(vod_item_of(m), Some(VodItem::movie(id)));
+            assert_eq!(vod_item_of(e), Some(VodItem::episode(id)));
+        }
+        assert_eq!(vod_item_of(7), None);
+        assert_eq!(vod_item_of(0), None);
+        assert_eq!(vod_item_of(i64::MIN), None);
+        // A movie's feed is as it always was; an episode's is no movie's.
+        assert_eq!(vod_feed(VodItem::movie(7)), movie_feed(7));
+        assert_eq!(movie_of(vod_feed(VodItem::episode(7))), None);
+    }
+
+    #[test]
     fn a_movie_feed_never_names_a_channel() {
         assert_eq!(movie_feed(7), -7);
         assert_eq!(movie_of(-7), Some(7));
@@ -1699,6 +1852,59 @@ mod tests {
             decide(full, &own[..1], 0, true),
             Decision::Refuse(Refusal::Recording { .. })
         ));
+    }
+
+    fn episode(rider: i64, id: i64) -> Conn {
+        Conn {
+            feed: vod_feed(VodItem::episode(id)),
+            riders: vec![Rider::viewer(rider)],
+        }
+    }
+
+    #[test]
+    fn an_episode_viewer_is_one_of_the_services_connections() {
+        // A recording on 5 and a browser watching episode 9: the account's
+        // two connections are both the service's.
+        let own = [rec(1, 5), episode(-1, 9)];
+        let feed = vod_feed(VodItem::episode(9));
+        let full = Slots::Full { active: 2, max: 2 };
+        assert_eq!(
+            decide(full, &own, 0, false),
+            Decision::Refuse(Refusal::Viewers { feeds: vec![feed] }),
+            "the episode's browser is named, and \"anyway\" offered"
+        );
+        assert_eq!(decide(full, &own, 0, true), Decision::TakeOver(feed));
+        assert!(matches!(
+            decide(full, &own[..1], 0, true),
+            Decision::Refuse(Refusal::Recording { .. })
+        ));
+    }
+
+    #[test]
+    fn anyway_takes_an_episode_viewers_place_never_a_recordings() {
+        let full = Slots::Full { active: 1, max: 1 };
+        let feed = vod_feed(VodItem::episode(9));
+        assert_eq!(decide(full, &[episode(-1, 9)], 0, true), Decision::TakeOver(feed));
+        assert_eq!(
+            decide(full, &[rec(1, 5)], 0, true),
+            Decision::Refuse(Refusal::Recording {
+                feeds: vec![5],
+                recordings: vec![1]
+            })
+        );
+        // Taking the episode's place ends its viewer, never a viewer of the
+        // movie with the same id.
+        let vod = MovieViewers::default();
+        let film = vod.add_for_test("a", VodItem::movie(9), 1);
+        let show = vod.add_for_test("b", VodItem::episode(9), 2);
+        let feeds: Vec<i64> = vod.conns().iter().map(|c| c.feed).collect();
+        assert!(feeds.contains(&-9) && feeds.contains(&feed), "{feeds:?}");
+        vod.end(feed);
+        let ended = |id: &str| vod.map()[id].ended.map(|(why, _)| why);
+        assert_eq!(ended(&show), Some(Ended::TakenOver));
+        assert_eq!(ended(&film), None);
+        vod.end(movie_feed(9));
+        assert_eq!(ended(&film), Some(Ended::TakenOver));
     }
 
     #[test]
@@ -1877,13 +2083,13 @@ mod tests {
     #[test]
     fn a_viewer_its_page_asks_after_is_not_let_go_as_idle() {
         let vod = MovieViewers::default();
-        let asked = vod.add_for_test("dev", 9, 1);
-        let slow = vod.add_for_test("dev", 7, 3);
-        let gone = vod.add_for_test("dev", 6, 4);
-        let quiet = vod.add_for_test("dev", 8, 2);
+        let asked = vod.add_for_test("dev", VodItem::movie(9), 1);
+        let slow = vod.add_for_test("dev", VodItem::movie(7), 3);
+        let gone = vod.add_for_test("dev", VodItem::episode(6), 4);
+        let quiet = vod.add_for_test("dev", VodItem::movie(8), 2);
         assert_eq!(
             vod.asked("dev", &asked).map(|(m, r, e)| (m, r, e.is_none())),
-            Some((9, 1, true))
+            Some((VodItem::movie(9), 1, true))
         );
         assert_eq!(vod.asked("other", &quiet), None, "another device's");
         // Times are shifted forward rather than set in the past: an Instant

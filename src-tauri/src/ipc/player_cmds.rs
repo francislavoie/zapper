@@ -21,8 +21,8 @@ use tauri::{AppHandle, Emitter};
 use crate::catalog::activity::{self, Accumulator};
 use crate::catalog::credentials;
 use crate::catalog::store;
-use crate::catalog::vod_progress::{ProgressSaver, ProgressWrite};
-use crate::catalog::vod_store::{self, ItemKind};
+use crate::catalog::vod_progress::{write_progress, ProgressSaver, ProgressWrite};
+use crate::catalog::vod_store::{self, VodItem};
 use crate::connections::{self, Limit, Verdict};
 use crate::ipc::ending::{self, Clues, Ending, EndingKind, Flow, How};
 use crate::ipc::live_start::{Join, Settle};
@@ -247,8 +247,9 @@ enum OpenKind {
     Live,
     /// A programme from a channel's archive.
     CatchUp(CatchUp),
-    /// A movie, on demand: neither live nor from an archive. Only ever
-    /// with [`Opened::Movie`].
+    /// A movie or an episode, on demand: neither live nor from an
+    /// archive. Only ever with an on-demand [`Opened`]
+    /// ([`Opened::is_on_demand`]).
     OnDemand,
 }
 
@@ -380,14 +381,14 @@ impl Machine {
         None
     }
 
-    /// A channel or a movie is opening. A catch-up programme sets `live`
-    /// false straight after, and so does a movie.
+    /// A channel or a title is opening. A catch-up programme sets `live`
+    /// false straight after, and so does a movie or an episode.
     fn opening(&mut self, what: Opened) {
         self.carry_unwritten_load();
-        let movie = matches!(what, Opened::Movie(_));
+        let title = what.is_on_demand();
         // Nothing about a title is "live", and nothing keeps it near an edge.
-        self.dto.at_live_edge = !movie;
-        self.following_live = !movie;
+        self.dto.at_live_edge = !title;
+        self.following_live = !title;
         self.last_live_nudge = None;
         self.drift_secs = 0.0;
         self.last_pos = None;
@@ -395,17 +396,19 @@ impl Machine {
         self.dto.state = PlaybackState::Opening;
         self.dto.stream_id = match what {
             Opened::Channel(id) => Some(id),
-            Opened::Movie(_) => None,
+            Opened::Movie(_) | Opened::Episode(_) => None,
+        };
+        let on_demand = |kind, id| OnDemandDto {
+            kind,
+            id,
+            position: 0.0,
+            duration: None,
+            buffered_to: None,
         };
         self.dto.on_demand = match what {
             Opened::Channel(_) => None,
-            Opened::Movie(id) => Some(OnDemandDto {
-                kind: OnDemandKind::Movie,
-                id,
-                position: 0.0,
-                duration: None,
-                buffered_to: None,
-            }),
+            Opened::Movie(id) => Some(on_demand(OnDemandKind::Movie, id)),
+            Opened::Episode(id) => Some(on_demand(OnDemandKind::Episode, id)),
         };
         self.dto.error = None;
         self.dto.ending = None;
@@ -472,10 +475,10 @@ impl Machine {
     }
 
     /// The viewer asked for live: stay at the edge from now on. A movie
-    /// has none.
+    /// or an episode has none.
     fn follow_live(&mut self) -> Result<(), String> {
         if self.dto.on_demand.is_some() {
-            return Err("a movie has no live edge".into());
+            return Err("a title has no live edge".into());
         }
         self.following_live = true;
         self.last_live_nudge = None;
@@ -1083,11 +1086,29 @@ fn round_tenth(v: f64) -> f64 {
 /// service are all about channels, and a movie's id is from another table
 /// that may well hold the same number. Keeping the two apart here is what
 /// stops a movie being mistaken for the channel with that id anywhere
-/// downstream.
+/// downstream. An episode is no more a stream id than a movie is, and its
+/// id is from a third table: no more a movie's either.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Opened {
     Channel(i64),
     Movie(i64),
+    Episode(i64),
+}
+
+impl Opened {
+    /// A title rather than a channel: a movie or an episode.
+    fn is_on_demand(self) -> bool {
+        matches!(self, Opened::Movie(_) | Opened::Episode(_))
+    }
+}
+
+/// The title an on-demand open is, for writing down how far into it the
+/// viewer got.
+fn item_of(o: &OnDemandDto) -> VodItem {
+    match o.kind {
+        OnDemandKind::Movie => VodItem::movie(o.id),
+        OnDemandKind::Episode => VodItem::episode(o.id),
+    }
 }
 
 /// How close to a movie's length its position has to be for an end of file
@@ -1104,7 +1125,8 @@ static STATE: LazyLock<Mutex<Machine>> = LazyLock::new(|| Mutex::new(Machine::ne
 /// [`crate::catalog::activity::Accumulator`], and is pure.
 static WATCHED: LazyLock<Mutex<Accumulator>> = LazyLock::new(|| Mutex::new(Accumulator::new()));
 
-/// How far into a movie the viewer is, for resuming and for "watched".
+/// How far into a movie or an episode the viewer is, for resuming and for
+/// "watched".
 /// Driven from the heartbeat like [`WATCHED`]; the policy is
 /// [`ProgressSaver`]'s.
 static PROGRESS: LazyLock<Mutex<ProgressSaver>> = LazyLock::new(|| Mutex::new(ProgressSaver::new()));
@@ -1117,19 +1139,15 @@ fn clock_secs() -> f64 {
         .map_or(0.0, |d| d.as_secs_f64())
 }
 
-/// Writes a movie's place, off the main thread and for the same reasons as
+/// Writes a title's place, off the main thread and for the same reasons as
 /// [`persist`].
 fn persist_progress(w: ProgressWrite) {
     tauri::async_runtime::spawn_blocking(move || {
-        let r = crate::catalog::db::with_db(|c| write_progress(c, w).map(|_| ()));
+        let r = crate::catalog::db::with_db(|c| write_progress(c, w, activity::now_secs()).map(|_| ()));
         if let Err(e) = r {
-            tracing::warn!("could not record how far into a movie playback got: {e}");
+            tracing::warn!("could not record how far into a title playback got: {e}");
         }
     });
-}
-
-fn write_progress(c: &rusqlite::Connection, w: ProgressWrite) -> anyhow::Result<vod_store::Marks> {
-    vod_store::record_progress(c, ItemKind::Movie, w.id, w.position, w.duration, activity::now_secs())
 }
 
 /// Writes the place `saver` holds that is not written yet, if any.
@@ -1137,10 +1155,13 @@ fn flush_progress(
     saver: &mut ProgressSaver,
     c: &rusqlite::Connection,
 ) -> anyhow::Result<Option<vod_store::Marks>> {
-    saver.flush().map(|w| write_progress(c, w)).transpose()
+    saver
+        .flush()
+        .map(|w| write_progress(c, w, activity::now_secs()))
+        .transpose()
 }
 
-/// Where a movie got to, written before the app quits.
+/// Where a movie or an episode got to, written before the app quits.
 ///
 /// The part of the stop command that matters at quit: its other part, giving
 /// the recording service's connection back, is not needed, since the service
@@ -1152,7 +1173,7 @@ pub fn save_progress_now() {
         return;
     };
     if let Err(e) = crate::catalog::db::with_db(|c| flush_progress(&mut saver, c)) {
-        tracing::warn!("could not record how far into a movie playback got: {e}");
+        tracing::warn!("could not record how far into a title playback got: {e}");
     }
 }
 
@@ -1730,7 +1751,7 @@ fn tick(app: &AppHandle, p: &Player) {
             activity::now_secs(),
         );
 
-        // How far into a movie, for resuming. Nothing is reported before a
+        // How far into a title, for resuming. Nothing is reported before a
         // picture is up: the position a title opens at is not where the
         // viewer got to.
         progress = {
@@ -1739,14 +1760,14 @@ fn tick(app: &AppHandle, p: &Player) {
                 Some(od) => {
                     let end = od.duration.unwrap_or(od.position);
                     saver
-                        .observe(Some(od.id), Some(end), od.duration, false, clock_secs())
+                        .observe(Some(item_of(&od)), Some(end), od.duration, false, clock_secs())
                         .or_else(|| saver.flush())
                 }
                 None => {
                     let shown = matches!(m.dto.state, PlaybackState::Playing | PlaybackState::Paused);
                     let od = m.dto.on_demand;
                     saver.observe(
-                        od.map(|o| o.id),
+                        od.as_ref().map(item_of),
                         od.filter(|_| shown).map(|o| o.position),
                         od.and_then(|o| o.duration),
                         m.dto.state == PlaybackState::Playing,
@@ -1975,6 +1996,28 @@ fn movie_target(movie_id: i64) -> Result<Playable, String> {
 pub async fn play_movie(app: AppHandle, movie_id: i64, start: Option<f64>) -> Result<(), String> {
     let target = movie_target(movie_id)?;
     open_as(&app, Opened::Movie(movie_id), target, OpenKind::OnDemand, None, Via::Direct, None, start).await
+}
+
+/// Where the provider serves an episode.
+///
+/// Under a harness (`ZAPPER_FIXTURE_BASE`) it is a file on the fixture
+/// server, `ZAPPER_FIXTURE_EPISODE` of it (default `movie.mkv`).
+fn episode_target(episode_id: i64) -> Result<Playable, String> {
+    if let Ok(base) = std::env::var("ZAPPER_FIXTURE_BASE") {
+        let name = std::env::var("ZAPPER_FIXTURE_EPISODE").unwrap_or_else(|_| "movie.mkv".into());
+        return Ok(Playable::plain(format!("{}/{name}", base.trim_end_matches('/'))));
+    }
+    source()?
+        .episode(episode_id)
+        .map_err(|e| crate::catalog::sync_engine::scrub(&e.to_string()))
+}
+
+/// Plays an episode, from `start` seconds in when given: on the player's
+/// own connection and under the same rules as a movie.
+#[tauri::command]
+pub async fn play_episode(app: AppHandle, episode_id: i64, start: Option<f64>) -> Result<(), String> {
+    let target = episode_target(episode_id)?;
+    open_as(&app, Opened::Episode(episode_id), target, OpenKind::OnDemand, None, Via::Direct, None, start).await
 }
 
 /// The player's current place on the recording service's connection, if
@@ -2373,7 +2416,7 @@ async fn open_as(
 #[tauri::command]
 pub async fn stop(app: AppHandle) -> Result<(), String> {
     crate::surface::trickplay::clear();
-    // Where a movie got to, before the title is forgotten.
+    // Where a movie or an episode got to, before the title is forgotten.
     let place = PROGRESS.lock().ok().and_then(|mut p| p.flush());
     if let Some(w) = place {
         persist_progress(w);
@@ -2445,7 +2488,7 @@ fn clamp_to_title(seconds: f64, duration: Option<f64>) -> f64 {
     duration.map_or(at, |d| at.min(d))
 }
 
-/// Seeks a movie to `seconds` from its start.
+/// Seeks a movie or an episode to `seconds` from its start.
 #[tauri::command]
 pub async fn seek_to(app: AppHandle, seconds: f64) -> Result<(), String> {
     if !seconds.is_finite() {
@@ -2458,7 +2501,7 @@ pub async fn seek_to(app: AppHandle, seconds: f64) -> Result<(), String> {
         .on_demand
         .is_some();
     if !movie {
-        return Err("seeking to a time is for movies".into());
+        return Err("seeking to a time is for movies and episodes".into());
     }
     on_player(&app, move |p| {
         let at = clamp_to_title(seconds, p.get_f64("duration").filter(|d| d.is_finite() && *d > 0.0));
@@ -2561,7 +2604,7 @@ const MIN_REPORTED_JUMP: f64 = 1.0;
 #[tauri::command]
 pub async fn seek_live(app: AppHandle) -> Result<(), String> {
     // Asking for live means staying there, not visiting once.
-    // A movie has no live edge, and says so.
+    // A movie or an episode has no live edge, and says so.
     let to = {
         let mut m = STATE.lock().expect("player state mutex poisoned");
         let to = m.to_live();
@@ -3013,8 +3056,9 @@ mod tests {
         let mut saver = ProgressSaver::new();
         // Two seconds into a movie: well short of a periodic save, so only a
         // flush at quit would keep this place.
-        assert!(saver.observe(Some(7), Some(1234.5), Some(5400.0), true, 100.0).is_none());
-        assert!(saver.observe(Some(7), Some(1236.5), Some(5400.0), true, 102.0).is_none());
+        let movie = Some(VodItem::movie(7));
+        assert!(saver.observe(movie, Some(1234.5), Some(5400.0), true, 100.0).is_none());
+        assert!(saver.observe(movie, Some(1236.5), Some(5400.0), true, 102.0).is_none());
         let marks = flush_progress(&mut saver, &c).unwrap().expect("a write at quit");
         assert_eq!((marks.position, marks.duration), (Some(1236.5), Some(5400.0)));
         let stored: f64 = c
@@ -3023,6 +3067,25 @@ mod tests {
         assert_eq!(stored, 1236.5);
         // Nothing new since: nothing more to write.
         assert!(flush_progress(&mut saver, &c).unwrap().is_none());
+    }
+
+    #[test]
+    fn quitting_writes_the_place_an_episode_got_to_on_the_episode() {
+        let c = crate::catalog::open_in_memory().unwrap();
+        let mut saver = ProgressSaver::new();
+        let episode = Some(VodItem::episode(7));
+        assert!(saver.observe(episode, Some(600.0), Some(1500.0), true, 100.0).is_none());
+        assert!(saver.observe(episode, Some(602.0), Some(1500.0), true, 102.0).is_none());
+        let marks = flush_progress(&mut saver, &c).unwrap().expect("a write at quit");
+        assert_eq!((marks.position, marks.duration), (Some(602.0), Some(1500.0)));
+        let kinds: Vec<String> = c
+            .prepare("SELECT kind FROM vod_marks WHERE item_id = 7")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(kinds, ["episode"]);
     }
 
     #[test]
@@ -3236,6 +3299,99 @@ mod tests {
         assert!(m.reconfigured(true));
         assert_eq!(m.dto.state, PlaybackState::Playing);
         assert!(m.join.is_none() && m.settle.is_none() && !m.following_live);
+    }
+
+    fn a_playing_episode(id: i64) -> Machine {
+        let mut m = Machine::new();
+        m.opening(Opened::Episode(id));
+        m.live = false;
+        m.starting(LiveStart::CatchUp);
+        m.playing();
+        m
+    }
+
+    #[test]
+    fn an_episode_open_reports_no_channel_and_no_movie() {
+        let mut m = Machine::new();
+        m.opening(Opened::Episode(7));
+        assert_eq!(m.dto.stream_id, None);
+        assert_eq!(
+            m.dto.on_demand.as_ref().map(|o| (o.kind, o.id)),
+            Some((OnDemandKind::Episode, 7))
+        );
+        assert!(!m.dto.at_live_edge && !m.following_live);
+        m.opening(Opened::Movie(7));
+        assert_eq!(
+            m.dto.on_demand.as_ref().map(|o| (o.kind, o.id)),
+            Some((OnDemandKind::Movie, 7))
+        );
+    }
+
+    #[test]
+    fn an_episode_earns_nothing_for_a_channel() {
+        let mut m = a_playing_episode(7);
+        assert!(m.ledger(Instant::now() + Duration::from_secs(10)).is_none());
+        let mut watched = Accumulator::new();
+        let mut earned = None;
+        for t in 0..120 {
+            earned = earned.or(watched.observe(m.dto.stream_id, true, 1.0, t));
+        }
+        assert!(earned.is_none());
+    }
+
+    #[test]
+    fn an_episode_is_never_reconnected() {
+        let network = Ending {
+            kind: EndingKind::Network,
+            status: None,
+            limit: false,
+            slots: None,
+            clip_secs: None,
+        };
+        let mut m = a_playing_episode(7);
+        m.plan_reconnect(network, false);
+        assert!(m.reconnect_due.is_none());
+        assert!(m.follow_live().is_err());
+        assert_eq!(m.to_live(), ToLive::Seek);
+    }
+
+    #[test]
+    fn an_episode_that_plays_to_its_end_stops_rather_than_failing() {
+        let mut m = a_playing_episode(7);
+        m.shown = true;
+        m.apply(&Probe {
+            time_pos: Some(119.6),
+            duration: Some(120.0),
+            ..Probe::default()
+        });
+        m.ended_with(How::Eof);
+        assert_eq!(m.dto.state, PlaybackState::Stopped);
+        assert!(m.dto.ending.is_none());
+        // One cut off in its middle keeps its place, as a movie does.
+        let mut m = a_playing_episode(7);
+        m.shown = true;
+        m.apply(&Probe {
+            time_pos: Some(60.0),
+            duration: Some(120.0),
+            ..Probe::default()
+        });
+        m.ended_with(How::Eof);
+        assert_eq!(m.dto.state, PlaybackState::Failed);
+        let od = m.dto.on_demand.unwrap();
+        assert_eq!((od.kind, od.id, od.position), (OnDemandKind::Episode, 7, 60.0));
+    }
+
+    #[test]
+    fn an_episode_is_written_down_as_an_episode() {
+        let od = OnDemandDto {
+            kind: OnDemandKind::Episode,
+            id: 7,
+            position: 0.0,
+            duration: None,
+            buffered_to: None,
+        };
+        assert_eq!(item_of(&od), VodItem::episode(7));
+        assert_eq!(item_of(&OnDemandDto { kind: OnDemandKind::Movie, ..od }), VodItem::movie(7));
     }
 
     #[test]
@@ -4248,7 +4404,7 @@ mod tests {
     }
 
     #[test]
-    fn a_catch_up_programme_or_a_movie_is_never_off_air() {
+    fn a_catch_up_programme_a_movie_or_an_episode_is_never_off_air() {
         let mut m = Machine::new();
         m.opening(Opened::Channel(7));
         m.live = false;
@@ -4259,6 +4415,11 @@ mod tests {
         assert_eq!(m.dto.state, PlaybackState::Playing);
 
         let mut m = a_playing_movie(3);
+        armed(&mut m);
+        assert_eq!(a_clip_arrives(&mut m), None);
+        assert_eq!(m.dto.state, PlaybackState::Playing);
+
+        let mut m = a_playing_episode(3);
         armed(&mut m);
         assert_eq!(a_clip_arrives(&mut m), None);
         assert_eq!(m.dto.state, PlaybackState::Playing);

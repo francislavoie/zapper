@@ -128,11 +128,16 @@ test("ordinary chrome is not on the allowlist, by class or by ancestor", () => {
     "rec-title",
     "rec-sub",
     "movie-badge",
+    "show-row-seasons",
     "poster-meta",
     "movie-band-facts",
     "movie-tag",
     "sheet-facts",
     "sheet-shelf-head",
+    "show-band-facts",
+    "season-meta",
+    "ep-len",
+    "ep-plot",
   ];
   for (const cls of chrome) {
     const hit = selectableSelectors.find((s) =>

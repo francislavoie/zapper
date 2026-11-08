@@ -9,6 +9,7 @@ import {
   indexOfStream,
   intentOf,
   mediaSessionOf,
+  episodeSessionOf,
   movieSessionOf,
   playbackOf,
   sessionKey,
@@ -51,6 +52,23 @@ test("a movie's session is its title, with its year and length beneath", () => {
   });
   assert.equal(movieSessionOf(m, "stopped"), null);
   assert.equal(movieSessionOf(null, "playing"), null);
+});
+
+test("an episode's session is its show and code, its own title beneath", () => {
+  const p = {
+    series: { cleanName: "Harbour Lights", name: "|EN| Harbour Lights" },
+    episode: { season: 2, episode: 4, episodeEnd: null, title: " Night Shift " },
+  };
+  assert.deepEqual(episodeSessionOf(p, "playing"), {
+    title: "Harbour Lights · S2 E4",
+    subtitle: "Night Shift",
+    artUrl: null,
+    playback: "playing",
+  });
+  const untitled = { ...p, episode: { ...p.episode, title: null } };
+  assert.equal(episodeSessionOf(untitled, "paused").subtitle, null);
+  assert.equal(episodeSessionOf(p, "stopped"), null);
+  assert.equal(episodeSessionOf(null, "playing"), null);
 });
 
 test("the session is the channel, its programme and its logo", () => {

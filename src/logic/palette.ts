@@ -41,6 +41,7 @@ export const ACTION_IDS = [
   "record",
   "recordings",
   "movies",
+  "shows",
   "liveTv",
   "settings",
   "updates",
@@ -83,6 +84,9 @@ export interface ActionConditions {
   /** The account has movies. Left out, they are assumed to be there; only
    *  `false` hides the way to them. */
   movies?: boolean;
+  /** The same for shows. Live TV, the way back, goes only when both are
+   *  `false`: there is no other tab to come back from. */
+  shows?: boolean;
   /** The app's window when not given. */
   capabilities?: Capabilities;
 }
@@ -188,6 +192,7 @@ export const ACTIONS: PaletteAction[] = [
   { id: "recordings", label: "Recordings", hint: "record · dvr", group: "data" },
   // The title bar's tabs, for the keyboard. Both go where the tabs are.
   { id: "movies", label: "Movies", hint: "M", group: "view", needsCapability: "onDemand" },
+  { id: "shows", label: "Shows", hint: "N", group: "view", needsCapability: "onDemand" },
   { id: "liveTv", label: "Live TV", hint: "", group: "view", needsCapability: "onDemand" },
   { id: "settings", label: "Open settings", hint: "⚙", group: "app" },
   // "upgrade" and "version" are what people type looking for this one.
@@ -237,10 +242,14 @@ export function availableActions(
   conditions: ActionConditions = {},
 ): PaletteAction[] {
   const caps = conditions.capabilities ?? DESKTOP;
+  const noMovies = conditions.movies === false;
+  const noShows = conditions.shows === false;
   return ACTIONS.filter(
     (a) =>
       allows(caps, a.needsCapability) &&
-      (conditions.movies !== false || (a.id !== "movies" && a.id !== "liveTv")) &&
+      !(a.id === "movies" && noMovies) &&
+      !(a.id === "shows" && noShows) &&
+      !(a.id === "liveTv" && noMovies && noShows) &&
       (!a.needsPlayer || (playing && caps.playback)) &&
       (!a.needsPrevious || conditions.hasPrevious === true) &&
       (a.needs === undefined || conditions[a.needs] === true),
