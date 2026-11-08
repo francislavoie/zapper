@@ -77,6 +77,7 @@ import {
 } from "./logic/webVod";
 import { heldAfter, nextStart, placeReportDue, playsOnReopen } from "./logic/resume";
 import {
+  TITLE_MAX_SLOTS,
   captureDue,
   keepFrame,
   letterbox,
@@ -220,7 +221,16 @@ let finishedLanguages: Languages | null = null;
  *  title. Kept while the same title is watched again, dropped for another.
  *  `blocked` once the page may not read the picture back (a file the
  *  browser fetched from elsewhere), so it is not asked again. */
-let previews: { item: VodItemRef; frames: Map<number, string>; blocked: boolean } | null = null;
+/** The frames are `blob:` addresses of small JPEGs, which the service's
+ *  content policy lets an image show (a `data:` one it does not); they are
+ *  let go when another title's take their place. `taking` while one is
+ *  being compressed, so the next tick does not take the same slot again. */
+let previews: {
+  item: VodItemRef;
+  frames: Map<number, string>;
+  blocked: boolean;
+  taking: boolean;
+} | null = null;
 
 /** Takes the playing picture's preview for its slot, when one is due. Off
  *  screen: the canvas is never in the page, so nothing is drawn over the
@@ -228,11 +238,13 @@ let previews: { item: VodItemRef; frames: Map<number, string>; blocked: boolean 
 function keepPlayedFrame(s: Session, el: HTMLVideoElement) {
   if (el.readyState < 2 || el.videoWidth <= 0 || el.videoHeight <= 0) return;
   if (!previews || !sameItem(previews.item, s.item)) {
-    previews = { item: s.item, frames: new Map(), blocked: false };
+    for (const url of previews?.frames.values() ?? []) URL.revokeObjectURL(url);
+    previews = { item: s.item, frames: new Map(), blocked: false, taking: false };
   }
-  if (previews.blocked) return;
-  const slot = captureDue(previews.frames, s.position, titleSpacing(durationOf(s)));
-  if (slot === null) return;
+  const kept = previews;
+  if (kept.blocked || kept.taking) return;
+  const slot = captureDue(kept.frames, s.position, titleSpacing(durationOf(s)));
+  if (slot === null || kept.frames.size >= TITLE_MAX_SLOTS) return;
   const c = document.createElement("canvas");
   c.width = 160;
   c.height = 90;
@@ -243,9 +255,22 @@ function keepPlayedFrame(s: Session, el: HTMLVideoElement) {
   const r = letterbox(el.videoWidth, el.videoHeight, c.width, c.height);
   try {
     g.drawImage(el, r.x, r.y, r.width, r.height);
-    previews.frames = keepFrame(previews.frames, slot, c.toDataURL("image/jpeg", 0.75));
+    kept.taking = true;
+    c.toBlob(
+      (blob) => {
+        kept.taking = false;
+        // Another title's by now: this one's store is gone.
+        if (!blob || previews !== kept) return;
+        kept.frames = keepFrame(kept.frames, slot, URL.createObjectURL(blob));
+      },
+      "image/jpeg",
+      0.75,
+    );
   } catch {
-    previews.blocked = true;
+    // The picture may not be read back (a file the browser fetched from
+    // elsewhere): no previews for this title.
+    kept.taking = false;
+    kept.blocked = true;
   }
 }
 
