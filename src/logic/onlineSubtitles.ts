@@ -127,13 +127,28 @@ export function downloadTrackTitle(release: string): string {
   return "Downloaded · " + release.trim().slice(0, 120);
 }
 
+/** A language compared across spellings: OpenSubtitles' code when it has
+ *  one, else as written. */
+const sameLanguage = (a: string | null, b: string | null): boolean =>
+  (toSearchLanguage(a) ?? a?.trim().toLowerCase() ?? "") ===
+  (toSearchLanguage(b) ?? b?.trim().toLowerCase() ?? "");
+
+/** The track a kept file is loaded as, if it is: by its title (the release)
+ *  and its language, since one release often has files in several. */
+export function keptTrack<T extends Pick<TrackDto, "title" | "lang">>(
+  k: KeptSubtitleDto,
+  tracks: readonly T[],
+): T | undefined {
+  const title = downloadTrackTitle(k.release);
+  return tracks.find((t) => t.title === title && sameLanguage(t.lang, k.language));
+}
+
 /** The kept subtitles not already loaded as a track of the stream. */
 export function offeredDownloads(
   kept: readonly KeptSubtitleDto[],
-  tracks: readonly TrackDto[],
+  tracks: readonly Pick<TrackDto, "title" | "lang">[],
 ): KeptSubtitleDto[] {
-  const titles = new Set(tracks.map((t) => t.title));
-  return kept.filter((k) => !titles.has(downloadTrackTitle(k.release)));
+  return kept.filter((k) => keptTrack(k, tracks) === undefined);
 }
 
 function downloadCount(n: number): string {

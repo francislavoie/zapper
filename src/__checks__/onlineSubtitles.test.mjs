@@ -12,6 +12,7 @@ import {
   findHeading,
   isSignedIn,
   signInLine,
+  keptTrack,
   offeredDownloads,
   resultLine,
   searchLanguages,
@@ -71,9 +72,37 @@ test("downloadTrackTitle", () => {
 test("offeredDownloads hides what is loaded", () => {
   const a = { fileId: 1, language: "en", release: "A", hearingImpaired: false, downloadedAt: 1 };
   const b = { ...a, fileId: 2, release: "B" };
-  const tracks = [{ id: 1, title: downloadTrackTitle("A") }];
+  const tracks = [{ id: 1, title: downloadTrackTitle("A"), lang: "eng" }];
   assert.deepEqual(offeredDownloads([a, b], tracks), [b]);
   assert.deepEqual(offeredDownloads([a, b], []), [a, b]);
+});
+
+// English and French files are often made for the same release.
+const en = { fileId: 7000001, language: "en", release: "Film.0001.2021.1080p.TEST", hearingImpaired: false, downloadedAt: 1 };
+const fr = { ...en, fileId: 7000004, language: "fr" };
+
+test("a kept file is its loaded track by release and language", () => {
+  const enTrack = { id: 3, title: downloadTrackTitle(en.release), lang: "eng" };
+  assert.equal(keptTrack(en, [enTrack]), enTrack);
+  assert.equal(keptTrack(fr, [enTrack]), undefined);
+  // Tagged in the standing choice's own spelling, or in either ISO code.
+  for (const lang of ["fre", "fra", "fr"]) {
+    const frTrack = { id: 4, title: downloadTrackTitle(fr.release), lang };
+    assert.equal(keptTrack(fr, [enTrack, frTrack]), frTrack);
+  }
+  // A stream's own track of that language isn't the file.
+  assert.equal(keptTrack(fr, [{ id: 1, title: "French", lang: "fre" }]), undefined);
+  // A language OpenSubtitles has no code for is compared as written.
+  const xx = { ...en, language: "xx" };
+  assert.equal(keptTrack(xx, [{ ...enTrack, lang: "xx" }])?.id, 3);
+  assert.equal(keptTrack(xx, [enTrack]), undefined);
+});
+
+test("with English loaded, French of the same release is still offered", () => {
+  const tracks = [{ id: 3, title: downloadTrackTitle(en.release), lang: "eng" }];
+  assert.deepEqual(offeredDownloads([en, fr], tracks), [fr]);
+  const both = [...tracks, { id: 4, title: downloadTrackTitle(fr.release), lang: "fre" }];
+  assert.deepEqual(offeredDownloads([en, fr], both), []);
 });
 
 test("resultLine", () => {
