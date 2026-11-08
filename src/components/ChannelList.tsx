@@ -332,6 +332,7 @@ export function ChannelList() {
           className="list-search"
           inputRef={searchRef}
           placeholder={SEARCH_PLACEHOLDER}
+          keyHint="/"
           value={state.query}
           onChange={(text) => dispatch({ type: "query", text })}
           clearLabel="Clear search"

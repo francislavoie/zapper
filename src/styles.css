@@ -1134,6 +1134,32 @@ select option {
   padding-right: 1.75rem;
 }
 
+.search-field > .field::placeholder {
+  color: var(--dimmer);
+  opacity: 1;
+}
+
+/* The key that focuses the box, as a small key-cap in its right end. Shown
+   only while the box is empty (placeholder showing) and not focused; the
+   clear button only exists once there is text, so the two never meet. */
+.search-hint {
+  position: absolute;
+  top: 50%;
+  right: 0.3125rem;
+  transform: translateY(-50%);
+  min-width: 1.125rem;
+  height: 1.125rem;
+  padding: 0 0.3125rem;
+  font-size: 0.6875rem;
+  color: var(--dim);
+  pointer-events: none;
+  display: none;
+}
+
+.search-field > .field:placeholder-shown:not(:focus) ~ .search-hint {
+  display: inline-flex;
+}
+
 .search-clear {
   position: absolute;
   top: 50%;

@@ -16,6 +16,7 @@ export function SearchField({
   inputRef,
   onKeyDown,
   clearLabel = "Clear",
+  keyHint,
 }: {
   value: string;
   onChange: (text: string) => void;
@@ -25,6 +26,9 @@ export function SearchField({
   inputRef?: Ref<HTMLInputElement>;
   onKeyDown?: KeyboardEventHandler<HTMLInputElement>;
   clearLabel?: string;
+  /** The key that focuses this box, drawn as a key-cap at its right end
+   *  while the box is empty and unfocused (CSS decides when). */
+  keyHint?: string;
 }) {
   const own = useRef<HTMLInputElement | null>(null);
   const setRefs = (el: HTMLInputElement | null) => {
@@ -44,6 +48,11 @@ export function SearchField({
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={onKeyDown}
       />
+      {keyHint ? (
+        <kbd className="search-hint" aria-hidden="true">
+          {keyHint}
+        </kbd>
+      ) : null}
       {value !== "" ? (
         <button
           type="button"
