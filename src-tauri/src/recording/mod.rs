@@ -59,6 +59,8 @@ pub mod hub;
 pub mod listen;
 #[cfg(feature = "server")]
 pub mod livemux;
+#[cfg(feature = "server")]
+pub mod online_http;
 #[cfg(all(test, feature = "server"))]
 pub(crate) mod test_fixtures;
 #[cfg(feature = "server")]

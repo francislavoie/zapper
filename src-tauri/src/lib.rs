@@ -195,6 +195,14 @@ pub fn run() {
             ipc::recording_cmds::set_recording_linger,
             ipc::recording_cmds::open_recording_folder,
             chrome::title_bar_double_click,
+            ipc::online_cmds::online_services,
+            ipc::online_cmds::set_opensubtitles,
+            ipc::online_cmds::opensubtitles_sign_in,
+            ipc::online_cmds::opensubtitles_sign_out,
+            ipc::online_cmds::find_subtitles,
+            ipc::online_cmds::download_subtitle,
+            ipc::online_cmds::kept_subtitles,
+            ipc::online_cmds::add_subtitle_file,
         ])
         // The save and open dialogs, for the backups. Used from Rust alone:
         // the capability grants the window no `dialog:` permission.

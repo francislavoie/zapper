@@ -7,10 +7,12 @@ import {
   browserSettings,
   errorText,
   idList,
+  languageList,
   requestInit,
   signedOutStatus,
   SYNC_BURST_MS,
   passwordInClear,
+  subtitlesPath,
   syncPollMs,
   withBrowserSettings,
 } from "../logic/web.ts";
@@ -33,6 +35,19 @@ test("addresses leave out what is not given and encode what is", () => {
   );
   assert.equal(apiUrl("/x", { a: undefined }), "/x");
   assert.equal(idList([3, 1, 2]), "3,1,2");
+});
+
+test("a title's subtitles are addressed part by part, languages joined", () => {
+  assert.equal(subtitlesPath("movie", 7), "/api/subtitles/movie/7");
+  assert.equal(subtitlesPath("episode", 9, "file", 7000001), "/api/subtitles/episode/9/file/7000001");
+  assert.equal(subtitlesPath("a/b", 1, "kept"), "/api/subtitles/a%2Fb/1/kept");
+  assert.equal(languageList(["en", "fr"]), "en,fr");
+  assert.equal(languageList([]), null);
+  assert.equal(
+    apiUrl(subtitlesPath("movie", 7), { languages: languageList(["en", "fr"]) }),
+    "/api/subtitles/movie/7?languages=en%2Cfr",
+  );
+  assert.equal(apiUrl(subtitlesPath("movie", 7), { languages: languageList([]) }), "/api/subtitles/movie/7");
 });
 
 test("a change carries the header; a read does not need it", () => {

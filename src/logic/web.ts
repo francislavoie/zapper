@@ -27,6 +27,16 @@ export function apiUrl(path: string, params: Record<string, Param> = {}): string
 /** Stream ids as the service reads them: `1,2,3`. */
 export const idList = (ids: readonly number[]): string => ids.join(",");
 
+/** A movie's or an episode's subtitles on the service:
+ *  `/api/subtitles/{kind}/{id}/…rest`, each part encoded. */
+export const subtitlesPath = (kind: string, id: number, ...rest: (string | number)[]): string =>
+  `/api/subtitles/${[kind, id, ...rest].map((p) => encodeURIComponent(String(p))).join("/")}`;
+
+/** Subtitle languages as the service reads them: `en,fr`; none is the
+ *  settings' own. */
+export const languageList = (languages: readonly string[]): string | null =>
+  languages.length ? languages.join(",") : null;
+
 /** The init for a request. Every one is same-origin with its cookie; one that
  *  changes something carries the CSRF header, and a body goes as JSON. */
 export function requestInit(method: string, body?: unknown): RequestInit {

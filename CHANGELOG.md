@@ -35,6 +35,8 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
 - Radio channels (sound, no picture) play.
 - A subtitles button on the player, remembered across channels and restarts (`C`).
 - **Find subtitles…** for movies and episodes, from OpenSubtitles.com, added to the player at once.
+- Subtitles from OpenSubtitles and Settings › Online services in the browser too, through the
+  recording service.
 - The mouse's back and forward buttons move between screens, and sheets have a Back button.
 
 ### Changed
