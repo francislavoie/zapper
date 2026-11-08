@@ -141,6 +141,9 @@ export function EpisodeList({ episodes, nextUp, onPlay, onWatched }: EpisodeList
   const at = cursor < count ? cursor : count - 1;
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    // The list's own keys only: Enter on a row's ✓ is that button's, and
+    // must mark that episode rather than play the row the cursor is on.
+    if (e.target !== e.currentTarget) return;
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     if (e.key === "Enter") {
       const ep = at >= 0 ? episodes[at] : undefined;

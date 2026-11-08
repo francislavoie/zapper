@@ -43,6 +43,16 @@ export function ShowSheet({ id }: { id: number }) {
   const [brokenBackdrop, setBrokenBackdrop] = useState<string | null>(null);
   const d = details.status === "ready" ? details.data : null;
 
+  // Once the episodes are here, focus moves on to them, the cursor on what
+  // is next: Enter plays it, ↑/↓ choose another, without first tabbing
+  // through the actions and the seasons. Only while focus is still where
+  // opening put it (on the sheet itself).
+  const listed = d !== null;
+  useEffect(() => {
+    if (!listed || document.activeElement !== root.current) return;
+    root.current?.querySelector<HTMLElement>(".ep-list")?.focus({ preventScroll: true });
+  }, [listed]);
+
   // The season chosen, while the show still has it; else the one it opens on.
   const season =
     shows.sheetSeason !== null && d?.seasons.some((s) => s.number === shows.sheetSeason)

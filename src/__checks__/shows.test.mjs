@@ -26,6 +26,7 @@ import {
   showAction,
   showCard,
   showCount,
+  showDetailsCache,
   showFacts,
   showQuery,
   showRailKind,
@@ -172,4 +173,33 @@ test("an episode's progress shows only while it is in progress", () => {
   assert.equal(episodeProgress(ep(1, 1, 1, { position: 1000, durationSecs: 2000, watched: true })), null);
   assert.equal(episodeProgress(ep(1, 1, 1, { position: 1000 })), null);
   assert.equal(episodeProgress(ep(1, 1, 1)), null);
+});
+test("a show's details: an answer from before a clear is not kept", () => {
+  const c = showDetailsCache(2);
+  const asked = c.generation();
+  c.clear(); // another account's shows, while the question was out
+  assert.equal(c.remember(1, 0, "old account", asked), false);
+  assert.equal(c.peek(1), undefined);
+  assert.equal(c.remember(1, 0, "new account", c.generation()), true);
+  assert.deepEqual(c.peek(1), { revision: 0, details: "new account" });
+});
+test("a show's details: an older revision does not replace a newer one", () => {
+  const c = showDetailsCache(2);
+  const g = c.generation();
+  assert.equal(c.remember(1, 2, "newer", g), true);
+  assert.equal(c.remember(1, 1, "older", g), false);
+  assert.equal(c.peek(1).details, "newer");
+  assert.equal(c.remember(1, 2, "again", g), true);
+  assert.equal(c.peek(1).details, "again");
+});
+test("a show's details: the oldest is forgotten past the limit", () => {
+  const c = showDetailsCache(2);
+  const g = c.generation();
+  c.remember(1, 0, "a", g);
+  c.remember(2, 0, "b", g);
+  c.recall(1); // 1 is now the newest
+  c.remember(3, 0, "c", g);
+  assert.equal(c.size(), 2);
+  assert.equal(c.peek(2), undefined);
+  assert.equal(c.peek(1).details, "a");
 });

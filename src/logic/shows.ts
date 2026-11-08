@@ -15,7 +15,15 @@ import type {
   ShowsSummaryDto,
 } from "../types";
 import type { Async } from "./async.ts";
-import { movieBadges, runtime, type MovieRailKind, type PosterCard, type YearRange } from "./movies.ts";
+import {
+  movieBadges,
+  recallDetails,
+  rememberDetails,
+  runtime,
+  type MovieRailKind,
+  type PosterCard,
+  type YearRange,
+} from "./movies.ts";
 import type { FixedRailItem } from "./railItems.ts";
 import { OVERSCAN, computeWindow } from "./virtual.ts";
 
@@ -240,4 +248,41 @@ export function heldEpisode(
 ): number | null {
   if (p.onDemand) return p.onDemand.kind === "episode" ? p.onDemand.id : null;
   return p.finished?.kind === "episode" ? p.finished.id : null;
+}
+
+/** A show's details as kept, with the revision they were read at. */
+export interface KeptDetails<T> {
+  revision: number;
+  details: T;
+}
+
+/** The shows' details, kept per show (the `max` most recent) with the
+ *  revision each was read at, and a generation that `clear` moves on: an
+ *  answer to a question asked before the clear (another account's shows)
+ *  is not kept, nor one older than what is already kept. */
+export function showDetailsCache<T>(max: number) {
+  const kept = new Map<number, KeptDetails<T>>();
+  let generation = 0;
+  return {
+    /** Taken when a question is asked, handed back with its answer. */
+    generation: () => generation,
+    /** What is kept for `id`, without making it the newest. */
+    peek: (id: number): KeptDetails<T> | undefined => kept.get(id),
+    /** What is kept for `id`; asking makes it the newest. */
+    recall: (id: number): KeptDetails<T> | undefined => recallDetails(kept, id),
+    /** Keeps an answer read at `revision` to a question asked in `asked`;
+     *  whether it was kept. */
+    remember(id: number, revision: number, details: T, asked: number): boolean {
+      if (asked !== generation) return false;
+      const now = kept.get(id);
+      if (now && now.revision > revision) return false;
+      rememberDetails(kept, id, { revision, details }, max);
+      return true;
+    },
+    clear(): void {
+      kept.clear();
+      generation++;
+    },
+    size: () => kept.size,
+  };
 }
