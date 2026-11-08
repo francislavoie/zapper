@@ -169,6 +169,7 @@ pub fn run() {
             ipc::update_cmds::update_install,
             ipc::update_cmds::update_restart,
             ipc::update_cmds::update_open_page,
+            ipc::update_cmds::open_opensubtitles_sign_up,
             ipc::backup_cmds::activity_rows,
             ipc::backup_cmds::import_activity,
             ipc::backup_cmds::export_backup,

@@ -162,7 +162,7 @@ test("findHeading", () => {
 // ---- the finder's state (src/onlineSubtitles.ts)
 import {
   clearKept, closeFindSubtitles, currentFind, keptChanged, keptFor, loadKept, openFindSubtitles,
-  setKeptSource,
+  currentServices, loadServices, setKeptSource, setServices, setServicesSource,
 } from "../onlineSubtitles.ts";
 
 test("the finder opens on a title and closes", () => {
@@ -193,4 +193,57 @@ test("the kept cache is keyed by kind and id, and kept for 20 titles", async () 
   assert.ok(keptFor({ kind: "movie", id: 119 }));
   setKeptSource();
   clearKept();
+});
+
+const deferred = () => {
+  let resolve;
+  const promise = new Promise((r) => (resolve = r));
+  return { promise, resolve };
+};
+const kept1 = (release) => [{ fileId: 1, language: "en", release, hearingImpaired: false, downloadedAt: 1 }];
+
+test("a slow earlier read landing after a newer one is dropped", async () => {
+  clearKept();
+  const slow = deferred();
+  const fast = deferred();
+  const queue = [slow, fast];
+  setKeptSource(() => queue.shift().promise);
+  const t = { kind: "movie", id: 5 };
+  const first = loadKept(t);
+  const second = loadKept(t, true);
+  fast.resolve(kept1("new"));
+  await second;
+  slow.resolve(kept1("old"));
+  await first;
+  assert.equal(keptFor(t)[0].release, "new");
+  setKeptSource();
+  clearKept();
+});
+test("reads of one title at the same time share one request", async () => {
+  clearKept();
+  let calls = 0;
+  const d = deferred();
+  setKeptSource(() => (calls++, d.promise));
+  const t = { kind: "episode", id: 9 };
+  const a = loadKept(t);
+  const b = loadKept(t);
+  d.resolve(kept1("x"));
+  await Promise.all([a, b]);
+  assert.equal(calls, 1);
+  setKeptSource();
+  clearKept();
+});
+
+const services = (user) => ({
+  openSubtitles: { enabled: true, languages: [], signedInAs: user, signInRefused: false, downloadsLeft: null, downloadsResetAt: null },
+});
+test("a settings read still in flight does not overwrite a newer answer", async () => {
+  const d = deferred();
+  setServicesSource(() => d.promise);
+  const load = loadServices();
+  setServices(services("tester"));
+  d.resolve(services(null));
+  await load;
+  assert.equal(currentServices().data.openSubtitles.signedInAs, "tester");
+  setServicesSource();
 });
