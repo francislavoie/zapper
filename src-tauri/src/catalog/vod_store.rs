@@ -109,6 +109,13 @@ pub struct MovieRow {
     pub category_id: Option<String>,
     pub favourite: bool,
     pub watched: bool,
+    /// Where it was left, in seconds, as last played (kept when it is
+    /// watched or removed from Continue watching).
+    pub position: Option<f64>,
+    /// The length the player measured.
+    pub duration: Option<f64>,
+    /// When it was last played.
+    pub played_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -133,11 +140,14 @@ pub struct Marks {
     pub watched: bool,
     pub position: Option<f64>,
     pub duration: Option<f64>,
+    pub played_at: Option<i64>,
 }
 
-const COLUMNS: &str = "m.movie_id, m.name, m.clean_name, m.year, m.rating, m.poster_url,
-    m.added, m.duration_secs, m.category_id,
-    k.favourite_at IS NOT NULL, k.watched_at IS NOT NULL";
+/// What [`row`] reads: the movie, then its marks.
+pub(crate) const COLUMNS: &str = "m.movie_id, m.name, m.clean_name, m.year, m.rating,
+    m.poster_url, m.added, m.duration_secs, m.category_id,
+    k.favourite_at IS NOT NULL, k.watched_at IS NOT NULL,
+    k.position, k.duration, k.played_at";
 
 /// Movies with the current catalogue's marks beside them.
 const MARKED: &str = concat!(
@@ -148,13 +158,13 @@ const MARKED: &str = concat!(
 
 /// The marks first, for the lists that are marks: a few rows to look up in
 /// the movies, rather than every movie to look up a mark for.
-const MARKS_FIRST: &str = concat!(
+pub(crate) const MARKS_FIRST: &str = concat!(
     "vod_marks k JOIN movies m ON m.movie_id = k.item_id AND k.origin = ",
     current_origin_sql!(),
     " AND k.kind = 'movie'"
 );
 
-fn row(r: &Row) -> rusqlite::Result<MovieRow> {
+pub(crate) fn row(r: &Row) -> rusqlite::Result<MovieRow> {
     Ok(MovieRow {
         movie_id: r.get(0)?,
         name: r.get(1)?,
@@ -167,6 +177,9 @@ fn row(r: &Row) -> rusqlite::Result<MovieRow> {
         category_id: r.get(8)?,
         favourite: r.get(9)?,
         watched: r.get(10)?,
+        position: r.get(11)?,
+        duration: r.get(12)?,
+        played_at: r.get(13)?,
     })
 }
 
@@ -425,7 +438,8 @@ pub(crate) fn origin(conn: &Connection) -> Result<String> {
 pub(crate) fn marks_of(conn: &Connection, origin: &str, kind: ItemKind, id: i64) -> Result<Marks> {
     Ok(conn
         .query_row(
-            "SELECT favourite_at IS NOT NULL, watched_at IS NOT NULL, position, duration
+            "SELECT favourite_at IS NOT NULL, watched_at IS NOT NULL, position, duration,
+                    played_at
              FROM vod_marks WHERE origin = ?1 AND kind = ?2 AND item_id = ?3",
             params![origin, kind.as_str(), id],
             |r| {
@@ -434,6 +448,7 @@ pub(crate) fn marks_of(conn: &Connection, origin: &str, kind: ItemKind, id: i64)
                     watched: r.get(1)?,
                     position: r.get(2)?,
                     duration: r.get(3)?,
+                    played_at: r.get(4)?,
                 })
             },
         )
