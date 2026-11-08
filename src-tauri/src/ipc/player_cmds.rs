@@ -3782,7 +3782,7 @@ pub(crate) async fn add_external_subtitle(
             .map(|m| may_add_subtitle(&m.dto, kind, id))
             .unwrap_or(false);
         if !open {
-            return Err("that title is no longer playing".to_owned());
+            return Err("That title is no longer playing.".to_owned());
         }
         let args: Vec<&str> = args.iter().map(String::as_str).collect();
         p.command("sub-add", &args)
