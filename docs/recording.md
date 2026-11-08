@@ -549,7 +549,8 @@ the password in its config directory, readable only by it, and turns the browser
 file into a WebVTT one. Signing in is needed for the first download only; searching works without.
 
 Downloaded files are kept with the title, per OpenSubtitles account, and listed again when the
-title is next opened. Turning the service off in Settings makes the service stop asking it. The requests are in the API table below.
+title is next opened. Turning the service off in Settings makes the service stop asking it. The
+requests are in the API table below.
 
 ## How it behaves
 
