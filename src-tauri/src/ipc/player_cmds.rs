@@ -1833,10 +1833,8 @@ fn tick(app: &AppHandle, p: &Player) {
         Signal::SubText(text) => Some(text.as_str()),
         _ => None,
     });
-    let captions_shown = track_lists.as_ref().map(|(_, subtitles)| captions::captions_selected(subtitles));
-    if captions_shown.is_some() || caption_text.is_some() {
-        place_captions(p, captions_shown, caption_text);
-    }
+    let captions_chosen = track_lists.as_ref().map(|(_, subtitles)| captions::captions_selected(subtitles));
+    place_captions(p, captions_chosen, caption_text);
     let mut finished = None;
     // Whether the file mpv has is the one the current open loaded: its
     // `path` against the address. Read before the state lock, and kept out
@@ -3382,16 +3380,33 @@ fn open_subtitles(p: &Player, pref: &SubtitlePref) {
 /// Closed captions placed where the broadcaster put them, as
 /// `ipc::captions` works out from the caption's grid position: mpv does not
 /// rescale those positions on wide video, so they are drawn without them and
-/// placed again from the grid. `selected` when the track list said whether
-/// captions are the track shown; `text` when the caption on screen changed.
+/// placed again from the grid, against where the picture is in the window.
+/// `selected` when the track list said whether captions are the track
+/// chosen; `text` when the caption on screen changed. Called on every
+/// heartbeat while captions are chosen, so a window resized, or the picture
+/// docked, places them again.
 static CAPTIONS: Mutex<captions::Captions> = Mutex::new(captions::Captions::new());
 
 fn place_captions(p: &Player, selected: Option<bool>, text: Option<&str>) {
     let Ok(mut c) = CAPTIONS.lock() else {
         return;
     };
-    let aspect = text.and_then(|_| p.get_f64("video-params/aspect"));
-    for (key, value) in c.update(selected, text, aspect) {
+    // Captions not chosen, and not chosen now: nothing to place or put back.
+    if !c.on() && selected != Some(true) {
+        return;
+    }
+    let dim = |k: &str| p.get_f64(&format!("osd-dimensions/{k}"));
+    let view = (|| {
+        Some(captions::View {
+            w: dim("w")?,
+            h: dim("h")?,
+            ml: dim("ml")?,
+            mr: dim("mr")?,
+            mt: dim("mt")?,
+            mb: dim("mb")?,
+        })
+    })();
+    for (key, value) in c.update(selected, text, view.as_ref(), |k| p.get_string(k)) {
         if let Err(e) = p.set_property(key, &value) {
             tracing::warn!("could not set {key} for the captions: {e}");
             c.forget(key);

@@ -51,15 +51,20 @@
 //! on, off and on again mid-play, and switched from English to French, the
 //! episode plays on; French chosen on one shows on the next; turned off,
 //! they stay off on the next; and the settings' choice, applied as the
-//! interface applies it, is what the next shows.
+//! interface applies it, is what the next shows. Against `fake_stream.py
+//! --keep-alive-timeout 5` the switch comes after the server has closed the
+//! connection the episode arrived on.
 //!
 //! `--captions` plays a channel with closed captions (CEA-608 in the
-//! picture, on 16:9 video) that shows one caption top left, one centred at
-//! the bottom and one on the right, chooses the captions, and checks that
-//! mpv draws each where the caption's grid says, not where mpv's own
-//! rescaling would put it; then that turning them off hides them and keeps
-//! the track, and that with no captions track mpv's own placement is back.
-//! `ZAPPER_CAPTION_SHOTS=<dir>` saves each frame there.
+//! picture) that shows one caption top left, one centred at the bottom and
+//! one on the right: `ZAPPER_FIXTURE_NAME=captions169.ts` (16:9) or
+//! `captions43.ts` (4:3, with bands either side in a wider window), which
+//! `tools/make_fixtures.sh` makes. It chooses the captions and checks that
+//! mpv draws each on its side and rows of the picture, a side caption's edge
+//! inside the picture rather than in a band; that turning them off hides
+//! them and keeps the track; and that with no captions track mpv's own
+//! values are back. `ZAPPER_CAPTION_SHOTS=<dir>` saves the window at each
+//! caption there.
 //!
 //! `--ending <kind>` plays a channel that is expected to stop by itself, and
 //! checks it stops the way the app explains it (`offAir`, `dropped`, …), as
@@ -129,6 +134,7 @@ fn main() {
         .setup(move |app| {
             let window = app.get_webview_window("main").unwrap();
             let ov = zapper_lib::surface::linux::overlay::install(&window)?;
+            OVERLAY.with(|o| *o.borrow_mut() = Some(ov.clone()));
             let player = zapper_lib::surface::linux::render::new_player(&ov.gl_area)?;
             // Kill the audio path entirely before anything is loaded. Muting
             // or zeroing the volume still opens the device and still leaks
@@ -911,6 +917,33 @@ async fn run_subtitles(app: &tauri::AppHandle) -> Result<String, String> {
         .into())
 }
 
+#[cfg(target_os = "linux")]
+thread_local! {
+    /// The window's layers, for a picture of what it shows (`grab`).
+    static OVERLAY: std::cell::RefCell<Option<zapper_lib::surface::linux::overlay::Overlay>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Saves what the window shows to `path`: the video layer as mpv drew it
+/// into the window (bands, subtitles and all), read back from GL, under the
+/// interface.
+#[cfg(target_os = "linux")]
+async fn grab(app: &tauri::AppHandle, path: String) -> Result<(), String> {
+    use zapper_lib::surface::linux::capture;
+    app.run_on_main_thread(move || capture::request(path)).map_err(|e| e.to_string())?;
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.run_on_main_thread(move || {
+        let r = OVERLAY.with(|o| match o.borrow().as_ref() {
+            Some(ov) => capture::finish(ov).map(|_| ()).map_err(|e| e.to_string()),
+            None => Err("no window to picture".to_owned()),
+        });
+        let _ = tx.send(r);
+    })
+    .map_err(|e| e.to_string())?;
+    rx.recv_timeout(std::time::Duration::from_secs(10)).map_err(|e| e.to_string())?
+}
+
 /// The `--captions` run; see the top of the file.
 #[cfg(target_os = "linux")]
 async fn run_captions(app: &tauri::AppHandle) -> Result<String, String> {
@@ -918,26 +951,33 @@ async fn run_captions(app: &tauri::AppHandle) -> Result<String, String> {
     use zapper_lib::ipc::player_cmds as cmds;
     use zapper_lib::ipc::types::PlaybackState;
 
-    /// mpv's caption text and the placement properties, read on the main
-    /// thread; with `shot`, the frame and its subtitles saved there too.
-    async fn read(app: &tauri::AppHandle, shot: Option<String>) -> Option<[String; 5]> {
+    /// What mpv says, read on the main thread: the caption text and the
+    /// placement properties, then the window and the picture's bands in it
+    /// (`osd-dimensions`).
+    const KEYS: [&str; 9] = [
+        "sub-text/ass",
+        "sub-ass-override",
+        "sub-pos",
+        "sub-align-x",
+        "sub-margin-x",
+        "osd-dimensions/w",
+        "osd-dimensions/ml",
+        "osd-dimensions/mr",
+        "sub-visibility",
+    ];
+    async fn read(app: &tauri::AppHandle) -> Option<[String; 9]> {
         let (tx, rx) = std::sync::mpsc::channel();
         app.run_on_main_thread(move || {
-            let v = zapper_lib::surface::mpv::with_player(|p| {
-                if let Some(path) = &shot {
-                    if let Err(e) = p.command("screenshot-to-file", &[path, "subtitles"]) {
-                        eprintln!("could not save {path}: {e}");
-                    }
-                }
-                ["sub-text/ass", "sub-ass-override", "sub-pos", "sub-align-x", "sub-margin-x"]
-                    .map(|k| p.get_string(k).unwrap_or_default())
-            });
+            let v = zapper_lib::surface::mpv::with_player(|p| KEYS.map(|k| p.get_string(k).unwrap_or_default()));
             let _ = tx.send(v);
         })
         .ok()?;
         rx.recv_timeout(Duration::from_secs(5)).ok().flatten()
     }
+    let num = |s: &str| s.parse::<f64>().unwrap_or(f64::NAN);
 
+    // mpv's own values, before anything is played.
+    let before = read(app).await.ok_or("could not read mpv's properties")?;
     let id = resolve_stream_id().await?;
     cmds::play(app.clone(), id).await?;
     let opened = await_state(Duration::from_secs(25), |s| s.state == PlaybackState::Playing).await;
@@ -960,42 +1000,67 @@ async fn run_captions(app: &tauri::AppHandle) -> Result<String, String> {
     // The fixture loops three captions: top left, centred at the bottom, and
     // on the right. Each one's placement, once mpv draws it.
     let shots = std::env::var("ZAPPER_CAPTION_SHOTS").ok();
-    let want = [
-        ("TOP LEFT", "21", "left", "top-left"),
-        ("THE BOTTOM", "90", "center", "bottom-centre"),
-        ("RIGHT SIDE", "90", "right", "right"),
-    ];
+    let name = std::env::var("ZAPPER_FIXTURE_NAME").unwrap_or_default();
+    let tag = name.trim_end_matches(".ts");
+    let want = [("TOP LEFT", "left", "top-left"), ("THE BOTTOM", "center", "bottom-centre"), ("RIGHT SIDE", "right", "right")];
     let mut seen = Vec::new();
     // Every distinct reading, for a run that fails to say what mpv did.
-    let mut readings: Vec<[String; 5]> = Vec::new();
+    let mut readings: Vec<[String; 9]> = Vec::new();
     let deadline = Instant::now() + Duration::from_secs(45);
-    for (text, pos, align, name) in want {
+    for (text, align, what) in want {
         loop {
             if Instant::now() > deadline {
                 return Err(format!(
-                    "the {name} caption was not seen placed (seen: {seen:?}; mpv said {readings:?})"
+                    "the {what} caption was not seen placed (seen: {seen:?}; mpv said {readings:?})"
                 ));
             }
-            let Some(v) = read(app, None).await else {
+            let Some(v) = read(app).await else {
                 return Err("could not read mpv's properties".into());
             };
             if readings.last() != Some(&v) && readings.len() < 40 {
                 readings.push(v.clone());
             }
-            // mpv reads `sub-pos` back as a decimal.
-            let at = v[2].parse::<f64>().ok() == pos.parse::<f64>().ok();
-            if v[0].contains(text) && at && v[3] == align {
-                if v[1] != "strip" {
-                    return Err(format!("the {name} caption was drawn with sub-ass-override={}", v[1]));
-                }
-                // A moment for the frame to carry it, then the picture.
-                tokio::time::sleep(Duration::from_millis(300)).await;
-                let shot = shots.as_ref().map(|d| format!("{d}/caption-{name}.png"));
-                read(app, shot).await;
-                seen.push(format!("{name}: sub-pos {} {} margin {}", v[2], v[3], v[4]));
-                break;
+            if !v[0].contains(text) {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                continue;
             }
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            // The placement follows the caption on the next heartbeat.
+            tokio::time::sleep(Duration::from_millis(600)).await;
+            let Some(v) = read(app).await else {
+                return Err("could not read mpv's properties".into());
+            };
+            if !v[0].contains(text) {
+                continue;
+            }
+            if v[3] != align {
+                return Err(format!("the {what} caption was aligned {}, not {align}", v[3]));
+            }
+            if v[1] != "strip" {
+                return Err(format!("the {what} caption was drawn with sub-ass-override={}", v[1]));
+            }
+            let (pos, margin, w, ml, mr) = (num(&v[2]), num(&v[4]), num(&v[5]), num(&v[6]), num(&v[7]));
+            // Where mpv puts a side caption's edge, in the window's pixels
+            // (see ipc::captions): inside the picture, never in a band.
+            let edge = margin * (w - ml - mr) / 960.0;
+            match what {
+                "top-left" if !(pos < 40.0 && edge > ml + 1.0) => {
+                    return Err(format!("top left placed at sub-pos {pos}, its edge {edge:.0}px with a {ml}px band"));
+                }
+                "bottom-centre" if pos < 70.0 => {
+                    return Err(format!("the bottom caption placed at sub-pos {pos}"));
+                }
+                "right" if !(pos > 70.0 && edge > mr + 1.0) => {
+                    return Err(format!("the right caption placed at sub-pos {pos}, its edge {edge:.0}px with a {mr}px band"));
+                }
+                _ => {}
+            }
+            // A moment for the frame to carry it, then the picture.
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            if let Some(dir) = &shots {
+                grab(app, format!("{dir}/{tag}-{what}.png")).await?;
+            }
+            seen.push(format!("{what}: sub-pos {pos} {align} margin {margin} (edge {edge:.0}px, bands {ml}/{mr}px of {w})"));
+            break;
         }
     }
 
@@ -1009,21 +1074,18 @@ async fn run_captions(app: &tauri::AppHandle) -> Result<String, String> {
     if cmds::player_state().await?.state != PlaybackState::Playing {
         return Err("turning captions off stopped the channel".into());
     }
-    // No captions track any more (stopped): everything back as mpv has it.
+    // No captions track any more (stopped): mpv's own values back.
     cmds::stop(app.clone()).await?;
     tokio::time::sleep(Duration::from_millis(1200)).await;
-    let v = read(app, None).await.ok_or("could not read mpv's properties")?;
-    let defaults = v[1] == "scale"
-        && v[2].parse::<f64>().ok() == Some(100.0)
-        && v[3] == "center"
-        && v[4] == "19";
-    if !defaults {
-        return Err(format!("with no captions track, mpv was left with {:?}", &v[1..]));
+    let v = read(app).await.ok_or("could not read mpv's properties")?;
+    if v[1..5] != before[1..5] {
+        return Err(format!("with no captions track, mpv was left with {:?}, not {:?}", &v[1..5], &before[1..5]));
     }
     Ok(format!(
         "{}; turned off, hidden with the track kept, playing on; with no captions track, mpv's \
-         own placement again",
-        seen.join("; ")
+         own values ({}) again",
+        seen.join("; "),
+        before[1..5].join(", ")
     ))
 }
 
