@@ -19,9 +19,34 @@ pub fn decode(bytes: &[u8]) -> String {
     if let Some(rest) = bytes.strip_prefix(b"\xfe\xff") {
         return utf16(rest, u16::from_be_bytes);
     }
+    if let Some(unit) = utf16_without_bom(bytes) {
+        return utf16(bytes, unit);
+    }
     match std::str::from_utf8(bytes) {
         Ok(text) => text.to_owned(),
         Err(_) => bytes.iter().map(|&b| windows_1252(b)).collect(),
+    }
+}
+
+/// UTF-16 without a byte-order mark, told by its NULs: a subtitle file is
+/// mostly Latin text, whose every other byte is then 0 (the second of each
+/// pair little-endian, the first big-endian). Judged on the first 512 bytes.
+fn utf16_without_bom(bytes: &[u8]) -> Option<fn([u8; 2]) -> u16> {
+    let (pairs, _) = bytes[..bytes.len().min(512)].as_chunks::<2>();
+    if pairs.len() < 4 {
+        return None;
+    }
+    let first = pairs.iter().filter(|p| p[0] == 0).count();
+    let second = pairs.iter().filter(|p| p[1] == 0).count();
+    // Most pairs have their NUL on one side, and almost none on the other.
+    let most = |n: usize| n * 10 >= pairs.len() * 7;
+    let few = |n: usize| n * 10 <= pairs.len();
+    if most(second) && few(first) {
+        Some(u16::from_le_bytes)
+    } else if most(first) && few(second) {
+        Some(u16::from_be_bytes)
+    } else {
+        None
     }
 }
 
@@ -124,39 +149,55 @@ fn time(t: &str) -> Option<String> {
 }
 
 /// A line of cue text, its markup reduced to what WebVTT and zapper show.
+///
+/// Byte by byte: everything it acts on is ASCII, so every index it cuts at
+/// is a character boundary. Each search for a closer stops at the next
+/// opener of its kind, so no byte is looked at more than a few times,
+/// however hostile the line.
 fn clean(line: &str) -> String {
-    let mut out = String::new();
-    let mut rest = line;
-    while let Some(c) = rest.chars().next() {
-        if rest.starts_with("{\\") {
-            if let Some(end) = rest.find('}') {
-                rest = &rest[end + 1..];
-                continue;
-            }
-        }
-        if let Some(after) = rest.strip_prefix("-->") {
-            out.push('→');
-            rest = after;
-            continue;
-        }
-        if c == '<' {
-            if let Some(end) = rest.find('>') {
-                let tag = &rest[1..end];
-                if is_tag(tag) {
-                    out.push_str(kept_tag(tag).unwrap_or(""));
-                    rest = &rest[end + 1..];
+    let b = line.as_bytes();
+    let mut out = String::with_capacity(line.len());
+    // Text since the last markup, copied in one go.
+    let mut text_from = 0;
+    let mut i = 0;
+    while i < b.len() {
+        let (put, next) = match b[i] {
+            b'{' if b.get(i + 1) == Some(&b'\\') => match closer(b, i, b'{', b'}') {
+                Some(end) => ("", end + 1),
+                None => {
+                    i += 1;
                     continue;
                 }
+            },
+            b'-' if b[i..].starts_with(b"-->") => ("→", i + 3),
+            b'<' => match closer(b, i, b'<', b'>') {
+                Some(end) if is_tag(&line[i + 1..end]) => {
+                    (kept_tag(&line[i + 1..end]).unwrap_or(""), end + 1)
+                }
+                // A `<` that starts no tag would start one in WebVTT.
+                _ => ("&lt;", i + 1),
+            },
+            // As text, not the start of a character reference.
+            b'&' => ("&amp;", i + 1),
+            _ => {
+                i += 1;
+                continue;
             }
-            // A `<` that starts no tag would start one in WebVTT.
-            out.push_str("&lt;");
-            rest = &rest[1..];
-            continue;
-        }
-        out.push(c);
-        rest = &rest[c.len_utf8()..];
+        };
+        out.push_str(&line[text_from..i]);
+        out.push_str(put);
+        i = next;
+        text_from = next;
     }
+    out.push_str(&line[text_from..]);
     out.trim().to_owned()
+}
+
+/// Where the `close` for the `open` at `at` is, if it comes before another
+/// `open`.
+fn closer(b: &[u8], at: usize, open: u8, close: u8) -> Option<usize> {
+    let hit = at + 1 + b[at + 1..].iter().position(|&c| c == open || c == close)?;
+    (b[hit] == close).then_some(hit)
 }
 
 fn is_tag(inside: &str) -> bool {
@@ -206,6 +247,37 @@ mod tests {
     }
 
     #[test]
+    fn ampersands_and_unclosed_markup_stay_text() {
+        let srt = "1\n00:00:01,000 --> 00:00:02,000\nTest &lt; line & 8\n\
+                   {\\an8 <i Test {\\i1}line <<i>9</i>\n";
+        assert_eq!(
+            to_vtt(srt),
+            "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nTest &amp;lt; line &amp; 8\n\
+             {\\an8 &lt;i Test line &lt;<i>9</i>\n"
+        );
+    }
+
+    #[test]
+    fn a_hostile_line_takes_linear_time() {
+        let half = SUBTITLE_MAX_BYTES / 2;
+        for line in [
+            "<".repeat(SUBTITLE_MAX_BYTES),
+            "{\\".repeat(half),
+            "<a".repeat(half),
+            format!("<{}", "a".repeat(SUBTITLE_MAX_BYTES)),
+            format!("{{\\{}", "a".repeat(SUBTITLE_MAX_BYTES)),
+        ] {
+            let srt = format!("1\n00:00:01,000 --> 00:00:02,000\n{line}\n");
+            let started = std::time::Instant::now();
+            let vtt = to_vtt(&srt);
+            let took = started.elapsed();
+            assert!(vtt.len() > SUBTITLE_MAX_BYTES / 2);
+            // Linear is milliseconds even unoptimised; quadratic was hours.
+            assert!(took < std::time::Duration::from_secs(1), "{took:?}");
+        }
+    }
+
+    #[test]
     fn latin1_reads_and_html_is_not_a_subtitle() {
         assert_eq!(decode(b"\xe9"), "é");
         assert_eq!(
@@ -214,6 +286,13 @@ mod tests {
         );
         assert_eq!(decode("café".as_bytes()), "café");
         assert_eq!(decode(b"\xff\xfeT\x00e\x00"), "Te");
+        // UTF-16 without its mark, either way round.
+        let text = "1\r\n00:00:01,000 --> 00:00:02,000\r\nTest line 1 é\r\n";
+        let le: Vec<u8> = text.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        let be: Vec<u8> = text.encode_utf16().flat_map(u16::to_be_bytes).collect();
+        assert_eq!(decode(&le), text);
+        assert_eq!(decode(&be), text);
+        assert_eq!(decode(b"Te\x00t"), "Te\u{0}t", "a stray NUL is not UTF-16");
         let srt = "1\n00:00:01,000 --> 00:00:02,000\nTest line 1 of file 7000001\n";
         assert!(looks_like_srt(srt));
         assert!(!looks_like_srt(

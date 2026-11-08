@@ -3,11 +3,11 @@
 //! rate limit and keeps URLs out of errors and logs.
 //!
 //! [`send`] waits its turn on the service's [`Pacer`], and answers
-//! [`OnlineError::Busy`] at once rather than wait longer than [`MAX_WAIT`]:
-//! somebody is looking at a menu. A 429 blocks the pacer until its
-//! `Retry-After`, so nothing else is sent to that service before then; a
-//! short one is waited out and retried once. A 502 or 503 is retried once
-//! after half a second. Each exchange is logged as its method, host, path,
+//! [`OnlineError::Busy`] at once rather than wait longer than [`MAX_WAIT`]
+//! in all: somebody is looking at a menu. A 429 blocks the pacer until its
+//! `Retry-After`, so nothing else is sent to that service before then; one
+//! that ends within that time is waited out and retried once. A 502 or 503
+//! is retried once after half a second, time allowing. Each exchange is logged as its method, host, path,
 //! status and the service's `x-ratelimit-remaining`, and nothing else: no
 //! query, no header, no body.
 
@@ -25,8 +25,8 @@ pub const USER_AGENT: &str = concat!("zapper v", env!("CARGO_PKG_VERSION"));
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// The whole exchange, body included.
 pub const TIMEOUT: Duration = Duration::from_secs(20);
-/// The longest [`send`] waits for its turn; past it, the answer is
-/// [`OnlineError::Busy`].
+/// The longest [`send`] waits in all, for its turns and a 429's retry; past
+/// it, the answer is [`OnlineError::Busy`].
 pub const MAX_WAIT: Duration = Duration::from_secs(5);
 /// Redirects followed, at most.
 pub const MAX_HOPS: usize = 3;
@@ -234,11 +234,19 @@ fn unix_at(until: Instant) -> i64 {
     unix_now() + left.as_secs_f64().ceil() as i64
 }
 
-async fn take_turn(pacer: &Pacer) -> Result<(), OnlineError> {
+/// Waits for `pacer` to let a request go, or answers Busy when that would
+/// be after `deadline`.
+async fn take_turn(pacer: &Pacer, deadline: Instant) -> Result<(), OnlineError> {
     loop {
-        match pacer.admit(Instant::now()) {
+        let now = Instant::now();
+        match pacer.admit(now) {
             Admit::Go => return Ok(()),
-            Admit::Wait(d) => tokio::time::sleep(d).await,
+            Admit::Wait(d) if now + d <= deadline => tokio::time::sleep(d).await,
+            Admit::Wait(d) => {
+                return Err(OnlineError::Busy {
+                    retry_at: unix_at(now + d),
+                })
+            }
             Admit::Busy { until } => {
                 return Err(OnlineError::Busy {
                     retry_at: unix_at(until),
@@ -279,9 +287,11 @@ async fn exchange(
     } else {
         " (a download link)".to_owned()
     };
+    // MAX_WAIT bounds all the waiting a request does, not each wait.
+    let deadline = Instant::now() + MAX_WAIT;
     let mut retried = false;
     loop {
-        take_turn(pacer).await?;
+        take_turn(pacer, deadline).await?;
         let Some(attempt) = request.try_clone() else {
             return Err(OnlineError::invalid("the request could not be repeated"));
         };
@@ -306,14 +316,14 @@ async fn exchange(
                 let wait = retry_after(resp.headers()).unwrap_or(DEFAULT_RETRY);
                 let until = Instant::now() + wait;
                 pacer.block_until(until);
-                if retried || wait > MAX_WAIT {
+                if retried || until > deadline {
                     return Err(OnlineError::Busy {
                         retry_at: unix_at(until),
                     });
                 }
                 retried = true;
             }
-            502 | 503 if !retried => {
+            502 | 503 if !retried && Instant::now() + UNAVAILABLE_PAUSE <= deadline => {
                 retried = true;
                 tokio::time::sleep(UNAVAILABLE_PAUSE).await;
             }

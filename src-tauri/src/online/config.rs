@@ -95,20 +95,23 @@ pub fn load() -> OnlineConfig {
 }
 
 pub fn load_from(path: &Path) -> OnlineConfig {
+    read_from(path).unwrap_or_else(|e| {
+        tracing::warn!("{e}; using the defaults");
+        OnlineConfig::default()
+    })
+}
+
+/// The settings at `path`: the defaults when there is no file or it is not
+/// valid settings; an error when the file is there but could not be read at
+/// all (it is then not to be written over).
+fn read_from(path: &Path) -> anyhow::Result<OnlineConfig> {
     let text = match std::fs::read_to_string(path) {
         Ok(text) => text,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return OnlineConfig::default(),
-        Err(e) => {
-            tracing::warn!(
-                "{} could not be read ({:?}); using the defaults",
-                path.display(),
-                e.kind()
-            );
-            return OnlineConfig::default();
-        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(OnlineConfig::default()),
+        Err(e) => anyhow::bail!("{} could not be read ({:?})", path.display(), e.kind()),
     };
     // serde's message can quote the file; its kind and place cannot.
-    serde_json::from_str(&text).unwrap_or_else(|e| {
+    Ok(serde_json::from_str(&text).unwrap_or_else(|e| {
         tracing::warn!(
             "{} could not be read ({:?} at line {}, column {}); using the defaults",
             path.display(),
@@ -117,11 +120,13 @@ pub fn load_from(path: &Path) -> OnlineConfig {
             e.column()
         );
         OnlineConfig::default()
-    })
+    }))
 }
 
 /// Reads the settings, lets `f` change them, and writes them back whole,
-/// readable by this user alone.
+/// readable by this user alone. A file that is there but cannot be read is
+/// left as it is (it may hold a sign-in) and the change refused; one that
+/// is not valid settings is replaced.
 pub fn update<R>(f: impl FnOnce(&mut OnlineConfig) -> R) -> anyhow::Result<(OnlineConfig, R)> {
     update_in(&crate::paths::config_dir().join(FILE), f)
 }
@@ -131,7 +136,7 @@ pub fn update_in<R>(
     f: impl FnOnce(&mut OnlineConfig) -> R,
 ) -> anyhow::Result<(OnlineConfig, R)> {
     let _one_at_a_time = WRITING.lock().unwrap_or_else(|e| e.into_inner());
-    let mut c = load_from(path);
+    let mut c = read_from(path)?;
     let r = f(&mut c);
     let text = serde_json::to_vec_pretty(&c)?;
     crate::recording::config::write_private(path, &text)?;
@@ -191,6 +196,30 @@ mod tests {
         let c = load_from(&path);
         assert!(c.opensubtitles.enabled);
         assert_eq!(c.opensubtitles.languages, ["fr"]);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn an_unreadable_file_is_not_written_over_but_a_broken_one_is() {
+        // There but unreadable: a directory where the file should be stands
+        // for a permission or I/O failure.
+        let path = scratch("unreadable");
+        std::fs::create_dir_all(&path).unwrap();
+        assert!(update_in(&path, |c| c.opensubtitles.enabled = false).is_err());
+        assert!(path.is_dir(), "left as it was");
+        assert!(
+            load_from(&path).opensubtitles.enabled,
+            "read as the defaults"
+        );
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+
+        // There and readable, but not valid settings: replaced.
+        let path = scratch("broken");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "{ not json").unwrap();
+        let (c, ()) = update_in(&path, |c| c.opensubtitles.enabled = false).unwrap();
+        assert!(!c.opensubtitles.enabled);
+        assert!(!load_from(&path).opensubtitles.enabled, "written");
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
