@@ -128,7 +128,9 @@ interface have their own page: [recording.md](recording.md).
 - Catch-up on channels whose source has an archive.
 - **Movies and episodes** play on demand, on a connection of their own under the same rules as a
   channel's. The picture gets a seek bar with the time played and left, `←`/`→` skip 10 seconds,
-  Space or a click pauses. How far you got is kept, and a title played past 92 % counts as
+  Space or a click pauses. Hovering the bar previews the picture over what has played or (in the
+  app) is already buffered, one frame per 10 seconds; elsewhere it shows the time alone. How far
+  you got is kept, and a title played past 92 % counts as
   watched. A title that stops or can't start says why and can be played again from where it
   stopped. An episode you left partway asks whether to resume or start over (see Continue
   watching). Episodes play with the show as the title and the episode beneath

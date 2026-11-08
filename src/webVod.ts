@@ -76,6 +76,14 @@ import {
   type VodMode,
 } from "./logic/webVod";
 import { heldAfter, nextStart, placeReportDue, playsOnReopen } from "./logic/resume";
+import {
+  captureDue,
+  keepFrame,
+  letterbox,
+  slotOf,
+  titleFrameAt,
+  titleSpacing,
+} from "./logic/trickplay";
 import type {
   MarksDto,
   OnDemandDto,
@@ -83,6 +91,7 @@ import type {
   PlayerOptionsDto,
   PlayingEpisodeDto,
   StreamEnding,
+  TitleThumbnailDto,
   TrackDto,
 } from "./types";
 import {
@@ -205,6 +214,49 @@ let poller: ReturnType<typeof setInterval> | undefined;
  *  or stop. The stopped state says so as `finished`. */
 let finished: VodItemRef | null = null;
 let finishedLanguages: Languages | null = null;
+
+/** The seek bar's previews of the title, by slot (logic/trickplay.ts): a
+ *  small copy of the picture as it played, about every ten seconds of the
+ *  title. Kept while the same title is watched again, dropped for another.
+ *  `blocked` once the page may not read the picture back (a file the
+ *  browser fetched from elsewhere), so it is not asked again. */
+let previews: { item: VodItemRef; frames: Map<number, string>; blocked: boolean } | null = null;
+
+/** Takes the playing picture's preview for its slot, when one is due. Off
+ *  screen: the canvas is never in the page, so nothing is drawn over the
+ *  picture. */
+function keepPlayedFrame(s: Session, el: HTMLVideoElement) {
+  if (el.readyState < 2 || el.videoWidth <= 0 || el.videoHeight <= 0) return;
+  if (!previews || !sameItem(previews.item, s.item)) {
+    previews = { item: s.item, frames: new Map(), blocked: false };
+  }
+  if (previews.blocked) return;
+  const slot = captureDue(previews.frames, s.position, titleSpacing(durationOf(s)));
+  if (slot === null) return;
+  const c = document.createElement("canvas");
+  c.width = 160;
+  c.height = 90;
+  const g = c.getContext("2d");
+  if (!g) return;
+  g.fillStyle = "#000";
+  g.fillRect(0, 0, c.width, c.height);
+  const r = letterbox(el.videoWidth, el.videoHeight, c.width, c.height);
+  try {
+    g.drawImage(el, r.x, r.y, r.width, r.height);
+    previews.frames = keepFrame(previews.frames, slot, c.toDataURL("image/jpeg", 0.75));
+  } catch {
+    previews.blocked = true;
+  }
+}
+
+/** The preview for the slot nearest `at` of the title playing here. */
+export function thumbnailFor(at: number): Promise<TitleThumbnailDto | null> {
+  const s = session;
+  if (!s || !previews || !sameItem(previews.item, s.item)) return Promise.resolve(null);
+  const spacing = titleSpacing(durationOf(s));
+  const dataUrl = titleFrameAt(previews.frames, at, spacing);
+  return Promise.resolve(dataUrl === null ? null : { dataUrl, at: slotOf(at, spacing) * spacing });
+}
 
 /** The sound's language, carried to the next episode. Its subtitles are
  *  the standing choice, as every title's are. */
@@ -1001,6 +1053,7 @@ function tick() {
     return;
   }
   report(s);
+  if (!el.paused && !el.seeking) keepPlayedFrame(s, el);
   if (s.pausedAt !== null && releaseDue(s.pausedAt, now)) {
     release(s);
     return;
