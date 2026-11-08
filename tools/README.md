@@ -241,8 +241,10 @@ in 10 s, `--retry-after S`), `--down` (503), `--token-ttl S` (a token stops
 working on `/download` after S seconds). `/files/<file_id>.srt` serves 20 cues
 (`7000099`: Latin-1 with CRLF; `7000098`: an HTML page; `7000097`: empty).
 `GET /_stats` returns counters (logins, logouts, infos, searches, downloads,
-files, refused, and the hosts that received an `Authorization` header) and
-never a token or password.
+files, refused, `authorized_files` — file fetches that carried an `Authorization`
+header, which a client should never send to the link's host — and the API hosts
+that received one) and never a token or password. `/download` without a
+`file_id` is a 400 and costs no download.
 
 `fake_stream.py` gives odd movies a `tmdb_id` (900000 + id) and odd shows a
 `tmdb` (800000 + id) in `get_vod_streams`/`get_vod_info` and

@@ -119,7 +119,7 @@ class State:
         self.next_token = 1
         self.downloads = 0
         self.stats = {"logins": 0, "logouts": 0, "infos": 0, "searches": 0,
-                      "downloads": 0, "files": 0, "refused": 0}
+                      "downloads": 0, "files": 0, "authorized_files": 0, "refused": 0}
         self.hosts = set()
 
     def reset_time(self):
@@ -165,8 +165,8 @@ class Handler(BaseHTTPRequestHandler):
             return not (with_ttl and ttl > 0 and time.monotonic() - st.tokens[token] > ttl)
 
     def _json_body(self):
-        n = int(self.headers.get("Content-Length") or 0)
         try:
+            n = int(self.headers.get("Content-Length") or 0)
             body = json.loads(self.rfile.read(n) or b"{}")
         except ValueError:
             return {}
@@ -252,6 +252,13 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/v1/download":
             if not self._token_ok(self._bearer(), with_ttl=True):
                 return self._refuse(401, {"message": "Invalid token"})
+            try:
+                fid = int(body.get("file_id") or 0)
+            except (TypeError, ValueError):
+                fid = 0
+            if fid <= 0:
+                # Refused before the allowance is touched, as a missing file costs nothing.
+                return self._refuse(400, {"message": "file_id is required"})
             with st.lock:
                 over = st.downloads >= st.opts.quota
                 if not over:
@@ -262,10 +269,6 @@ class Handler(BaseHTTPRequestHandler):
                 return self._refuse(406, {
                     "message": f"You have downloaded your allowed {st.opts.quota} subtitles for 24h",
                     "remaining": 0, "reset_time_utc": st.reset_time()})
-            try:
-                fid = int(body.get("file_id") or 0)
-            except (TypeError, ValueError):
-                fid = 0
             return self._send(200, {
                 "link": f"http://127.0.0.1:{st.opts.port}/files/{fid}.srt",
                 "file_name": f"{fid}.srt", "requests": n,
@@ -311,6 +314,9 @@ class Handler(BaseHTTPRequestHandler):
     def _file(self, name):
         with self.state.lock:
             self.state.stats["files"] += 1
+            # A token sent to the link's host is a leak: counted so a check can see it.
+            if self.headers.get("Authorization"):
+                self.state.stats["authorized_files"] += 1
         try:
             fid = int(name)
         except ValueError:
@@ -345,6 +351,8 @@ def main():
         srv.serve_forever()
     except KeyboardInterrupt:
         pass
+    finally:
+        srv.server_close()
 
 
 if __name__ == "__main__":
