@@ -948,6 +948,17 @@ The catalogue, for the web interface (the app or a device); channels come as the
 | `GET /api/account` | the provider account as the app's `AccountDto`, with no secret in it (`hasPassword`, `tvheadendHasPassword`; addresses with `<redacted>` in place of a login, flagged `playlistRedacted`, `epgRedacted`, `hdhomerunEpgRedacted`) and an empty `path` |
 | `PUT /api/account` | saves a form and makes its kind the one in use: `{kind: "xtream", host, username, password}`, `{kind: "m3u", playlist, epgUrls, userAgent}`, `{kind: "hdhomerun", device, epgUrls}` or `{kind: "tvheadend", url, username, password}`. An empty password, or `null` for `playlist` or `epgUrls`, keeps what is on file. Asks for a sync; returns the same as `GET`. `400 {"error"}` with what is wrong, never with what was sent |
 | `POST /api/account/test` | the same body, tested as typed and not saved (`{result}`, or `400 {"error"}`); with no body, the account on file |
+| `GET /api/online` | Settings › Online services as the app's `OnlineServicesDto`: whether OpenSubtitles is on, its languages, who is signed in (the username alone) and the downloads left |
+| `PUT /api/online/opensubtitles` | body `{enabled?, languages?}` (an absent field is left as it is) → `OnlineServicesDto` |
+| `POST /api/online/opensubtitles/sign-in`, `POST /api/online/opensubtitles/sign-out` | sign the service in to OpenSubtitles (body `{username, password}`, kept by the service and never answered back) or out → `OnlineServicesDto`. A refused sign-in is a `400` saying so |
+| `GET /api/subtitles/{kind}/{id}?languages=en,fr` | subtitles for a movie or an episode (`kind` `movie` or `episode`, else `400`) found on OpenSubtitles, as the app's `SubtitleSearchDto`; no `languages` is the settings' own. `404` for a title not in the catalogue |
+| `POST /api/subtitles/{kind}/{id}/download` | body `{fileId}` → `SubtitleDownloadDto`: the file kept with the title, or why not (`signIn`, `quota`, `busy`, `off`) |
+| `GET /api/subtitles/{kind}/{id}/kept` | `[KeptSubtitleDto]`: the files kept for the title under the account in use, newest first |
+| `GET /api/subtitles/{kind}/{id}/file/{fileId}` | a kept file as WebVTT (`text/vtt; charset=utf-8`, cached privately for an hour); `404` unless the title keeps it |
+
+None of these answers carries the app's OpenSubtitles key, the password, the token or a download
+link. A failure is a fixed sentence in `{"error"}` (`502` when OpenSubtitles could not be asked,
+`409` while it is turned off); why in full goes to the service's log, scrubbed.
 
 Watching (the app or a device; a viewer is its device's alone, `404` to anyone else):
 

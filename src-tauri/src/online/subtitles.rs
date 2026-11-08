@@ -447,7 +447,7 @@ struct PaidLink {
 /// Everything a search or a download uses: OpenSubtitles' client (with its
 /// pacer), the search cache, the settings file, the files' directory and
 /// the account's state.
-struct Context {
+pub(crate) struct Context {
     client: Client,
     cache: SearchCache,
     config_path: PathBuf,
@@ -456,7 +456,7 @@ struct Context {
 }
 
 impl Context {
-    fn new(client: Client, config_path: PathBuf, files_dir: PathBuf) -> Self {
+    pub(crate) fn new(client: Client, config_path: PathBuf, files_dir: PathBuf) -> Self {
         Self {
             client,
             cache: SearchCache::default(),
@@ -468,7 +468,7 @@ impl Context {
 
     /// The process's own: the shared pacer, the process-wide search cache,
     /// `config_dir()` and `data_dir()/subtitles`.
-    fn shared() -> &'static Arc<Context> {
+    pub(crate) fn shared() -> &'static Arc<Context> {
         static SHARED: OnceLock<Arc<Context>> = OnceLock::new();
         SHARED.get_or_init(|| {
             Arc::new(Context::new(
@@ -524,7 +524,7 @@ pub async fn search(item: VodItem, languages: Vec<String>) -> Result<SubtitleSea
     search_with(Context::shared(), item, languages).await
 }
 
-async fn search_with(
+pub(crate) async fn search_with(
     ctx: &Context,
     item: VodItem,
     languages: Vec<String>,
@@ -818,7 +818,7 @@ pub async fn download(item: VodItem, file_id: i64) -> Result<SubtitleDownloadDto
     download_with(Context::shared(), item, file_id).await
 }
 
-async fn download_with(
+pub(crate) async fn download_with(
     ctx: &Arc<Context>,
     item: VodItem,
     file_id: i64,
@@ -1014,12 +1014,20 @@ fn vtt_in(dir: &Path, item: VodItem, file_id: i64) -> Result<Option<String>, Str
 
 /// A kept file as WebVTT, when `item` offers it under the current account.
 pub fn vtt(item: VodItem, file_id: i64) -> Result<Option<String>, String> {
-    vtt_in(&Context::shared().files_dir, item, file_id)
+    vtt_with(Context::shared(), item, file_id)
+}
+
+pub(crate) fn vtt_with(
+    ctx: &Context,
+    item: VodItem,
+    file_id: i64,
+) -> Result<Option<String>, String> {
+    vtt_in(&ctx.files_dir, item, file_id)
 }
 
 // --------------------------------------------------- the account, settings
 
-fn status_with(ctx: &Context) -> OnlineServicesDto {
+pub(crate) fn status_with(ctx: &Context) -> OnlineServicesDto {
     config::status(&config::load_from(&ctx.config_path), ctx.account.quota())
 }
 
@@ -1034,7 +1042,7 @@ pub async fn sign_in(username: String, password: String) -> Result<OnlineService
     sign_in_with(Context::shared(), username, password).await
 }
 
-async fn sign_in_with(
+pub(crate) async fn sign_in_with(
     ctx: &Context,
     username: String,
     password: String,
@@ -1069,7 +1077,7 @@ pub async fn sign_out() -> Result<OnlineServicesDto, String> {
     sign_out_with(Context::shared()).await
 }
 
-async fn sign_out_with(ctx: &Context) -> Result<OnlineServicesDto, String> {
+pub(crate) async fn sign_out_with(ctx: &Context) -> Result<OnlineServicesDto, String> {
     let os = ctx.settings();
     if let (true, Some(token)) = (os.enabled, os.token.as_deref()) {
         let base = os.api_base.as_deref().unwrap_or(ctx.client.base());
@@ -1098,7 +1106,7 @@ pub fn set_opensubtitles(
     set_opensubtitles_with(Context::shared(), enabled, languages)
 }
 
-fn set_opensubtitles_with(
+pub(crate) fn set_opensubtitles_with(
     ctx: &Context,
     enabled: Option<bool>,
     languages: Option<Vec<String>>,
