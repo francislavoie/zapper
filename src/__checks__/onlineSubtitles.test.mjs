@@ -12,8 +12,11 @@ import {
   findHeading,
   isSignedIn,
   signInLine,
+  keptTrack,
   offeredDownloads,
   resultLine,
+  servicesAfterDownload,
+  signInPrompt,
   searchLanguages,
   searchNotice,
   toSearchLanguage,
@@ -71,9 +74,102 @@ test("downloadTrackTitle", () => {
 test("offeredDownloads hides what is loaded", () => {
   const a = { fileId: 1, language: "en", release: "A", hearingImpaired: false, downloadedAt: 1 };
   const b = { ...a, fileId: 2, release: "B" };
-  const tracks = [{ id: 1, title: downloadTrackTitle("A") }];
+  const tracks = [{ id: 1, title: downloadTrackTitle("A"), lang: "eng" }];
   assert.deepEqual(offeredDownloads([a, b], tracks), [b]);
   assert.deepEqual(offeredDownloads([a, b], []), [a, b]);
+});
+
+// English and French files are often made for the same release.
+const en = { fileId: 7000001, language: "en", release: "Film.0001.2021.1080p.TEST", hearingImpaired: false, downloadedAt: 1 };
+const fr = { ...en, fileId: 7000004, language: "fr" };
+
+test("a kept file is its loaded track by release and language", () => {
+  const enTrack = { id: 3, title: downloadTrackTitle(en.release), lang: "eng" };
+  assert.equal(keptTrack(en, [enTrack]), enTrack);
+  assert.equal(keptTrack(fr, [enTrack]), undefined);
+  // Tagged in the standing choice's own spelling, or in either ISO code.
+  for (const lang of ["fre", "fra", "fr"]) {
+    const frTrack = { id: 4, title: downloadTrackTitle(fr.release), lang };
+    assert.equal(keptTrack(fr, [enTrack, frTrack]), frTrack);
+  }
+  // A stream's own track of that language isn't the file.
+  assert.equal(keptTrack(fr, [{ id: 1, title: "French", lang: "fre" }]), undefined);
+  // A language OpenSubtitles has no code for is compared as written.
+  const xx = { ...en, language: "xx" };
+  assert.equal(keptTrack(xx, [{ ...enTrack, lang: "xx" }])?.id, 3);
+  assert.equal(keptTrack(xx, [enTrack]), undefined);
+});
+
+test("with English loaded, French of the same release is still offered", () => {
+  const tracks = [{ id: 3, title: downloadTrackTitle(en.release), lang: "eng" }];
+  assert.deepEqual(offeredDownloads([en, fr], tracks), [fr]);
+  const both = [...tracks, { id: 4, title: downloadTrackTitle(fr.release), lang: "fre" }];
+  assert.deepEqual(offeredDownloads([en, fr], both), []);
+});
+
+// ---- the settings' account line follows what a download says
+
+const os = (over) => ({
+  openSubtitles: {
+    enabled: true,
+    languages: ["en"],
+    signedInAs: "tester",
+    signInRefused: false,
+    downloadsLeft: 20,
+    downloadsResetAt: null,
+    ...over,
+  },
+});
+
+test("a download counts what is left", () => {
+  const s = os({});
+  const next = servicesAfterDownload(s, { kind: "downloaded", subtitle: en, downloadsLeft: 19 });
+  assert.equal(next.openSubtitles.downloadsLeft, 19);
+  assert.equal(next.openSubtitles.signedInAs, "tester");
+  assert.deepEqual(next.openSubtitles.languages, ["en"]);
+  // Unknown to the service: the count is left as it was.
+  assert.equal(servicesAfterDownload(s, { kind: "downloaded", subtitle: en, downloadsLeft: null }), s);
+  // A download is proof the sign-in works.
+  assert.equal(
+    servicesAfterDownload(os({ signInRefused: true }), { kind: "downloaded", subtitle: en, downloadsLeft: 5 })
+      .openSubtitles.signInRefused,
+    false,
+  );
+});
+
+test("used up: none left, until when the service said", () => {
+  const next = servicesAfterDownload(os({}), { kind: "quota", resetAt: 5000 });
+  assert.equal(next.openSubtitles.downloadsLeft, 0);
+  assert.equal(next.openSubtitles.downloadsResetAt, 5000);
+  const unknown = servicesAfterDownload(os({}), { kind: "quota", resetAt: null });
+  assert.equal(unknown.openSubtitles.downloadsResetAt, null);
+});
+
+test("a refused sign-in is no longer a sign-in", () => {
+  const next = servicesAfterDownload(os({}), { kind: "signIn", refused: true, email: false });
+  assert.equal(next.openSubtitles.signInRefused, true);
+  assert.equal(isSignedIn(next.openSubtitles), false);
+  // Asked for a first sign-in: nothing was signed in.
+  const none = servicesAfterDownload(os({}), { kind: "signIn", refused: false, email: false });
+  assert.equal(none.openSubtitles.signedInAs, null);
+});
+
+test("busy and off change nothing", () => {
+  const s = os({});
+  assert.equal(servicesAfterDownload(s, { kind: "busy", retryAt: 1 }), s);
+  assert.equal(servicesAfterDownload(s, { kind: "off" }), s);
+});
+
+test("the sign-in the finder asks for", () => {
+  assert.equal(signInPrompt(false, false), "Downloads need your OpenSubtitles account. Searching doesn't.");
+  assert.equal(
+    signInPrompt(true, false),
+    "OpenSubtitles no longer accepts the account signed in here. Sign in again to download.",
+  );
+  assert.equal(
+    signInPrompt(true, true),
+    "OpenSubtitles no longer accepts the account signed in here. It signs in with your username, not your email address.",
+  );
 });
 
 test("resultLine", () => {
@@ -164,7 +260,7 @@ test("findHeading", () => {
 // ---- the finder's state (src/onlineSubtitles.ts)
 import {
   clearKept, closeFindSubtitles, currentFind, keptChanged, keptFor, loadKept, openFindSubtitles,
-  currentServices, loadServices, setKeptSource, setServices, setServicesSource,
+  currentServices, downloadAnswered, loadServices, setKeptSource, setServices, setServicesSource,
 } from "../onlineSubtitles.ts";
 
 test("the finder opens on a title and closes", () => {
@@ -247,6 +343,16 @@ test("a settings read still in flight does not overwrite a newer answer", async 
   d.resolve(services(null));
   await load;
   assert.equal(currentServices().data.openSubtitles.signedInAs, "tester");
+  setServicesSource();
+});
+test("a download's answer is written back to the settings read", () => {
+  setServicesSource();
+  // Never read: nothing to correct.
+  downloadAnswered({ kind: "quota", resetAt: null });
+  assert.equal(currentServices().status, "idle");
+  setServices(services("tester"));
+  downloadAnswered({ kind: "signIn", refused: true, email: false });
+  assert.equal(currentServices().data.openSubtitles.signInRefused, true);
   setServicesSource();
 });
 

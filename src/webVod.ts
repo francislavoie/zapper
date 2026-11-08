@@ -51,6 +51,7 @@ import {
   FILE_READ_TRIES,
   cueTimes,
   fileCueWindow,
+  fileReadCounts,
   movedAt,
   needsData,
   openDue,
@@ -93,6 +94,7 @@ import {
   patch,
   playableHere,
   playerFeed,
+  sayFeed,
   signedOutNow,
   stop as stopPlayer,
   takeLive,
@@ -1242,8 +1244,8 @@ export async function setSubtitleTrack(id: number | null): Promise<PlayerOptions
 }
 
 /** Adds a downloaded subtitle file (kept by the service) to the title
- *  playing, once, and shows it. Refused, with nothing changed, unless that
- *  title is the one playing. */
+ *  playing, once, and shows it. Refused, with nothing changed and the
+ *  app's sentence, unless that title is the one playing. */
 export async function addSubtitleFile(
   kind: OnDemandKind,
   id: number,
@@ -1252,7 +1254,7 @@ export async function addSubtitleFile(
   lang: string,
 ): Promise<PlayerOptionsDto> {
   const s = session;
-  if (!s || !sameItem(s.item, { kind, id })) return optionsFeed.last;
+  if (!s || !sameItem(s.item, { kind, id })) throw new Error("That title is no longer playing.");
   let index = s.subtitles.findIndex((t) => t.file === fileId);
   if (index < 0) {
     s.subtitles.push({ index: -1, language: lang, title, text: true, file: fileId });
@@ -1297,6 +1299,9 @@ function showCues(s: Session) {
   const el = currentVideo();
   if (el && s.subtitle !== null) textTrack(el).mode = s.subtitlesShown ? "showing" : "hidden";
 }
+
+/** Said once when a downloaded file's cues can't be had this session. */
+const FILE_UNREADABLE = "Couldn't read the downloaded subtitles.";
 
 /** Whether the track chosen is a downloaded file. */
 const fileChosen = (s: Session): boolean =>
@@ -1365,9 +1370,14 @@ async function fileCues(s: Session, el: HTMLVideoElement, index: number, file: n
         requestInit("GET"),
       );
       if (r.status === 401) signedOutNow();
-      // Not kept (yet, or any more): asked again on the next poll, a few
-      // times at most this session; nothing is kept for it.
-      if (r.status === 404) s.fileMisses.set(file, (s.fileMisses.get(file) ?? 0) + 1);
+      // Not kept (yet, or any more), or the service failing to read it:
+      // asked again on the next poll, a few times at most this session,
+      // then said once; nothing is kept for it.
+      if (fileReadCounts(r.status)) {
+        const misses = (s.fileMisses.get(file) ?? 0) + 1;
+        s.fileMisses.set(file, misses);
+        if (misses >= FILE_READ_TRIES && session === s) sayFeed.set({ text: FILE_UNREADABLE });
+      }
       if (r.ok) doc = await r.text();
     } catch {
       // Asked again in a moment.

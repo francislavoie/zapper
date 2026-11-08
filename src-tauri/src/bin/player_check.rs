@@ -1318,7 +1318,7 @@ async fn run_find_subtitles(app: &tauri::AppHandle) -> Result<String, String> {
     // Stopped, there is nothing to add the file to.
     cmds::stop(app.clone()).await?;
     match online::add_subtitle_file(app.clone(), OnDemandKind::Movie, 1, FILE, title, "en".into()).await {
-        Err(e) if e == "that title is no longer playing" => {}
+        Err(e) if e == "That title is no longer playing." => {}
         other => return Err(format!("adding the file once stopped answered {other:?}")),
     }
     Ok(format!(

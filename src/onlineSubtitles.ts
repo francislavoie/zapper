@@ -7,7 +7,8 @@
 
 import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
 import { failed, idle, loading, ready, errorMessage, type Async } from "./logic/async.ts";
-import type { KeptSubtitleDto, OnDemandKind, OnlineServicesDto } from "./types";
+import { servicesAfterDownload } from "./logic/onlineSubtitles.ts";
+import type { KeptSubtitleDto, OnDemandKind, OnlineServicesDto, SubtitleDownloadDto } from "./types";
 
 export type TitleRef = { kind: OnDemandKind; id: number };
 
@@ -59,6 +60,10 @@ export function useFindSubtitles(): TitleRef | null {
 
 export type KeptFetch = (kind: OnDemandKind, id: number) => Promise<KeptSubtitleDto[]>;
 
+// `./backend` is imported when first needed, not at the top: node checks load
+// this module, and the backend and what it imports can't load under node.
+// The build's warning that it is also imported statically elsewhere (so it
+// isn't split into a chunk of its own) is expected.
 const defaultFetch: KeptFetch = async (kind, id) =>
   (await import("./backend")).backend.keptSubtitles(kind, id);
 let fetchKept: KeptFetch = defaultFetch;
@@ -162,6 +167,7 @@ const notifyServices = (next: Async<OnlineServicesDto>) => {
 };
 
 export type ServicesFetch = () => Promise<OnlineServicesDto>;
+// Imported when first needed, as `defaultFetch` above says.
 const defaultServices: ServicesFetch = async () =>
   (await import("./backend")).backend.onlineServices();
 let fetchServices: ServicesFetch = defaultServices;
@@ -178,6 +184,15 @@ export const currentServices = (): Async<OnlineServicesDto> => services;
 export function setServices(next: OnlineServicesDto): void {
   generation++;
   notifyServices(ready(next));
+}
+
+/** A download answered: the settings' account line follows what it said
+ *  (the downloads left, a sign-in refused). Nothing when they were never
+ *  read: their first read says the same. */
+export function downloadAnswered(d: SubtitleDownloadDto): void {
+  if (services.status !== "ready") return;
+  const next = servicesAfterDownload(services.data, d);
+  if (next !== services.data) setServices(next);
 }
 
 export async function loadServices(): Promise<void> {

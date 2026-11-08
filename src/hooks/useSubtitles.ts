@@ -15,7 +15,7 @@ import {
   toggleChoice,
 } from "../logic/subtitles";
 import { run, useApp, useDispatch } from "../store";
-import type { PlayerOptionsDto } from "../types";
+import type { PlayerOptionsDto, TrackDto } from "../types";
 import { useSettings } from "./useSettings";
 
 export interface Subtitles {
@@ -27,6 +27,9 @@ export interface Subtitles {
    *  and keeps that as the standing choice. Resolves to the options as they
    *  are after. */
   choose: (id: number | null) => Promise<PlayerOptionsDto>;
+  /** Keeps `track` as the standing choice, as `choose` does: for a track
+   *  that came in selected, as a downloaded file added to the player does. */
+  remember: (track: Pick<TrackDto, "lang">) => void;
   /** Hides them when they show; shows the track chosen when they don't
    *  (or, with none chosen yet, the one an open would choose). */
   toggle: () => void;
@@ -38,17 +41,24 @@ export function useSubtitles(): Subtitles {
   const { patch } = useSettings();
   const pictures = capabilities.pictureSubtitles;
 
+  const keep = useCallback(
+    (track: Pick<TrackDto, "lang"> | null) => {
+      // Never saved over settings that have not been read: that would put
+      // the defaults back for everything else.
+      if (settingsStatus.status === "ready") patch(afterChoosing(track, settings));
+    },
+    [patch, settings, settingsStatus.status],
+  );
+
   const choose = useCallback(
     (id: number | null) => {
       const track = id === null ? null : (options.subtitles.find((t) => t.id === id) ?? null);
       return backend.setSubtitleTrack(id).then((o) => {
-        // Never saved over settings that have not been read: that would put
-        // the defaults back for everything else.
-        if (settingsStatus.status === "ready") patch(afterChoosing(track, settings));
+        keep(track);
         return o;
       });
     },
-    [options.subtitles, patch, settings, settingsStatus.status],
+    [options.subtitles, keep],
   );
 
   const toggle = useCallback(() => {
@@ -70,6 +80,7 @@ export function useSubtitles(): Subtitles {
     available: hasSubtitles(options.subtitles, pictures),
     showing: subtitlesShowing(options),
     choose,
+    remember: keep,
     toggle,
   };
 }

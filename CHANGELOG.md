@@ -12,8 +12,8 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
 ### Added
 
 - **Continue watching** (`W`): pick up movies and shows where you left off, in the app and the browser. Opening one you left partway asks whether to resume or start over, and movies show a progress bar.
-- **Settings › Online services**: a switch for OpenSubtitles with a line on what it sends, the
-  languages to search in, and signing in or out of your OpenSubtitles account.
+- **Find subtitles** from OpenSubtitles for movies and episodes, with your own free account, in the
+  app and the browser. Settings › Online services has its switch, languages and sign-in.
 - **Movies**: a tab (`M`) for an Xtream account's or a playlist's movies. Browse by category as a
   list or posters, sort, filter by year, search, mark favourites and watched, and open a details
   sheet.
@@ -26,8 +26,6 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
 - Up next plays a next episode you had started from where you left it.
 - Movies and episodes play in the browser through the recording service, converted on the fly when
   the browser can't play the file. Text subtitles included.
-- Subtitles from OpenSubtitles for movies and episodes, with your own free account, in the app and
-  in the browser.
 - Off-air channels: when the provider sends a placeholder clip instead of the broadcast, zapper
   says so and suggests channels showing the same programmes. Recordings retry until the broadcast
   starts.
@@ -35,9 +33,6 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
 - Recordings shows the free space on the recordings disk.
 - Radio channels (sound, no picture) play.
 - A subtitles button on the player, remembered across channels and restarts (`C`).
-- **Find subtitles…** for movies and episodes, from OpenSubtitles.com, added to the player at once.
-- Subtitles from OpenSubtitles and Settings › Online services in the browser too, through the
-  recording service.
 - The mouse's back and forward buttons move between screens, and sheets have a Back button.
 
 ### Changed

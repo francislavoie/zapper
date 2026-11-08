@@ -6,8 +6,10 @@
 // dialog (`FindSubtitles`) searches in the languages Settings › Online
 // services names (or the standing subtitle language and the interface's),
 // lists what was downloaded before and then what was found, and adds the
-// chosen file to the player at once. A first download asks for the
-// OpenSubtitles sign-in in place of the list, and runs once more after it.
+// file chosen (its row's Download button, Enter, or a double-click; never a
+// single click, which only highlights) to the player at once. A first
+// download asks for the OpenSubtitles sign-in in place of the list, and runs
+// once more after it.
 // A refusal (no downloads left, a service asking to wait, the service off)
 // is said in place, with the list kept.
 
@@ -21,15 +23,18 @@ import {
   downloadNotice,
   downloadTrackTitle,
   findHeading,
+  keptTrack,
   offeredDownloads,
   resultLine,
   searchLanguages,
   searchNotice,
+  signInPrompt,
   trackLanguage,
 } from "../logic/onlineSubtitles";
 import { languageName } from "../logic/tracks";
 import {
   closeFindSubtitles,
+  downloadAnswered,
   findOpener,
   keptChanged,
   openFindSubtitles,
@@ -46,19 +51,23 @@ import { RadioItem } from "./SubMenu";
 const same = (a: TitleRef | null, b: TitleRef | null) =>
   a !== null && b !== null && a.kind === b.kind && a.id === b.id;
 
-/** Adds a kept subtitle to what is playing; it comes back selected. */
+/** Adds a kept subtitle to what is playing; it comes back selected, and is
+ *  the standing choice from now, as a track chosen in the menu is. */
 function useAddKept() {
   const { settings } = useApp();
   const dispatch = useDispatch();
+  const { remember } = useSubtitles();
   return async (t: TitleRef, k: KeptSubtitleDto) => {
+    const lang = trackLanguage(k.language, settings.subtitleLanguage);
     const value = await backend.addSubtitleFile(
       t.kind,
       t.id,
       k.fileId,
       downloadTrackTitle(k.release),
-      trackLanguage(k.language, settings.subtitleLanguage),
+      lang,
     );
     dispatch({ type: "options", value });
+    remember({ lang });
   };
 }
 
@@ -183,7 +192,9 @@ function FindDialog({ target: title }: { target: TitleRef }) {
   const [active, setActive] = useState(0);
   const at = Math.min(active, Math.max(rows.length - 1, 0));
 
-  const [signIn, setSignIn] = useState<{ fileId: number; refused: boolean } | null>(null);
+  const [signIn, setSignIn] = useState<{ fileId: number; refused: boolean; email: boolean } | null>(
+    null,
+  );
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState<number | null>(null);
   const busyRef = useRef(false);
@@ -198,7 +209,7 @@ function FindDialog({ target: title }: { target: TitleRef }) {
   /** The subtitle is kept: into the player, if this title is what plays. */
   const added = async (k: KeptSubtitleDto) => {
     if (same(playing, title)) {
-      const track = app.options.subtitles.find((t) => t.title === downloadTrackTitle(k.release));
+      const track = keptTrack(k, app.options.subtitles);
       if (track) {
         dispatch({ type: "options", value: await subtitles.choose(track.id) });
         closeFindSubtitles();
@@ -232,12 +243,14 @@ function FindDialog({ target: title }: { target: TitleRef }) {
   const download = (fileId: number) =>
     act(async () => {
       const d = await backend.downloadSubtitle(title.kind, title.id, fileId);
+      // Kept, and counted, even when the dialog was closed meanwhile.
+      downloadAnswered(d);
+      if (d.kind === "downloaded") keptChanged(title);
       if (!alive.current) return;
       if (d.kind === "downloaded") {
-        keptChanged(title);
         await added(d.subtitle);
       } else if (d.kind === "signIn") {
-        setSignIn({ fileId, refused: d.refused });
+        setSignIn({ fileId, refused: d.refused, email: d.email });
       } else {
         setNotice(downloadNotice(d, now()));
       }
@@ -289,6 +302,11 @@ function FindDialog({ target: title }: { target: TitleRef }) {
 
   const onListKey = (e: KeyboardEvent<HTMLDivElement>) => {
     const step = e.key === "ArrowDown" ? 1 : e.key === "ArrowUp" ? -1 : 0;
+    // Moving from a row's Download button: the list takes the keys again,
+    // rather than focus staying on a button that is hidden once its row
+    // isn't the highlighted one.
+    const moving = step !== 0 || e.key === "Home" || e.key === "End";
+    if (moving && e.target !== listRef.current) listRef.current?.focus();
     if (step) {
       e.preventDefault();
       setActive(Math.max(0, Math.min(rows.length - 1, at + step)));
@@ -312,6 +330,8 @@ function FindDialog({ target: title }: { target: TitleRef }) {
     const release = (k ? k.release : (row as { result: SubtitleResultDto }).result.release).trim();
     const rest = line.detail.slice(release.length).replace(/^ · /, "");
     const fileId = k ? k.fileId : (row as { result: SubtitleResultDto }).result.fileId;
+    // Already here: adding it spends nothing.
+    const have = k !== null || kept.some((x) => x.fileId === fileId);
     return (
       <div
         key={`${k ? "k" : "r"}${fileId}`}
@@ -331,6 +351,22 @@ function FindDialog({ target: title }: { target: TitleRef }) {
           {release}
         </span>
         <span className="find-subs-meta">{busy === fileId ? "Downloading…" : rest}</span>
+        {/* Shown on the row highlighted and the one under the pointer, and
+            on every row on a touch screen (styles.css). A click on the row
+            only highlights it: a stray one must not spend a download. */}
+        <button
+          className="ctl find-subs-get"
+          tabIndex={i === at ? 0 : -1}
+          aria-disabled={busy !== null || undefined}
+          onClick={(e) => {
+            e.stopPropagation();
+            setActive(i);
+            choose(row);
+          }}
+          onDoubleClick={(e) => e.stopPropagation()}
+        >
+          {have ? "Add" : "Download"}
+        </button>
       </div>
     );
   };
@@ -365,11 +401,7 @@ function FindDialog({ target: title }: { target: TitleRef }) {
 
         {signIn ? (
           <div className="find-subs-signin">
-            <p className="find-subs-line">
-              {signIn.refused
-                ? "OpenSubtitles no longer accepts the account signed in here. Sign in again to download."
-                : "Downloads need your OpenSubtitles account. Searching doesn't."}
-            </p>
+            <p className="find-subs-line">{signInPrompt(signIn.refused, signIn.email)}</p>
             <OpenSubtitlesSignIn
               onSignedIn={(next) => {
                 services.set(next);

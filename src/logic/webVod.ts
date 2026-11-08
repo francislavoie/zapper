@@ -268,16 +268,24 @@ export function remapSubtitle(subtitle: number | null, ownBefore: number, ownNow
 }
 
 /** How many times a session asks for a file the service says it doesn't
- *  keep before it stops asking (a later watch asks again). */
+ *  keep, or fails to read, before it stops asking and says so (a later
+ *  watch asks again). */
 export const FILE_READ_TRIES = 2;
+
+/** Whether a failed read of a downloaded file counts toward
+ *  `FILE_READ_TRIES`: not kept (404) or the service failing (5xx). A
+ *  sign-out is asked again once signed in; a dropped connection, in a
+ *  moment. */
+export const fileReadCounts = (status: number): boolean => status === 404 || status >= 500;
 
 /** How far behind the picture a downloaded file's cues are still put on. */
 export const FILE_CUES_BEHIND_SECONDS = 30;
 
 /** The cues of a downloaded file to put on the element now: those that end
  *  after the stream's start (and not long behind the picture) and begin
- *  before `ahead` seconds past it. The element holds a window, not a
- *  film's thousand-odd cues at once, widened as the picture moves. */
+ *  before `ahead` seconds past it. The element is given the cues as the
+ *  picture nears them, not a film's thousand-odd at once; those given stay
+ *  until the next reading puts them afresh. */
 export function fileCueWindow(
   cues: readonly VodCue[],
   start: number,
