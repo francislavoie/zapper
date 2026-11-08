@@ -209,3 +209,11 @@ test("the Shows pane: after the countdown, and a focused search is cleared first
   // With something playing, Esc from the list closes the pane, not into the player.
   assert.equal(escapeStep({ ...nothing, showPane: true, playing: true }, "key"), "showPane");
 });
+
+test("Escape closes the Resume question before Up next's card, and the mouse leaves it", () => {
+  const c = { ...nothing, mode: "watch", playing: true, resumePrompt: true, upNextCard: true };
+  assert.equal(escapeStep(c, "key"), "resumePrompt");
+  assert.equal(escapeStep({ ...c, paletteOpen: true }, "key"), "palette");
+  assert.equal(escapeStep(c, "mouse"), "browse");
+  assert.equal(escapeStep({ ...c, resumePrompt: false }, "key"), "upNextCard");
+});

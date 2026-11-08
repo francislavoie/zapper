@@ -27,7 +27,7 @@ import {
   type NavHistory,
   type Place,
 } from "../logic/navHistory";
-import { playNextEpisode, playPrevious, recordFromPlayer, runAction } from "../actions";
+import { playNextEpisode, playPrevious, recordFromPlayer, resumeHeld, runAction } from "../actions";
 import { focusSearch, typingInto } from "../focus";
 import { exitFullscreen, toggleFullscreen } from "../fullscreen";
 import { fullscreenNow, refreshFullscreen } from "./useFullscreen";
@@ -60,6 +60,8 @@ export function useGlobalKeys(
   upNext: UpNext,
   /** The player is across the top with a list under it (App's `stacked`). */
   stacked: boolean,
+  /** The Resume question is up (App's useResumePrompt). */
+  promptShown = false,
 ) {
   // The episode Up next would play: the same object while the count runs.
   const upNextEpisode = upNext.kind === "none" ? null : upNext.next;
@@ -132,11 +134,11 @@ export function useGlobalKeys(
   // What the handlers below read, as of the latest render. They are added
   // once and read it when they run, so no field they use can be missing
   // from a list of dependencies and leave them acting on an old state.
-  const latest = useRef({ state, upNextEpisode, stacked });
-  latest.current = { state, upNextEpisode, stacked };
+  const latest = useRef({ state, upNextEpisode, stacked, promptShown });
+  latest.current = { state, upNextEpisode, stacked, promptShown };
   useEffect(() => {
     const handlers = () => {
-      const { state, upNextEpisode, stacked } = latest.current;
+      const { state, upNextEpisode, stacked, promptShown } = latest.current;
       // The Up next card in the full player (docked, no key is taken from the
       // lists beside it: its buttons are in the tab order).
       const card = state.mode === "watch" && upNextEpisode ? state.shows.playing : null;
@@ -151,6 +153,14 @@ export function useGlobalKeys(
         !state.updateOpen &&
         !state.menuOpen &&
         !state.videoMenu;
+
+      const overlayOpen = () =>
+        state.paletteOpen ||
+        state.settingsOpen ||
+        state.aboutOpen ||
+        state.updateOpen ||
+        state.menuOpen ||
+        state.videoMenu !== null;
 
       // What is open, for the Escape chain (logic/escape.ts).
       const context = (): EscapeContext => ({
@@ -183,6 +193,8 @@ export function useGlobalKeys(
           state.shows.paneOpen &&
           state.shows.selected !== null &&
           showsAvailable(state.shows.summary),
+        // Only in the full player: docked, Escape is the list's.
+        resumePrompt: promptShown && state.mode === "watch" && !stacked,
         upNextCard: card !== null,
         fullscreen: fullscreenNow(),
         // A search belongs to the tab it was typed on.
@@ -251,6 +263,11 @@ export function useGlobalKeys(
             break;
           case "showPane":
             dispatch({ type: "shows/pane", open: false });
+            break;
+          case "resumePrompt":
+            // Closes the question and nothing else: the title stays paused at
+            // its place.
+            dispatch({ type: "continue/prompt", prompt: null });
             break;
           case "upNextCard":
             // Cancelled, and the player stays as it is. A second press goes
@@ -381,6 +398,17 @@ export function useGlobalKeys(
 
         if (typingInto(e.target)) return;
         if (blocksPlainKey(e, IS_MAC)) return;
+
+        // Resume, in the full player, by the same rule as Up next's Enter.
+        if (
+          e.key === "Enter" &&
+          promptShown &&
+          upNextTakesEnter(e, state.mode === "watch" && !stacked && !overlayOpen())
+        ) {
+          e.preventDefault();
+          void resumeHeld(dispatch, state.player.state);
+          return;
+        }
 
         // Up next's Play now, in the full player, when nothing else has taken
         // the key: a focused control (the card's own buttons, Pause after a

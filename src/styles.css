@@ -7956,6 +7956,9 @@ html[data-backend="web"] {
   color: var(--dim);
   text-align: right;
   white-space: nowrap;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
 }
 
 .ep-check {
@@ -7996,4 +7999,96 @@ html[data-backend="web"] {
   .ctl.icon.ep-check {
     width: 1.25rem;
   }
+}
+
+/* Resume: where a movie was left, under its facts (band and sheet), and the
+   time left under an episode's length. */
+.vod-place {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  min-width: 0;
+  margin-top: 0.375rem;
+  font-size: 0.75rem;
+  color: var(--dim);
+}
+
+.vod-place .watch-progress {
+  flex: 0 0 7.5rem;
+}
+
+.vod-place-line {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ep-left {
+  color: var(--accent);
+}
+
+/* ---------------------------------------------- resume question */
+
+/* "Resume A Film?" over the picture of a title opened at its place: centred
+   in the full player, small in the top-left of the docked picture. A panel
+   of its own, opaque enough to read over anything. */
+.resume-prompt {
+  position: absolute;
+  z-index: 4;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 24rem;
+  max-width: calc(100% - 3rem);
+  padding: 1.25rem;
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
+  background: rgba(20, 23, 28, 0.95);
+  cursor: auto;
+}
+
+.resume-prompt-title {
+  margin: 0;
+  font-size: 1.125rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resume-prompt-line {
+  margin: 0.375rem 0 0;
+  color: var(--dim);
+  font-size: 0.8125rem;
+}
+
+.resume-prompt-btns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.resume-prompt.compact {
+  left: 0.375rem;
+  top: 0.375rem;
+  transform: none;
+  width: auto;
+  max-width: calc(100% - 0.75rem);
+  padding: 0.375rem 0.5rem;
+  border-radius: 0.375rem;
+}
+
+.resume-prompt.compact .resume-prompt-title {
+  font-size: 0.75rem;
+}
+
+.resume-prompt.compact .resume-prompt-btns {
+  margin-top: 0.25rem;
+  gap: 0.25rem;
+}
+
+.resume-prompt.compact .ctl {
+  padding: 0.125rem 0.4375rem;
+  font-size: 0.6875rem;
 }

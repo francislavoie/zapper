@@ -153,7 +153,7 @@ export function ShowPane({ show, stacked, listName, wantsFocus, settled, toList 
     return true;
   };
 
-  const play = (episode: EpisodeDto) => void playEpisode(dispatch, { series: show, episode });
+  const play = (episode: EpisodeDto) => void playEpisode(dispatch, { series: show, episode }, "ask");
   const mark = (episode: EpisodeDto, watched: boolean) => void setEpisodeWatched(dispatch, episode, watched);
   const openSheet = () => dispatch({ type: "shows/sheet", id: show.seriesId });
 

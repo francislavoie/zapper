@@ -2,7 +2,7 @@
 // palette, the guide and the chrome all fail the same way.
 
 import type { Dispatch } from "react";
-import { backend, capabilities, signOut } from "./backend";
+import { backend, backendKind, capabilities, signOut } from "./backend";
 import { toggleFullscreen } from "./fullscreen";
 import { errorMessage, failed, loading, ready } from "./logic/async";
 import { anchorFor, catchupMinutes } from "./logic/guide";
@@ -79,6 +79,7 @@ export async function playChannel(
 
   // Metadata paints immediately — name, logo, programme — while the stream
   // opens, which is the whole trick for perceived latency.
+  dispatch({ type: "continue/prompt", prompt: null });
   dispatch({ type: "opening", channel: ch });
   if (opts.full) dispatch({ type: "mode", mode: "watch" });
   const ok = await run(dispatch, `play ${ch.cleanName}`, backend.play(ch.streamId));
@@ -221,6 +222,7 @@ export async function playCatchupProgramme(
 ) {
   if (ch.isSeparator || !ch.hasArchive) return;
 
+  dispatch({ type: "continue/prompt", prompt: null });
   dispatch({ type: "opening", channel: { ...ch, nowPlaying: programme } });
   const ok = await run(
     dispatch,
@@ -431,6 +433,8 @@ async function openMovie(dispatch: Dispatch<Action>, movie: MovieDto, start: Sta
   }
   dispatch({ type: "movies/playing", movie });
   dispatch({ type: "mode", mode: "watch" });
+  // Another open is not one that asks: a question left over goes.
+  dispatch({ type: "continue/prompt", prompt: null });
   if (plan.ask && plan.start !== null) {
     dispatch({
       type: "continue/prompt",
@@ -652,6 +656,7 @@ async function openEpisode(
   dispatch({ type: "shows/playing", playing });
   dispatch({ type: "shows/sheet", id: null });
   dispatch({ type: "mode", mode: "watch" });
+  dispatch({ type: "continue/prompt", prompt: null });
   if (plan.ask && plan.start !== null) {
     dispatch({
       type: "continue/prompt",
@@ -693,6 +698,7 @@ export async function playNextEpisode(
 ): Promise<void> {
   if (!advanceGuard.claim(from.episode.episodeId)) return;
   advanceGuard.reset(next.episodeId);
+  dispatch({ type: "continue/prompt", prompt: null });
   dispatch({ type: "shows/playing", playing: { series: from.series, episode: next } });
   const ok = await run(
     dispatch,
@@ -927,3 +933,22 @@ export async function deleteRecording(dispatch: Dispatch<Action>, rec: Recording
   }
   await afterRecordingAction(dispatch);
 }
+
+/** Answers the Resume question with Resume: the held title plays from where
+ *  it stands, and the question goes. The browser's player has no explicit
+ *  play command yet, so there a paused title is toggled. */
+export async function resumeHeld(dispatch: Dispatch<Action>, state: PlayerStateDto["state"]): Promise<void> {
+  dispatch({ type: "continue/prompt", prompt: null });
+  await run(dispatch, "resume", playHeld(state));
+}
+
+/** Answers it with Start over: back to 0:00, playing. */
+export async function startOverHeld(dispatch: Dispatch<Action>, state: PlayerStateDto["state"]): Promise<void> {
+  dispatch({ type: "continue/prompt", prompt: null });
+  await run(dispatch, "start over", backend.seekTo(0).then(() => playHeld(state)));
+}
+
+const playHeld = async (state: PlayerStateDto["state"]): Promise<void> => {
+  if (backendKind !== "web") return backend.setPaused(false);
+  if (state === "paused") return backend.togglePause();
+};

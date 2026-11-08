@@ -36,10 +36,11 @@ import { StreamEnded } from "./StreamEnded";
 import { TransportBar } from "./TransportBar";
 import { VideoFeedback } from "./VideoFeedback";
 import { PictureCorner } from "./PictureCorner";
+import { ResumeCard } from "./ResumeCard";
 import { UpNextCard } from "./UpNextCard";
 import type { UpNext } from "../logic/upNext";
 
-export function PlayerChrome({ upNext }: { upNext: UpNext }) {
+export function PlayerChrome({ upNext, compactCards = false }: { upNext: UpNext; compactCards?: boolean }) {
   const { player, nowChannel, stacked, zoom, movies, shows } = useApp();
   const kind = playingKind(player);
   // A movie or an episode: the title's transport, steps and click.
@@ -142,6 +143,7 @@ export function PlayerChrome({ upNext }: { upNext: UpNext }) {
           player, as stopping does. */}
       <StreamEnded onDismissed={() => dispatch({ type: "mode", mode: "browse" })} />
       {/* Near an episode's end: what plays next, and when (App's useUpNext). */}
+      <ResumeCard compact={compactCards} />
       <UpNextCard upNext={upNext} />
       <div className="chrome-top">
         {/* Top-left, where the way out of a full-screen thing lives on every

@@ -86,13 +86,19 @@ test("seasons and years in words", () => {
   assert.equal(yearsText(null, null), "");
 });
 test("the main action plays what is next, and nothing without episodes", () => {
-  assert.deepEqual(showAction(details({ nextUp: 204, episodes: [ep(201, 2, 1), ep(204, 2, 4)] })), { label: "Play S2 E4", episodeId: 204 });
-  assert.deepEqual(showAction(details({ nextUp: null, episodes: [ep(101, 1, 1)] })), { label: "Play S1 E1", episodeId: 101 });
+  assert.deepEqual(showAction(details({ nextUp: 204, episodes: [ep(201, 2, 1), ep(204, 2, 4)] })), { label: "Play S2 E4", episodeId: 204, resume: false });
+  assert.deepEqual(showAction(details({ nextUp: null, episodes: [ep(101, 1, 1)] })), { label: "Play S1 E1", episodeId: 101, resume: false });
   assert.equal(showAction(details({ nextUp: null, episodes: [] })), null);
+});
+test("an episode in progress is resumed, with the time left", () => {
+  assert.deepEqual(
+    showAction(details({ nextUp: 204, episodes: [ep(204, 2, 4, { position: 2340, duration: 3120 })] })),
+    { label: "Resume S2 E4 \u00b7 13m left", episodeId: 204, resume: true },
+  );
 });
 test("with nothing next, the main action skips the specials listed first", () => {
   const eps = [ep(1, 0, 1), ep(101, 1, 1, { episodeEnd: 2 }), ep(103, 1, 3)];
-  assert.deepEqual(showAction(details({ nextUp: null, episodes: eps })), { label: "Play S1 E1–E2", episodeId: 101 });
+  assert.deepEqual(showAction(details({ nextUp: null, episodes: eps })), { label: "Play S1 E1–E2", episodeId: 101, resume: false });
 });
 test("the sheet opens on the next-up's season, else the first", () => {
   const seasons = [

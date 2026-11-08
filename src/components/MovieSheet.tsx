@@ -11,7 +11,7 @@ import { useMovieDetails } from "../hooks/useMovieDetails";
 import { playingKind, languagesLine, peopleLine } from "../logic/movies";
 import { useApp, useDispatch } from "../store";
 import type { MovieDto } from "../types";
-import { MovieActions, MovieFacts } from "./MovieBand";
+import { MovieActions, MovieFacts, MoviePlace } from "./MovieBand";
 import { Poster } from "./Poster";
 import { SheetControls } from "./SheetControls";
 
@@ -103,6 +103,7 @@ export function MovieSheet({ id }: { id: number }) {
             {movie.cleanName}
           </h2>
           <MovieFacts movie={movie} details={details} className="sheet-facts" />
+          {playing ? null : <MoviePlace movie={movie} />}
           {details.status === "loading" ? <p className="watch-none">Loading details…</p> : null}
           {details.status === "error" ? <p className="watch-none">Details unavailable</p> : null}
           {languages ? <p className="sheet-people">{languages}</p> : null}

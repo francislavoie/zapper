@@ -43,10 +43,12 @@ export interface ShowBandProps {
   dual?: boolean;
   /** The side column, when WatchBand fills it; else what is up next. */
   side?: ReactNode;
+  /** Another action at the end of the row (Continue watching's Remove). */
+  extra?: ReactNode;
 }
 
 /** A show selected in the list (and not playing). */
-export function ShowBand({ show, dual = false, side }: ShowBandProps) {
+export function ShowBand({ show, dual = false, side, extra }: ShowBandProps) {
   const details = useShowDetailsOf(show, DETAILS_DELAY_MS);
   const openSheet = useOpenShowSheet(show);
   const d = details.status === "ready" ? details.data : null;
@@ -57,7 +59,7 @@ export function ShowBand({ show, dual = false, side }: ShowBandProps) {
         className="show-band"
         thumb={<BandPoster url={show.posterUrl} name={show.cleanName} />}
         kicker={dual ? <Kicker what="selected" /> : null}
-        actions={<ShowActions show={show} details={details} playing={false} onDetails={openSheet} />}
+        actions={<ShowActions show={show} details={details} playing={false} onDetails={openSheet} extra={extra} />}
         credits={
           d ? (
             <Credits
@@ -316,7 +318,7 @@ export function ShowPlayButton({ show, details }: { show: SeriesDto; details: As
       className="ctl primary movie-play show-play"
       disabled={!episode}
       onClick={() => {
-        if (episode) void playEpisode(dispatch, { series: show, episode });
+        if (episode) void playEpisode(dispatch, { series: show, episode }, action?.resume ? "resume" : null);
       }}
     >
       <Play className="i" /> {action ? action.label : "Play"}
@@ -333,6 +335,7 @@ export function ShowActions({
   playing,
   onDetails,
   main,
+  extra,
 }: {
   show: SeriesDto;
   details: Async<SeriesDetailsDto>;
@@ -340,6 +343,8 @@ export function ShowActions({
   onDetails?: () => void;
   /** In place of ▶ Play: the episode pane's own main action. */
   main?: ReactNode;
+  /** Another action at the end of the row. */
+  extra?: ReactNode;
 }) {
   const dispatch = useDispatch();
   const d = details.status === "ready" ? details.data : null;
@@ -358,6 +363,7 @@ export function ShowActions({
         </button>
       ) : null}
       {playing ? <PlayingEnd /> : null}
+      {extra}
     </>
   );
 }

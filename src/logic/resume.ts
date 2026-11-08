@@ -100,6 +100,30 @@ export interface ResumePrompt {
   playedAt: number | null;
 }
 
+/** Where the question stands for the player's state: shown while the prompt's
+ *  item is open and opening or paused; `seen` once it has been; `clear` when
+ *  its item plays, fails or stops, or when it was seen and the player has
+ *  anything else. Before the player first reports the item nothing is
+ *  cleared: the open is on its way. */
+export function promptStep(
+  prompt: ResumePrompt | null,
+  seen: boolean,
+  p: { state: string; onDemand: { kind: string; id: number } | null },
+): { shown: boolean; seen: boolean; clear: boolean } {
+  if (prompt === null) return { shown: false, seen: false, clear: false };
+  const open = p.onDemand?.kind === prompt.item.kind && p.onDemand.id === prompt.item.id;
+  if (open && (p.state === "opening" || p.state === "paused")) return { shown: true, seen: true, clear: false };
+  // Until the title has been reported opening or paused, whatever the player
+  // says is from before the open: nothing clears it.
+  return { shown: false, seen, clear: seen };
+}
+
+/** Whether the question is seen, for the prompt now asked: a new prompt (or
+ *  another item) starts unseen, whatever the last one was. */
+export function seenFor(last: ResumePrompt | null, seen: boolean, now: ResumePrompt | null): boolean {
+  return last !== null && last === now ? seen : false;
+}
+
 /** "You stopped at 46:10, yesterday at 22:40." */
 export function promptLine(p: ResumePrompt, now: number): string {
   const at = clock(p.position);
