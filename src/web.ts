@@ -25,8 +25,10 @@ import {
   browserSettings,
   errorText,
   idList,
+  languageList,
   requestInit,
   signedOutStatus,
+  subtitlesPath,
   syncPollMs,
   withBrowserSettings,
 } from "./logic/web";
@@ -41,12 +43,14 @@ import type {
   DeviceDto,
   FavouriteDto,
   GuideRowDto,
+  KeptSubtitleDto,
   MarksDto,
   MovieDetailsDto,
   MovieDto,
   MoviePageDto,
   MoviesSummaryDto,
   NetworkDto,
+  OnlineServicesDto,
   PlayingEpisodeDto,
   PlayerOptionsDto,
   PlayerStateDto,
@@ -64,6 +68,8 @@ import type {
   SeriesPageDto,
   SettingsDto,
   ShowsSummaryDto,
+  SubtitleDownloadDto,
+  SubtitleSearchDto,
   SyncStatusDto,
   VodCategoryDto,
 } from "./types";
@@ -354,13 +360,21 @@ export const webBackend: typeof api = {
     del<unknown>(`/api/vod/continue/${kind}/${id}`).then(() => undefined),
   movieMarks: (movieId) => get<MarksDto>(`/api/vod/movies/${movieId}/marks`),
   episodeMarks: (episodeId) => get<MarksDto>(`/api/vod/episodes/${episodeId}/marks`),
-  onlineServices: notYet,
-  setOpenSubtitles: notYet,
-  signInOpenSubtitles: notYet,
-  signOutOpenSubtitles: notYet,
-  findSubtitles: notYet,
-  downloadSubtitle: notYet,
-  keptSubtitles: notYet,
+
+  // Online services are the service's: its sign-in to OpenSubtitles, and the
+  // subtitles it finds and keeps. The password goes in the body alone.
+  onlineServices: () => get<OnlineServicesDto>("/api/online"),
+  setOpenSubtitles: (patch) => put<OnlineServicesDto>("/api/online/opensubtitles", patch),
+  signInOpenSubtitles: (username, password) =>
+    post<OnlineServicesDto>("/api/online/opensubtitles/sign-in", { username, password }),
+  signOutOpenSubtitles: () => post<OnlineServicesDto>("/api/online/opensubtitles/sign-out"),
+  findSubtitles: (kind, id, languages) =>
+    get<SubtitleSearchDto>(
+      apiUrl(subtitlesPath(kind, id), { languages: languageList(languages) }),
+    ),
+  downloadSubtitle: (kind, id, fileId) =>
+    post<SubtitleDownloadDto>(subtitlesPath(kind, id, "download"), { fileId }),
+  keptSubtitles: (kind, id) => get<KeptSubtitleDto[]>(subtitlesPath(kind, id, "kept")),
   addSubtitleFile: notYet,
 
   activityRows: notHere,

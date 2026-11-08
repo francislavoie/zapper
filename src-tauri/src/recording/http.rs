@@ -445,6 +445,7 @@ pub fn router(server: Shared) -> Router {
         .merge(account::routes())
         .merge(watch::routes())
         .merge(vodwatch::routes())
+        .merge(super::online_http::routes())
         .route_layer(middleware::from_fn_with_state(server.clone(), auth));
     let app = Router::new()
         .route("/api/network", get(network).put(set_network))
@@ -4897,5 +4898,28 @@ pub(crate) mod tests {
         assert_eq!((st, none), (StatusCode::OK, serde_json::json!([])));
         let (st, _) = call(&s, from_page("GET", "/api/channels/x/alternatives", Some(&cookie), None)).await;
         assert_eq!(st, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn online_routes_need_the_sign_in() {
+        let s = server("online-sign-in");
+        enable(&s, true).await;
+        for uri in ["/api/online", "/api/subtitles/movie/1"] {
+            assert_eq!(
+                call(&s, from_page("GET", uri, None, None)).await.0,
+                StatusCode::UNAUTHORIZED,
+                "{uri}"
+            );
+        }
+        // Signed in, a change still needs the page's header.
+        let cookie = browser_login(&s).await;
+        let mut r = from_page(
+            "POST",
+            "/api/online/opensubtitles/sign-out",
+            Some(&cookie),
+            None,
+        );
+        r.headers_mut().remove("x-zapper");
+        assert_eq!(call(&s, r).await.0, StatusCode::FORBIDDEN);
     }
 }
