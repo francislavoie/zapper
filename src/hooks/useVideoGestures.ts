@@ -8,10 +8,10 @@
 // goes through the player to get there.
 
 import { useCallback, useRef, useState } from "react";
-import { backend } from "../backend";
+import { seekBy } from "../actions";
 import { SKIP_SECONDS, zoneAction, zoneAt } from "../logic/gestures";
 import { volumeLevel } from "../logic/volume";
-import { run, useDispatch } from "../store";
+import { useDispatch } from "../store";
 import type { Feedback } from "./useFeedback";
 
 export interface VideoGestureOptions {
@@ -63,7 +63,7 @@ export function useVideoGestures({
     }
     onActivity();
     flash({ kind: action.zone, label: `${step} seconds`, seconds: step });
-    void run(dispatch, "seek", backend.seekRelative(action.by));
+    void seekBy(dispatch, action.by);
   };
 
   return { feedback, flashVolume, doubleClick };

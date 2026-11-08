@@ -43,6 +43,7 @@
 // are.
 
 import type { MouseEvent, RefObject } from "react";
+import { seekBy } from "../actions";
 import { backend } from "../backend";
 import { duration, liveState } from "../logic/format";
 import { SKIP_SECONDS } from "../logic/gestures";
@@ -140,7 +141,7 @@ export function TransportBar({
   // own seek bar, longer skips, a position readout, and no Live button.
   const movie = isOnDemandKind(playingKind(player)) ? player.onDemand : null;
   const skip = movie ? VOD_SKIP_SECONDS : SKIP_SECONDS;
-  const seekBy = (by: number) => void run(dispatch, "seek", backend.seekRelative(by));
+  const skipBy = (by: number) => void seekBy(dispatch, by);
 
   /** One place decides what setting a volume means. Reaching for the slider
    *  while muted means "let me hear this", so it unmutes rather than moving a
@@ -220,7 +221,7 @@ export function TransportBar({
           className="ctl icon"
           data-tip={`Back ${skip} seconds (Left)`}
           aria-label={`Back ${skip} seconds`}
-          onClick={() => seekBy(-skip)}
+          onClick={() => skipBy(-skip)}
         >
           <SkipBack className="i" seconds={skip} />
         </button>
@@ -228,7 +229,7 @@ export function TransportBar({
           className="ctl icon"
           data-tip={`Forward ${skip} seconds (Right)`}
           aria-label={`Forward ${skip} seconds`}
-          onClick={() => seekBy(skip)}
+          onClick={() => skipBy(skip)}
         >
           <SkipForward className="i" seconds={skip} />
         </button>

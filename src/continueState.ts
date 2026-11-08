@@ -79,7 +79,7 @@ export function continueReducer(s: ContinueState, a: ContinueAction): ContinueSt
     case "continue/menu":
       return { ...s, menu: a.menu };
     case "continue/prompt":
-      return { ...s, prompt: a.prompt };
+      return a.prompt === s.prompt ? s : { ...s, prompt: a.prompt };
     case "continue/changed":
       return { ...s, revision: s.revision + 1 };
     case "continue/reset":

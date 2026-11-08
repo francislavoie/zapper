@@ -27,7 +27,15 @@ import {
   type NavHistory,
   type Place,
 } from "../logic/navHistory";
-import { goToContinue, playNextEpisode, playPrevious, recordFromPlayer, resumeHeld, runAction } from "../actions";
+import {
+  goToContinue,
+  playNextEpisode,
+  playPrevious,
+  recordFromPlayer,
+  resumeHeld,
+  runAction,
+  seekBy,
+} from "../actions";
 import { focusSearch, typingInto } from "../focus";
 import { exitFullscreen, toggleFullscreen } from "../fullscreen";
 import { fullscreenNow, refreshFullscreen } from "./useFullscreen";
@@ -572,11 +580,11 @@ export function useGlobalKeys(
             break;
           case "ArrowLeft":
             e.preventDefault();
-            void run(dispatch, "seek", backend.seekRelative(-skip));
+            void seekBy(dispatch, -skip);
             break;
           case "ArrowRight":
             e.preventDefault();
-            void run(dispatch, "seek", backend.seekRelative(skip));
+            void seekBy(dispatch, skip);
             break;
           case "l":
           case "L":
