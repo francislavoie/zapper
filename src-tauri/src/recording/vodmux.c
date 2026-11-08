@@ -146,6 +146,13 @@ static int is_text_sub(enum AVCodecID id) {
            id == AV_CODEC_ID_MOV_TEXT || id == AV_CODEC_ID_WEBVTT;
 }
 
+/* Whether this FFmpeg has a decoder for `codec` (FFmpeg's name for it): a
+ * build may leave some out, as an older libmpv bundle did MP4's subtitles. */
+int zv_can_decode(const char *codec) {
+    const AVCodecDescriptor *d = avcodec_descriptor_get_by_name(codec);
+    return d && avcodec_find_decoder(d->id);
+}
+
 /* Appends to `out` (length `len`, capacity `cap`, NUL kept). */
 static size_t add(char *out, size_t len, size_t cap, const char *s) {
     size_t n = strlen(s);
@@ -587,7 +594,10 @@ int zv_run(zv_read_fn read, zv_seek_fn seek, zv_size_fn size, zv_write_fn write,
         else if (cp->codec_type == AVMEDIA_TYPE_AUDIO)
             stream_fn(opaque, 0, (int)s, avcodec_get_name(cp->codec_id), lang, title,
                       cp->ch_layout.nb_channels);
-        else if (cp->codec_type == AVMEDIA_TYPE_SUBTITLE)
+        /* Text this FFmpeg can't decode is not offered: it would never
+         * come out as cues. */
+        else if (cp->codec_type == AVMEDIA_TYPE_SUBTITLE &&
+                 !(is_text_sub(cp->codec_id) && !avcodec_find_decoder(cp->codec_id)))
             stream_fn(opaque, is_text_sub(cp->codec_id) ? 1 : 2, (int)s,
                       avcodec_get_name(cp->codec_id), lang, title, 0);
     }
@@ -643,7 +653,7 @@ int zv_run(zv_read_fn read, zv_seek_fn seek, zv_size_fn size, zv_write_fn write,
         if (st->codecpar->codec_type != AVMEDIA_TYPE_SUBTITLE ||
             !is_text_sub(st->codecpar->codec_id))
             continue;
-        /* A track this FFmpeg can't decode is simply not offered. */
+        /* A track this FFmpeg can't decode was not offered either. */
         const AVCodec *dc = avcodec_find_decoder(st->codecpar->codec_id);
         AVCodecContext *c = dc ? avcodec_alloc_context3(dc) : NULL;
         if (!c)

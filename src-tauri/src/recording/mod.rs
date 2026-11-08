@@ -58,6 +58,8 @@ pub mod hub;
 pub mod listen;
 #[cfg(feature = "server")]
 pub mod livemux;
+#[cfg(all(test, feature = "server"))]
+pub(crate) mod test_fixtures;
 #[cfg(feature = "server")]
 pub mod remux;
 #[cfg(feature = "server")]

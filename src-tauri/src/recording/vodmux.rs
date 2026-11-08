@@ -143,6 +143,7 @@ type CueFn = extern "C" fn(*mut c_void, c_int, i64, i64, *const c_char);
 const REFUSED: c_int = 1;
 
 extern "C" {
+    fn zv_can_decode(codec: *const c_char) -> c_int;
     #[allow(clippy::too_many_arguments)]
     fn zv_run(
         read: ReadFn,
@@ -158,6 +159,18 @@ extern "C" {
         err: *mut c_char,
         errlen: usize,
     ) -> c_int;
+}
+
+/// Whether the FFmpeg this was linked with decodes `codec` (FFmpeg's name,
+/// as [`SubtitleStream::codec`] has it). A text subtitle track it can't
+/// decode is not offered: an older libmpv bundle had no decoder for MP4's.
+pub fn can_decode(codec: &str) -> bool {
+    let Ok(name) = std::ffi::CString::new(codec) else {
+        return false;
+    };
+    // SAFETY: a lookup in FFmpeg's static codec tables, of a NUL-terminated
+    // name that outlives the call.
+    unsafe { zv_can_decode(name.as_ptr()) != 0 }
 }
 
 /// Chunks queued out of the remuxer: enough to ride out a slow reader, few
@@ -424,10 +437,12 @@ pub fn spawn(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::recording::livemux::can_encode_aac;
+    use crate::recording::test_fixtures::{
+        aac_encoder_or_skip, decoder_or_skip, keep_or_remove, skip, NO_FIXTURE,
+    };
     use crate::recording::tsprobe::{Audio, Tables, Video};
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc, Mutex, OnceLock};
     use std::time::Duration;
 
     /// A file in memory that remembers where it was seeked to.
@@ -473,8 +488,24 @@ mod tests {
     /// (AC-3 sound, SubRip subtitles) or an MP4 (AAC sound, `mov_text`),
     /// made with the ffmpeg command when there is one. `busy` adds noise so
     /// the video is big enough to outrun the output queue. `None` without
-    /// ffmpeg.
-    fn fixture(mkv: bool, busy: bool) -> Option<Vec<u8>> {
+    /// ffmpeg. Made once per process for each kind, on one thread and
+    /// bit-exact, so every run reads the same bytes.
+    fn fixture(mkv: bool, busy: bool) -> Option<Arc<Vec<u8>>> {
+        type Made = OnceLock<Option<Arc<Vec<u8>>>>;
+        static MKV: Made = OnceLock::new();
+        static MKV_BUSY: Made = OnceLock::new();
+        static MP4: Made = OnceLock::new();
+        static MP4_BUSY: Made = OnceLock::new();
+        let made = match (mkv, busy) {
+            (true, false) => &MKV,
+            (true, true) => &MKV_BUSY,
+            (false, false) => &MP4,
+            (false, true) => &MP4_BUSY,
+        };
+        made.get_or_init(|| make_fixture(mkv, busy).map(Arc::new)).clone()
+    }
+
+    fn make_fixture(mkv: bool, busy: bool) -> Option<Vec<u8>> {
         static N: AtomicUsize = AtomicUsize::new(0);
         let n = N.fetch_add(1, Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!("zapper-vodmux-{}-{n}", std::process::id()));
@@ -498,14 +529,16 @@ mod tests {
             .args(["-c:v", "libx264", "-g", "25", "-pix_fmt", "yuv420p"])
             .args(["-b:v", if busy { "8M" } else { "300k" }])
             .args(["-c:a", audio, "-ac", "6", "-c:s", sub])
+            .args(["-threads", "1", "-filter_threads", "1", "-fflags", "+bitexact"])
             .arg(&out)
             .status()
             .ok()?
             .success();
         let bytes = made.then(|| std::fs::read(&out).ok()).flatten();
-        let _ = std::fs::remove_dir_all(&dir);
+        keep_or_remove(&dir);
         bytes
     }
+
 
     fn encode_plan(info: &MediaInfo) -> Result<VodPlan, String> {
         Ok(VodPlan {
@@ -553,11 +586,9 @@ mod tests {
     #[tokio::test]
     async fn an_mkv_with_ac3_comes_out_as_ts_with_aac() {
         let Some(file) = fixture(true, false) else {
-            eprintln!("skipped: no ffmpeg command to make a fixture with");
-            return;
+            return skip(NO_FIXTURE);
         };
-        if !can_encode_aac() {
-            eprintln!("skipped: this FFmpeg has no AAC encoder");
+        if !aac_encoder_or_skip() {
             return;
         }
         let (input, _) = mem(&file);
@@ -590,8 +621,7 @@ mod tests {
     #[tokio::test]
     async fn text_subtitles_come_out_as_cues_on_the_outputs_timeline() {
         let Some(file) = fixture(true, false) else {
-            eprintln!("skipped: no ffmpeg command to make a fixture with");
-            return;
+            return skip(NO_FIXTURE);
         };
         let (input, _) = mem(&file);
         let (info, mut vod) = spawn(input, 0.0, |_| Ok(VodPlan { audio: None, encode: false }));
@@ -616,9 +646,11 @@ mod tests {
     #[tokio::test]
     async fn starting_at_ten_seconds_seeks_rather_than_reading_from_the_start() {
         let Some(file) = fixture(false, false) else {
-            eprintln!("skipped: no ffmpeg command to make a fixture with");
-            return;
+            return skip(NO_FIXTURE);
         };
+        if !decoder_or_skip("mov_text") {
+            return;
+        }
         let (input, seeks) = mem(&file);
         // Between keyframes (one a second): the output starts on the one before.
         let (info, mut vod) = spawn(input, 10.5, |info| {
@@ -664,10 +696,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn text_subtitles_are_offered_only_when_this_ffmpeg_reads_them() {
+        let Some(file) = fixture(false, false) else {
+            return skip(NO_FIXTURE);
+        };
+        let (input, _) = mem(&file);
+        let (info, mut vod) = spawn(input, 0.0, |_| Ok(VodPlan { audio: None, encode: false }));
+        let info = info.await.unwrap().expect("it opens");
+        let _ = all(&mut vod.output).await;
+        let offered: Vec<_> = info.subtitles.iter().map(|s| (s.codec.as_str(), s.text)).collect();
+        if can_decode("mov_text") {
+            assert_eq!(offered, [("mov_text", true)]);
+            assert!(vod.cues.recv().await.is_some(), "an offered track has its cues");
+        } else {
+            // Offered, it would never come out as cues.
+            assert!(offered.is_empty(), "{offered:?}");
+        }
+        assert!(can_decode("subrip"), "every FFmpeg reads SubRip");
+        assert!(!can_decode("no such codec"));
+    }
+
+    #[tokio::test]
     async fn a_refused_plan_reports_its_reason_and_writes_nothing() {
         let Some(file) = fixture(false, false) else {
-            eprintln!("skipped: no ffmpeg command to make a fixture with");
-            return;
+            return skip(NO_FIXTURE);
         };
         let (input, _) = mem(&file);
         let (info, mut vod) = spawn(input, 0.0, |_| Err("no browser here plays this video".into()));
@@ -690,8 +742,7 @@ mod tests {
     #[tokio::test]
     async fn a_panicking_plan_is_an_error_not_an_abort() {
         let Some(file) = fixture(false, false) else {
-            eprintln!("skipped: no ffmpeg command to make a fixture with");
-            return;
+            return skip(NO_FIXTURE);
         };
         let (input, _) = mem(&file);
         let (info, mut vod) = spawn(input, 0.0, |_| panic!("plan bug"));
@@ -735,8 +786,7 @@ mod tests {
         let file = made.ok().filter(|s| s.success()).and_then(|_| std::fs::read(&out).ok());
         let _ = std::fs::remove_dir_all(&dir);
         let Some(file) = file else {
-            eprintln!("skipped: no ffmpeg command to make a fixture with");
-            return;
+            return skip(NO_FIXTURE);
         };
         let (input, _) = mem(&file);
         let (info, mut vod) = spawn(input, 0.0, |_| Ok(VodPlan { audio: None, encode: false }));
@@ -752,8 +802,7 @@ mod tests {
     #[tokio::test]
     async fn the_remuxer_stops_when_its_reader_leaves() {
         let Some(file) = fixture(false, true) else {
-            eprintln!("skipped: no ffmpeg command to make a fixture with");
-            return;
+            return skip(NO_FIXTURE);
         };
         let (input, _) = mem(&file);
         let (info, mut vod) = spawn(input, 0.0, |_| Ok(VodPlan { audio: None, encode: false }));

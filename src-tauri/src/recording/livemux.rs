@@ -126,6 +126,7 @@ pub fn start(audio_pid: Option<u16>, encode: bool) -> std::io::Result<Remuxer> {
 mod tests {
     use super::*;
     use crate::recording::tsprobe::{Audio, Tables, Video};
+    use crate::recording::test_fixtures::{aac_encoder_or_skip, skip, NO_FIXTURE};
 
     /// A few seconds of test pattern with AC-3 sound, made with the ffmpeg
     /// command when there is one (its output is ours to use: a pattern and
@@ -155,11 +156,9 @@ mod tests {
     #[tokio::test]
     async fn ac3_sound_comes_out_as_aac_and_the_picture_as_it_was() {
         let Some(ts) = ac3_fixture() else {
-            eprintln!("skipped: no ffmpeg command to make an AC-3 fixture with");
-            return;
+            return skip(NO_FIXTURE);
         };
-        if !can_encode_aac() {
-            eprintln!("skipped: this FFmpeg has no AAC encoder");
+        if !aac_encoder_or_skip() {
             return;
         }
         let mut src = Tables::new();
@@ -206,8 +205,7 @@ mod tests {
     #[tokio::test]
     async fn the_remuxer_stops_when_its_reader_leaves() {
         let Some(ts) = ac3_fixture() else {
-            eprintln!("skipped: no ffmpeg command to make a fixture with");
-            return;
+            return skip(NO_FIXTURE);
         };
         let Remuxer { input, mut output } = start(None, false).unwrap();
         // Feed it forever, until it stops taking.
