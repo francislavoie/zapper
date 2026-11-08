@@ -276,8 +276,9 @@ impl Store {
     }
 
     /// The thumbnail nearest `at` within [`TOLERANCE_S`]: a channel's.
-    fn nearest(&self, at: f64) -> Option<&Thumb> {
-        if self.thumbs.is_empty() || !at.is_finite() {
+    fn nearest_live(&self, at: f64) -> Option<&Thumb> {
+        // A title's frames are JPEG, and answered by `title_lookup`.
+        if self.title.is_some() || self.thumbs.is_empty() || !at.is_finite() {
             return None;
         }
         let pos = self.thumbs.partition_point(|t| t.at < at);
@@ -296,15 +297,21 @@ impl Store {
 
     /// Files a title's frame in its slot unless the slot has one already:
     /// the first frame of a slot stays, whichever path brought it. Nothing
-    /// is pruned, since the slots are bounded by the title's length; the cap
-    /// is for a title whose length was never known.
+    /// is refused for want of room: a title that fills [`TITLE_MAX_SLOTS`]
+    /// (one whose length was not known, played or buffered past what its
+    /// slots cover) gets slots twice as wide, keeping the first frame of
+    /// each, until it has room.
     fn insert_title(&mut self, thumb: Thumb) -> bool {
+        if self.title.is_none() || !thumb.at.is_finite() || thumb.at < 0.0 {
+            return false;
+        }
+        while self.thumbs.len() >= TITLE_MAX_SLOTS {
+            let wider = self.title.as_ref().map_or(TITLE_SPACING_S, |t| t.spacing) * 2.0;
+            self.set_spacing(wider);
+        }
         let Some(spacing) = self.title.as_ref().map(|t| t.spacing) else {
             return false;
         };
-        if !thumb.at.is_finite() || thumb.at < 0.0 || self.thumbs.len() >= TITLE_MAX_SLOTS {
-            return false;
-        }
         let slot = slot_of(thumb.at, spacing);
         let pos = self.thumbs.partition_point(|t| t.at < thumb.at);
         // A slot is one stretch of time, so a frame already in it is a
@@ -337,13 +344,14 @@ impl Store {
             .filter(|t| slot_of(t.at, spacing) == slot)
     }
 
-    /// Changes a title's spacing once its length is known, keeping the
-    /// first frame of each new slot.
+    /// Widens a title's spacing once more of its length is known, keeping
+    /// the first frame of each new slot. Never narrower: the length it was
+    /// chosen for only grows.
     fn set_spacing(&mut self, spacing: f64) {
         let Some(title) = self.title.as_mut() else {
             return;
         };
-        if !spacing.is_finite() || spacing <= 0.0 || title.spacing == spacing {
+        if !spacing.is_finite() || spacing <= title.spacing {
             return;
         }
         title.spacing = spacing;
@@ -369,7 +377,7 @@ impl Store {
 /// nothing was captured close enough to be honest about.
 pub fn nearest_png(at: f64) -> Option<(f64, Vec<u8>)> {
     let guard = STORE.lock().ok()?;
-    let best = guard.as_ref()?.nearest(at)?;
+    let best = guard.as_ref()?.nearest_live(at)?;
     Some((best.at, encoded(&best.img).1))
 }
 
@@ -789,7 +797,47 @@ mod tests {
         for k in 0..TITLE_MAX_SLOTS + 50 {
             s.insert_title(jpeg(k as f64 * 10.0));
         }
-        assert_eq!(s.thumbs.len(), TITLE_MAX_SLOTS);
+        assert!(s.thumbs.len() <= TITLE_MAX_SLOTS);
+    }
+
+    #[test]
+    fn a_full_title_spaces_its_slots_out_rather_than_refusing_a_frame() {
+        // A title whose length is not known, played for longer than the cap
+        // covers at ten seconds: every frame offered is still filed.
+        let mut s = title_store(10.0);
+        for k in 0..TITLE_MAX_SLOTS + 300 {
+            let at = k as f64 * 10.0;
+            assert!(s.insert_title(jpeg(at)) || s.title_lookup(at).is_some(), "{at}s refused");
+        }
+        assert!(s.thumbs.len() <= TITLE_MAX_SLOTS);
+        let spacing = s.title.as_ref().unwrap().spacing;
+        assert!(spacing > 10.0, "spaced out to {spacing}");
+        let last = (TITLE_MAX_SLOTS + 299) as f64 * 10.0;
+        assert!(s.title_lookup(last).is_some(), "the newest moment has a frame");
+    }
+
+    #[test]
+    fn a_titles_spacing_only_ever_widens() {
+        let mut s = title_store(20.0);
+        s.set_spacing(10.0);
+        assert_eq!(s.title.as_ref().unwrap().spacing, 20.0);
+        s.set_spacing(30.0);
+        assert_eq!(s.title.as_ref().unwrap().spacing, 30.0);
+    }
+
+    #[test]
+    fn a_channels_lookup_never_answers_from_a_title() {
+        // A title's frames are JPEG and answered by `title_frame`; the
+        // channel lookup is PNG only and says nothing about them.
+        let mut s = title_store(10.0);
+        s.insert_title(jpeg(50.0));
+        assert!(s.nearest_live(50.0).is_none());
+        let mut live = Store::default();
+        live.insert(Thumb {
+            at: 50.0,
+            img: Img::Rgba(vec![]),
+        });
+        assert!(live.nearest_live(50.0).is_some());
     }
 
     #[test]
