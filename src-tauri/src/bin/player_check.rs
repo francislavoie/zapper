@@ -35,10 +35,14 @@
 //! plays `ZAPPER_FIXTURE_EPISODE`, so give it the 120 s episode): one
 //! played to its end reports itself as `finished`; moving on from it opens
 //! the next and marks it watched in the scratch catalogue; moving on from
-//! one still playing does the same, once however often it is asked; and the
-//! fixture server never sends two streams at once. With `--drop`, against
-//! `fake_stream.py --vod-cut-at 0.8`, an episode cut short fails with no
-//! finished title, and moving on from it is refused.
+//! one still playing does the same, once however often it is asked; and no
+//! second stream lingers on the fixture server (it sends a title as fast as
+//! it is read, so this catches a stream left open, not a brief overlap).
+//! With `--past-end` the first episode is ended by a skip past its end
+//! (`seek_relative`) rather than a seek near it, which must still count as
+//! finished. With `--drop`, against `fake_stream.py --vod-cut-at 0.8`, an
+//! episode cut short fails with no finished title, and moving on from it is
+//! refused.
 //!
 //! `--ending <kind>` plays a channel that is expected to stop by itself, and
 //! checks it stops the way the app explains it (`offAir`, `dropped`, …), as
@@ -151,7 +155,8 @@ fn main() {
                 } else if args.iter().any(|a| a == "--movie") {
                     run_movie(&handle).await
                 } else if args.iter().any(|a| a == "--up-next") {
-                    run_up_next(&handle, args.iter().any(|a| a == "--drop")).await
+                    let has = |flag: &str| args.iter().any(|a| a == flag);
+                    run_up_next(&handle, has("--drop"), has("--past-end")).await
                 } else if args.iter().any(|a| a == "--episode") {
                     run_episode(&handle).await
                 } else {
@@ -719,7 +724,7 @@ async fn run_episode(app: &tauri::AppHandle) -> Result<String, String> {
 
 /// The `--up-next` run; see the top of the file.
 #[cfg(target_os = "linux")]
-async fn run_up_next(app: &tauri::AppHandle, drop: bool) -> Result<String, String> {
+async fn run_up_next(app: &tauri::AppHandle, drop: bool, past_end: bool) -> Result<String, String> {
     use std::time::Duration;
     use zapper_lib::ipc::player_cmds as cmds;
     use zapper_lib::ipc::types::{OnDemandKind, PlaybackState, PlayerStateDto};
@@ -785,8 +790,18 @@ async fn run_up_next(app: &tauri::AppHandle, drop: bool) -> Result<String, Strin
     let port = fixture_port()?;
     let streams = StreamWatch::start(port);
 
-    // Played to its end.
-    cmds::seek_to(app.clone(), 115.0).await?;
+    // Played to its end: from near it, or by skipping past it (the
+    // credits), which ends the file before a heartbeat reads the new place.
+    if past_end {
+        cmds::seek_to(app.clone(), 85.0).await?;
+        let there = await_state(Duration::from_secs(8), |s| (84.0..=90.0).contains(&at(s))).await;
+        if !(84.0..=90.0).contains(&at(&there)) {
+            return Err(format!("seek_to(85) left A at {:.1}s", at(&there)));
+        }
+        cmds::seek_relative(app.clone(), 60.0).await?;
+    } else {
+        cmds::seek_to(app.clone(), 115.0).await?;
+    }
     let ended = await_state(Duration::from_secs(30), |s| s.state != PlaybackState::Playing).await;
     if ended.state != PlaybackState::Stopped {
         return Err(failure("an episode played to its end", &ended));
@@ -847,13 +862,14 @@ async fn run_up_next(app: &tauri::AppHandle, drop: bool) -> Result<String, Strin
     }
 
     cmds::stop(app.clone()).await?;
-    let most = streams.stop();
+    let most = streams.stop()?;
     if most >= 2 {
-        return Err(format!("the fixture server was sending {most} streams at once"));
+        return Err(format!("a second stream lingered on the fixture server ({most} open)"));
     }
     Ok(format!(
-        "A played to its end as finished; A to B opened B and marked A watched; B to C at {:.0}s \
-         opened C once, marked B watched and kept the subtitles; at most {most} stream(s) sent at once",
+        "A {} as finished; A to B opened B and marked A watched; B to C at {:.0}s \
+         opened C once, marked B watched and kept the subtitles; no second stream lingered",
+        if past_end { "skipped past its end" } else { "played to its end" },
         at(&near)
     ))
 }
@@ -892,14 +908,16 @@ fn fixture_port() -> Result<u16, String> {
         .ok_or_else(|| format!("no port in ZAPPER_FIXTURE_BASE ({base})"))
 }
 
-/// Watches how many streams the fixture server is sending, from its
-/// account API, until stopped. A count is believed only when two readings a
-/// third of a second apart agree: the server's thread sending a stream that
+/// Watches the fixture server's account API for a second stream left open,
+/// until stopped. Only a lingering one: the server sends a title as fast as
+/// it is read, so a stream is open for moments and a brief overlap between
+/// two would pass unseen. Two are believed only when two readings a third
+/// of a second apart agree, since the server's thread sending a stream that
 /// was just closed notices a moment later (as `fake_stream.py` allows for).
 #[cfg(target_os = "linux")]
 struct StreamWatch {
     running: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    thread: std::thread::JoinHandle<i64>,
+    thread: std::thread::JoinHandle<Result<i64, String>>,
 }
 
 #[cfg(target_os = "linux")]
@@ -912,20 +930,25 @@ impl StreamWatch {
             let mut most = 0;
             let mut last = 0;
             while still.load(Ordering::Acquire) {
-                let now = active_streams(port).unwrap_or(0);
+                // A reading that failed is not a reading of none.
+                let now = active_streams(port)
+                    .ok_or("the fixture server's account API could not be read")?;
                 most = most.max(now.min(last));
                 last = now;
                 std::thread::sleep(std::time::Duration::from_millis(350));
             }
-            most
+            Ok(most)
         });
         Self { running, thread }
     }
 
-    /// The most streams it saw at once.
-    fn stop(self) -> i64 {
+    /// The most streams it saw open at once, by two readings; an error if
+    /// the server could not be asked.
+    fn stop(self) -> Result<i64, String> {
         self.running.store(false, std::sync::atomic::Ordering::Release);
-        self.thread.join().unwrap_or(i64::MAX)
+        self.thread
+            .join()
+            .map_err(|_| "the stream watch panicked".to_owned())?
     }
 }
 

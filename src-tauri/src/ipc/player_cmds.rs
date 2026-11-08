@@ -218,6 +218,12 @@ struct Machine {
     /// The languages the last episode was in, to look for in this one's
     /// tracks once they are known: moving on to the next episode only.
     carry_languages: Option<Languages>,
+    /// Where a title was last sought to, and when, until mpv's clock gets
+    /// there ([`SEEK_LANDED`]) or [`SEEK_SETTLE`] has passed. The title's
+    /// position says this meanwhile: a seek to its end can reach the end of
+    /// the file before a heartbeat has read the new place, and that end is
+    /// judged by where the viewer asked to be, not where they were.
+    seek_target: Option<(f64, Instant)>,
 }
 
 /// What an open has shown about its channel that is worth keeping: see
@@ -324,6 +330,7 @@ impl Machine {
             reconnect_token: 0,
             languages: None,
             carry_languages: None,
+            seek_target: None,
         }
     }
 
@@ -424,6 +431,7 @@ impl Machine {
         self.dto.finished = None;
         self.languages = None;
         self.carry_languages = None;
+        self.seek_target = None;
         self.live = true;
         self.catch_up = None;
         self.has_video = None;
@@ -816,6 +824,9 @@ impl Machine {
     /// double press opens it once. Returns the languages `from` was in, for
     /// `next` to carry.
     fn advance(&mut self, from: i64, next: i64) -> Result<Option<Languages>, String> {
+        if from == next {
+            return Err("that is the episode playing".to_owned());
+        }
         if !up_next_allowed(&self.dto, from) {
             return Err("that episode is not the one playing".to_owned());
         }
@@ -823,6 +834,15 @@ impl Machine {
         self.opening(Opened::Episode(next));
         self.live = false;
         Ok(languages)
+    }
+
+    /// A title was sought to `at` seconds (already clamped to its length):
+    /// its position says so from now, until mpv's clock catches up.
+    fn sought(&mut self, at: f64) {
+        if let Some(od) = self.dto.on_demand.as_mut() {
+            od.position = at.max(0.0).round();
+            self.seek_target = Some((od.position, Instant::now()));
+        }
     }
 
     /// Failed, with words but no account of why: the open itself could not
@@ -862,6 +882,7 @@ impl Machine {
         self.dto.stream_id = None;
         self.dto.on_demand = None;
         self.dto.finished = None;
+        self.seek_target = None;
         self.dto.error = None;
         self.dto.ending = None;
         self.dto.behind_live = 0.0;
@@ -1058,7 +1079,16 @@ impl Machine {
                 // re-rendered for every tenth, and the saved place is whole
                 // seconds too.
                 if let Some(t) = p.time_pos {
-                    od.position = t.max(0.0).round();
+                    let t = t.max(0.0).round();
+                    match self.seek_target {
+                        // Not there yet: the place asked for stands.
+                        Some((target, since))
+                            if (t - target).abs() > SEEK_LANDED && since.elapsed() < SEEK_SETTLE => {}
+                        _ => {
+                            self.seek_target = None;
+                            od.position = t;
+                        }
+                    }
                 }
                 if p.duration.is_some() {
                     od.duration = p.duration.map(f64::round);
@@ -1235,6 +1265,14 @@ fn mark_moved_on(
 /// How close to a movie's length its position has to be for an end of file
 /// to be its end rather than a dropped connection.
 const MOVIE_END_SLACK_SECS: f64 = 10.0;
+
+/// How near the place sought to mpv's clock has to be for the seek to have
+/// landed. A seek lands on a keyframe, which can be a few seconds off.
+const SEEK_LANDED: f64 = 5.0;
+
+/// How long the place sought to stands in for mpv's clock at most: a seek
+/// that lands further off than [`SEEK_LANDED`] is believed after this.
+const SEEK_SETTLE: Duration = Duration::from_secs(3);
 
 static STATE: LazyLock<Mutex<Machine>> = LazyLock::new(|| Mutex::new(Machine::new()));
 
@@ -2660,19 +2698,41 @@ pub async fn seek_relative(app: AppHandle, seconds: f64) -> Result<(), String> {
     on_player(&app, move |p| {
         let probe = p.probe();
         // A movie is read from a file that can be asked for any part of it:
-        // the buffered window is a live stream's limit, not its.
-        let by = if movie {
-            seconds
-        } else {
-            clamp_seek(seconds, probe.buffered_back, probe.behind_live)
+        // the buffered window is a live stream's limit, not its. Its own
+        // ends are, though: never before the start or past the end.
+        let target = movie
+            .then(|| probe.time_pos.map(|now| clamp_to_title(now + seconds, title_length(p))))
+            .flatten();
+        let by = match (movie, probe.time_pos, target) {
+            (true, Some(now), Some(at)) => at - now,
+            (true, _, _) => seconds,
+            (false, _, _) => clamp_seek(seconds, probe.buffered_back, probe.behind_live),
         };
         if by.abs() < 0.05 {
             return Ok(());
         }
         p.command("seek", &[&format!("{by:.3}"), "relative"])
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+        if let Some(at) = target {
+            sought(at);
+        }
+        Ok(())
     })
     .await
+}
+
+/// A title's length as mpv reads it, when it knows one.
+fn title_length(p: &Player) -> Option<f64> {
+    p.get_f64("duration").filter(|d| d.is_finite() && *d > 0.0)
+}
+
+/// Notes a seek on a title the moment it is sent, on the main thread where
+/// the heartbeat runs, so that no heartbeat reads an end of file between
+/// the two. See [`Machine::seek_target`].
+fn sought(at: f64) {
+    if let Ok(mut m) = STATE.lock() {
+        m.sought(at);
+    }
 }
 
 /// Where in a movie to seek to, for a place `seconds` from its start:
@@ -2698,9 +2758,11 @@ pub async fn seek_to(app: AppHandle, seconds: f64) -> Result<(), String> {
         return Err("seeking to a time is for movies and episodes".into());
     }
     on_player(&app, move |p| {
-        let at = clamp_to_title(seconds, p.get_f64("duration").filter(|d| d.is_finite() && *d > 0.0));
+        let at = clamp_to_title(seconds, title_length(p));
         p.command("seek", &[&format!("{at:.3}"), "absolute"])
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+        sought(at);
+        Ok(())
     })
     .await
 }
@@ -3683,6 +3745,65 @@ mod tests {
             assert_eq!(m.dto.state, PlaybackState::Failed);
             assert!(!up_next_allowed(&m.dto, 7));
             assert!(m.advance(7, 8).is_err());
+        }
+
+        #[test]
+        fn moving_on_to_the_same_episode_is_refused() {
+            let mut m = finished_episode(7);
+            assert_eq!(m.advance(7, 7).unwrap_err(), "that is the episode playing");
+            assert_eq!(m.dto.state, PlaybackState::Stopped);
+            assert_eq!(title(m.dto.finished).map(|t| t.1), Some(7));
+            let mut m = a_playing_episode(7);
+            assert!(m.advance(7, 7).is_err());
+            assert_eq!(m.dto.state, PlaybackState::Playing);
+        }
+
+        #[test]
+        fn a_seek_to_the_end_that_ends_before_a_heartbeat_is_finished() {
+            // Playing at 85 s of 120, the viewer skips the credits: the file
+            // ends before any heartbeat has read the new place.
+            let mut m = a_playing_episode(7);
+            at(&mut m, 85.0);
+            m.sought(clamp_to_title(85.0 + 30.0, Some(120.0)));
+            m.ended();
+            assert_eq!(m.dto.state, PlaybackState::Stopped);
+            assert_eq!(title(m.dto.finished), Some((OnDemandKind::Episode, 7, 115.0)));
+            // Clamped to the very end, the same.
+            let mut m = a_playing_episode(7);
+            at(&mut m, 100.0);
+            m.sought(clamp_to_title(100.0 + 600.0, Some(120.0)));
+            m.ended();
+            assert_eq!(title(m.dto.finished), Some((OnDemandKind::Episode, 7, 120.0)));
+        }
+
+        #[test]
+        fn a_seek_to_the_middle_then_an_end_is_still_a_drop() {
+            let mut m = a_playing_episode(7);
+            at(&mut m, 100.0);
+            m.sought(60.0);
+            m.ended();
+            assert_eq!(m.dto.state, PlaybackState::Failed);
+            assert!(m.dto.finished.is_none());
+            assert_eq!(title(m.dto.on_demand), Some((OnDemandKind::Episode, 7, 60.0)));
+        }
+
+        #[test]
+        fn the_place_sought_stands_until_mpv_gets_there() {
+            let mut m = a_playing_episode(7);
+            at(&mut m, 85.0);
+            m.sought(115.0);
+            // A heartbeat that still reads the old place keeps the new one.
+            at(&mut m, 85.0);
+            assert_eq!(title(m.dto.on_demand).map(|t| t.2), Some(115.0));
+            // Landed (on a keyframe a little short): mpv's clock again.
+            at(&mut m, 113.0);
+            assert_eq!(title(m.dto.on_demand).map(|t| t.2), Some(113.0));
+            assert!(m.seek_target.is_none());
+            // One that never lands is believed after a while.
+            m.sought(30.0);
+            m.seek_target = m.seek_target.map(|(t, _)| (t, Instant::now() - SEEK_SETTLE));
+            at(&mut m, 113.0);
+            assert_eq!(title(m.dto.on_demand).map(|t| t.2), Some(113.0));
         }
 
         #[test]
