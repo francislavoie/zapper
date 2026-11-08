@@ -165,7 +165,7 @@ export function stripShown(
 ): boolean {
   return (
     view === "posters" &&
-    selection !== CONTINUE &&
+    !continueShown(selection, query) &&
     !isTitleSearch(query) &&
     items > 0 &&
     paneHeight >= STRIP_MIN_PANE_PX

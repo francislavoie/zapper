@@ -48,7 +48,7 @@ export function ContinueStrip({ tab }: { tab: "movies" | "shows" }) {
           >
             <span className="cw-strip-art">
               <Poster url={card.art} name={card.title} className="poster cw-strip-img" />
-              <span className="cw-strip-over">{card.title}</span>
+              <span className="cw-strip-over" data-tip-overflow={card.title}>{card.title}</span>
               {card.progress !== null ? (
                 <span className="poster-progress" aria-hidden>
                   <span style={{ width: `${Math.round(card.progress * 100)}%` }} />

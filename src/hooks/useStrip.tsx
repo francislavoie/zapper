@@ -21,4 +21,3 @@ export function useStrip(
     [view, selection, query, count, tab],
   );
 }
-
