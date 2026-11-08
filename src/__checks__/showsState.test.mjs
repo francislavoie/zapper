@@ -27,10 +27,10 @@ test("starts on what was added recently, as a list", () => {
   assert.equal(s.view, "list");
   assert.equal(s.playing, null);
 });
-test("choosing a rail item clears the search, the open show and the sheet", () => {
+test("choosing a rail item clears the search, the open show, its pane and the sheet", () => {
   let s = initialShows("list");
   s = showsReducer(s, { type: "shows/query", text: "harbour" });
-  s = showsReducer(s, { type: "shows/selectShow", show: show(1) });
+  s = showsReducer(s, { type: "shows/selectShow", show: show(1), pane: true });
   s = showsReducer(s, { type: "shows/sheet", id: 1 });
   s = showsReducer(s, { type: "shows/season", number: 2 });
   s = showsReducer(s, { type: "shows/select", id: SHOW_FAVOURITES });
@@ -38,14 +38,15 @@ test("choosing a rail item clears the search, the open show and the sheet", () =
   assert.equal(s.query, "");
   assert.equal(s.selected, null);
   assert.equal(s.sheetId, null);
-  assert.equal(s.sheetSeason, null);
+  assert.equal(s.season, null);
+  assert.equal(s.paneOpen, false);
 });
-test("another show's sheet opens on its own season", () => {
-  let s = showsReducer(initialShows("list"), { type: "shows/sheet", id: 1 });
+test("another show opens on its own season", () => {
+  let s = showsReducer(initialShows("list"), { type: "shows/selectShow", show: show(1) });
   s = showsReducer(s, { type: "shows/season", number: 3 });
-  assert.equal(s.sheetSeason, 3);
-  s = showsReducer(s, { type: "shows/sheet", id: 2 });
-  assert.equal(s.sheetSeason, null);
+  assert.equal(s.season, 3);
+  s = showsReducer(s, { type: "shows/selectShow", show: show(2) });
+  assert.equal(s.season, null);
 });
 test("the playing episode is set, and cleared with null", () => {
   let s = showsReducer(initialShows("list"), { type: "shows/playing", playing: { series: show(1), episode: episode(7) } });
@@ -89,7 +90,7 @@ test("a show's mark patches the open and playing show; an episode's, the playing
 test("a new account resets the selection, the sheet and the marks", () => {
   let s = showsReducer(initialShows("list"), { type: "shows/summary", value: summary("a1") });
   s = showsReducer(s, { type: "shows/select", id: SHOW_FAVOURITES });
-  s = showsReducer(s, { type: "shows/selectShow", show: show(1) });
+  s = showsReducer(s, { type: "shows/selectShow", show: show(1), pane: true });
   s = showsReducer(s, { type: "shows/sheet", id: 1 });
   s = showsReducer(s, { type: "shows/season", number: 2 });
   s = showsReducer(s, { type: "shows/marked", marks: marks(1, { favourite: true }) });
@@ -100,7 +101,8 @@ test("a new account resets the selection, the sheet and the marks", () => {
   assert.equal(s.selection, SHOW_RECENT);
   assert.equal(s.selected, null);
   assert.equal(s.sheetId, null);
-  assert.equal(s.sheetSeason, null);
+  assert.equal(s.season, null);
+  assert.equal(s.paneOpen, false);
   assert.deepEqual(s.seriesMarks, {});
   assert.deepEqual(s.episodeMarks, {});
   assert.equal(s.revision, rev + 1);

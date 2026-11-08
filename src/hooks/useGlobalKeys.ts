@@ -170,6 +170,12 @@ export function useGlobalKeys(
         state.section === "shows" &&
         state.shows.sheetId !== null &&
         showsAvailable(state.shows.summary),
+      showPane:
+        (state.mode === "browse" || stacked) &&
+        state.section === "shows" &&
+        state.shows.paneOpen &&
+        state.shows.selected !== null &&
+        showsAvailable(state.shows.summary),
       upNextCard: card !== null,
       fullscreen: fullscreenNow(),
       // A search belongs to the tab it was typed on.
@@ -231,6 +237,9 @@ export function useGlobalKeys(
           break;
         case "showSheet":
           dispatch({ type: "shows/sheet", id: null });
+          break;
+        case "showPane":
+          dispatch({ type: "shows/pane", open: false });
           break;
         case "upNextCard":
           // Cancelled, and the player stays as it is. A second press goes

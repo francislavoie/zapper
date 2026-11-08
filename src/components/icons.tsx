@@ -480,3 +480,16 @@ export function ResetArrow({ className, title }: IconProps) {
     </svg>
   );
 }
+
+/** ↩: back to the other thing the band tells of (↩ Show). */
+export function Return({ className, title }: IconProps) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" aria-hidden={!title} focusable="false">
+      {title ? <title>{title}</title> : null}
+      <path d="M9 6 L4.5 10.5 L9 15" fill="none" stroke="currentColor"
+            strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M5 10.5 H15 a4.5 4.5 0 0 1 0 9 H12.5" fill="none" stroke="currentColor"
+            strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}

@@ -89,6 +89,19 @@ export const SHORTCUT_GROUPS: readonly ShortcutGroup[] = [
     ],
   },
   {
+    title: "In the Shows list",
+    when: "on the Shows tab",
+    needs: "onDemand",
+    items: [
+      { keys: [["↑"], ["↓"]], pair: true, does: "Previous or next show; its episodes follow" },
+      { keys: [["Enter"], ["→"]], does: "Into the selected show's episodes" },
+      { keys: [["Enter"]], does: "In the episodes: play the one chosen" },
+      { keys: [["["], ["]"]], pair: true, does: "In the episodes: previous or next season" },
+      { keys: [["←"], ["Esc"]], does: "From the episodes back to the list" },
+      { keys: [["Esc"]], does: "Close the episodes" },
+    ],
+  },
+  {
     title: "In the guide",
     items: [
       { keys: [["←"], ["→"]], pair: true, does: "An hour earlier or later" },

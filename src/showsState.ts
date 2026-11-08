@@ -1,7 +1,7 @@
 // The Shows tab's state, a slice of the store with a reducer of its own, as
 // the Movies tab's is (see moviesState.ts): the same rail, lists, sorts and
-// menus, plus what a show adds: the season its sheet shows, the episode
-// playing, an episode's marks beside a show's, and a revision per show so its
+// menus, plus what a show adds: the episode pane beside the list and the
+// season it shows, the episode playing, an episode's marks beside a show's, and a revision per show so its
 // details are read again once something it holds has changed. The store
 // delegates every `shows/*` action here.
 
@@ -33,13 +33,17 @@ export interface ShowsState {
   categorySort: CategorySort;
   summary: Async<ShowsSummaryDto>;
   categories: Async<SeriesCategoryDto[]>;
-  /** The show the details pane shows. */
+  /** The show the band and the episode pane show. */
   selected: SeriesDto | null;
+  /** The episode pane beside the list is open, on the selected show. A
+   *  click on a show opens it; Escape and its ✕ close it, the selection
+   *  (and the band) staying. */
+  paneOpen: boolean;
   /** The show whose sheet is open. */
   sheetId: number | null;
-  /** The season the sheet shows; `null` for the one it opens on
-   *  (logic/shows.ts `firstSeason`). */
-  sheetSeason: number | null;
+  /** The season the pane shows; `null` for the one it opens on
+   *  (logic/shows.ts `firstSeason`). Per show: another show starts again. */
+  season: number | null;
   /** The episode the player has open, with its show, for their names while
    *  the player's own state only knows an id. Kept after an episode played
    *  to its end, for what comes next. */
@@ -73,8 +77,9 @@ export function initialShows(view: MoviesView): ShowsState {
     summary: idle(),
     categories: idle(),
     selected: null,
+    paneOpen: false,
     sheetId: null,
-    sheetSeason: null,
+    season: null,
     playing: null,
     seriesMarks: {},
     episodeMarks: {},
@@ -97,8 +102,11 @@ export type ShowsAction =
   | { type: "shows/categorySort"; sort: CategorySort }
   | { type: "shows/summary"; value: Async<ShowsSummaryDto> }
   | { type: "shows/categories"; value: Async<SeriesCategoryDto[]> }
-  | { type: "shows/selectShow"; show: SeriesDto | null }
-  /** Opens a show's sheet, on the season it opens on; `null` closes it. */
+  /** `pane`: and open the episode pane (a click); without it an open pane
+   *  follows and a closed one stays closed (the arrow keys). */
+  | { type: "shows/selectShow"; show: SeriesDto | null; pane?: boolean }
+  | { type: "shows/pane"; open: boolean }
+  /** Opens a show's sheet; `null` closes it. */
   | { type: "shows/sheet"; id: number | null }
   | { type: "shows/season"; number: number }
   | { type: "shows/playing"; playing: PlayingEpisodeDto | null }
@@ -135,8 +143,9 @@ export function showsReducer(s: ShowsState, a: ShowsAction): ShowsState {
         selection: a.id,
         query: "",
         selected: null,
+        paneOpen: false,
         sheetId: null,
-        sheetSeason: null,
+        season: null,
         menu: null,
       };
     case "shows/sort":
@@ -165,8 +174,9 @@ export function showsReducer(s: ShowsState, a: ShowsAction): ShowsState {
           selection: SHOW_RECENT,
           query: "",
           selected: null,
+          paneOpen: false,
           sheetId: null,
-          sheetSeason: null,
+          season: null,
           seriesMarks: {},
           episodeMarks: {},
           menu: null,
@@ -178,11 +188,18 @@ export function showsReducer(s: ShowsState, a: ShowsAction): ShowsState {
       if (a.value.status === "loading" && s.categories.status === "ready") return s;
       return { ...s, categories: a.value };
     case "shows/selectShow":
-      return { ...s, selected: a.show };
+      return {
+        ...s,
+        selected: a.show,
+        paneOpen: a.show === null ? false : a.pane ? true : s.paneOpen,
+        season: a.show?.seriesId === s.selected?.seriesId ? s.season : null,
+      };
+    case "shows/pane":
+      return { ...s, paneOpen: a.open && s.selected !== null };
     case "shows/sheet":
-      return a.id === s.sheetId ? s : { ...s, sheetId: a.id, sheetSeason: null };
+      return a.id === s.sheetId ? s : { ...s, sheetId: a.id };
     case "shows/season":
-      return { ...s, sheetSeason: a.number };
+      return { ...s, season: a.number };
     case "shows/playing":
       return { ...s, playing: a.playing, upNextCancelled: null };
     case "shows/upNextCancel":
