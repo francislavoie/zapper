@@ -25,15 +25,13 @@ import {
   type PosterCard,
   type YearRange,
 } from "./movies.ts";
-import type { FixedRailItem } from "./railItems.ts";
+import { CONTINUE, type FixedRailItem } from "./railItems.ts";
 import { progressOf } from "./resume.ts";
 import { OVERSCAN, computeWindow } from "./virtual.ts";
 
 export const SHOW_FAVOURITES = "*favourites*";
 export const SHOW_RECENT = "*added*";
 export const SHOW_WATCHED = "*watched*";
-/** Continue watching's id on both tabs (continueWatching.ts's `CONTINUE`). */
-const CONTINUE_ID = "*continue*";
 
 export function showRailKind(id: string): MovieRailKind {
   switch (id) {
@@ -75,7 +73,7 @@ export function fixedShowItems(
   const first: FixedRailItem[] =
     continueCount === undefined || continueCount === null
       ? []
-      : [{ id: CONTINUE_ID, name: "Continue watching", count: countText(continueCount) }];
+      : [{ id: CONTINUE, name: "Continue watching", count: countText(continueCount) }];
   return [
     ...first,
     { id: SHOW_FAVOURITES, name: "Favourites", count: countText(s?.favourites) },

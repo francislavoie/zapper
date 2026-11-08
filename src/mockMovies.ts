@@ -46,7 +46,7 @@ const BOOT_PLAYING = flag(/(^|[?&])movie=playing(&|$)/);
 /** `?continue=none`: no places. `?continue=many`: forty more films in progress. */
 const NO_PLACES = flag(/(^|[?&])continue=none(&|$)/);
 const MANY_PLACES = flag(/(^|[?&])continue=many(&|$)/);
-/** The in-progress and watched fractions (catalog/vod_progress.rs). */
+/** The in-progress and watched fractions (catalog/vod_progress.rs; mirrors logic/resume.ts). */
 const STARTED_FRACTION = 0.01;
 const WATCHED_FRACTION = 0.92;
 

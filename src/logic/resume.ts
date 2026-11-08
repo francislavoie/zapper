@@ -4,8 +4,7 @@
 // written once here for the interface. Pure; exercised by
 // src/__checks__/resume.test.mjs.
 
-import { calendarDate, clock, hhmm } from "./format.ts";
-import { runtime } from "./movies.ts";
+import { calendarDate, clock, hhmm, runtime } from "./format.ts";
 
 export const STARTED_FRACTION = 0.01;
 export const WATCHED_FRACTION = 0.92;
