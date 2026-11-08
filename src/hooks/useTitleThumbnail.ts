@@ -2,21 +2,36 @@
 //
 // Asked once per slot (logic/trickplay.ts) rather than per pixel: the
 // backend holds at most one frame a slot, so every position inside one gets
-// the same answer, and a sweep across the bar is a few dozen calls.
+// the same answer, and a sweep across the bar is a few dozen calls. Asked
+// again every couple of seconds while the pointer rests, because the slot
+// may be filled meanwhile (it was buffered and not yet decoded, or it has
+// just played), and afresh for another title (Up next moving on).
 
 import { useEffect, useState } from "react";
 import { backend } from "../backend";
 import { slotOf, titleSpacing } from "../logic/trickplay";
 import type { TitleThumbnailDto } from "../types";
 
-/** `at` of null means nothing to preview: the pointer is not on the bar. */
+/** How often a resting pointer asks again. */
+const REASK_MS = 2000;
+
+/** `at` of null means nothing to preview: the pointer is not on the bar.
+ *  `title` names the title (its kind and id), so another one asks anew. */
 export function useTitleThumbnail(
+  title: string,
   at: number | null,
   duration: number | null,
 ): TitleThumbnailDto | null {
   const [thumb, setThumb] = useState<TitleThumbnailDto | null>(null);
+  const [round, setRound] = useState(0);
   const spacing = titleSpacing(duration);
   const slot = at === null || !Number.isFinite(at) ? null : slotOf(Math.max(0, at), spacing);
+
+  useEffect(() => {
+    if (slot === null) return;
+    const t = window.setInterval(() => setRound((r) => r + 1), REASK_MS);
+    return () => window.clearInterval(t);
+  }, [slot, title]);
 
   useEffect(() => {
     if (slot === null) {
@@ -38,7 +53,7 @@ export function useTitleThumbnail(
     return () => {
       live = false;
     };
-  }, [slot, spacing]);
+  }, [slot, spacing, title, round]);
 
   return thumb;
 }
