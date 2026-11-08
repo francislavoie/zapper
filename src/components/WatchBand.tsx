@@ -147,6 +147,8 @@ export function WatchBand({ videoRef, picture, upNext }: WatchBandProps) {
   const drag = useRef<{ x: number; rem: number; pxPerRem: number } | null>(null);
 
   const onGripDown = (e: ReactPointerEvent<HTMLElement>) => {
+    // The main button only: a side button's press is a step back, not a drag.
+    if (e.button !== 0) return;
     const slot = videoRef.current;
     if (!slot) return;
     const rect = slot.getBoundingClientRect();

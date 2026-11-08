@@ -19,6 +19,7 @@ import {
   MOUSE_FORWARD,
   SAME_PRESS_MS,
   buttonLatch,
+  isSideButton,
   goBack,
   goForward,
   startHistory,
@@ -47,6 +48,11 @@ import type { Dispatch } from "react";
 /** Every event a side button's press can arrive as. All are cancelled; the
  *  latch picks the one that acts. */
 const BUTTON_EVENTS = ["pointerdown", "mousedown", "pointerup", "mouseup", "auxclick"] as const;
+
+/** What the desktop app's Linux webview dispatches on the window for a side
+ *  button's release, with `detail` "back" or "forward"
+ *  (src-tauri/src/surface/linux/overlay.rs). */
+const SIDE_BUTTON_EVENT = "zapper:side-button";
 
 export function useGlobalKeys(
   state: State,
@@ -85,24 +91,30 @@ export function useGlobalKeys(
 
   // A browser's own Back — its toolbar button, Alt+Left, or a side button
   // it acts on before the page can cancel it — would leave the app: the
-  // page is one history entry. So outside the desktop app a second entry is
-  // kept on top of it (pushed at the first press of anything, because
-  // Chromium's Back skips entries a page adds unprompted), and when Back
-  // takes it away it is put straight back and the app goes back a step
-  // instead. A side button that has already acted has its pop absorbed
-  // rather than acted on twice. The desktop app's webview has no history to
-  // go through, and cancelling the button is enough there.
+  // page is one history entry. So outside the desktop app a second entry,
+  // the sentinel, is kept on top of it: pushed once, at the first press of
+  // anything (Chromium's Back skips entries a page adds unprompted, and
+  // Escape is not a press that counts), and kept across reloads. When Back
+  // leaves it, `history.forward()` returns to that same entry — never a
+  // new one, which would be pushed without a press and so skipped — and the
+  // app goes back a step instead. The return is itself a pop, onto the
+  // sentinel, and is passed over. A side button that has already acted has
+  // its pop absorbed rather than acted on twice. The desktop app's webview
+  // has no history to go through, and cancelling the button is enough
+  // there.
   useEffect(() => {
     if (backendKind === "tauri") return;
-    let pushed = false;
-    const push = () => {
+    const SENTINEL = "back";
+    let pushed = (window.history.state as { zapper?: string } | null)?.zapper === SENTINEL;
+    const push = (e: Event) => {
       if (pushed) return;
+      if (e instanceof KeyboardEvent && e.key === "Escape") return;
       pushed = true;
-      window.history.pushState({ zapper: "back" }, "");
+      window.history.pushState({ zapper: SENTINEL }, "");
     };
-    const onPop = () => {
-      pushed = false;
-      push();
+    const onPop = (e: PopStateEvent) => {
+      if ((e.state as { zapper?: string } | null)?.zapper === SENTINEL) return;
+      window.history.forward();
       if (performance.now() - lastButton.current < SAME_PRESS_MS) return;
       unwindRef.current("mouse");
     };
@@ -249,12 +261,21 @@ export function useGlobalKeys(
           dispatch({ type: "mode", mode: "watch" });
           break;
         case "history":
-          travel(goBack(nav.current));
+          travel(goBack(nav.current, reachable));
           break;
         case "none":
           break;
       }
     };
+
+    /** A place there is still a tab for: Movies and Shows come and go with
+     *  the account, and a step back to one that has gone is stepped over. */
+    const reachable = (p: Place) =>
+      p.section === "live" ||
+      (capabilities.onDemand &&
+        (p.section === "movies"
+          ? moviesAvailable(state.movies.summary)
+          : showsAvailable(state.shows.summary)));
 
     /** Goes to a place from the tab-and-rail history, or nowhere. */
     const travel = (to: ReturnType<typeof goBack>) => {
@@ -275,19 +296,42 @@ export function useGlobalKeys(
     // one event, and which ones differs between engines (see buttonLatch);
     // each is cancelled whatever it is, so neither the webview nor a browser
     // goes through its own history, and one of them acts.
+    //
+    // Stopped here as well as cancelled: this listens on the window in the
+    // capture phase, ahead of the page, so nothing below — a menu's or a
+    // dialog's click-outside, a drag — takes the press for its own. The
+    // desktop app on Linux sends no DOM events for these buttons at all (see
+    // `zapper:side-button` below); on macOS, wry turns them into a synthetic
+    // `mousedown`/`mouseup` aimed at `elementFromPoint` with window pixels,
+    // which misses above 100 % zoom — the same gap the Linux path closes,
+    // still open there.
     const onButton = (e: MouseEvent) => {
-      if (e.button !== MOUSE_BACK && e.button !== MOUSE_FORWARD) return;
+      if (!isSideButton(e)) return;
       e.preventDefault();
+      e.stopPropagation();
       const down = e.type === "mousedown" || e.type === "pointerdown";
-      if (!latch.current(down ? "down" : "up", e.button, e.timeStamp)) return;
+      if (latch.current(down ? "down" : "up", e.button, e.timeStamp)) act(e.button);
+    };
+
+    // The desktop app on Linux: the webview's GTK handler takes buttons 8
+    // and 9 before wry's (surface/linux/overlay.rs) and says which was
+    // released with this event. Through the same latch, so a DOM release
+    // of the same press arriving as well cannot act twice.
+    const onSideButton = (e: Event) => {
+      const detail = (e as CustomEvent<unknown>).detail;
+      const button = detail === "back" ? MOUSE_BACK : detail === "forward" ? MOUSE_FORWARD : null;
+      if (button !== null && latch.current("up", button, e.timeStamp)) act(button);
+    };
+
+    const act = (button: number) => {
       lastButton.current = performance.now();
-      if (e.button === MOUSE_BACK) {
+      if (button === MOUSE_BACK) {
         unwind("mouse");
       } else if (escapeStep(context(), "mouse") === "history") {
         // Forward re-takes the tab and rail steps Back undid. Not a sheet
         // or the player: what Back closed stays closed, as a dismissed
         // dialog does in a browser.
-        travel(goForward(nav.current));
+        travel(goForward(nav.current, reachable));
       }
     };
     unwindRef.current = unwind;
@@ -482,9 +526,11 @@ export function useGlobalKeys(
     // Captured, so a component that stops a click's propagation cannot
     // keep the button from the window.
     for (const type of BUTTON_EVENTS) window.addEventListener(type, onButton as EventListener, true);
+    window.addEventListener(SIDE_BUTTON_EVENT, onSideButton);
     return () => {
       window.removeEventListener("keydown", onKey);
       for (const type of BUTTON_EVENTS) window.removeEventListener(type, onButton as EventListener, true);
+      window.removeEventListener(SIDE_BUTTON_EVENT, onSideButton);
     };
   }, [
     dispatch,

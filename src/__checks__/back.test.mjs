@@ -5,7 +5,6 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import { escapeStep } from "../logic/escape.ts";
 import {
   MOUSE_BACK,
@@ -13,6 +12,7 @@ import {
   NAV_HISTORY_CAP,
   SAME_PRESS_MS,
   buttonLatch,
+  isSideButton,
   goBack,
   goForward,
   startHistory,
@@ -142,11 +142,54 @@ test("an engine that sends no press still acts, once per release", () => {
   assert.equal(latch("up", MOUSE_FORWARD, 1000 + SAME_PRESS_MS + 2), true);
 });
 
-test("useGlobalKeys runs both Escape and the side buttons through the one chain", () => {
-  const src = readFileSync(new URL("../hooks/useGlobalKeys.ts", import.meta.url), "utf8");
-  assert.match(src, /unwind\("key"\)/);
-  assert.match(src, /unwind\("mouse"\)/);
-  // No second list: the chain's steps are dispatched from one switch.
-  assert.equal((src.match(/escapeStep\(/g) ?? []).length, 2);
-  assert.match(src, /e\.preventDefault\(\);\s*const down/);
+test("Escape unwinds everything, one press each, in the order it was stacked", () => {
+  // Everything open at once, over the full player in fullscreen with a
+  // search typed: each press takes the top one off.
+  const order = [
+    ["programmeMenu", "programmeMenu"],
+    ["favouriteMenu", "favouriteMenu"],
+    ["categoryMenu", "categoryMenu"],
+    ["categoryOptions", "categoryOptions"],
+    ["moviesMenu", "moviesMenu"],
+    ["showsMenu", "showsMenu"],
+    ["videoMenu", "videoMenu"],
+    ["menuOpen", "menu"],
+    ["aboutOpen", "about"],
+    ["updateOpen", "update"],
+    ["settingsOpen", "settings"],
+    ["paletteOpen", "palette"],
+    ["movieSheet", "movieSheet"],
+    ["showSheet", "showSheet"],
+    ["upNextCard", "upNextCard"],
+    ["fullscreen", "fullscreen"],
+    ["query", "query"],
+  ];
+  const c = { ...nothing, mode: "watch", playing: true };
+  for (const [flag] of order) c[flag] = true;
+  for (const [flag, step] of order) {
+    assert.equal(escapeStep(c, "key"), step, `with ${flag} on top`);
+    c[flag] = false;
+  }
+  assert.equal(escapeStep(c, "key"), "browse");
+  c.mode = "browse";
+  assert.equal(escapeStep(c, "key"), "watch");
+  c.playing = false;
+  assert.equal(escapeStep(c, "key"), "none");
+});
+
+test("only a side button is a side button", () => {
+  assert.equal(isSideButton({ button: MOUSE_BACK }), true);
+  assert.equal(isSideButton({ button: MOUSE_FORWARD }), true);
+  for (const button of [0, 1, 2]) assert.equal(isSideButton({ button }), false);
+});
+
+test("a step back over a tab the account no longer has goes past it", () => {
+  let h = startHistory(live());
+  h = visit(h, movies());
+  h = visit(h, shows());
+  const noMovies = (p) => p.section !== "movies";
+  const b = goBack(h, noMovies);
+  assert.deepEqual(b.place, live());
+  assert.deepEqual(goForward(b.history, noMovies).place, shows());
+  assert.equal(goBack(startHistory(movies()), noMovies), null);
 });

@@ -43,23 +43,40 @@ export function visit(h: NavHistory, place: Place, cap = NAV_HISTORY_CAP): NavHi
 }
 
 /** One step back: the place to go to, and the history once there; null at
- *  the start. */
-export function goBack(h: NavHistory): { place: Place; history: NavHistory } | null {
-  if (h.at <= 0) return null;
-  const at = h.at - 1;
-  return { place: h.places[at], history: { places: h.places, at } };
+ *  the start. Places `reachable` turns down — a tab this account no longer
+ *  has — are stepped over. */
+export function goBack(
+  h: NavHistory,
+  reachable: (p: Place) => boolean = () => true,
+): { place: Place; history: NavHistory } | null {
+  for (let at = h.at - 1; at >= 0; at--) {
+    if (reachable(h.places[at])) return { place: h.places[at], history: { places: h.places, at } };
+  }
+  return null;
 }
 
-/** One step forward again, after a back; null with nothing ahead. */
-export function goForward(h: NavHistory): { place: Place; history: NavHistory } | null {
-  if (h.at >= h.places.length - 1) return null;
-  const at = h.at + 1;
-  return { place: h.places[at], history: { places: h.places, at } };
+/** One step forward again, after a back; null with nothing ahead. Steps
+ *  over what cannot be reached, as goBack does. */
+export function goForward(
+  h: NavHistory,
+  reachable: (p: Place) => boolean = () => true,
+): { place: Place; history: NavHistory } | null {
+  for (let at = h.at + 1; at < h.places.length; at++) {
+    if (reachable(h.places[at])) return { place: h.places[at], history: { places: h.places, at } };
+  }
+  return null;
 }
 
 /** The mouse's side buttons, as `MouseEvent.button` numbers them. */
 export const MOUSE_BACK = 3;
 export const MOUSE_FORWARD = 4;
+
+/** A press of either side button. Anything that dismisses or drags on a
+ *  press ignores these: the press is the back or forward button's, and a
+ *  menu it closed on the way down would be a second step for one press. */
+export function isSideButton(e: { button: number }): boolean {
+  return e.button === MOUSE_BACK || e.button === MOUSE_FORWARD;
+}
 
 /** How long after acting on a press another release of the same button is
  *  taken as the same press arriving by another event. */

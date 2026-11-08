@@ -39,7 +39,7 @@
 // No delay, deliberately: a tooltip that waits is a tooltip nobody sees,
 // and the point of these is to be read in passing.
 
-import { placeTip, tipAnchor } from "./logic/tooltip";
+import { overflows, placeTip, tipAnchor } from "./logic/tooltip";
 import { documentScale } from "./zoom";
 
 const TIPPED = "[data-tip],[data-tip-overflow]";
@@ -65,10 +65,10 @@ export const TIP_ID = "app-tooltip";
  *  height can differ by a descender or a rounding without anything being
  *  hidden. A clamp that bites hides a whole line. */
 function isTruncated(el: HTMLElement): boolean {
-  if (el.scrollWidth - el.clientWidth > 1) return true;
+  if (overflows(el.scrollWidth, el.clientWidth, null, 0)) return true;
   const cs = getComputedStyle(el);
   const clamp = cs.getPropertyValue("-webkit-line-clamp");
-  if (clamp && clamp !== "none" && el.scrollHeight - el.clientHeight > 1) return true;
+  if (clamp && clamp !== "none" && overflows(el.scrollHeight, el.clientHeight, null, 0)) return true;
   if (cs.textOverflow !== "ellipsis") return false;
 
   const range = document.createRange();
@@ -82,7 +82,7 @@ function isTruncated(el: HTMLElement): boolean {
       parseFloat(cs.borderRightWidth)) *
     documentScale();
   const room = el.getBoundingClientRect().width - inset;
-  return text > room + 0.5;
+  return overflows(el.scrollWidth, el.clientWidth, text, room);
 }
 
 /** What `el` would say, or null if it has nothing to say at the moment. */
