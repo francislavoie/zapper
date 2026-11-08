@@ -135,8 +135,8 @@ fn before_trailing_code(t: &str, season: i32, episode: i32) -> Option<&str> {
 }
 
 /// An episode's own title, without the show's name and the `SxxEyy` that
-/// servers repeat in it: `A Show - S02E04 - Triangulation` is
-/// `Triangulation`. None when nothing else is left.
+/// servers repeat in it: `A Show - S02E04 - Night Shift` is
+/// `Night Shift`. None when nothing else is left.
 pub fn episode_title(raw: &str, show: &str, season: i32, episode: i32) -> Option<String> {
     let mut t = raw.trim();
     // A show listed with its year is often named without it in its episodes.
@@ -256,6 +256,8 @@ pub struct SeriesWriter<'t> {
     undated: Vec<i64>,
     /// Shows whose episodes changed.
     changed: BTreeSet<i64>,
+    /// Shows listed under another name or TMDB id than before.
+    renamed: BTreeSet<i64>,
 }
 
 impl<'t> SeriesWriter<'t> {
@@ -282,6 +284,7 @@ impl<'t> SeriesWriter<'t> {
             episodes: HashSet::new(),
             undated: Vec::new(),
             changed: BTreeSet::new(),
+            renamed: BTreeSet::new(),
         })
     }
 
@@ -317,14 +320,21 @@ impl<'t> SeriesWriter<'t> {
         };
         let added = s.added.filter(|a| *a > 0);
         // What was fetched about a show under another name or TMDB id is
-        // not about this one.
-        self.conn
+        // not about this one: its details go now, and its episodes are
+        // soft-deleted in `finish` (the counts go in the upsert below).
+        let renamed: Option<bool> = self
+            .conn
             .prepare_cached(
-                "DELETE FROM series_details WHERE series_id = ?1 AND EXISTS
-                   (SELECT 1 FROM series x WHERE x.series_id = ?1
-                      AND (x.name IS NOT ?2 OR x.tmdb_id IS NOT ?3))",
+                "SELECT name IS NOT ?2 OR tmdb_id IS NOT ?3 FROM series WHERE series_id = ?1",
             )?
-            .execute(params![s.series_id, s.name, s.tmdb_id])?;
+            .query_row(params![s.series_id, s.name, s.tmdb_id], |r| r.get(0))
+            .optional()?;
+        if renamed == Some(true) {
+            self.conn
+                .prepare_cached("DELETE FROM series_details WHERE series_id = ?1")?
+                .execute([s.series_id])?;
+            self.renamed.insert(s.series_id);
+        }
         let year = s
             .year
             .filter(vod_sync::plausible_year)
@@ -413,6 +423,7 @@ impl<'t> SeriesWriter<'t> {
             episodes,
             undated,
             mut changed,
+            renamed,
         } = self;
         let (origin, switched) = vod_sync::current_origin(conn, SERIES_ORIGIN)?;
         if seen.is_empty() && !existing.is_empty() && !switched && !empty_ok {
@@ -452,30 +463,51 @@ impl<'t> SeriesWriter<'t> {
         for id in &undated {
             stamp.execute(params![now, id])?;
         }
+        let mut soft_delete =
+            conn.prepare_cached("UPDATE episodes SET deleted_at = ?1 WHERE episode_id = ?2")?;
+        // A renamed show's episodes were another show's, unless this write
+        // listed them again.
+        let mut of_show = conn.prepare_cached(
+            "SELECT episode_id FROM episodes WHERE series_id = ?1 AND deleted_at IS NULL",
+        )?;
+        for &show in &renamed {
+            let live: Vec<i64> = of_show
+                .query_map([show], |r| r.get(0))?
+                .collect::<Result<_, _>>()?;
+            for id in live.into_iter().filter(|id| !episodes.contains(id)) {
+                soft_delete.execute(params![now, id])?;
+                changed.insert(show);
+            }
+        }
         if owns_episodes {
             let live: Vec<(i64, i64)> = conn
                 .prepare("SELECT episode_id, series_id FROM episodes WHERE deleted_at IS NULL")?
                 .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
                 .collect::<Result<_, _>>()?;
-            let mut soft_delete =
-                conn.prepare_cached("UPDATE episodes SET deleted_at = ?1 WHERE episode_id = ?2")?;
             for (id, show) in live.into_iter().filter(|(id, _)| !episodes.contains(id)) {
                 soft_delete.execute(params![now, id])?;
                 changed.insert(show);
             }
+            // Only the shows whose counts may have moved: those whose
+            // episodes changed, those a rename cleared, and every one after
+            // a switch cleared them all.
+            let mut recount: BTreeSet<i64> = changed.union(&renamed).copied().collect();
+            if switched {
+                recount.extend(&seen);
+            }
             // A playlist dates nothing, so a show is as new as the newest
             // episode it gained: one that adds an episode climbs the
             // newest-first list, one that only stays listed does not.
-            conn.execute(
-                &format!(
-                    "UPDATE series SET {COUNTS},
-                       added = COALESCE((SELECT MAX(e.added) FROM episodes e
-                                          WHERE e.series_id = series.series_id
-                                            AND e.deleted_at IS NULL), added)
-                     WHERE deleted_at IS NULL"
-                ),
-                [],
-            )?;
+            let mut update = conn.prepare_cached(&format!(
+                "UPDATE series SET {COUNTS},
+                   added = COALESCE((SELECT MAX(e.added) FROM episodes e
+                                      WHERE e.series_id = series.series_id
+                                        AND e.deleted_at IS NULL), added)
+                 WHERE series_id = ?1 AND deleted_at IS NULL"
+            ))?;
+            for show in recount {
+                update.execute([show])?;
+            }
         }
         categories.replace(conn, "series")?;
         Ok(SeriesLanded {
@@ -524,6 +556,9 @@ pub fn land_series(
 /// details as fetched (`info_json`), and `episodes` as the whole of the
 /// show's episodes, written under `series_id`. Episodes it no longer lists
 /// are soft-deleted, so their marks are still there if they return.
+///
+/// No episodes for a show that has some is refused, as an empty series list
+/// is: a server's bad minute, far more likely than a show emptied.
 pub fn land_series_details(
     conn: &Connection,
     series_id: i64,
@@ -532,6 +567,18 @@ pub fn land_series_details(
     episodes: &[NewEpisode],
 ) -> Result<()> {
     let tx = conn.unchecked_transaction()?;
+    if episodes.is_empty() {
+        let live: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM episodes WHERE series_id = ?1 AND deleted_at IS NULL",
+            [series_id],
+            |r| r.get(0),
+        )?;
+        if live > 0 {
+            return Err(anyhow!(
+                "the show's episode list was empty; keeping the {live} already here"
+            ));
+        }
+    }
     tx.execute(
         "INSERT INTO series_details (series_id, fetched_at, info) VALUES (?1, ?2, ?3)
          ON CONFLICT(series_id) DO UPDATE SET
@@ -806,30 +853,30 @@ mod tests {
     #[test]
     fn an_episode_title_loses_the_show_and_code_it_repeats() {
         assert_eq!(
-            episode_title("A Show - S02E04 - Triangulation", "A Show", 2, 4).as_deref(),
-            Some("Triangulation")
+            episode_title("A Show - S02E04 - Night Shift", "A Show", 2, 4).as_deref(),
+            Some("Night Shift")
         );
         assert_eq!(
-            episode_title("s2e4 Triangulation", "A Show", 2, 4).as_deref(),
-            Some("Triangulation")
+            episode_title("s2e4 Night Shift", "A Show", 2, 4).as_deref(),
+            Some("Night Shift")
         );
         assert_eq!(episode_title("A Show S02E04", "A Show", 2, 4), None);
         assert_eq!(
-            episode_title("Triangulation", "A Show", 2, 4).as_deref(),
-            Some("Triangulation")
+            episode_title("Night Shift", "A Show", 2, 4).as_deref(),
+            Some("Night Shift")
         );
         // Another episode's code, or a longer word, is part of the title.
         assert_eq!(
-            episode_title("S02E05 Triangulation", "A Show", 2, 4).as_deref(),
-            Some("S02E05 Triangulation")
+            episode_title("S02E05 Night Shift", "A Show", 2, 4).as_deref(),
+            Some("S02E05 Night Shift")
         );
         assert_eq!(
             episode_title("A Showcase", "A Show", 2, 4).as_deref(),
             Some("A Showcase")
         );
         assert_eq!(
-            episode_title("a show: Triangulation - S02E04", "A Show", 2, 4).as_deref(),
-            Some("Triangulation")
+            episode_title("a show: Night Shift - S02E04", "A Show", 2, 4).as_deref(),
+            Some("Night Shift")
         );
         assert_eq!(
             episode_title("A Show - S02E04", "A Show (2019)", 2, 4),
@@ -934,6 +981,81 @@ mod tests {
         let renamed = [show(2, "a", "Another")];
         land_series(&c, &[cat("a", "A")], &renamed, 20).unwrap();
         assert_eq!(count(&c, "SELECT COUNT(*) FROM series_details"), 0);
+        // Its episodes were the other show's.
+        assert_eq!(
+            count(&c, "SELECT deleted_at FROM episodes WHERE episode_id = 21"),
+            20
+        );
+        let counts: (Option<i64>, Option<i64>) = c
+            .query_row(
+                "SELECT season_count, episode_count FROM series WHERE series_id = 2",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(counts, (None, None));
+    }
+
+    #[test]
+    fn an_empty_episode_list_keeps_the_episodes_already_here() {
+        let c = open_in_memory().unwrap();
+        let (cats, shows) = three();
+        land_series(&c, &cats, &shows, 100).unwrap();
+        // A show that never had any may have none.
+        land_series_details(&c, 2, 110, "{}", &[]).unwrap();
+        land_series_details(&c, 1, 120, "{}", &[ep(11, 1, 1, 1), ep(12, 1, 1, 2)]).unwrap();
+        let err = land_series_details(&c, 1, 130, "{}", &[])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("keeping the 2"), "{err}");
+        assert_eq!(
+            count(&c, "SELECT COUNT(*) FROM episodes WHERE deleted_at IS NULL"),
+            2
+        );
+        assert_eq!(
+            count(
+                &c,
+                "SELECT fetched_at FROM series_details WHERE series_id = 1"
+            ),
+            120
+        );
+    }
+
+    #[test]
+    fn details_date_their_undated_episodes_when_first_seen() {
+        let c = open_in_memory().unwrap();
+        let (cats, shows) = three();
+        land_series(&c, &cats, &shows, 100).unwrap();
+        let mut dated = ep(12, 1, 1, 2);
+        dated.added = Some(50);
+        land_series_details(&c, 1, 200, "{}", &[ep(11, 1, 1, 1), dated.clone()]).unwrap();
+        land_series_details(&c, 1, 300, "{}", &[ep(11, 1, 1, 1), dated, ep(13, 1, 1, 3)]).unwrap();
+        let added: Vec<i64> = c
+            .prepare("SELECT added FROM episodes ORDER BY episode_id")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(added, [200, 50, 300]);
+    }
+
+    #[test]
+    fn a_switch_names_the_shows_whose_episodes_went() {
+        let c = open_in_memory().unwrap();
+        let (cats, shows) = three();
+        set_origin(&c, "A");
+        land_series(&c, &cats, &shows, 100).unwrap();
+        land_series_details(&c, 1, 110, "{}", &[ep(11, 1, 1, 1)]).unwrap();
+        land_series_details(&c, 3, 110, "{}", &[ep(31, 3, 1, 1)]).unwrap();
+        set_origin(&c, "B");
+        let tx = c.unchecked_transaction().unwrap();
+        let mut w = SeriesWriter::begin(&tx).unwrap();
+        w.push_series(&show(5, "x", "Five"), None).unwrap();
+        let landed = w.finish(200).unwrap();
+        tx.commit().unwrap();
+        assert_eq!(landed.changed_shows, [1, 3]);
+        assert_eq!(count(&c, "SELECT COUNT(*) FROM episodes"), 0);
     }
 
     fn write(c: &Connection, now: i64, eps: &[NewEpisode]) -> SeriesLanded {
@@ -997,5 +1119,49 @@ mod tests {
             )
             .unwrap();
         assert_eq!(counts, (2, 2));
+    }
+
+    #[test]
+    fn an_episode_that_moves_changes_both_shows() {
+        let c = open_in_memory().unwrap();
+        write(&c, 100, &[ep(11, 1, 1, 1), ep(12, 1, 1, 2)]);
+        let landed = write(&c, 200, &[ep(11, 2, 1, 1), ep(12, 1, 1, 2)]);
+        assert_eq!(landed.changed_shows, [1, 2]);
+        let episodes = |id: i64| -> i64 {
+            c.query_row(
+                "SELECT episode_count FROM series WHERE series_id = ?1",
+                [id],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!((episodes(1), episodes(2)), (1, 1));
+        assert_eq!(
+            count(&c, "SELECT series_id FROM episodes WHERE episode_id = 11"),
+            2
+        );
+    }
+
+    #[test]
+    fn a_playlist_write_recounts_only_the_shows_that_changed() {
+        let c = open_in_memory().unwrap();
+        write(&c, 100, &[ep(11, 1, 1, 1), ep(21, 2, 1, 1)]);
+        // A count no write would set, to see which shows are recounted.
+        c.execute("UPDATE series SET episode_count = 99", [])
+            .unwrap();
+        let landed = write(
+            &c,
+            200,
+            &[ep(11, 1, 1, 1), ep(21, 2, 1, 1), ep(22, 2, 1, 2)],
+        );
+        assert_eq!(landed.changed_shows, [2]);
+        assert_eq!(
+            count(&c, "SELECT episode_count FROM series WHERE series_id = 1"),
+            99
+        );
+        assert_eq!(
+            count(&c, "SELECT episode_count FROM series WHERE series_id = 2"),
+            2
+        );
     }
 }

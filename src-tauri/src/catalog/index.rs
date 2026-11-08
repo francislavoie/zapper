@@ -90,13 +90,18 @@ pub fn movies_built() -> bool {
 /// Shows get theirs, for the same reason as movies.
 static SERIES: Slot = Slot::new();
 
-pub fn rebuild_series(conn: &Connection) -> Result<usize> {
+/// The live shows' names, as the series index holds them.
+fn series_names(conn: &Connection) -> Result<Vec<(i64, String)>> {
     let mut stmt =
         conn.prepare("SELECT series_id, clean_name FROM series WHERE deleted_at IS NULL")?;
     let names = stmt
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
         .collect::<rusqlite::Result<_>>()?;
-    Ok(SERIES.rebuild_from(names))
+    Ok(names)
+}
+
+pub fn rebuild_series(conn: &Connection) -> Result<usize> {
+    Ok(SERIES.rebuild_from(series_names(conn)?))
 }
 
 pub fn query_series(needle: &str, limit: usize) -> Vec<i64> {
@@ -191,19 +196,20 @@ mod tests {
             },
         ];
         land_series(&c, &[], &shows, 1).unwrap();
-        // `SERIES` is touched by this test alone, so the process-wide
-        // functions are safe to use here.
-        assert_eq!(rebuild_series(&c).unwrap(), 2);
-        assert!(series_built());
-        assert_eq!(query_series("quillmoor", 10), vec![30]);
-        assert!(query_series("northwind", 10).is_empty());
-        // The other indexes never hold a show.
-        assert!(!query_movies("quillmoorharbour", 10).contains(&30));
-        assert!(!query("quillmoorharbour", 10).contains(&30));
+        // Local slots, built as the process-wide ones are: those are shared
+        // with every other test that searches.
+        let series = Slot::new();
+        assert_eq!(series.rebuild_from(series_names(&c).unwrap()), 2);
+        let movies = Slot::new();
+        movies.rebuild_from(vod_store::movie_names(&c).unwrap());
         let channels = Slot::new();
         channels.rebuild(&c).unwrap();
-        assert_eq!(channels.query("northwindone", 10), vec![1]);
+        // Each finds its own kind under the same word, and only it.
+        assert_eq!(series.query("quillmoor", 10), vec![30]);
+        assert_eq!(movies.query("quillmoor", 10), vec![20]);
         assert!(channels.query("quillmoor", 10).is_empty());
+        assert!(series.query("northwindone", 10).is_empty());
+        assert_eq!(channels.query("northwindone", 10), vec![1]);
     }
 
     // The free functions over `INDEX` are covered end-to-end by the `search`
