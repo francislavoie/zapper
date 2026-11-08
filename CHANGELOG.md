@@ -23,6 +23,12 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
 - The title bar shows the catalogue's sync status beside Settings.
 - The title bar shows Movies beside Live TV, and `M` opens it. It appears only for an account that
   has movies.
+- The title bar shows Shows, after Live TV and Movies, for an account that has some, and `N`
+  opens it.
+- A playlist's episodes move from Live TV to Shows. An on-demand entry (a video file or a
+  `/series/` address) whose name has an episode number (`S01E02`, `s01.e02`, `1x02`,
+  `Season 1 Episode 2`, or a range such as `S01E01-E02`) is no longer listed as a channel: it is
+  an episode, gathered into a show by its group and the name before the number.
 
 ### Added
 
@@ -34,10 +40,24 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
 - Movies play on demand, with a seek bar, the time played and left, and 10-second skips; the place
   is kept, a movie played past 92 % counts as watched, and one that stops can be played again from
   where it stopped.
+- Shows: a tab listing an Xtream account's or a playlist's shows by category, as a list or
+  posters, sorted by recently added, name, year or rating and limited to a range of years, with
+  favourites, search, and watched by episode or for a whole show. Selecting a show gives its
+  plot, people and Play for the next episode; its sheet has the seasons and each one's episodes,
+  with stills, titles, plots, lengths and watched marks.
+- Episodes play in the app and in the browser, as movies do: from their beginning, with the show
+  and the episode (`S2 E4 · Night Shift · 52m`) as the title. An episode played past 92 % counts
+  as watched.
+- Up next: 20 seconds before an episode ends, a card names the next one and counts down 10
+  seconds into it, docked or full, with **Play now** and **Cancel** (`Enter` and `Esc` in the
+  full player), in the app and in the browser. The next episode keeps the sound and subtitle languages, and plays on
+  the same connection. Cancel lets the episode play to its end; a Stop, a sleep timer or a stream
+  cut short never moves on.
 - Movies in the browser through the recording service: played as they are when the browser can,
   otherwise converted on the way without re-encoding the picture. Text subtitles show there,
   MP4 ones included; subtitles stored as pictures (DVD, Blu-ray, DVB) can't, and the player's
-  menu says so.
+  menu says so. A converted film or episode whose stream ends early is opened again where it
+  was, and after two tries says it stopped, with Retry.
 - A channel that isn't broadcasting, where your provider sends a placeholder clip (minutes of
   black) instead, now says so: "This channel isn't broadcasting right now", with how long the
   clip was. It stops there instead of skipping to the clip's end and blaming another device, and

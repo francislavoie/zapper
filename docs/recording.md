@@ -292,6 +292,10 @@ What a browser can do there:
 - browse movies (the **Movies** tab, there only when the account has some: not for HDHomeRun,
   Tvheadend or a playlist without movie entries): categories, favourites, watched, search,
   details and posters, and play them ([Movies in the browser](#movies-in-the-browser));
+- browse shows (the **Shows** tab, there only when the account has some: an Xtream account, or a
+  playlist with episode entries): categories, favourites, watched, search, a show's details,
+  seasons and episodes, marking episodes or a whole show watched, and play episodes, with Up next
+  moving on to the next one near an episode's end, as in the app;
 - watch live TV: choosing a channel plays it in the page, with the same picture band, player,
   transport, volume, fullscreen and audio tracks as the app ([Watching in the
   browser](#watching-in-the-browser));
@@ -445,12 +449,19 @@ watches it again from there. While the page is open it asks after its film every
 keeps the film's place on the service even when the browser holds all it needs for now and reads
 nothing (a page that has asked within the last 90 seconds keeps it: a background tab may ask only
 once a minute); a closed page's goes within 90 seconds. A film that doesn't start within half a
-minute, or stands still for half a minute while playing, is opened again where it was, twice at
-most, before the page says it stopped.
+minute, stands still for half a minute while playing, or whose converted stream ends before the
+film does, is opened again where it was, twice at most, before the page says it stopped and
+offers **Retry**, which plays it from there.
 
 An episode of a show plays in the browser exactly as a movie does, on a connection of its own
 under the same rules, played as it is or converted, with the same subtitles; another device turned
 away because it holds the last connection is told which episode, as “A Show” S2 E4.
+
+**Up next.** Near an episode's end the page counts down into the next one, as the app does (see
+the [README](../README.md#playback)). Moving on marks the episode watched and asks for the next
+with `replaces` naming the episode's viewer, so the next one takes over its connection rather
+than asking for another; the sound and the subtitles are chosen in the languages the episode
+before was heard and read in, where the next one has them (only text subtitles can be shown).
 
 Posters and backdrops reach the page through the service (`/api/poster/movie/{id}`,
 `/api/backdrop/movie/{id}/{n}`), fetched like a channel's logo, so the provider's address and login
