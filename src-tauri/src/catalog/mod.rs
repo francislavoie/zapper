@@ -5,6 +5,8 @@
 
 pub mod account_form;
 pub mod activity;
+pub mod continue_reads;
+pub mod continue_store;
 pub mod credentials;
 pub mod db;
 pub mod episode;

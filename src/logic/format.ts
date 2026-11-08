@@ -421,3 +421,11 @@ export function scrubLabels(o: {
     `${held} of scrollback`,
   ];
 }
+
+/** "52m", "1h 49m", "2h 01m"; nothing for an unknown or zero length. */
+export function runtime(secs: number | null): string {
+  if (!secs || secs <= 0) return "";
+  const minutes = Math.round(secs / 60);
+  if (minutes < 60) return `${minutes}m`;
+  return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, "0")}m`;
+}

@@ -855,6 +855,12 @@ export interface MovieDto {
   categoryId: string | null;
   favourite: boolean;
   watched: boolean;
+  /** Where it was left, seconds from the start. */
+  position: number | null;
+  /** The length the player measured. */
+  duration: number | null;
+  /** When it last played, unix seconds. */
+  playedAt: number | null;
 }
 
 export type MovieSort = "added" | "az" | "year" | "rating";
@@ -913,6 +919,8 @@ export interface MarksDto {
   watched: boolean;
   position: number | null;
   duration: number | null;
+  /** When it last played, unix seconds. */
+  playedAt: number | null;
 }
 
 export type OnDemandKind = "movie" | "episode";
@@ -1044,3 +1052,22 @@ export interface PlayingEpisodeDto {
   series: SeriesDto;
   episode: EpisodeDto;
 }
+
+// ------------------------------------------------------ continue watching
+
+/** An entry in Continue watching: a movie in progress, an episode in
+ *  progress, or (`upNext`) the next episode of a show being followed, not
+ *  yet started. One entry per movie and per show. */
+export type ContinueItemDto =
+  | { kind: "movie"; movie: MovieDto; lastWatched: number }
+  | {
+      kind: "episode";
+      series: SeriesDto;
+      episode: EpisodeDto;
+      upNext: boolean;
+      /** Unix seconds. */
+      lastWatched: number;
+    };
+
+/** What a removal from Continue watching names. */
+export type ContinueKind = "movie" | "series";

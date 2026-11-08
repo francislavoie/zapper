@@ -37,6 +37,7 @@ import type {
   AccountDto,
   CategoryDto,
   ChannelDto,
+  ContinueItemDto,
   DeviceDto,
   FavouriteDto,
   GuideRowDto,
@@ -342,6 +343,14 @@ export const webBackend: typeof api = {
     put<MarksDto>(`/api/vod/episodes/${episodeId}/marks`, { watched }),
   playingEpisode: (episodeId) =>
     get<PlayingEpisodeDto>(`/api/vod/episodes/${episodeId}`),
+
+  // Continue watching is the service's one list, the app's included.
+  continueWatching: (limit) =>
+    get<ContinueItemDto[]>(apiUrl("/api/vod/continue", { limit })),
+  removeFromContinue: (kind, id) =>
+    del<unknown>(`/api/vod/continue/${kind}/${id}`).then(() => undefined),
+  movieMarks: (movieId) => get<MarksDto>(`/api/vod/movies/${movieId}/marks`),
+  episodeMarks: (episodeId) => get<MarksDto>(`/api/vod/episodes/${episodeId}/marks`),
 
   activityRows: notHere,
   importActivity: notHere,

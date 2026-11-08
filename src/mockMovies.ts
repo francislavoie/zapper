@@ -17,6 +17,7 @@
 // the player before a band can start one.
 
 import type {
+  ContinueItemDto,
   MarksDto,
   MovieDetailsDto,
   MovieDto,
@@ -42,6 +43,12 @@ const NONE = flag(/(^|[?&])movies=none(&|$)/);
 const EMPTY = flag(/(^|[?&])movies=empty(&|$)/);
 const HIDDEN = NONE || EMPTY;
 const BOOT_PLAYING = flag(/(^|[?&])movie=playing(&|$)/);
+/** `?continue=none`: no places. `?continue=many`: forty more films in progress. */
+const NO_PLACES = flag(/(^|[?&])continue=none(&|$)/);
+const MANY_PLACES = flag(/(^|[?&])continue=many(&|$)/);
+/** The in-progress and watched fractions (catalog/vod_progress.rs; mirrors logic/resume.ts). */
+const STARTED_FRACTION = 0.01;
+const WATCHED_FRACTION = 0.92;
 
 const NOW = Math.floor(Date.now() / 1000);
 
@@ -175,11 +182,31 @@ function art(i: number, w: number, h: number, label: string): string {
 const favourites = new Set<number>();
 const watched = new Set<number>();
 const positions = new Map<number, number>();
+/** Movie id -> when it last played, unix seconds. */
+const playedAt = new Map<number, number>();
 /** Bumped by every mark, so a remembered list is not served stale. */
 let marksVersion = 0;
 
 for (let k = 1; k <= 12; k++) favourites.add(1 + ((k * 12_007) % MOVIE_TOTAL));
 for (let k = 1; k <= 30; k++) watched.add(1 + ((k * 5_003) % MOVIE_TOTAL));
+
+// Places, for Continue watching: movie 2 at 38 % yesterday evening, movie 7 at
+// 84 % nine days ago; `?continue=many` adds forty more, newest first.
+if (!NO_PLACES) {
+  const yesterdayEvening = new Date();
+  yesterdayEvening.setDate(yesterdayEvening.getDate() - 1);
+  yesterdayEvening.setHours(22, 40, 0, 0);
+  positions.set(2, Math.round(MOCK_DURATION * 0.38));
+  playedAt.set(2, Math.floor(yesterdayEvening.getTime() / 1000));
+  positions.set(7, Math.round(MOCK_DURATION * 0.84));
+  playedAt.set(7, NOW - 9 * DAY);
+  if (MANY_PLACES) {
+    for (let k = 0; k < 40; k++) {
+      positions.set(100 + k, Math.round(MOCK_DURATION * (0.05 + (k % 17) * 0.05)));
+      playedAt.set(100 + k, NOW - 3 * 3600 - k * 5 * 3600);
+    }
+  }
+}
 
 function row(i: number): MovieDto {
   const clean = cleanNameOf(i);
@@ -195,6 +222,28 @@ function row(i: number): MovieDto {
     categoryId: `m${categoryNo(i)}`,
     favourite: favourites.has(i),
     watched: watched.has(i),
+    position: positions.get(i) ?? null,
+    duration: positions.has(i) ? MOCK_DURATION : null,
+    playedAt: playedAt.get(i) ?? null,
+  };
+}
+
+/** A film is in progress from 1 % to 92 % of its length, until it is watched. */
+const inProgress = (id: number): boolean => {
+  const at = positions.get(id);
+  if (at === undefined || watched.has(id)) return false;
+  const f = at / MOCK_DURATION;
+  return f >= STARTED_FRACTION && f < WATCHED_FRACTION;
+};
+
+function marksOf(id: number): MarksDto {
+  return {
+    id,
+    favourite: favourites.has(id),
+    watched: watched.has(id),
+    position: positions.get(id) ?? null,
+    duration: positions.has(id) ? MOCK_DURATION : null,
+    playedAt: playedAt.get(id) ?? null,
   };
 }
 
@@ -359,9 +408,9 @@ export function createMockMovies(host: MoviePlayerHost) {
     host.patch({ onDemand: onDemand(m.id, position, true) });
   }
 
-  const playing = (id: number, position: number) =>
+  const playing = (id: number, position: number, state: "playing" | "paused" = "playing") =>
     host.patch({
-      state: "playing",
+      state,
       streamId: null,
       width: 1920,
       height: 1080,
@@ -452,19 +501,28 @@ export function createMockMovies(host: MoviePlayerHost) {
         else watched.delete(movieId);
       }
       marksVersion++;
-      return {
-        id: movieId,
-        favourite: favourites.has(movieId),
-        watched: watched.has(movieId),
-        position: positions.get(movieId) ?? null,
-        duration: positions.has(movieId) ? MOCK_DURATION : null,
-      };
+      return marksOf(movieId);
     },
 
-    /** Opens the film from `start`, or from the start, as the app does. */
-    playMovie: async (movieId: number, start: number | null): Promise<void> => {
+    /** The films in progress, as Continue watching lists them, newest first. */
+    continueEntries: (): ContinueItemDto[] =>
+      [...positions.keys()]
+        .filter((id) => inProgress(id) && playedAt.has(id))
+        .map((id) => ({ kind: "movie" as const, movie: row(id), lastWatched: playedAt.get(id) as number }))
+        .sort((a, b) => b.lastWatched - a.lastWatched),
+
+    marksOf: (movieId: number): MarksDto => {
+      if (!inRange(movieId)) throw new Error("no such movie");
+      return marksOf(movieId);
+    },
+
+    /** Opens the film from `start`, or from the start, as the app does; `held`
+     *  opens it paused there. */
+    playMovie: async (movieId: number, start: number | null, held = false): Promise<void> => {
       if (!inRange(movieId)) throw new Error("no such movie");
       const mine = host.open();
+      playedAt.set(movieId, Math.floor(Date.now() / 1000));
+      marksVersion++;
       const from = Math.max(0, Math.min(MOCK_DURATION, start ?? 0));
       host.patch({
         state: "opening",
@@ -481,7 +539,7 @@ export function createMockMovies(host: MoviePlayerHost) {
       });
       await delay(700);
       if (host.current() !== mine) return;
-      playing(movieId, from);
+      playing(movieId, from, held ? "paused" : "playing");
       startClock();
     },
 

@@ -33,6 +33,11 @@ test("the rail's own movie items, counted in words", () => {
   const f = fixedMovieItems({ available: true, note: null, total: 159000, favourites: 12, recent: 240, watched: 0, origin: "a1" });
   assert.deepEqual(f.map((x) => [x.id, x.name, x.count]), [[MOVIE_FAVOURITES, "Favourites", "12"], [MOVIE_RECENT, "Recently added", "240"], [MOVIE_WATCHED, "Watched", ""]]);
   assert.deepEqual(fixedMovieItems(null).map((x) => x.count), ["", "", ""]);
+  const s = { available: true, note: null, total: 159000, favourites: 12, recent: 240, watched: 0, origin: "a1" };
+  assert.deepEqual(fixedMovieItems(s, 4)[0], { id: "*continue*", name: "Continue watching", count: "4" });
+  assert.equal(fixedMovieItems(s, 0)[0].count, "");
+  assert.equal(fixedMovieItems(s).some((x) => x.id === "*continue*"), false);
+  assert.equal(fixedMovieItems(s, null).some((x) => x.id === "*continue*"), false);
 });
 test("a selection becomes the query the backend reads", () => {
   assert.deepEqual(movieQuery("c7", "az", { from: 1990, to: 1999 }), { list: "category", categoryId: "c7", sort: "az", yearFrom: 1990, yearTo: 1999, search: null });
@@ -87,8 +92,9 @@ test("a movie as a poster card: the clean name drawn, the full name for its tip"
   };
   assert.deepEqual(movieCard(m, now), {
     id: 3, title: "Film", name: "Film 4K", posterUrl: null, badges: ["NEW", "4K"],
-    meta: "2025 · 1h 49m · ★ 7.6", watched: false, favourite: true,
+    meta: "2025 · 1h 49m · ★ 7.6", watched: false, favourite: true, progress: null,
   });
+  assert.equal(movieCard({ ...m, position: 30 * 60, duration: 100 * 60 }, now).progress, 0.3);
   assert.equal(movieCard({ ...m, year: null, durationSecs: null, rating: null, added: null, name: "Film" }, now).meta, "");
   assert.deepEqual(movieCard({ ...m, added: null, name: "Film" }, now).badges, []);
 });

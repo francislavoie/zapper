@@ -23,7 +23,8 @@
 //! ([`access`]), the provider account a signed-in browser may change
 //! ([`account`]), its HTTPS certificate ([`tls`]), and the web interface it
 //! serves ([`web`]) with the catalogue API that interface reads ([`browse`],
-//! and for movies [`vod_browse`]),
+//! for movies [`vod_browse`], for shows [`series_browse`] and for Continue
+//! watching [`continue_browse`]),
 //! and the live stream of a recording a `.strm` file points Jellyfin at
 //! ([`strm`]) — is in the `server` feature, so the app links none of it.
 
@@ -82,6 +83,8 @@ pub mod watch;
 pub mod vod_browse;
 #[cfg(feature = "server")]
 pub mod series_browse;
+#[cfg(feature = "server")]
+pub mod continue_browse;
 #[cfg(feature = "server")]
 pub mod web;
 

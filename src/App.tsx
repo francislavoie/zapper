@@ -20,12 +20,15 @@ import {
 import { paintMockStill } from "./mock";
 import {
   loadCategories,
+  loadContinue,
   loadMovieCategories,
   loadMoviesSummary,
   loadShowCategories,
   loadShowsSummary,
   loadWatchLists,
+  refreshMovieMarks,
 } from "./actions";
+import { freshOnReturn } from "./logic/continueWatching";
 import { moviesAvailable } from "./logic/movies";
 import { heldEpisode, showsAvailable } from "./logic/shows";
 import { errorMessage } from "./logic/async";
@@ -365,14 +368,17 @@ export function App() {
   // starts before the player reports it. Its place, and whether it now
   // counts as watched, were written as it played, so the lists and the
   // rail's counts are read again, once for the stop.
-  const hadMovie = useRef(false);
+  const hadMovie = useRef<number | null>(null);
   useEffect(() => {
-    if (openMovie === null && hadMovie.current) {
+    const was = hadMovie.current;
+    if (openMovie === null && was !== null) {
       dispatch({ type: "movies/playing", movie: null });
       dispatch({ type: "movies/catalogue" });
+      dispatch({ type: "continue/changed" });
+      void refreshMovieMarks(dispatch, was);
       void loadMoviesSummary(dispatch, true);
     }
-    hadMovie.current = openMovie !== null;
+    hadMovie.current = openMovie;
   }, [openMovie, dispatch]);
 
   // An episode is playing that the store does not know (a reloaded window),
@@ -415,6 +421,7 @@ export function App() {
     if (was !== null && was.episodeId !== openEpisode) {
       if (was.seriesId !== null) dispatch({ type: "shows/played", seriesId: was.seriesId });
       else dispatch({ type: "shows/catalogue" });
+      dispatch({ type: "continue/changed" });
       void loadShowsSummary(dispatch, true);
     }
     if (openEpisode === null) {
@@ -453,6 +460,49 @@ export function App() {
     void loadMoviesSummary(dispatch, catalogueRev > 0);
     void loadShowsSummary(dispatch, catalogueRev > 0);
   }, [catalogueRev, dispatch]);
+
+  // Continue watching is read where the account has movies or shows, and
+  // again whenever something that moves it has happened (a mark, a stop, a
+  // removal, a sync, another account).
+  const continueOn =
+    moviesAvailable(state.movies.summary) || showsAvailable(state.shows.summary);
+  const continueRevision = state.continue.revision;
+  useEffect(() => {
+    if (continueOn) void loadContinue(dispatch, continueRevision);
+  }, [continueOn, continueRevision, dispatch]);
+
+  // Coming back to the window after a while away (another device may have
+  // watched something meanwhile): the list, the catalogue and what is open
+  // are read again.
+  const latest = useRef(state);
+  useEffect(() => {
+    latest.current = state;
+  });
+  useEffect(() => {
+    let hiddenAt: number | null = null;
+    const leave = () => {
+      if (hiddenAt === null) hiddenAt = Date.now();
+    };
+    const back = () => {
+      const at = hiddenAt;
+      hiddenAt = null;
+      if (!freshOnReturn(at, Date.now())) return;
+      const { movies, shows } = latest.current;
+      dispatch({ type: "continue/changed" });
+      dispatch({ type: "movies/catalogue" });
+      if (movies.selected) void refreshMovieMarks(dispatch, movies.selected.movieId);
+      if (shows.selected) dispatch({ type: "shows/played", seriesId: shows.selected.seriesId });
+    };
+    const onVisibility = () => (document.visibilityState === "hidden" ? leave() : back());
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("blur", leave);
+    window.addEventListener("focus", back);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("blur", leave);
+      window.removeEventListener("focus", back);
+    };
+  }, [dispatch]);
 
   // The Movies rail's categories, loaded when the tab first shows (a catalogue
   // of movies is not read for someone who never opens it) and again after a

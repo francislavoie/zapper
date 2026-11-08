@@ -15,10 +15,12 @@ import { clearMovieDetails } from "./hooks/useMovieDetails";
 import { clearShowDetails } from "./hooks/useShowDetails";
 import { clearDeadPosters } from "./deadPosters";
 import { windowControls } from "./window";
-import { ALL_CATEGORIES, run, type Action, type Mode } from "./store";
+import { ALL_CATEGORIES, run, type Action, type Mode, type State } from "./store";
 import type {
   ChannelDto,
+  ContinueItemDto,
   EpisodeDto,
+  MarksDto,
   FavouriteDto,
   MovieDto,
   PlayerStateDto,
@@ -29,6 +31,10 @@ import type {
   SeriesDto,
 } from "./types";
 import { episodeCode } from "./logic/shows";
+import { moviesAvailable } from "./logic/movies";
+import { CONTINUE, CONTINUE_MAX, continueTarget } from "./logic/continueWatching";
+import { createPending } from "./logic/pending";
+import { startPlan, type Place, type StartAt } from "./logic/resume";
 import { createAdvanceGuard } from "./logic/upNext";
 import {
   conflictLosesProgramme,
@@ -368,23 +374,81 @@ export async function forgetChannel(dispatch: Dispatch<Action>, streamId: number
 
 // ----------------------------------------------------------------- movies
 
-/** Opens a movie in the player, from `start` seconds or, with `null`, from
- *  the start. Like a channel it takes the window over (a movie is watched,
- *  not glanced at), and a failed open gives the window back. Choosing a movie
- *  to look at never comes through here: only Play does. */
+/** The place a title was left at, from the marks just read. */
+const placeOf = (
+  k: MarksDto,
+  durationSecs: number | null,
+): { place: Place; playedAt: number | null } => ({
+  place: { watched: k.watched, position: k.position, duration: k.duration, durationSecs },
+  playedAt: k.playedAt,
+});
+
+/** Opens a movie in the player: from `start` seconds, from the start with
+ *  `null`, from where it was left with "resume", or with "ask" from there but
+ *  held paused while the question is asked (`continue/prompt`; the beginning,
+ *  and no question, for a movie not in progress). The place is read just
+ *  before, as the service has it, else the row's own. Like a channel it
+ *  takes the window over (a movie is watched, not glanced at), and a failed
+ *  open gives the window back. Choosing a movie to look at never comes
+ *  through here: only Play does. */
 export async function playMovie(
   dispatch: Dispatch<Action>,
   movie: MovieDto,
-  start: number | null = null,
+  start: StartAt = "ask",
 ): Promise<void> {
   if (!capabilities.playback) {
     dispatch({ type: "toast", text: NO_PLAYBACK, kind: "info" });
     return;
   }
+  // A second Play while this one is still being set up is ignored.
+  const key = `movie:${movie.movieId}`;
+  if (!openings.claim(key)) return;
+  try {
+    await openMovie(dispatch, movie, start);
+  } finally {
+    openings.release(key);
+  }
+}
+
+/** The opens being set up, by title. */
+const openings = createPending();
+
+async function openMovie(dispatch: Dispatch<Action>, movie: MovieDto, start: StartAt): Promise<void> {
+  let plan = startPlan(start, null);
+  let playedAt: number | null = null;
+  if (start === "ask" || start === "resume") {
+    const own = await backend.movieMarks(movie.movieId).catch((): MarksDto => ({
+      id: movie.movieId,
+      favourite: movie.favourite,
+      watched: movie.watched,
+      position: movie.position,
+      duration: movie.duration,
+      playedAt: movie.playedAt,
+    }));
+    const read = placeOf(own, movie.durationSecs);
+    plan = startPlan(start, read.place);
+    playedAt = read.playedAt;
+  }
   dispatch({ type: "movies/playing", movie });
   dispatch({ type: "mode", mode: "watch" });
-  const ok = await run(dispatch, `play ${movie.cleanName}`, backend.playMovie(movie.movieId, start));
+  if (plan.ask && plan.start !== null) {
+    dispatch({
+      type: "continue/prompt",
+      prompt: {
+        item: { kind: "movie", id: movie.movieId },
+        title: movie.cleanName,
+        position: plan.start,
+        playedAt,
+      },
+    });
+  }
+  const ok = await run(
+    dispatch,
+    `play ${movie.cleanName}`,
+    backend.playMovie(movie.movieId, plan.start, plan.held),
+  );
   if (!ok) {
+    dispatch({ type: "continue/prompt", prompt: null });
     dispatch({ type: "movies/playing", movie: null });
     dispatch({ type: "mode", mode: "browse" });
   }
@@ -403,7 +467,91 @@ async function markMovie(
     dispatch({ type: "toast", text: `${what}: ${errorMessage(e)}` });
     return;
   }
+  dispatch({ type: "continue/changed" });
   await loadMoviesSummary(dispatch, true);
+}
+
+/** Reads a movie's marks again (it was just stopped) so its place shows
+ *  wherever it is drawn. Failing to is not worth a toast: the lists read
+ *  again on their own. */
+export async function refreshMovieMarks(dispatch: Dispatch<Action>, movieId: number): Promise<void> {
+  try {
+    dispatch({ type: "movies/marked", marks: await backend.movieMarks(movieId) });
+  } catch {
+    // The place is shown as it was.
+  }
+}
+
+/** Opens a movie's sheet, in the Movies tab (from Live TV, where the movie
+ *  playing is shown, it goes there). */
+export function openMovieSheet(dispatch: Dispatch<Action>, movie: MovieDto): void {
+  dispatch({ type: "section", section: "movies" });
+  dispatch({ type: "movies/selectMovie", movie });
+  dispatch({ type: "movies/sheet", id: movie.movieId });
+}
+
+/** Opens a show's sheet, in the Shows tab likewise. */
+export function openShowSheet(dispatch: Dispatch<Action>, show: SeriesDto): void {
+  dispatch({ type: "section", section: "shows" });
+  dispatch({ type: "shows/selectShow", show });
+  dispatch({ type: "shows/sheet", id: show.seriesId });
+}
+
+// -------------------------------------------------------- continue watching
+
+/** Reads Continue watching. One already showing stays while the fresh one
+ *  loads, and a failed read does not replace it (the reducer sees to both). */
+export async function loadContinue(dispatch: Dispatch<Action>, revision: number): Promise<void> {
+  // Tagged with the revision it began at: an answer that arrives after
+  // another account's reset (or a newer change) is dropped by the reducer.
+  dispatch({ type: "continue/items", value: loading(), revision });
+  try {
+    const list = await backend.continueWatching(CONTINUE_MAX);
+    dispatch({ type: "continue/items", value: ready(list), revision });
+  } catch (e) {
+    dispatch({ type: "continue/items", value: failed(errorMessage(e)), revision });
+  }
+}
+
+/** Plays an entry: its movie, or its episode (the one in progress, or the
+ *  next of a show being followed). Only Play, Resume, Start over, a row's
+ *  Enter and a strip card come through here. */
+export function playContinue(
+  dispatch: Dispatch<Action>,
+  item: ContinueItemDto,
+  start: StartAt = "ask",
+): Promise<void> {
+  return item.kind === "movie"
+    ? playMovie(dispatch, item.movie, start)
+    : playEpisode(dispatch, { series: item.series, episode: item.episode }, start);
+}
+
+/** Takes an entry out of Continue watching, then reads the list again. */
+export async function removeFromContinue(
+  dispatch: Dispatch<Action>,
+  item: ContinueItemDto,
+): Promise<void> {
+  const { kind, id } = continueTarget(item);
+  try {
+    await backend.removeFromContinue(kind, id);
+  } catch (e) {
+    dispatch({ type: "toast", text: `Remove from Continue watching: ${errorMessage(e)}` });
+    return;
+  }
+  dispatch({ type: "continue/changed" });
+}
+
+/** Shows Continue watching: on the tab being shown if Movies or Shows, else
+ *  on Movies where there are movies, else Shows. It counts as chosen. */
+export function goToContinue(dispatch: Dispatch<Action>, state: State): void {
+  const section =
+    state.section === "movies" || state.section === "shows"
+      ? state.section
+      : moviesAvailable(state.movies.summary)
+        ? "movies"
+        : "shows";
+  if (state.section !== section) dispatch({ type: "section", section });
+  dispatch({ type: section === "movies" ? "movies/select" : "shows/select", id: CONTINUE });
 }
 
 export function toggleMovieFavourite(dispatch: Dispatch<Action>, movie: MovieDto): Promise<void> {
@@ -455,31 +603,73 @@ export async function loadMovieCategories(
 
 // ------------------------------------------------------------------ shows
 
-/** Opens an episode in the player, from `start` seconds or, with `null`, from
- *  the start: as a movie does (see `playMovie`), and the show's sheet closes
- *  for the player. Only Play comes through here; choosing a show, opening
- *  its sheet or a season never does. */
+/** Opens an episode in the player: as a movie does (see `playMovie`: a
+ *  number, `null`, "resume" or "ask"), and the show's sheet closes for the
+ *  player. Only Play comes through here; choosing a show, opening its sheet
+ *  or a season never does. */
 export async function playEpisode(
   dispatch: Dispatch<Action>,
   playing: PlayingEpisodeDto,
-  start: number | null = null,
+  start: StartAt = "ask",
 ): Promise<void> {
   if (!capabilities.playback) {
     dispatch({ type: "toast", text: NO_PLAYBACK, kind: "info" });
     return;
   }
+  const key = `episode:${playing.episode.episodeId}`;
+  if (!openings.claim(key)) return;
+  try {
+    await openEpisode(dispatch, playing, start);
+  } finally {
+    openings.release(key);
+  }
+}
+
+async function openEpisode(
+  dispatch: Dispatch<Action>,
+  playing: PlayingEpisodeDto,
+  start: StartAt,
+): Promise<void> {
   const e = playing.episode;
+  const code = `${playing.series.cleanName} · ${episodeCode(e.season, e.episode, e.episodeEnd)}`;
+  let plan = startPlan(start, null);
+  let playedAt: number | null = null;
+  if (start === "ask" || start === "resume") {
+    const own = await backend.episodeMarks(e.episodeId).catch((): MarksDto => ({
+      id: e.episodeId,
+      favourite: false,
+      watched: e.watched,
+      position: e.position,
+      duration: e.duration,
+      playedAt: null,
+    }));
+    const read = placeOf(own, e.durationSecs);
+    plan = startPlan(start, read.place);
+    playedAt = read.playedAt;
+  }
   // Another playing of it, which Up next may move on from again.
   advanceGuard.reset(e.episodeId);
   dispatch({ type: "shows/playing", playing });
   dispatch({ type: "shows/sheet", id: null });
   dispatch({ type: "mode", mode: "watch" });
+  if (plan.ask && plan.start !== null) {
+    dispatch({
+      type: "continue/prompt",
+      prompt: {
+        item: { kind: "episode", id: e.episodeId },
+        title: code,
+        position: plan.start,
+        playedAt,
+      },
+    });
+  }
   const ok = await run(
     dispatch,
     `play ${playing.series.cleanName} ${episodeCode(e.season, e.episode, e.episodeEnd)}`,
-    backend.playEpisode(e.episodeId, start),
+    backend.playEpisode(e.episodeId, plan.start, plan.held),
   );
   if (!ok) {
+    dispatch({ type: "continue/prompt", prompt: null });
     dispatch({ type: "shows/playing", playing: null });
     dispatch({ type: "mode", mode: "browse" });
   }
@@ -546,6 +736,7 @@ async function markShow(
     return;
   }
   if (marks.watched !== undefined) dispatch({ type: "shows/played", seriesId: show.seriesId });
+  dispatch({ type: "continue/changed" });
   await loadShowsSummary(dispatch, true);
 }
 
@@ -577,6 +768,7 @@ export async function setEpisodeWatched(
     return;
   }
   dispatch({ type: "shows/played", seriesId: episode.seriesId });
+  dispatch({ type: "continue/changed" });
   await loadShowsSummary(dispatch, true);
 }
 

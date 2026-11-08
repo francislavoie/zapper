@@ -49,16 +49,14 @@ import { modeForSection } from "./logic/toolbar";
 import type { Section } from "./logic/toolbar";
 import {
   initialMovies,
-  isMoviesAction,
-  moviesReducer,
   type MoviesAction,
   type MoviesState,
 } from "./moviesState";
 import { loadMoviesView, loadVodView } from "./moviesView";
+import { initialContinue, type ContinueAction, type ContinueState } from "./continueState";
+import { isSliceAction, reduceSlices, syncedSlices } from "./continueRoot";
 import {
   initialShows,
-  isShowsAction,
-  showsReducer,
   type ShowsAction,
   type ShowsState,
 } from "./showsState";
@@ -311,6 +309,8 @@ export interface State {
   movies: MoviesState;
   /** The Shows tab, likewise: see showsState.ts. */
   shows: ShowsState;
+  /** Continue watching, which both tabs show: see continueState.ts. */
+  continue: ContinueState;
 }
 
 /** An open context menu over a programme: record it, or cancel its
@@ -430,11 +430,13 @@ export const initialState: State = {
   // The List/Posters choice is read before the first render, like zoom.
   movies: initialMovies(loadMoviesView()),
   shows: initialShows(loadVodView(SHOWS_VIEW_STORAGE_KEY)),
+  continue: initialContinue(),
 };
 
 export type Action =
   | MoviesAction
   | ShowsAction
+  | ContinueAction
   /** ↩ Show in the band: what plays and the selection change places. */
   | { type: "bandSwap" }
   /** A fetch of the recordings: the list, or why there is none. */
@@ -538,8 +540,12 @@ export function reducer(state: State, action: Action): State {
 }
 
 function reduce(state: State, action: Action): State {
-  if (isMoviesAction(action)) return { ...state, movies: moviesReducer(state.movies, action) };
-  if (isShowsAction(action)) return { ...state, shows: showsReducer(state.shows, action) };
+  if (isSliceAction(action)) {
+    const next = reduceSlices(state, action);
+    return next.movies === state.movies && next.shows === state.shows && next.continue === state.continue
+      ? state
+      : { ...state, ...next };
+  }
   switch (action.type) {
     case "bandSwap":
       // `reducer` answers it.
@@ -760,8 +766,7 @@ function reduce(state: State, action: Action): State {
         ...state,
         sync: action.value,
         catalogueRev: changed ? state.catalogueRev + 1 : state.catalogueRev,
-        movies: changed ? moviesReducer(state.movies, { type: "movies/catalogue" }) : state.movies,
-        shows: changed ? showsReducer(state.shows, { type: "shows/catalogue" }) : state.shows,
+        ...(changed ? syncedSlices(state) : {}),
       };
     }
     case "channelQuality":

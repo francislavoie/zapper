@@ -8,11 +8,12 @@
 use anyhow::Result;
 use rusqlite::types::Value;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Row};
+use std::sync::OnceLock;
 
 use crate::catalog::origin::current_origin_sql;
 use crate::catalog::series_store;
 use crate::catalog::title_search::searched_name_sql;
-use crate::catalog::vod_progress::is_finished;
+use crate::catalog::vod_progress::{is_finished, STARTED_FRACTION, WATCHED_FRACTION};
 
 /// "Recently added" is this many days back.
 pub const RECENT_DAYS: i64 = 30;
@@ -109,6 +110,13 @@ pub struct MovieRow {
     pub category_id: Option<String>,
     pub favourite: bool,
     pub watched: bool,
+    /// Where it was left, in seconds, as last played (kept when it is
+    /// watched or removed from Continue watching).
+    pub position: Option<f64>,
+    /// The length the player measured.
+    pub duration: Option<f64>,
+    /// When it was last played.
+    pub played_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -133,11 +141,14 @@ pub struct Marks {
     pub watched: bool,
     pub position: Option<f64>,
     pub duration: Option<f64>,
+    pub played_at: Option<i64>,
 }
 
-const COLUMNS: &str = "m.movie_id, m.name, m.clean_name, m.year, m.rating, m.poster_url,
-    m.added, m.duration_secs, m.category_id,
-    k.favourite_at IS NOT NULL, k.watched_at IS NOT NULL";
+/// What [`row`] reads: the movie, then its marks.
+const COLUMNS: &str = "m.movie_id, m.name, m.clean_name, m.year, m.rating,
+    m.poster_url, m.added, m.duration_secs, m.category_id,
+    k.favourite_at IS NOT NULL, k.watched_at IS NOT NULL,
+    k.position, k.duration, k.played_at";
 
 /// Movies with the current catalogue's marks beside them.
 const MARKED: &str = concat!(
@@ -167,6 +178,9 @@ fn row(r: &Row) -> rusqlite::Result<MovieRow> {
         category_id: r.get(8)?,
         favourite: r.get(9)?,
         watched: r.get(10)?,
+        position: r.get(11)?,
+        duration: r.get(12)?,
+        played_at: r.get(13)?,
     })
 }
 
@@ -363,6 +377,37 @@ pub fn movie_counts(conn: &Connection, now: i64) -> Result<MovieCounts> {
     })
 }
 
+/// The movies in progress, most recently played first: the marks first,
+/// read in order from `vod_marks_by_played` (a test holds it to that). In
+/// progress is a place between [`STARTED_FRACTION`] and
+/// [`WATCHED_FRACTION`] of the length (the player's measured `duration`,
+/// else the provider's; an unknown length never is), not marked watched,
+/// and played since any removal from Continue watching (`dismissed_at`).
+/// `?1`/`?2` are those bounds, `?3` the limit.
+pub(crate) fn movies_in_progress_sql() -> &'static str {
+    static SQL: OnceLock<String> = OnceLock::new();
+    SQL.get_or_init(|| {
+        format!(
+            "SELECT {COLUMNS} FROM {MARKS_FIRST}
+             WHERE m.deleted_at IS NULL AND k.watched_at IS NULL
+               AND k.played_at > COALESCE(k.dismissed_at, -1)
+               AND k.position / COALESCE(k.duration, m.duration_secs) >= ?1
+               AND k.position / COALESCE(k.duration, m.duration_secs) < ?2
+             ORDER BY k.played_at DESC, k.item_id LIMIT ?3"
+        )
+    })
+}
+
+/// The `limit` movies in progress played most recently, newest first
+/// ([`movies_in_progress_sql`]).
+pub(crate) fn movies_in_progress(conn: &Connection, limit: u32) -> Result<Vec<MovieRow>> {
+    let mut stmt = conn.prepare_cached(movies_in_progress_sql())?;
+    let rows = stmt
+        .query_map(params![STARTED_FRACTION, WATCHED_FRACTION, limit], row)?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(rows)
+}
+
 /// What playing a movie needs, or None for one that is unknown or deleted.
 pub fn movie_source(conn: &Connection, id: i64) -> Result<Option<MovieSource>> {
     Ok(conn
@@ -425,7 +470,8 @@ pub(crate) fn origin(conn: &Connection) -> Result<String> {
 pub(crate) fn marks_of(conn: &Connection, origin: &str, kind: ItemKind, id: i64) -> Result<Marks> {
     Ok(conn
         .query_row(
-            "SELECT favourite_at IS NOT NULL, watched_at IS NOT NULL, position, duration
+            "SELECT favourite_at IS NOT NULL, watched_at IS NOT NULL, position, duration,
+                    played_at
              FROM vod_marks WHERE origin = ?1 AND kind = ?2 AND item_id = ?3",
             params![origin, kind.as_str(), id],
             |r| {
@@ -434,6 +480,7 @@ pub(crate) fn marks_of(conn: &Connection, origin: &str, kind: ItemKind, id: i64)
                     watched: r.get(1)?,
                     position: r.get(2)?,
                     duration: r.get(3)?,
+                    played_at: r.get(4)?,
                 })
             },
         )

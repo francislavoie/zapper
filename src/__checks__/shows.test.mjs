@@ -138,6 +138,10 @@ test("a selection becomes the query the backend reads", () => {
 test("the rail's own items, and the list's title", () => {
   const f = fixedShowItems({ available: true, note: null, total: 12000, favourites: 8, recent: 120, watched: 0, origin: "a" });
   assert.deepEqual(f.map((x) => [x.id, x.name, x.count]), [[SHOW_FAVOURITES, "Favourites", "8"], [SHOW_RECENT, "Recently added", "120"], [SHOW_WATCHED, "Watched", ""]]);
+  assert.equal(fixedShowItems(null, 2)[0].id, "*continue*");
+  assert.deepEqual(fixedShowItems(null, 2)[0], { id: "*continue*", name: "Continue watching", count: "2" });
+  assert.equal(fixedShowItems(null, 0)[0].count, "");
+  assert.equal(fixedShowItems(null).some((x) => x.id === "*continue*"), false);
   assert.equal(showTitle(SHOW_RECENT, []), "Recently added");
   assert.equal(showTitle("s2", [{ id: "s2", name: "Mysteries" }]), "Mysteries");
   assert.equal(showTitle("gone", []), "Shows");

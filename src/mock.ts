@@ -13,6 +13,7 @@ import { rankAlternatives } from "./logic/alternatives";
 import { patternFor, place, validatePattern } from "./logic/naming";
 import { parsePort, passwordProblem } from "./logic/network";
 import { afterChoosing, openChoice, type SubtitlePreference } from "./logic/subtitles";
+import { createMockContinue } from "./mockContinue";
 import { createMockMovies } from "./mockMovies";
 import { createMockShows } from "./mockShows";
 import type {
@@ -1600,6 +1601,9 @@ const mockShows = createMockShows({
   current: () => openSeq,
 });
 
+/** Continue watching: the two catalogues' places, merged. */
+const mockContinue = createMockContinue(mockMovies, mockShows);
+
 export const mockApi = {
   categories: async () => {
     await delay(120);
@@ -2199,6 +2203,11 @@ export const mockApi = {
   playingEpisode: mockShows.playingEpisode,
   playEpisode: mockShows.playEpisode,
   playNextEpisode: mockShows.playNextEpisode,
+
+  continueWatching: mockContinue.continueWatching,
+  removeFromContinue: mockContinue.removeFromContinue,
+  movieMarks: mockContinue.movieMarks,
+  episodeMarks: mockContinue.episodeMarks,
 
   forgetActivity: async (streamId: number) => {
     await delay(20);

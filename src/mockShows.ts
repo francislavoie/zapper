@@ -29,6 +29,7 @@
 
 import type { MoviePlayerHost } from "./mockMovies";
 import type {
+  ContinueItemDto,
   EpisodeDto,
   MarksDto,
   MovieSort,
@@ -51,7 +52,7 @@ const RECENT_TOTAL = 120;
 const DAY = 86_400;
 /** What an episode with no length of its own runs for, in the player. */
 const MOCK_EPISODE_SECS = 2700;
-/** The in-progress and watched fractions (catalog/vod_progress.rs). */
+/** The in-progress and watched fractions (catalog/vod_progress.rs; mirrors logic/resume.ts). */
 const STARTED_FRACTION = 0.01;
 const WATCHED_FRACTION = 0.92;
 
@@ -59,6 +60,8 @@ const flag = (re: RegExp) => typeof location !== "undefined" && re.test(location
 const NONE = flag(/(^|[?&])shows=none(&|$)/);
 const BOOT_PLAYING = flag(/(^|[?&])show=playing(&|$)/);
 const BOOT_ENDING = flag(/(^|[?&])episode=ending(&|$)/);
+/** `?continue=none`: no places for Continue watching. */
+const NO_PLACES = flag(/(^|[?&])continue=none(&|$)/);
 const DROP = flag(/(^|[?&])drop=1(&|$)/);
 /** How far from its end a `drop=1` episode fails. */
 const DROP_BEFORE_END_SECS = 12;
@@ -260,12 +263,17 @@ const lengthOf = (seriesId: number, e: number) => durationOf(seriesId, e) ?? MOC
 // -------------------------------------------------------------------- state
 
 const favourites = new Set<number>();
-/** Episode id → when it became watched (an order, not a time). */
+/** Episode id → when it became watched (tick order, not a time; see `watchedWhen` for seconds). */
 const watchedAt = new Map<number, number>();
 /** Episode id → where it was left, seconds from the start. */
 const positions = new Map<number, number>();
-/** Episode id → when it last played (an order, not a time). */
+/** Episode id → when it last played (tick order, not a time; see `playedWhen` for seconds). */
 const playedAt = new Map<number, number>();
+/** Episode id -> when it last played, unix seconds. */
+const playedWhen = new Map<number, number>();
+/** Episode id -> when it became watched, unix seconds. */
+const watchedWhen = new Map<number, number>();
+const nowSecs = () => Math.floor(Date.now() / 1000);
 /** Shows with an episode marked: the only ones that can be watched. */
 const touched = new Set<number>();
 /** Shows whose episodes have been seen, which is when their counts are known. */
@@ -278,8 +286,11 @@ for (let k = 1; k <= 9; k++) favourites.add(1 + ((k * 1_307) % SHOW_TOTAL));
 favourites.add(1);
 for (let i = 1; i <= SHOW_TOTAL; i++) if (i % 4 !== 0 || i <= 4) seen.add(i);
 
-function watch(episodeId: number, seriesId: number) {
-  if (!watchedAt.has(episodeId)) watchedAt.set(episodeId, ++tick);
+function watch(episodeId: number, seriesId: number, at: number = nowSecs()) {
+  if (!watchedAt.has(episodeId)) {
+    watchedAt.set(episodeId, ++tick);
+    watchedWhen.set(episodeId, at);
+  }
   touched.add(seriesId);
 }
 
@@ -291,6 +302,17 @@ for (const s of slots(1)) {
   const e = episodeIdOf(1, 2, 4);
   positions.set(e, Math.round(lengthOf(1, e) * 0.7));
   playedAt.set(e, ++tick);
+  playedWhen.set(e, nowSecs() - 2 * DAY);
+}
+// For Continue watching: show 3's opening two-parter watched five days ago
+// (S1 E3 is next up, not started), and show 7's first episode left at 40 %.
+if (!NO_PLACES) {
+  watch(episodeIdOf(3, 1, 1), 3, nowSecs() - 5 * DAY);
+  const e = episodeIdOf(7, 1, 1);
+  positions.set(e, Math.round(lengthOf(7, e) * 0.4));
+  playedAt.set(e, ++tick);
+  playedWhen.set(e, nowSecs() - 3 * DAY);
+  touched.add(7);
 }
 // A few shows seen to the end.
 for (const id of [9, 23, 57, 88, 140, 301]) {
@@ -512,7 +534,38 @@ function episodeMarks(seriesId: number, episodeId: number): MarksDto {
     watched: watchedAt.has(episodeId),
     position: positions.get(episodeId) ?? null,
     duration: playedAt.has(episodeId) ? lengthOf(seriesId, episodeId) : null,
+    playedAt: playedWhen.get(episodeId) ?? null,
   };
+}
+
+/** Where each followed show stands, as Continue watching lists it, newest
+ *  first: the episode in progress that played last, else (when something was
+ *  watched) the next episode, not started. */
+function continueEntries(): ContinueItemDto[] {
+  if (NO_PLACES) return [];
+  const out: ContinueItemDto[] = [];
+  for (const id of touched) {
+    const eps = slots(id).map((s) => episode(id, s));
+    const next = nextUp(eps);
+    const e = eps.find((x) => x.episodeId === next);
+    if (!e) continue;
+    const len = e.duration ?? e.durationSecs;
+    const f = e.position !== null && len ? e.position / len : 0;
+    const started = !e.watched && f >= STARTED_FRACTION && f < WATCHED_FRACTION;
+    const last = Math.max(0, ...eps.map((x) => watchedWhen.get(x.episodeId) ?? 0));
+    if (started) {
+      out.push({
+        kind: "episode",
+        series: row(id),
+        episode: e,
+        upNext: false,
+        lastWatched: playedWhen.get(e.episodeId) ?? nowSecs(),
+      });
+    } else if (last > 0) {
+      out.push({ kind: "episode", series: row(id), episode: e, upNext: true, lastWatched: last });
+    }
+  }
+  return out.sort((a, b) => b.lastWatched - a.lastWatched);
 }
 
 // ------------------------------------------------------------------- player
@@ -597,9 +650,9 @@ export function createMockShows(host: MoviePlayerHost) {
     host.patch({ onDemand: onDemand(m.id, position, true) });
   }
 
-  const playing = (id: number, position: number) =>
+  const playing = (id: number, position: number, state: "playing" | "paused" = "playing") =>
     host.patch({
-      state: "playing",
+      state,
       streamId: null,
       width: 1920,
       height: 1080,
@@ -623,9 +676,10 @@ export function createMockShows(host: MoviePlayerHost) {
   }
 
   /** Opens an episode from `from`, playing. */
-  const open = async (episodeId: number, seriesId: number, from: number) => {
+  const open = async (episodeId: number, seriesId: number, from: number, held = false) => {
     const mine = host.open();
     playedAt.set(episodeId, ++tick);
+    playedWhen.set(episodeId, nowSecs());
     touched.add(seriesId);
     host.patch({
       state: "opening",
@@ -642,7 +696,7 @@ export function createMockShows(host: MoviePlayerHost) {
     });
     await delay(700);
     if (host.current() !== mine) return;
-    playing(episodeId, from);
+    playing(episodeId, from, held ? "paused" : "playing");
     startClock();
   };
 
@@ -669,11 +723,15 @@ export function createMockShows(host: MoviePlayerHost) {
     await open(nextId, at.seriesId, 0);
   };
 
-  const playEpisode = async (episodeId: number, start: number | null): Promise<void> => {
+  const playEpisode = async (
+    episodeId: number,
+    start: number | null,
+    held = false,
+  ): Promise<void> => {
     const at = slotOf(episodeId);
     if (!at) throw new Error("no such episode");
     const from = Math.max(0, Math.min(lengthOf(at.seriesId, episodeId), start ?? 0));
-    await open(episodeId, at.seriesId, from);
+    await open(episodeId, at.seriesId, from, held);
   };
 
   return {
@@ -747,6 +805,7 @@ export function createMockShows(host: MoviePlayerHost) {
         watched: isWatched(seriesId),
         position: null,
         duration: null,
+        playedAt: null,
       };
     },
 
@@ -761,6 +820,14 @@ export function createMockShows(host: MoviePlayerHost) {
         positions.delete(episodeId);
       }
       marksVersion++;
+      return episodeMarks(at.seriesId, episodeId);
+    },
+
+    continueEntries,
+
+    marksOf: (episodeId: number): MarksDto => {
+      const at = slotOf(episodeId);
+      if (!at) throw new Error("no such episode");
       return episodeMarks(at.seriesId, episodeId);
     },
 

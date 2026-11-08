@@ -116,3 +116,22 @@ test("a catalogue refresh forgets the marks kept this session and reads the list
   assert.equal(s.revision, before.revision + 1);
   assert.equal(s.selected, before.selected, "the open title stays open");
 });
+test("choosing a rail item marks the selection as chosen", () => {
+  let s = initialMovies("list");
+  assert.equal(s.chosen, false);
+  s = moviesReducer(s, { type: "movies/select", id: MOVIE_FAVOURITES });
+  assert.equal(s.chosen, true);
+});
+test("a mark carries the place into the open and playing titles", () => {
+  let s = initialMovies("list");
+  s = moviesReducer(s, { type: "movies/selectMovie", movie: movie(1) });
+  s = moviesReducer(s, { type: "movies/playing", movie: movie(1) });
+  s = moviesReducer(s, {
+    type: "movies/marked",
+    marks: marks(1, { favourite: false, watched: false, position: 40, duration: 100, playedAt: 5 }),
+  });
+  assert.equal(s.selected.position, 40);
+  assert.equal(s.selected.duration, 100);
+  assert.equal(s.selected.playedAt, 5);
+  assert.equal(s.playing.position, 40);
+});

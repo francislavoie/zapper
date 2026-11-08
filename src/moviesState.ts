@@ -55,6 +55,9 @@ export interface MoviesState {
   /** Bumped when what a list holds may have changed (a mark, a sync), so
    *  the lists read again. */
   revision: number;
+  /** Whether the owner has chosen a rail item, as opposed to the tab's own
+   *  first one: Continue watching takes over only the latter. */
+  chosen: boolean;
 }
 
 export function initialMovies(view: MoviesView): MoviesState {
@@ -74,6 +77,7 @@ export function initialMovies(view: MoviesView): MoviesState {
     marks: {},
     menu: null,
     revision: 0,
+    chosen: false,
   };
 }
 
@@ -101,12 +105,29 @@ export function isMoviesAction(a: { type: string }): a is MoviesAction {
 }
 
 const patch = (m: MovieDto | null, k: MarksDto): MovieDto | null =>
-  m && m.movieId === k.id ? { ...m, favourite: k.favourite, watched: k.watched } : m;
+  m && m.movieId === k.id
+    ? {
+        ...m,
+        favourite: k.favourite,
+        watched: k.watched,
+        position: k.position,
+        duration: k.duration,
+        playedAt: k.playedAt,
+      }
+    : m;
 
 export function moviesReducer(s: MoviesState, a: MoviesAction): MoviesState {
   switch (a.type) {
     case "movies/select":
-      return { ...s, selection: a.id, query: "", selected: null, sheetId: null, menu: null };
+      return {
+        ...s,
+        selection: a.id,
+        query: "",
+        selected: null,
+        sheetId: null,
+        menu: null,
+        chosen: true,
+      };
     case "movies/sort":
       return { ...s, sort: a.sort, menu: null };
     case "movies/years":
@@ -134,6 +155,7 @@ export function moviesReducer(s: MoviesState, a: MoviesAction): MoviesState {
           ...s,
           summary: a.value,
           selection: MOVIE_RECENT,
+          chosen: false,
           query: "",
           selected: null,
           sheetId: null,

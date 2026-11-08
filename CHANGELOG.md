@@ -22,6 +22,7 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
   Cancel. It keeps your audio and subtitle languages.
 - Movies and episodes play in the browser through the recording service, converted on the fly when
   the browser can't play the file. Text subtitles included.
+- Browsers signed in to the recording service share the app's Continue watching list.
 - Off-air channels: when the provider sends a placeholder clip instead of the broadcast, zapper
   says so and suggests channels showing the same programmes. Recordings retry until the broadcast
   starts.

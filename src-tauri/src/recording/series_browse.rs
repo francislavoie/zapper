@@ -39,14 +39,14 @@ pub fn still_path(id: i64) -> String {
 }
 
 /// Swaps a show's provider poster for this service's address for it.
-fn local_series(s: &mut SeriesDto) {
+pub(super) fn local_series(s: &mut SeriesDto) {
     if s.poster_url.is_some() {
         s.poster_url = Some(poster_path(s.series_id));
     }
 }
 
 /// Swaps an episode's provider still for this service's address for it.
-fn local_episode(e: &mut EpisodeDto) {
+pub(super) fn local_episode(e: &mut EpisodeDto) {
     if e.still_url.is_some() {
         e.still_url = Some(still_path(e.episode_id));
     }
@@ -312,7 +312,10 @@ pub fn routes<S: Clone + Send + Sync + 'static>() -> Router<S> {
         .route("/api/vod/series/{id}", get(details))
         .route("/api/vod/series/{id}/marks", put(set_marks))
         .route("/api/vod/episodes/{id}", get(episode))
-        .route("/api/vod/episodes/{id}/marks", put(set_episode_marks))
+        .route(
+            "/api/vod/episodes/{id}/marks",
+            get(super::continue_browse::episode_marks).put(set_episode_marks),
+        )
         .route("/api/vod/episodes/{id}/progress", put(save_progress))
         .route("/api/poster/series/{id}", get(poster))
         .route("/api/backdrop/series/{id}/{n}", get(backdrop))
