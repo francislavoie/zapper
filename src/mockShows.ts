@@ -52,7 +52,7 @@ const RECENT_TOTAL = 120;
 const DAY = 86_400;
 /** What an episode with no length of its own runs for, in the player. */
 const MOCK_EPISODE_SECS = 2700;
-/** The in-progress and watched fractions (catalog/vod_progress.rs). */
+/** The in-progress and watched fractions (catalog/vod_progress.rs; mirrors logic/resume.ts). */
 const STARTED_FRACTION = 0.01;
 const WATCHED_FRACTION = 0.92;
 
@@ -263,11 +263,11 @@ const lengthOf = (seriesId: number, e: number) => durationOf(seriesId, e) ?? MOC
 // -------------------------------------------------------------------- state
 
 const favourites = new Set<number>();
-/** Episode id → when it became watched (an order, not a time). */
+/** Episode id → when it became watched (tick order, not a time; see `watchedWhen` for seconds). */
 const watchedAt = new Map<number, number>();
 /** Episode id → where it was left, seconds from the start. */
 const positions = new Map<number, number>();
-/** Episode id → when it last played (an order, not a time). */
+/** Episode id → when it last played (tick order, not a time; see `playedWhen` for seconds). */
 const playedAt = new Map<number, number>();
 /** Episode id -> when it last played, unix seconds. */
 const playedWhen = new Map<number, number>();

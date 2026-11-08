@@ -131,6 +131,9 @@ export function focusTarget(
   };
 }
 
+/** Continue watching's id on both tabs: starred, so never a provider category's. */
+export const CONTINUE = "*continue*";
+
 export interface FixedRailItem {
   id: string;
   name: string;

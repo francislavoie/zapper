@@ -71,6 +71,12 @@ test("the line under a title says how far, what is left and when", () => {
   const p = place(46 * 60 + 10, { duration: 121 * 60 + 25 });
   assert.equal(watchedLine(p, yesterdayLate, now), "46m watched · 1h 15m left · yesterday 22:40");
   assert.equal(watchedLine(p, null, now), "46m watched · 1h 15m left");
+  // the clock follows every form of the when: a weekday, a date this year, another year
+  const days = (n, h, m) => new Date(2026, 10, 8 - n, h, m).getTime() / 1000;
+  for (const at of [days(3, 21, 5), days(9, 21, 5), new Date(2025, 9, 28, 21, 5).getTime() / 1000]) {
+    assert.equal(watchedLine(p, at, now), `46m watched · 1h 15m left · ${watchedWhen(at, now)} 21:05`);
+  }
+  assert.match(watchedLine(p, days(9, 21, 5), now), /21:05$/);
   assert.equal(promptLine({ item: { kind: "movie", id: 2 }, title: "A Film", position: 2770, playedAt: yesterdayLate }, now), "You stopped at 46:10, yesterday at 22:40.");
 });
 

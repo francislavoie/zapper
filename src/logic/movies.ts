@@ -12,15 +12,17 @@ import type {
   PlayerStateDto,
 } from "../types";
 import type { Async } from "./async.ts";
-import type { FixedRailItem } from "./railItems.ts";
+import { runtime } from "./format.ts";
+import { CONTINUE, type FixedRailItem } from "./railItems.ts";
 import { progressOf } from "./resume.ts";
 import { isTitleSearch } from "./titleMatch.ts";
+
+/** Lengths are format.ts's; kept importable from here. */
+export { runtime };
 
 export const MOVIE_FAVOURITES = "*favourites*";
 export const MOVIE_RECENT = "*added*";
 export const MOVIE_WATCHED = "*watched*";
-/** Continue watching's id on both tabs (continueWatching.ts's `CONTINUE`). */
-const CONTINUE_ID = "*continue*";
 
 export type MovieRailKind = "favourites" | "recent" | "watched" | "category";
 
@@ -65,7 +67,7 @@ export function fixedMovieItems(
   const first: FixedRailItem[] =
     continueCount === undefined || continueCount === null
       ? []
-      : [{ id: CONTINUE_ID, name: "Continue watching", count: countText(continueCount) }];
+      : [{ id: CONTINUE, name: "Continue watching", count: countText(continueCount) }];
   return [
     ...first,
     { id: MOVIE_FAVOURITES, name: "Favourites", count: countText(s?.favourites) },
@@ -163,14 +165,6 @@ export function movieTitle(
 
 export function movieCount(n: number): string {
   return `${n.toLocaleString()} ${n === 1 ? "movie" : "movies"}`;
-}
-
-/** "52m", "1h 49m", "2h 01m"; nothing for an unknown or zero length. */
-export function runtime(secs: number | null): string {
-  if (!secs || secs <= 0) return "";
-  const minutes = Math.round(secs / 60);
-  if (minutes < 60) return `${minutes}m`;
-  return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, "0")}m`;
 }
 
 /** "2025 · 1h 49m · ★ 7.6", with whatever is unknown left out. */

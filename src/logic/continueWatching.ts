@@ -4,13 +4,13 @@
 // src/__checks__/continueWatching.test.mjs.
 
 import type { ContinueItemDto, ContinueKind } from "../types";
-import { runtime, type PosterCard } from "./movies.ts";
+import { runtime } from "./format.ts";
+import type { PosterCard } from "./movies.ts";
+import { CONTINUE } from "./railItems.ts";
 import { progressOf, timeLeft, watchedWhen, type Place } from "./resume.ts";
 import { episodeCode, episodeTitle } from "./shows.ts";
 
-/** The rail's own item, the same id on both tabs: starred, so never a
- *  provider category's. */
-export const CONTINUE = "*continue*";
+export { CONTINUE };
 
 /** The most the catalogue lists. */
 export const CONTINUE_MAX = 100;
