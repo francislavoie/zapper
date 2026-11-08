@@ -9,7 +9,8 @@
  *
  * Cheap on purpose, because it runs beside playback: one decoder thread,
  * the deblocking filter skipped (invisible at 160x90, and a good part of an
- * H.264 decode), nothing past the first picture decoded or read.
+ * H.264 decode), nothing past the first picture decoded; the rest of the
+ * excerpt is only read, for its timestamps.
  *
  * The picture keeps its shape inside the preview, centred on black, as mpv
  * shows it on screen and as a channel's previews are taken.
@@ -21,6 +22,7 @@
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libswscale/swscale.h>
+#include <math.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -72,17 +74,36 @@ static int shrink(const AVFrame *frame, uint8_t *rgba, int tw, int th) {
     return rows > 0 ? 0 : -1;
 }
 
+/* FNV-1a over a packet's bytes: the same keyframe written into two
+ * excerpts hashes the same, whatever timestamps each was given. */
+static uint64_t fingerprint(const AVPacket *pkt) {
+    uint64_t h = 1469598103934665603ULL;
+    for (int i = 0; i < pkt->size; i++) {
+        h ^= pkt->data[i];
+        h *= 1099511628211ULL;
+    }
+    return h;
+}
+
 /*
  * Decodes the first picture of the video in `path` into `rgba` (tw x th,
- * RGBA, top-down). Returns 0, or a negative number when there is no
- * picture to give.
+ * RGBA, top-down). `key` identifies the keyframe it came from (its bytes'
+ * hash), and `span` is how many seconds of video the excerpt holds from that
+ * picture to its last packet: its group of pictures, or NAN when the file
+ * has no timestamps to say. mpv writes an excerpt's timestamps from zero,
+ * so these are all it can tell about where in the title the picture is.
+ * Returns 0, or a negative number when there is no picture to give.
  */
-int zapper_thumb_decode(const char *path, int tw, int th, uint8_t *rgba) {
+int zapper_thumb_decode(const char *path, int tw, int th, uint8_t *rgba, uint64_t *key,
+                        double *span) {
     AVFormatContext *fmt = NULL;
     AVCodecContext *ctx = NULL;
     AVPacket *pkt = NULL;
     AVFrame *frame = NULL;
-    int ret = -1, got = 0;
+    int ret = -1, got = 0, first = 1;
+    int64_t last = AV_NOPTS_VALUE;
+    *key = 0;
+    *span = NAN;
 
     if (avformat_open_input(&fmt, path, NULL, NULL) < 0)
         return -1;
@@ -107,18 +128,31 @@ int zapper_thumb_decode(const char *path, int tw, int th, uint8_t *rgba) {
     if (!pkt || !frame)
         goto out;
 
-    while (!got && av_read_frame(fmt, pkt) >= 0) {
-        if (pkt->stream_index == vi && avcodec_send_packet(ctx, pkt) >= 0 &&
-            avcodec_receive_frame(ctx, frame) >= 0)
-            got = 1;
+    while (av_read_frame(fmt, pkt) >= 0) {
+        if (pkt->stream_index == vi) {
+            int64_t ts = pkt->pts != AV_NOPTS_VALUE ? pkt->pts : pkt->dts;
+            if (ts != AV_NOPTS_VALUE && (last == AV_NOPTS_VALUE || ts > last))
+                last = ts;
+            if (first) {
+                *key = fingerprint(pkt);
+                first = 0;
+            }
+            if (!got && avcodec_send_packet(ctx, pkt) >= 0 &&
+                avcodec_receive_frame(ctx, frame) >= 0)
+                got = 1;
+        }
         av_packet_unref(pkt);
     }
     /* A decoder that holds pictures back gives the first one when told the
      * excerpt has ended. */
     if (!got && avcodec_send_packet(ctx, NULL) >= 0 && avcodec_receive_frame(ctx, frame) >= 0)
         got = 1;
-    if (got)
+    if (got) {
+        int64_t at = frame->best_effort_timestamp;
+        if (at != AV_NOPTS_VALUE && last != AV_NOPTS_VALUE && last >= at)
+            *span = (double)(last - at) * av_q2d(st->time_base);
         ret = shrink(frame, rgba, tw, th);
+    }
 
 out:
     av_frame_free(&frame);
