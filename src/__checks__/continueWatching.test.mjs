@@ -8,6 +8,7 @@ import {
   continueCard,
   continueCode,
   continueCount,
+  continueShown,
   continueKey,
   continuePlace,
   continueTarget,
@@ -15,6 +16,7 @@ import {
   firstSelection,
   freshOnReturn,
   stripCard,
+  stripShown,
 } from "../logic/continueWatching.ts";
 
 const now = new Date(2026, 10, 8, 12).getTime() / 1000;
@@ -95,4 +97,22 @@ test("counts, first selection and coming back", () => {
   assert.equal(freshOnReturn(null, now), false);
   assert.equal(freshOnReturn(now - 31_000, now), true);
   assert.equal(freshOnReturn(now - 5_000, now), false);
+});
+test("the Continue pane shows while it is chosen and no title search is typed", () => {
+  assert.equal(continueShown(CONTINUE, ""), true);
+  assert.equal(continueShown(CONTINUE, "   "), true, "blank is no search");
+  assert.equal(continueShown(CONTINUE, " | "), true, "only pipes is no search");
+  assert.equal(continueShown(CONTINUE, "a"), false, "a search is the tab's results");
+  assert.equal(continueShown("*added*", ""), false);
+  assert.equal(continueShown("c7", ""), false);
+});
+test("the strip shows over posters only, with entries, no search and room", () => {
+  assert.equal(stripShown("posters", "*added*", "", 3, 700), true);
+  assert.equal(stripShown("list", "*added*", "", 3, 700), false);
+  assert.equal(stripShown("posters", CONTINUE, "", 3, 700), false);
+  assert.equal(stripShown("posters", "*added*", "ni", 3, 700), false);
+  assert.equal(stripShown("posters", "*added*", "", 0, 700), false);
+  assert.equal(stripShown("posters", "*added*", "", 3, 400), false);
+  assert.equal(stripShown("posters", "*added*", "", 3, 480), true);
+  assert.equal(stripShown("posters", "c7", " ", 3, 700), true, "blank is no search");
 });

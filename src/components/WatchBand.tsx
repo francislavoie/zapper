@@ -47,7 +47,8 @@ import {
   widthAfterDrag,
 } from "../logic/videoSize";
 import { useRecordingChannels } from "../hooks/useRecordingChannels";
-import { CONTINUE, listedFor, railItemKind } from "../logic/railItems";
+import { listedFor, railItemKind } from "../logic/railItems";
+import { continueShown } from "../logic/continueWatching";
 import { categoryNames } from "../logic/searchGroups";
 import { RecordingBand } from "./RecordingBand";
 import { bandLayout, type BandItem } from "../logic/band";
@@ -104,9 +105,8 @@ export function WatchBand({ videoRef, picture, upNext }: WatchBandProps) {
   // With Continue watching chosen and nothing typed, the band is about its
   // selected entry: the movie, or an episode's show.
   const tab = inMovies ? app.movies : inShows ? app.shows : null;
-  const continueEntry =
-    tab !== null && tab.selection === CONTINUE && tab.query === "" ? app.continue.selected : null;
-  const inContinue = tab !== null && tab.selection === CONTINUE && tab.query === "";
+  const inContinue = tab !== null && continueShown(tab.selection, tab.query);
+  const continueEntry = inContinue ? app.continue.selected : null;
   const selectedMovie = inContinue
     ? continueEntry?.kind === "movie"
       ? continueEntry.movie

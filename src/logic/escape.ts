@@ -14,6 +14,8 @@ export interface EscapeContext {
   categoryOptions: boolean;
   moviesMenu: boolean;
   showsMenu: boolean;
+  /** A Continue watching entry's menu (continueState.ts). */
+  continueMenu: boolean;
   videoMenu: boolean;
   menuOpen: boolean;
   aboutOpen: boolean;
@@ -49,6 +51,7 @@ export type EscapeStep =
   | "categoryOptions"
   | "moviesMenu"
   | "showsMenu"
+  | "continueMenu"
   | "videoMenu"
   | "menu"
   | "about"
@@ -88,6 +91,7 @@ export function escapeStep(c: EscapeContext, via: "key" | "mouse"): EscapeStep {
   if (c.categoryOptions) return "categoryOptions";
   if (c.moviesMenu) return "moviesMenu";
   if (c.showsMenu) return "showsMenu";
+  if (c.continueMenu) return "continueMenu";
   if (c.videoMenu) return "videoMenu";
   if (c.menuOpen) return "menu";
   if (c.aboutOpen) return "about";

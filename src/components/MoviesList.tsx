@@ -5,6 +5,8 @@
 import { useCallback, useMemo } from "react";
 import { backend } from "../backend";
 import { useSettledSearch } from "../hooks/useSettledSearch";
+import { useStrip } from "../hooks/useStrip";
+import { continueShown } from "../logic/continueWatching";
 import {
   MOVIE_SEARCH_PLACEHOLDER,
   movieCard,
@@ -21,6 +23,7 @@ import type { MoviesMenu } from "../moviesState";
 import { saveMoviesView } from "../moviesView";
 import { useApp, useDispatch } from "../store";
 import type { MovieDto, MovieSort } from "../types";
+import { ContinueList } from "./ContinueList";
 import { MovieRow } from "./MovieRow";
 import { OnDemandList, type Marks } from "./OnDemandList";
 
@@ -28,7 +31,7 @@ import { OnDemandList, type Marks } from "./OnDemandList";
  *  stacked under the picture show the same titles. */
 const MOVIE_PAGES = new PageBook<MovieDto>();
 
-const MOVIE_COLUMNS = ["", "Title", "Year", "Length", "Rating", ""] as const;
+const MOVIE_COLUMNS = ["", "Title", "Year", "Length", "Rating", "Progress", ""] as const;
 const idOf = (m: MovieDto) => m.movieId;
 const withMarks = (m: MovieDto, k: Marks): MovieDto => ({
   ...m,
@@ -53,15 +56,20 @@ export function MoviesList({ besideRail = true }: { besideRail?: boolean }) {
   );
   const listKey = JSON.stringify(query);
   const fetchPage = useCallback(
-    (offset: number, limit: number) => backend.movies(query, offset, limit),
+    (offset: number, limit: number) =>
+      query ? backend.movies(query, offset, limit) : Promise.resolve({ total: 0, items: [] }),
     [query],
   );
 
   // What the list shows, not what is being typed: the two differ for
   // the moment of the pause.
   const searching = isTitleSearch(searched);
+  // Continue watching, until a search there makes it the tab's results.
+  const continuing = continueShown(movies.selection, searched);
   const categories = movies.categories.status === "ready" ? movies.categories.data : [];
   const heading = searching ? "Search results" : movieTitle(movies.selection, categories);
+
+  const above = useStrip("movies", movies.view, movies.selection, searched);
 
   const selectedId = movies.selected?.movieId ?? null;
   const state = useMemo(
@@ -103,28 +111,31 @@ export function MoviesList({ besideRail = true }: { besideRail?: boolean }) {
   );
 
   return (
-    <OnDemandList<MovieDto>
-      besideRail={besideRail}
-      idPrefix="movie"
-      kindClass="movies"
-      colsClass="movie-cols"
-      unavailableLabel="Movies unavailable"
-      listKey={listKey}
-      fetchPage={fetchPage}
-      pages={MOVIE_PAGES}
-      state={state}
-      marks={movies.marks}
-      idOf={idOf}
-      withMarks={withMarks}
-      heading={heading}
-      countLabel={movieCount}
-      placeholder={MOVIE_SEARCH_PLACEHOLDER}
-      emptyNote={emptyNote(movies.selection, searching, searched, movies.years)}
-      columns={MOVIE_COLUMNS}
-      Row={MovieRow}
-      card={movieCard}
-      on={on}
-    />
+    <ContinueList tab="movies" besideRail={besideRail} shown={continuing}>
+      <OnDemandList<MovieDto>
+        besideRail={besideRail}
+        idPrefix="movie"
+        kindClass="movies"
+        colsClass="movie-cols"
+        unavailableLabel="Movies unavailable"
+        listKey={listKey}
+        fetchPage={fetchPage}
+        pages={MOVIE_PAGES}
+        state={state}
+        marks={movies.marks}
+        idOf={idOf}
+        withMarks={withMarks}
+        heading={heading}
+        countLabel={movieCount}
+        placeholder={MOVIE_SEARCH_PLACEHOLDER}
+        emptyNote={emptyNote(movies.selection, searching, searched, movies.years)}
+        above={above}
+        columns={MOVIE_COLUMNS}
+        Row={MovieRow}
+        card={movieCard}
+        on={on}
+      />
+    </ContinueList>
   );
 }
 

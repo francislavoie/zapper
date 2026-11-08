@@ -151,7 +151,7 @@ export class PageBook<T> {
 export interface GoneCheck {
   /** Where the selection was. */
   at: number;
-  id: number;
+  id: number | string;
   /** The list it was in (its query, as the list keys it). */
   key: string;
 }
@@ -165,7 +165,7 @@ export interface GoneCheck {
 export function selectionGone<T>(
   check: GoneCheck,
   now: {
-    selectedId: number | null;
+    selectedId: number | string | null;
     key: string;
     loading: boolean;
     error: string | null;
@@ -173,7 +173,7 @@ export function selectionGone<T>(
     fresh: (index: number) => boolean;
     freshRows: () => readonly T[];
   },
-  idOf: (t: T) => number,
+  idOf: (t: T) => number | string,
 ): "wait" | "drop" | "present" | "gone" {
   if (now.selectedId !== check.id || now.key !== check.key || now.error) return "drop";
   if (now.loading || !now.fresh(0)) return "wait";

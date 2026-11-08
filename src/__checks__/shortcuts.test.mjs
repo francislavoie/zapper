@@ -75,6 +75,14 @@ test("N goes to Shows, where the app has on-demand", () => {
   assert.ok(keysSource.includes('e.key === "n"'), "N is handled");
 });
 
+test("W goes to Continue watching, where the app has on-demand", () => {
+  const w = SHORTCUT_GROUPS.flatMap((g) => g.items).find((it) => it.keys.some((c) => c.includes("W")));
+  assert.ok(w, "W is listed");
+  assert.equal(w.does, "Continue watching");
+  assert.equal(w.needs, "onDemand");
+  assert.ok(keysSource.includes('e.key === "w"'), "W is handled");
+});
+
 test("rows read cleanly: something to press and something it does", () => {
   for (const g of SHORTCUT_GROUPS) {
     assert.ok(g.items.length > 0, g.title);

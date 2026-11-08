@@ -295,3 +295,23 @@ test("a show's details: what a view shows", () => {
   assert.deepEqual(detailsShown(7, 2, 0, undefined, mine(1, ready("x"))), { status: "loading" });
   assert.deepEqual(detailsShown(7, 2, 1, undefined, mine(2, ready("x"), 0)), { status: "loading" });
 });
+test("Continue watching is never a category: searched, it is the whole tab's search; else nothing is asked", () => {
+  const CONTINUE = "*continue*";
+  assert.equal(showRailKind(CONTINUE), "all");
+  assert.deepEqual(showQuery(CONTINUE, "rating", { from: 2010, to: 2019 }, " a "), {
+    list: "all",
+    categoryId: null,
+    sort: "rating",
+    yearFrom: 2010,
+    yearTo: 2019,
+    search: "a",
+  });
+  assert.equal(showQuery(CONTINUE, "added", null, ""), null);
+  assert.equal(showQuery(CONTINUE, "added", null), null);
+  for (const search of ["", " ", "|", "a", "Harbour Lights"]) {
+    const q = showQuery(CONTINUE, "az", null, search);
+    assert.ok(q === null || q.categoryId === null, `search ${JSON.stringify(search)}`);
+    assert.ok(!JSON.stringify(q).includes(CONTINUE), `search ${JSON.stringify(search)}`);
+  }
+  assert.equal(showTitle(CONTINUE, []), "Continue watching");
+});

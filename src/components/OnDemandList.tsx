@@ -24,6 +24,7 @@ import {
   useState,
   type ComponentType,
   type KeyboardEvent,
+  type ReactNode,
 } from "react";
 import { searchInputRegistration } from "../focus";
 import { useClock } from "../hooks/useClock";
@@ -49,6 +50,12 @@ import { PosterGrid } from "./PosterGrid";
 import { RailToggle } from "./Rail";
 import { SearchField } from "./SearchField";
 
+/** A row's identity: a title's id, or a Continue watching entry's key. */
+export type RowKey = number | string;
+
+/** Where a menu opens, in window pixels. */
+export type MenuAt = { x: number; y: number };
+
 /** What a list row is given, whatever kind of title it draws. */
 export interface VodRowProps<T> {
   item: T;
@@ -64,6 +71,8 @@ export interface VodRowProps<T> {
   now: number;
   onSelect: (t: T, i: number) => void;
   onOpen: (t: T, i: number) => void;
+  /** A right-click on it, where the list has a menu for its titles. */
+  onMenu?: (t: T, i: number, at: MenuAt) => void;
 }
 
 /** What a title's marks say: Movies also take the place left. */
@@ -109,13 +118,13 @@ export interface OnDemandListProps<T> {
     years: YearRange | null;
     menu: MoviesMenu | null;
     revision: number;
-    selectedId: number | null;
+    selectedId: RowKey | null;
     /** The title the player has open, marked in its row. */
-    playingId?: number | null;
+    playingId?: RowKey | null;
   };
   /** The latest marks the service reported, by id, over what a page holds. */
-  marks: Readonly<Record<number, Marks>>;
-  idOf: (t: T) => number;
+  marks: Readonly<Record<RowKey, Marks>>;
+  idOf: (t: T) => RowKey;
   withMarks: (t: T, k: Marks) => T;
   heading: string;
   countLabel: (n: number) => string;
@@ -123,10 +132,19 @@ export interface OnDemandListProps<T> {
   emptyNote: string;
   /** The .list-cols labels, an empty string for an unlabelled column. */
   columns: readonly string[];
+  /** Drawn between the header and the list, in the posters view only: what
+   *  sits above the grid. A function is given the pane's height. */
+  above?: ReactNode | ((paneHeight: number) => ReactNode);
   /** Memoised; it keeps its render while its props do. */
   Row: ComponentType<VodRowProps<T>>;
   /** What a poster card draws; the same function from render to render. */
   card: (t: T, now: number) => PosterCard;
+  /** A list in an order of its own: said in place of the sort and years
+   *  menus, which it does not have. */
+  fixedOrder?: string;
+  /** A title's menu: a right-click on its row or card, or the ContextMenu
+   *  key or Shift+F10 on the one selected (`fromKeyboard`). */
+  onMenu?: (t: T, at: MenuAt, fromKeyboard: boolean) => void;
   on: {
     select(t: T): void;
     /** A click on a title, where it does more than the keys' selection
@@ -173,6 +191,8 @@ function sameRow(a: object, b: object): boolean {
 export function OnDemandList<T extends object>(p: OnDemandListProps<T>) {
   const { state, on, idOf, withMarks, Row } = p;
   const viewportRef = useRef<HTMLDivElement | null>(null);
+  const paneRef = useRef<HTMLElement | null>(null);
+  const [paneHeight, setPaneHeight] = useState(0);
   const sortRef = useRef<HTMLButtonElement | null>(null);
   const yearsRef = useRef<HTMLButtonElement | null>(null);
   const searchRef = useMemo(searchInputRegistration, []);
@@ -195,7 +215,7 @@ export function OnDemandList<T extends object>(p: OnDemandListProps<T>) {
   // The patched row is kept per title, so a marked title is the same object
   // from one render to the next and its memoised row is not redrawn.
   const marks = p.marks;
-  const patched = useRef(new Map<number, { from: T; marks: Marks; row: T }>());
+  const patched = useRef(new Map<RowKey, { from: T; marks: Marks; row: T }>());
   const rowAt = useCallback(
     (i: number): T | undefined => {
       const m = paged.rowAt(i);
@@ -222,6 +242,17 @@ export function OnDemandList<T extends object>(p: OnDemandListProps<T>) {
     const el = viewportRef.current;
     if (!el) return;
     const measure = () => setSize({ width: el.clientWidth, height: el.clientHeight });
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const el = paneRef.current;
+    if (!el) return;
+    const measure = () => setPaneHeight(el.clientHeight);
     measure();
     if (typeof ResizeObserver === "undefined") return;
     const ro = new ResizeObserver(measure);
@@ -272,6 +303,20 @@ export function OnDemandList<T extends object>(p: OnDemandListProps<T>) {
     cursor.current = index;
     onRef.current.open(t);
   }, []);
+  // A right-click selects the title it is on, then opens its menu.
+  const menuRef = useRef(p.onMenu);
+  menuRef.current = p.onMenu;
+  const selectedRef = useRef(state.selectedId);
+  selectedRef.current = state.selectedId;
+  const onRowMenu = useCallback(
+    (t: T, index: number, at: MenuAt) => {
+      cursor.current = index;
+      if (idOf(t) !== selectedRef.current) onRef.current.select(t);
+      menuRef.current?.(t, at, false);
+    },
+    [idOf],
+  );
+  const rowMenu = p.onMenu ? onRowMenu : undefined;
 
   /** The index the keys move from: the one last moved to while its row is
    *  still on its way, else wherever the selected title is. */
@@ -298,10 +343,17 @@ export function OnDemandList<T extends object>(p: OnDemandListProps<T>) {
   // shown; the pages around it are read again, and the answer waits for
   // them (logic/pagedRows.ts `selectionGone`).
   const goneCheck = useRef<GoneCheck | null>(null);
-  const seenRevision = useRef(state.revision);
+  const seen = useRef({ revision: state.revision, key: listKey });
   useEffect(() => {
-    if (seenRevision.current === state.revision) return;
-    seenRevision.current = state.revision;
+    const was = seen.current;
+    seen.current = { revision: state.revision, key: listKey };
+    if (was.revision === state.revision) return;
+    // Another list in the same render (Continue watching into a search, a
+    // new category) is not this one read again: nothing to look for.
+    if (was.key !== listKey) {
+      goneCheck.current = null;
+      return;
+    }
     const at = selectedId === null || !on.gone ? -1 : currentIndex();
     goneCheck.current = at >= 0 && selectedId !== null ? { at, id: selectedId, key: listKey } : null;
     if (goneCheck.current) {
@@ -309,7 +361,7 @@ export function OnDemandList<T extends object>(p: OnDemandListProps<T>) {
       paged.ensure(around[0], around[around.length - 1] + 1);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.revision]);
+  }, [state.revision, listKey]);
   useEffect(() => {
     const g = goneCheck.current;
     if (!g) return;
@@ -337,6 +389,18 @@ export function OnDemandList<T extends object>(p: OnDemandListProps<T>) {
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (p.onMenu && (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10"))) {
+      const at = currentIndex();
+      const t = at >= 0 ? rowAt(at) : undefined;
+      if (t === undefined) return;
+      e.preventDefault();
+      e.stopPropagation();
+      // Under the selected row or card, where it is drawn.
+      const el = document.getElementById(`${idPrefix}-${idOf(t)}`) ?? viewportRef.current;
+      const box = el?.getBoundingClientRect();
+      p.onMenu(t, { x: (box?.left ?? 0) + 24, y: box?.bottom ?? 0 }, true);
+      return;
+    }
     if (e.key === "Enter") {
       if (selectedId !== null) {
         e.preventDefault();
@@ -468,6 +532,7 @@ export function OnDemandList<T extends object>(p: OnDemandListProps<T>) {
           now={now}
           onSelect={onSelect}
           onOpen={onOpen}
+          onMenu={rowMenu}
         />,
       );
     }
@@ -476,7 +541,7 @@ export function OnDemandList<T extends object>(p: OnDemandListProps<T>) {
   const empty = total === 0 && !loading && !error;
 
   return (
-    <main className={`list-pane ${p.kindClass}-pane`}>
+    <main className={`list-pane ${p.kindClass}-pane`} ref={paneRef}>
       <div className="list-head">
         {p.besideRail ? <RailToggle /> : null}
         <span className="list-title" data-tip-overflow="">
@@ -494,34 +559,40 @@ export function OnDemandList<T extends object>(p: OnDemandListProps<T>) {
           clearLabel="Clear search"
         />
         <span className="spring" />
-        <button
-          className={`movies-menu-btn ${state.menu?.kind === "sort" ? "on" : ""}`}
-          ref={sortRef}
-          aria-haspopup="menu"
-          aria-expanded={state.menu?.kind === "sort"}
-          aria-label={`Sort: ${MOVIE_SORT_LABEL[state.sort]}`}
-          data-tip="Sort"
-          onClick={() => openMenu("sort", sortRef.current)}
-        >
-          {MOVIE_SORT_LABEL[state.sort]}
-          <ChevronDown className="movies-menu-i" />
-        </button>
-        <button
-          className={`movies-menu-btn years-menu ${state.years ? "set" : ""} ${state.menu?.kind === "years" ? "on" : ""}`}
-          ref={yearsRef}
-          aria-haspopup="menu"
-          aria-expanded={state.menu?.kind === "years"}
-          aria-label={`Years: ${yearLabel}`}
-          data-tip="Years"
-          onClick={() => openMenu("years", yearsRef.current)}
-        >
-          {/* In a narrowed list, "Years" stands in for "All years". */}
-          <span className="years-label">{yearLabel}</span>
-          <span className="years-short" aria-hidden>
-            Years
-          </span>
-          <ChevronDown className="movies-menu-i" />
-        </button>
+        {p.fixedOrder !== undefined ? (
+          <span className="list-order">{p.fixedOrder}</span>
+        ) : (
+          <>
+            <button
+              className={`movies-menu-btn ${state.menu?.kind === "sort" ? "on" : ""}`}
+              ref={sortRef}
+              aria-haspopup="menu"
+              aria-expanded={state.menu?.kind === "sort"}
+              aria-label={`Sort: ${MOVIE_SORT_LABEL[state.sort]}`}
+              data-tip="Sort"
+              onClick={() => openMenu("sort", sortRef.current)}
+            >
+              {MOVIE_SORT_LABEL[state.sort]}
+              <ChevronDown className="movies-menu-i" />
+            </button>
+            <button
+              className={`movies-menu-btn years-menu ${state.years ? "set" : ""} ${state.menu?.kind === "years" ? "on" : ""}`}
+              ref={yearsRef}
+              aria-haspopup="menu"
+              aria-expanded={state.menu?.kind === "years"}
+              aria-label={`Years: ${yearLabel}`}
+              data-tip="Years"
+              onClick={() => openMenu("years", yearsRef.current)}
+            >
+              {/* In a narrowed list, "Years" stands in for "All years". */}
+              <span className="years-label">{yearLabel}</span>
+              <span className="years-short" aria-hidden>
+                Years
+              </span>
+              <ChevronDown className="movies-menu-i" />
+            </button>
+          </>
+        )}
         <div className="view-switch" role="tablist" aria-label="View">
           {(
             [
@@ -550,6 +621,8 @@ export function OnDemandList<T extends object>(p: OnDemandListProps<T>) {
         </div>
       )}
 
+      {posters ? (typeof p.above === "function" ? p.above(paneHeight) : (p.above ?? null)) : null}
+
       {error ? (
         <div className="pane-error">
           <span>
@@ -569,6 +642,9 @@ export function OnDemandList<T extends object>(p: OnDemandListProps<T>) {
         aria-activedescendant={selectedShown ? `${idPrefix}-${selectedId}` : undefined}
         tabIndex={0}
         onKeyDown={onKeyDown}
+        // The menu key's own event lands on the list: its menu is the
+        // selected title's (onKeyDown), not the browser's.
+        onContextMenu={p.onMenu ? (e) => e.preventDefault() : undefined}
         onScroll={(e) => {
           const top = e.currentTarget.scrollTop;
           // Quantised to the row grid, as the channel list's is: only which
@@ -591,6 +667,7 @@ export function OnDemandList<T extends object>(p: OnDemandListProps<T>) {
               now={now}
               onSelect={onSelect}
               onOpen={onOpen}
+              onMenu={rowMenu}
             />
           ) : (
             rows
@@ -599,7 +676,7 @@ export function OnDemandList<T extends object>(p: OnDemandListProps<T>) {
         {empty ? <div className="pane-note">{p.emptyNote}</div> : null}
       </div>
 
-      {state.menu ? (
+      {state.menu && p.fixedOrder === undefined ? (
         <ContextMenu
           x={state.menu.x}
           y={state.menu.y}

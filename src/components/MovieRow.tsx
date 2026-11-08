@@ -4,6 +4,7 @@
 
 import { memo } from "react";
 import { movieBadges, runtime } from "../logic/movies";
+import { progressOf, timeLeft } from "../logic/resume";
 import { LIST_ROW_HEIGHT } from "../logic/virtual";
 import type { MovieDto } from "../types";
 import type { VodRowProps } from "./OnDemandList";
@@ -20,6 +21,13 @@ export const MovieRow = memo(function MovieRow({
   onOpen,
 }: VodRowProps<MovieDto>) {
   const badges = movieBadges(movie, now);
+  const place = {
+    watched: movie.watched,
+    position: movie.position ?? null,
+    duration: movie.duration ?? null,
+    durationSecs: movie.durationSecs,
+  };
+  const progress = progressOf(place);
   return (
     // Not a button: the list is one focus stop and the arrow keys move the
     // selection inside it, so a row must not take focus away when it is
@@ -47,6 +55,16 @@ export const MovieRow = memo(function MovieRow({
       <span className="movie-year">{movie.year ?? ""}</span>
       <span className="movie-length">{runtime(movie.durationSecs)}</span>
       <span className="movie-rating">{movie.rating !== null ? `★ ${movie.rating.toFixed(1)}` : ""}</span>
+      <span className="movie-progress">
+        {progress !== null ? (
+          <>
+            <span className="movie-progress-bar" aria-hidden>
+              <span style={{ width: `${Math.round(progress * 100)}%` }} />
+            </span>
+            <span className="movie-progress-left">{timeLeft(place)}</span>
+          </>
+        ) : null}
+      </span>
       <span className="movie-marks">
         {movie.watched ? (
           <span className="movie-mark watched" data-tip="Watched" aria-label="Watched">

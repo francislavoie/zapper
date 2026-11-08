@@ -5,10 +5,11 @@
 
 import type { ContinueItemDto, ContinueKind } from "../types";
 import { runtime } from "./format.ts";
-import type { PosterCard } from "./movies.ts";
+import type { MoviesView, PosterCard } from "./movies.ts";
 import { CONTINUE } from "./railItems.ts";
 import { progressOf, timeLeft, watchedWhen, type Place } from "./resume.ts";
 import { episodeCode, episodeTitle } from "./shows.ts";
+import { isTitleSearch } from "./titleMatch.ts";
 
 export { CONTINUE };
 
@@ -36,6 +37,12 @@ export function firstSelection(
   items: number,
 ): string | null {
   return !chosen && selection === recent && items > 0 ? CONTINUE : null;
+}
+
+/** Whether a tab shows the Continue pane: chosen in its rail, and no title
+ *  search typed there (a search is the whole tab's results instead). */
+export function continueShown(selection: string, search: string): boolean {
+  return selection === CONTINUE && !isTitleSearch(search);
 }
 
 /** "movie:7", "show:12": a show is one entry whichever episode it is at. */
@@ -138,4 +145,29 @@ export function stripCard(i: ContinueItemDto, now: number): StripCard {
 /** "1 title", "4 titles". */
 export function continueCount(n: number): string {
   return `${n.toLocaleString()} ${n === 1 ? "title" : "titles"}`;
+}
+
+/** The pane narrower than this has no room for a strip above the posters. */
+export const STRIP_MIN_PANE_PX = 480;
+/** A strip card's width: 16:9 art. */
+export const STRIP_CARD_WIDTH = 240;
+
+/** Whether the strip of Continue watching cards is drawn above the posters:
+ *  in Posters view, not on Continue watching itself, with no title search
+ *  typed, with something to show, and a pane tall enough to leave the
+ *  posters room. */
+export function stripShown(
+  view: MoviesView,
+  selection: string,
+  query: string,
+  items: number,
+  paneHeight: number,
+): boolean {
+  return (
+    view === "posters" &&
+    !continueShown(selection, query) &&
+    !isTitleSearch(query) &&
+    items > 0 &&
+    paneHeight >= STRIP_MIN_PANE_PX
+  );
 }
