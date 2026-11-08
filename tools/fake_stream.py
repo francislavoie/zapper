@@ -58,7 +58,9 @@ keep-alive) has it kept until it closes it, unless told otherwise:
 as many servers do with a connection nobody has used for a while. It is the
 connection's socket timeout, so it also cuts off a client that stops reading
 for that long in the middle of a file or a channel. /keepalive says the
-timeout and how many idle connections it has closed.
+timeout and how many idle connections it has closed. /vodopens says how many
+times a movie or episode file was asked for from its first byte: an open (or
+a reopen), as a seek asks for a range further in.
 
 Made-up series (also needs the movie fixtures):
 
@@ -129,6 +131,8 @@ class Handler(BaseHTTPRequestHandler):
     series = 0
     # Close a movie or episode file's connection after this fraction of it (0: off).
     vod_cut_at = 0.0
+    # Movie and episode files asked for from their first byte, for /vodopens.
+    vod_opens = 0
     # Answer every live stream with placeholder.ts, all at once, then close.
     placeholder = False
     # ...only while this file exists: deleting it puts the channel on the air.
@@ -187,6 +191,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if name == "keepalive":
             self._json({"timeout": Handler.timeout or 0, "idleClosed": Handler.idle_closed})
+            return
+        if name == "vodopens":
+            self._json({"opens": Handler.vod_opens})
             return
         if name == "streaming/timeshift.php":
             self._timeshift()
@@ -356,6 +363,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             start, end = span
             status = 206
+        if start == 0:
+            with Handler.lock:
+                Handler.vod_opens += 1
         # The first byte this server won't send.
         stop = end + 1
         cut = Handler.vod_cut_at > 0
