@@ -8,6 +8,8 @@
 
 /** What is open, as far as unwinding it goes. */
 export interface EscapeContext {
+  /** The "Find subtitles…" dialog. */
+  findSubtitles: boolean;
   programmeMenu: boolean;
   favouriteMenu: boolean;
   categoryMenu: boolean;
@@ -45,6 +47,7 @@ export interface EscapeContext {
 }
 
 export type EscapeStep =
+  | "findSubtitles"
   | "programmeMenu"
   | "favouriteMenu"
   | "categoryMenu"
@@ -83,6 +86,9 @@ export type EscapeStep =
  *  search (a search is not a screen), and with nothing open it goes to the
  *  screen before rather than into the player. */
 export function escapeStep(c: EscapeContext, via: "key" | "mouse"): EscapeStep {
+  // The subtitle finder is on top of everything: it is opened from a menu
+  // that has closed by then, over the player.
+  if (c.findSubtitles) return "findSubtitles";
   // The menus first: whichever is open was opened last, since none of them
   // can be opened from behind another.
   if (c.programmeMenu) return "programmeMenu";

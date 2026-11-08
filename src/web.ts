@@ -376,6 +376,8 @@ export const webBackend: typeof api = {
   updateInstall: notHere,
   updateRestart: notHere,
   updateOpenPage: notHere,
+  // The page's own link opens in the browser.
+  openOpenSubtitlesSignUp: notHere,
 
   recordings: () => get<RecordingDto[]>("/api/recordings"),
   recordProgramme: (req: ScheduleRequest) => post<RecordingDto>("/api/recordings", req),

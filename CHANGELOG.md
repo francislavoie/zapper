@@ -12,6 +12,8 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
 ### Added
 
 - **Continue watching** (`W`): pick up movies and shows where you left off, in the app and the browser. Opening one you left partway asks whether to resume or start over, and movies show a progress bar.
+- **Settings › Online services**: a switch for OpenSubtitles with a line on what it sends, the
+  languages to search in, and signing in or out of your OpenSubtitles account.
 - **Movies**: a tab (`M`) for an Xtream account's or a playlist's movies. Browse by category as a
   list or posters, sort, filter by year, search, mark favourites and watched, and open a details
   sheet.
@@ -31,6 +33,7 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
 - Recordings shows the free space on the recordings disk.
 - Radio channels (sound, no picture) play.
 - A subtitles button on the player, remembered across channels and restarts (`C`).
+- **Find subtitles…** for movies and episodes, from OpenSubtitles.com, added to the player at once.
 - The mouse's back and forward buttons move between screens, and sheets have a Back button.
 
 ### Changed

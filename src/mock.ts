@@ -15,6 +15,7 @@ import { parsePort, passwordProblem } from "./logic/network";
 import { afterChoosing, openChoice, type SubtitlePreference } from "./logic/subtitles";
 import { createMockContinue } from "./mockContinue";
 import { createMockMovies } from "./mockMovies";
+import { createMockOnline } from "./mockOnline";
 import { createMockShows } from "./mockShows";
 import type {
   AccountCandidateDto,
@@ -1604,7 +1605,14 @@ const mockShows = createMockShows({
 /** Continue watching: the two catalogues' places, merged. */
 const mockContinue = createMockContinue(mockMovies, mockShows);
 
+/** OpenSubtitles, on the same player options. */
+const mockOnline = createMockOnline({
+  options: () => optionsEmitter.last,
+  patch: patchOptions,
+});
+
 export const mockApi = {
+  ...mockOnline,
   categories: async () => {
     await delay(120);
     return getCatalog().categories;
@@ -2467,6 +2475,9 @@ export const mockApi = {
     (globalThis as Record<string, unknown>).__mockRestarted = true;
   },
 
+  openOpenSubtitlesSignUp: async () => {
+    (globalThis as Record<string, unknown>).__openedSignUp = true;
+  },
   updateOpenPage: async () => {
     if (updateEmitter.last.state.state === "notConfigured") {
       throw "Updates aren't configured for this build, so there's no release page to open.";

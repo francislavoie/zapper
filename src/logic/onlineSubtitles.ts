@@ -14,6 +14,7 @@
 
 import type {
   KeptSubtitleDto,
+  OpenSubtitlesStatusDto,
   SubtitleDownloadDto,
   SubtitleResultDto,
   SubtitleSearchDto,
@@ -184,6 +185,23 @@ export function searchNotice(s: SubtitleSearchDto, _now: number): string | null 
 
 const sameDay = (a: number, b: number) =>
   new Date(a * 1000).toDateString() === new Date(b * 1000).toDateString();
+
+/** Whether there is a sign-in to use: one OpenSubtitles refused is not one,
+ *  whoever it names. */
+export const isSignedIn = (s: OpenSubtitlesStatusDto): boolean =>
+  s.signedInAs !== null && !s.signInRefused;
+
+/** Settings' line on the signed-in account and the downloads it has left. */
+export function signInLine(s: OpenSubtitlesStatusDto, now: number): string {
+  const who = `Signed in as ${s.signedInAs}`;
+  if (s.downloadsLeft === null) return who;
+  if (s.downloadsLeft > 0) {
+    return `${who} · ${s.downloadsLeft} ${s.downloadsLeft === 1 ? "download" : "downloads"} left today`;
+  }
+  if (s.downloadsResetAt === null) return `${who} · no downloads left today`;
+  const when = sameDay(s.downloadsResetAt, now) ? hhmm(s.downloadsResetAt) : dateTime(s.downloadsResetAt);
+  return `${who} · no downloads left until ${when}`;
+}
 
 /** What a download says when it didn't give a subtitle. */
 export function downloadNotice(d: SubtitleDownloadDto, now: number): string | null {

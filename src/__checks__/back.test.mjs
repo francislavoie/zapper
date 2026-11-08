@@ -20,6 +20,7 @@ import {
 } from "../logic/navHistory.ts";
 
 const nothing = {
+  findSubtitles: false,
   programmeMenu: false,
   favouriteMenu: false,
   categoryMenu: false,
@@ -50,6 +51,20 @@ test("a menu goes before the sheet under it, and the sheet before the player", (
   assert.equal(escapeStep(c, "mouse"), "showsMenu");
   assert.equal(escapeStep({ ...c, showsMenu: false }, "mouse"), "showSheet");
   assert.equal(escapeStep(open({ mode: "watch", playing: true }), "mouse"), "browse");
+});
+
+test("the subtitle finder over the player is closed alone, by either", () => {
+  // Opened from the picture's menu, which has closed: the dialog is all
+  // that is open over the full player.
+  const c = open({ findSubtitles: true, mode: "watch", playing: true });
+  assert.equal(escapeStep(c, "key"), "findSubtitles");
+  assert.equal(escapeStep(c, "mouse"), "findSubtitles");
+  // Over everything else too: it is the top-most thing there is.
+  const all = open({ findSubtitles: true, videoMenu: true, settingsOpen: true, fullscreen: true, mode: "watch", playing: true });
+  assert.equal(escapeStep(all, "key"), "findSubtitles");
+  assert.equal(escapeStep(all, "mouse"), "findSubtitles");
+  // Once it is closed, the next step is the player's, not before.
+  assert.equal(escapeStep({ ...c, findSubtitles: false }, "mouse"), "browse");
 });
 
 test("with nothing open, back goes through the history; Escape goes to the picture", () => {
@@ -149,6 +164,7 @@ test("Escape unwinds everything, one press each, in the order it was stacked", (
   // Everything open at once, over the full player in fullscreen with a
   // search typed: each press takes the top one off.
   const order = [
+    ["findSubtitles", "findSubtitles"],
     ["programmeMenu", "programmeMenu"],
     ["favouriteMenu", "favouriteMenu"],
     ["categoryMenu", "categoryMenu"],

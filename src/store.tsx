@@ -100,14 +100,15 @@ export interface CategoryMenu {
  *  in useGlobalKeys.
  *
  *  `only` is the menu narrowed to one of its submenus, opened from a control
- *  rather than a right-click: the transport bar's audio button and its moon.
+ *  rather than a right-click: the transport bar's audio button, its moon,
+ *  and its subtitles button on a title with no subtitles to show.
  *  `anchor` is that control, so a second press on it closes the menu rather
  *  than closing and reopening it; `keyboard` when it was pressed from the
  *  keyboard, so the menu takes focus. */
 export interface VideoMenu {
   x: number;
   y: number;
-  only?: "audio" | "sleep";
+  only?: "audio" | "sleep" | "subtitles";
   anchor?: HTMLElement | null;
   keyboard?: boolean;
   /** Opens upwards from `y`: from a control at the bottom of the picture. */

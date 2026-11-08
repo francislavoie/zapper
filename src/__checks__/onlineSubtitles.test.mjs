@@ -10,6 +10,8 @@ import {
   downloadNotice,
   downloadTrackTitle,
   findHeading,
+  isSignedIn,
+  signInLine,
   offeredDownloads,
   resultLine,
   searchLanguages,
@@ -17,7 +19,7 @@ import {
   toSearchLanguage,
   trackLanguage,
 } from "../logic/onlineSubtitles.ts";
-import { dateTime, setTimeFormat } from "../logic/format.ts";
+import { dateTime, hhmm, setTimeFormat } from "../logic/format.ts";
 
 const at = (h, m, day = 4) => new Date(2027, 2, day, h, m).getTime() / 1000;
 const NOW = at(12, 0);
@@ -157,4 +159,141 @@ test("findHeading", () => {
     "Show 0001 · S1 E2",
   );
   assert.equal(findHeading(null, null), "");
+});
+
+// ---- the finder's state (src/onlineSubtitles.ts)
+import {
+  clearKept, closeFindSubtitles, currentFind, keptChanged, keptFor, loadKept, openFindSubtitles,
+  currentServices, loadServices, setKeptSource, setServices, setServicesSource,
+} from "../onlineSubtitles.ts";
+
+test("the finder opens on a title and closes", () => {
+  assert.equal(currentFind(), null);
+  openFindSubtitles({ kind: "movie", id: 7 });
+  assert.deepEqual(currentFind(), { kind: "movie", id: 7 });
+  closeFindSubtitles();
+  assert.equal(currentFind(), null);
+});
+test("the kept cache is keyed by kind and id, and kept for 20 titles", async () => {
+  clearKept();
+  const calls = [];
+  setKeptSource(async (kind, id) => {
+    calls.push(`${kind}:${id}`);
+    return [{ fileId: id, language: "en", release: kind, hearingImpaired: false, downloadedAt: 1 }];
+  });
+  await loadKept({ kind: "movie", id: 7 });
+  await loadKept({ kind: "episode", id: 7 });
+  await loadKept({ kind: "movie", id: 7 });
+  assert.deepEqual(calls, ["movie:7", "episode:7"]);
+  assert.equal(keptFor({ kind: "movie", id: 7 })[0].release, "movie");
+  assert.equal(keptFor({ kind: "episode", id: 7 })[0].release, "episode");
+  keptChanged({ kind: "movie", id: 7 });
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(calls.length, 3);
+  for (let i = 100; i < 120; i++) await loadKept({ kind: "movie", id: i });
+  assert.equal(keptFor({ kind: "movie", id: 7 }), undefined);
+  assert.ok(keptFor({ kind: "movie", id: 119 }));
+  setKeptSource();
+  clearKept();
+});
+
+const deferred = () => {
+  let resolve;
+  const promise = new Promise((r) => (resolve = r));
+  return { promise, resolve };
+};
+const kept1 = (release) => [{ fileId: 1, language: "en", release, hearingImpaired: false, downloadedAt: 1 }];
+
+test("a slow earlier read landing after a newer one is dropped", async () => {
+  clearKept();
+  const slow = deferred();
+  const fast = deferred();
+  const queue = [slow, fast];
+  setKeptSource(() => queue.shift().promise);
+  const t = { kind: "movie", id: 5 };
+  const first = loadKept(t);
+  const second = loadKept(t, true);
+  fast.resolve(kept1("new"));
+  await second;
+  slow.resolve(kept1("old"));
+  await first;
+  assert.equal(keptFor(t)[0].release, "new");
+  setKeptSource();
+  clearKept();
+});
+test("reads of one title at the same time share one request", async () => {
+  clearKept();
+  let calls = 0;
+  const d = deferred();
+  setKeptSource(() => (calls++, d.promise));
+  const t = { kind: "episode", id: 9 };
+  const a = loadKept(t);
+  const b = loadKept(t);
+  d.resolve(kept1("x"));
+  await Promise.all([a, b]);
+  assert.equal(calls, 1);
+  setKeptSource();
+  clearKept();
+});
+
+const services = (user) => ({
+  openSubtitles: { enabled: true, languages: [], signedInAs: user, signInRefused: false, downloadsLeft: null, downloadsResetAt: null },
+});
+test("a settings read still in flight does not overwrite a newer answer", async () => {
+  const d = deferred();
+  setServicesSource(() => d.promise);
+  const load = loadServices();
+  setServices(services("tester"));
+  d.resolve(services(null));
+  await load;
+  assert.equal(currentServices().data.openSubtitles.signedInAs, "tester");
+  setServicesSource();
+});
+
+// ---- Settings › Online services: the sign-in line
+
+const status = (over) => ({
+  enabled: true,
+  languages: [],
+  signedInAs: "tester",
+  signInRefused: false,
+  downloadsLeft: null,
+  downloadsResetAt: null,
+  ...over,
+});
+
+test("the sign-in line counts what is left, in the singular for one", () => {
+  const now = at(9, 0);
+  assert.equal(signInLine(status({}), now), "Signed in as tester");
+  assert.equal(
+    signInLine(status({ downloadsLeft: 17 }), now),
+    "Signed in as tester · 17 downloads left today",
+  );
+  assert.equal(
+    signInLine(status({ downloadsLeft: 1 }), now),
+    "Signed in as tester · 1 download left today",
+  );
+});
+
+test("with none left, the line says when there will be more", () => {
+  setTimeFormat("24h");
+  const now = at(9, 0);
+  assert.equal(
+    signInLine(status({ downloadsLeft: 0, downloadsResetAt: at(18, 30) }), now),
+    `Signed in as tester · no downloads left until ${hhmm(at(18, 30))}`,
+  );
+  assert.equal(
+    signInLine(status({ downloadsLeft: 0, downloadsResetAt: at(18, 30, 5) }), now),
+    `Signed in as tester · no downloads left until ${dateTime(at(18, 30, 5))}`,
+  );
+  assert.equal(
+    signInLine(status({ downloadsLeft: 0 }), now),
+    "Signed in as tester · no downloads left today",
+  );
+});
+
+test("a sign-in OpenSubtitles refused is not a sign-in, whoever it names", () => {
+  assert.equal(isSignedIn(status({})), true);
+  assert.equal(isSignedIn(status({ signInRefused: true })), false);
+  assert.equal(isSignedIn(status({ signedInAs: null })), false);
 });
