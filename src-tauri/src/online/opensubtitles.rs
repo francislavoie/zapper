@@ -341,10 +341,20 @@ pub(crate) fn utc_seconds(s: &str) -> Option<i64> {
                 b'-' => -1,
                 _ => return None,
             };
-            let (h, m) = rest[1..]
-                .split_once(':')
-                .unwrap_or((rest.get(1..3)?, rest.get(3..)?));
-            let (h, m): (i64, i64) = (h.parse().ok()?, m.parse().ok()?);
+            // `+HH:MM`, `+HHMM` or `+HH`, and nothing longer.
+            let digits = rest[1..].replacen(':', "", 1);
+            if !matches!(digits.len(), 2 | 4) || !digits.bytes().all(|c| c.is_ascii_digit()) {
+                return None;
+            }
+            let h: i64 = digits[..2].parse().ok()?;
+            let m: i64 = if digits.len() == 4 {
+                digits[2..].parse().ok()?
+            } else {
+                0
+            };
+            if h > 23 || m > 59 {
+                return None;
+            }
             sign * (h * 3600 + m * 60)
         }
     };
@@ -550,6 +560,10 @@ impl Client {
         token: &str,
         file_id: i64,
     ) -> Result<Link, OnlineError> {
+        // Without a token the answer is known: nothing is sent.
+        if token.trim().is_empty() {
+            return Err(OnlineError::SignInNeeded);
+        }
         let base = self.token_base(api_base);
         let body = serde_json::json!({ "file_id": file_id, "sub_format": "srt" });
         let req = self
@@ -601,6 +615,9 @@ impl Client {
 
     /// Ends the sign-in's token; best effort.
     pub async fn logout(&self, api_base: &str, token: &str) {
+        if token.trim().is_empty() {
+            return;
+        }
         let base = self.token_base(api_base);
         let req = self
             .api(self.http.delete(format!("{base}/logout")))
@@ -774,6 +791,17 @@ mod tests {
             utc_seconds("2026-11-08T14:00:00+02:00"),
             Some(1_794_139_200)
         );
+        assert_eq!(utc_seconds("2026-11-08T10:30:00-0130"), Some(1_794_139_200));
+        assert_eq!(utc_seconds("2026-11-08T14:00:00+02"), Some(1_794_139_200));
+        // An offset that is no offset is refused, never overflowed.
+        assert_eq!(
+            utc_seconds("2026-11-08T12:00:00+99999999999999999:00"),
+            None
+        );
+        assert_eq!(utc_seconds("2026-11-08T12:00:00+3074457345618258:00"), None);
+        assert_eq!(utc_seconds("2026-11-08T12:00:00+24:00"), None);
+        assert_eq!(utc_seconds("2026-11-08T12:00:00+02:60"), None);
+        assert_eq!(utc_seconds("2026-11-08T12:00:00+"), None);
         assert_eq!(utc_seconds("2026-11-08 12:00:00"), Some(1_794_139_200));
         assert_eq!(utc_seconds("soon"), None);
     }
@@ -973,13 +1001,20 @@ mod tests {
         ));
         // A base that is not OpenSubtitles' is not sent the token: the
         // client's own base is used instead.
-        let _ = c
-            .download_link(
-                "https://files.example.net/api/v1",
-                "fake-os-token-1",
-                7000001,
-            )
-            .await;
+        let elsewhere = "https://files.example.net/api/v1";
+        assert!(!token_host_allowed(elsewhere, &base));
+        let _ = c.download_link(elsewhere, "fake-os-token-1", 7000001).await;
+        assert_eq!(server.requests().len(), 3);
+        assert!(server.requests()[2].path.starts_with("/api/v1/download"));
+
+        // No token, no request.
+        for blank in ["", "  "] {
+            assert!(matches!(
+                c.download_link(&base, blank, 7000001).await,
+                Err(OnlineError::SignInNeeded)
+            ));
+            c.logout(&base, blank).await;
+        }
         assert_eq!(server.requests().len(), 3);
     }
 
@@ -997,7 +1032,10 @@ mod tests {
             .unwrap();
         assert_eq!(bytes, SRT.as_bytes());
         let r = &server.requests()[0];
-        assert_eq!(r.header("api-key"), None);
+        assert!(
+            r.header("api-key").is_none(),
+            "the file link was sent the app's key"
+        );
         assert_eq!(r.header("authorization"), None);
         assert!(r
             .header("user-agent")
@@ -1014,10 +1052,13 @@ mod tests {
                 .await,
             Err(OnlineError::Refused(404))
         ));
-        assert!(c
-            .fetch_file("https://files.example.net/7000001.srt")
-            .await
-            .is_err());
+        // Refused before any request is built.
+        let elsewhere = "https://files.example.net/7000001.srt";
+        assert!(!file_link_allowed(elsewhere, c.base()));
+        assert!(matches!(
+            c.fetch_file(elsewhere).await,
+            Err(OnlineError::Invalid(_))
+        ));
         assert_eq!(server.requests().len(), 3, "the other host was never asked");
     }
 
@@ -1093,6 +1134,25 @@ mod tests {
         }
         assert!(started.elapsed() < Duration::from_secs(1));
         assert_eq!(server.requests().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn waits_add_up_to_no_more_than_max_wait() {
+        // A 2 s wait for a turn, then a 4 s Retry-After: each fits in
+        // MAX_WAIT, both together do not, so the 429 is answered Busy.
+        let server = serve(|_, _| Reply::new(429, "").header("Retry-After", "4"));
+        let pacer = Pacer::new(10, 1, Duration::from_secs(2));
+        assert_eq!(pacer.admit(Instant::now()), Admit::Go);
+        let c = Client::at_with(&api(&server.base), pacer);
+        let started = Instant::now();
+        assert!(matches!(
+            c.search(&film()).await,
+            Err(OnlineError::Busy { .. })
+        ));
+        let took = started.elapsed();
+        assert!(took >= Duration::from_millis(1900), "{took:?}");
+        assert!(took < Duration::from_secs(4), "{took:?}");
+        assert_eq!(server.requests().len(), 1, "the 429 was not retried");
     }
 
     #[tokio::test]
