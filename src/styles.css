@@ -7956,6 +7956,9 @@ html[data-backend="web"] {
   color: var(--dim);
   text-align: right;
   white-space: nowrap;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
 }
 
 .ep-check {
@@ -8019,12 +8022,6 @@ html[data-backend="web"] {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.ep-len {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
 }
 
 .ep-left {
