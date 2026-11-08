@@ -372,7 +372,17 @@ impl<'t> SeriesWriter<'t> {
                    episode_count=CASE WHEN series.name IS excluded.name
                                        AND series.tmdb_id IS excluded.tmdb_id
                                       THEN series.episode_count END,
-                   tmdb_id=excluded.tmdb_id, deleted_at=NULL",
+                   tmdb_id=excluded.tmdb_id, deleted_at=NULL
+                 -- As the movies': a show listed as it was is left alone.
+                 WHERE series.deleted_at IS NOT NULL
+                    OR series.category_id IS NOT excluded.category_id
+                    OR series.name IS NOT excluded.name
+                    OR series.clean_name IS NOT excluded.clean_name
+                    OR series.year IS NOT excluded.year
+                    OR series.rating IS NOT excluded.rating
+                    OR series.poster_url IS NOT excluded.poster_url
+                    OR (?8 IS NOT NULL AND series.added IS NOT ?8)
+                    OR series.tmdb_id IS NOT excluded.tmdb_id",
             )?
             .execute(params![
                 s.series_id,
@@ -464,7 +474,10 @@ impl<'t> SeriesWriter<'t> {
             )?;
         }
         vod_sync::record_origin(conn, SERIES_ORIGIN, &origin)?;
-        conn.execute("UPDATE series SET added = ?1 WHERE added = 0", [now])?;
+        conn.execute(
+            "UPDATE series SET added = ?1 WHERE added = 0 AND deleted_at IS NULL",
+            [now],
+        )?;
         let mut soft_delete =
             conn.prepare_cached("UPDATE series SET deleted_at=?1 WHERE series_id=?2")?;
         for gone in existing.difference(&seen) {
@@ -704,6 +717,38 @@ mod tests {
             r.get(0)
         })
         .unwrap()
+    }
+
+    #[test]
+    fn a_show_listed_as_it_was_is_not_written_again() {
+        let c = open_in_memory().unwrap();
+        let (cats, mut shows) = three();
+        land_series(&c, &cats, &shows, 100).unwrap();
+        c.execute("UPDATE series SET deleted_at = 150 WHERE series_id = 3", [])
+            .unwrap();
+        let upserts = |shows: &[NewSeries]| -> (Vec<u64>, SyncStats) {
+            let tx = c.unchecked_transaction().unwrap();
+            let mut w = SeriesWriter::begin(&tx).unwrap();
+            w.categories.extend(&cats);
+            let mut changed = Vec::new();
+            for s in shows {
+                w.push_series(s, None).unwrap();
+                changed.push(tx.changes());
+            }
+            let landed = w.finish(200).unwrap();
+            tx.commit().unwrap();
+            (changed, landed.stats)
+        };
+        let (changed, s) = upserts(&shows);
+        assert_eq!(changed, [0, 0, 1]);
+        assert_eq!((s.inserted, s.updated, s.deleted), (1, 2, 0));
+        let (changed, s) = upserts(&shows);
+        assert_eq!(changed, [0, 0, 0]);
+        assert_eq!((s.inserted, s.updated, s.deleted), (0, 3, 0));
+        shows[2].name = "Three Again".into();
+        let (changed, s) = upserts(&shows);
+        assert_eq!(changed, [0, 0, 1]);
+        assert_eq!((s.inserted, s.updated, s.deleted), (0, 3, 0));
     }
 
     #[test]
