@@ -6,6 +6,7 @@ import { test } from "node:test";
 import { setTimeFormat } from "../logic/format.ts";
 import {
   nextStart,
+  playsOnReopen,
   progressOf,
   promptLine,
   promptStep,
@@ -139,4 +140,17 @@ test("the next episode starts where it was left, while in progress", () => {
   assert.equal(nextStart(marks({ position: 0.5 }), null), 0);           // under 1 %
   assert.equal(nextStart(marks({ duration: null }), 120), 60);           // the listed length
   assert.equal(nextStart(marks({ duration: null }), null), 0);           // no length known
+});
+
+test("a reading opened again plays as the picture did, and a held title stays paused", () => {
+  const at = (o) => ({ started: true, paused: false, ended: false, wantPlay: true, ...o });
+  // Held for the question, before its first frame: it stays paused.
+  assert.equal(playsOnReopen(at({ started: false, paused: true, wantPlay: false })), false);
+  assert.equal(playsOnReopen(at({ started: false, paused: null, wantPlay: false })), false);
+  // Not started yet, asked to play: plays.
+  assert.equal(playsOnReopen(at({ started: false, paused: true, wantPlay: true })), true);
+  assert.equal(playsOnReopen(at({})), true);                                       // playing
+  assert.equal(playsOnReopen(at({ paused: true, wantPlay: true })), false);        // paused
+  assert.equal(playsOnReopen(at({ paused: true, ended: true, wantPlay: false })), true); // ran out
+  assert.equal(playsOnReopen(at({ paused: null, wantPlay: false })), true);        // no element
 });
