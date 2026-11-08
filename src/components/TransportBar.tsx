@@ -43,7 +43,7 @@ import { duration, liveState } from "../logic/format";
 import { SKIP_SECONDS } from "../logic/gestures";
 import { playingKind } from "../logic/movies";
 import { hasAudioChoice, selectedLabel } from "../logic/tracks";
-import { VOD_SKIP_SECONDS, vodLabel } from "../logic/vodTransport";
+import { VOD_SKIP_SECONDS, isOnDemandKind, vodLabel } from "../logic/vodTransport";
 import { run, useApp, useDispatch } from "../store";
 import { useSleepLeft } from "../hooks/useSleep";
 import {
@@ -127,9 +127,9 @@ export function TransportBar({
   // must not second-guess it from behindLive, which sawtooths by seconds
   // during ordinary playback — that is precisely the flicker.
   const live = liveState(player.atLiveEdge, player.behindLive);
-  // A movie has a start and an end instead of a live edge: its own seek bar,
-  // longer skips, a position readout, and no Live button.
-  const movie = playingKind(player) === "movie" ? player.onDemand : null;
+  // A movie or an episode has a start and an end instead of a live edge: its
+  // own seek bar, longer skips, a position readout, and no Live button.
+  const movie = isOnDemandKind(playingKind(player)) ? player.onDemand : null;
   const skip = movie ? VOD_SKIP_SECONDS : SKIP_SECONDS;
   const seekBy = (by: number) => void run(dispatch, "seek", backend.seekRelative(by));
 

@@ -24,10 +24,28 @@ test("a retried movie resumes where the player was", () => {
   assert.equal(retryStart({ onDemand: null }), null);
 });
 
+test("a retried episode resumes where the player was, as a movie does", () => {
+  const at = (position) => ({ onDemand: { kind: "episode", id: 7, position, duration: 3120 } });
+  assert.equal(retryStart(at(845)), 845);
+  assert.equal(retryStart(at(0)), null);
+});
+
 test("retry replays a movie by its id and a channel by its stream", () => {
   assert.equal(retryTarget({ streamId: null, onDemand: { kind: "movie", id: 3 } }), "movie");
   assert.equal(retryTarget({ streamId: 9, onDemand: null }), "channel");
   assert.equal(retryTarget({ streamId: null, onDemand: null }), "none");
+});
+
+test("retry replays an episode by its id, not the channel last on", () => {
+  assert.equal(
+    retryTarget({
+      state: "ended",
+      streamId: null,
+      onDemand: { kind: "episode", id: 7, position: 845, duration: 3120, bufferedTo: null },
+    }),
+    "episode",
+  );
+  assert.equal(retryTarget({ streamId: 9, onDemand: { kind: "episode", id: 7 } }), "episode");
 });
 
 const failed = (ending, error = "the stream ended") => ({ state: "failed", ending, error });

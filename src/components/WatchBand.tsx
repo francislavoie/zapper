@@ -21,7 +21,7 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import { playChannel, showChannelCategory, showChannelInGuide } from "../actions";
+import { playChannel, setEpisodeWatched, showChannelCategory, showChannelInGuide } from "../actions";
 import { endedMessage, startingLine } from "../logic/ending";
 import { chordLabel } from "../logic/keys";
 import { IS_MAC } from "../platform";
@@ -50,6 +50,7 @@ import { listedFor, railItemKind } from "../logic/railItems";
 import { categoryNames } from "../logic/searchGroups";
 import { RecordingBand } from "./RecordingBand";
 import { moviesAvailable, playingKind } from "../logic/movies";
+import { episodeLine } from "../logic/shows";
 import { run, useApp, useDispatch } from "../store";
 import { MovieBand, PlayingEnd } from "./MovieBand";
 import { Fullscreen, ResizeHandle, Stop } from "./icons";
@@ -58,7 +59,7 @@ import { StreamEnded } from "./StreamEnded";
 import { Alternatives } from "./Alternatives";
 import { usePlayerRecord } from "../hooks/usePlayerRecord";
 import { PlayerRecordLine } from "./PlayerRecord";
-import type { ChannelDto, ProgrammeDto } from "../types";
+import type { ChannelDto, PlayingEpisodeDto, ProgrammeDto } from "../types";
 
 export interface WatchBandProps {
   /** The transparent hole mpv is told to draw into. */
@@ -88,13 +89,15 @@ export function WatchBand({ videoRef, picture }: WatchBandProps) {
   const recordingChannel = useRecordingChannels(recordingList).get(recording?.streamId ?? -1) ?? null;
 
   // Which body the band has, first match: the picked recording; in the
-  // Movies tab the selected movie; a movie that is playing; the channel.
+  // Movies tab the selected movie; a movie that is playing; an episode that
+  // is playing; the channel.
   // Choosing a movie to look at changes this and nothing else — the picture
   // beside it is whatever was already on.
   const inMovies = app.section === "movies" && moviesAvailable(app.movies.summary);
   const selectedMovie = inMovies ? app.movies.selected : null;
   const movieOpen = playingKind(player) === "movie";
   const openMovieId = player.onDemand?.kind === "movie" ? player.onDemand.id : null;
+  const episodeOpen = playingKind(player) === "episode";
 
   const live = player.state !== "stopped";
   const toWatch = () => dispatch({ type: "mode", mode: "watch" });
@@ -191,6 +194,23 @@ export function WatchBand({ videoRef, picture }: WatchBandProps) {
             <>
               <div className="watch-body">
                 <h2 className="watch-title-h">Playing a movie</h2>
+              </div>
+              <div className="watch-actions">
+                <PlayingEnd />
+              </div>
+            </>
+          )
+        ) : episodeOpen ? (
+          app.shows.playing ? (
+            <EpisodeBand
+              key={app.shows.playing.episode.episodeId}
+              playing={app.shows.playing}
+            />
+          ) : (
+            // Open, but not looked up yet: still stoppable.
+            <>
+              <div className="watch-body">
+                <h2 className="watch-title-h">Playing an episode</h2>
               </div>
               <div className="watch-actions">
                 <PlayingEnd />
@@ -569,6 +589,37 @@ function Playing({
             <Stop className="i" />
           </button>
         </span>
+      </div>
+    </>
+  );
+}
+
+/** The episode the player has open: its show, "S2 E4 · Night Shift · 52m",
+ *  its plot, and the actions of what is playing. */
+function EpisodeBand({ playing }: { playing: PlayingEpisodeDto }) {
+  const dispatch = useDispatch();
+  const { series, episode } = playing;
+  return (
+    <>
+      <div className="watch-body movie-band">
+        <h2 className="watch-title-h movie-band-title" data-tip-overflow={series.name}>
+          {series.cleanName}
+        </h2>
+        <p className="movie-band-facts">{episodeLine(episode)}</p>
+        {episode.plot ? (
+          <p className="watch-desc movie-band-plot" data-tip-overflow="">
+            {episode.plot}
+          </p>
+        ) : null}
+      </div>
+      <div className="watch-actions">
+        <button
+          className="ctl"
+          onClick={() => void setEpisodeWatched(dispatch, episode, !episode.watched)}
+        >
+          {episode.watched ? "Mark unwatched" : "Mark watched"}
+        </button>
+        <PlayingEnd />
       </div>
     </>
   );

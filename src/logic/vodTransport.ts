@@ -1,16 +1,25 @@
-// The numbers behind a movie's transport: its times, where a click on the
-// seek bar lands, and how much of the bar is played and read ahead. Pure;
-// checked in src/__checks__/vodTransport.test.mjs.
+// The numbers behind a movie's transport — an episode's too: its times, where
+// a click on the seek bar lands, and how much of the bar is played and read
+// ahead. Pure; checked in src/__checks__/vodTransport.test.mjs.
 //
 // Position and duration arrive rounded to whole seconds, so the readout moves
 // once a second and never shows a fraction.
 
 import type { OnDemandDto } from "../types";
 import { clock } from "./format.ts";
+import type { playingKind } from "./movies.ts";
 
-/** What the skip buttons, ←/→ and the picture's side zones move a movie by,
- *  and what the icons say. A film is long, so the step is longer than a
- *  channel's. */
+/** Whether what the player has open is a title (a movie or an episode)
+ *  rather than a channel: a start and an end instead of a live edge, so the
+ *  title's seek bar, longer skips, a click that pauses, and no Live or
+ *  Record. */
+export function isOnDemandKind(k: ReturnType<typeof playingKind>): boolean {
+  return k === "movie" || k === "episode";
+}
+
+/** What the skip buttons, ←/→ and the picture's side zones move a movie or
+ *  an episode by, and what the icons say. A title is long, so the step is
+ *  longer than a channel's. */
 export const VOD_SKIP_SECONDS = 10;
 
 /** The three times of the readout. Total and remaining are empty while the

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   VOD_SKIP_SECONDS,
   bufferedFraction,
+  isOnDemandKind,
   playedFraction,
   seekTarget,
   vodLabel,
@@ -35,4 +36,11 @@ test("fills: played and buffered as fractions", () => {
 
 test("a movie skips ten seconds", () => {
   assert.equal(VOD_SKIP_SECONDS, 10);
+});
+
+test("a movie and an episode get the on-demand transport; a channel and nothing do not", () => {
+  assert.equal(isOnDemandKind("movie"), true);
+  assert.equal(isOnDemandKind("episode"), true);
+  assert.equal(isOnDemandKind("channel"), false);
+  assert.equal(isOnDemandKind(null), false);
 });

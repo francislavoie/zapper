@@ -4,6 +4,7 @@
 
 import { playingKind } from "../logic/movies";
 import { playerRecord, type PlayerRecord } from "../logic/recordings";
+import { isOnDemandKind } from "../logic/vodTransport";
 import { useApp } from "../store";
 import { useClock } from "./useClock";
 
@@ -12,7 +13,6 @@ export function usePlayerRecord(): PlayerRecord | null {
   const now = useClock(15_000);
   // A movie or an episode has no programme to record; the channel last
   // browsed is not it.
-  const kind = playingKind(player);
-  if (player.state === "stopped" || kind === "movie" || kind === "episode") return null;
+  if (player.state === "stopped" || isOnDemandKind(playingKind(player))) return null;
   return playerRecord(recordings, nowChannel, nowProgramme, now);
 }

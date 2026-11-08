@@ -17,7 +17,7 @@ import { blocksPlainKey, shortcutModifier } from "../logic/keys";
 import { moviesAvailable, playingKind } from "../logic/movies";
 import { ALL_CATEGORIES, railItemKind } from "../logic/railItems";
 import { playerRecord } from "../logic/recordings";
-import { VOD_SKIP_SECONDS } from "../logic/vodTransport";
+import { VOD_SKIP_SECONDS, isOnDemandKind } from "../logic/vodTransport";
 import { IS_MAC } from "../platform";
 import { run } from "../store";
 import type { State } from "../store";
@@ -198,7 +198,8 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
 
       // The rest only mean anything with a stream open.
       if (state.player.state === "stopped") return;
-      const movie = playingKind(state.player) === "movie";
+      // A movie or an episode: longer skips, and no live edge or programme.
+      const movie = isOnDemandKind(playingKind(state.player));
 
       // Theater: the picture filling the window, without going fullscreen
       // (that is F). YouTube's key for the same idea, so the hand already
@@ -238,7 +239,7 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
           break;
         case "l":
         case "L":
-          // A movie has no live edge.
+          // A movie or an episode has no live edge.
           if (movie) break;
           e.preventDefault();
           void run(dispatch, "seek to live", backend.seekLive());

@@ -108,3 +108,10 @@ test("a browser lists the player's keys but not mpv's or the window's, and the a
     assert.ok(!cannotDo.includes(gone), gone);
   }
 });
+
+test("the arrows' step names both kinds of title", () => {
+  const does = SHORTCUT_GROUPS.flatMap((g) => g.items)
+    .filter((it) => it.keys.some((c) => c[0] === "←"))
+    .map((it) => it.does);
+  assert.ok(does.includes("Back or forward 5 seconds (10 in a movie or episode)"), does.join("; "));
+});

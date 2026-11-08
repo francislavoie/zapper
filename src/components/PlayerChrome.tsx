@@ -4,7 +4,8 @@
 //
 // On a channel click does not pause. That is a VOD idiom and it misfires
 // constantly on live TV, where the click you meant for the window lands on
-// the stream. A movie is the VOD case: there a click toggles pause.
+// the stream. A movie or an episode is the VOD case: there a click toggles
+// pause.
 //
 // The bottom bar is TransportBar, which the docked picture uses too — see
 // that file for the order of the row and why. What is only here: the way
@@ -21,7 +22,8 @@ import { toggleFullscreen } from "../fullscreen";
 import { endedMessage, startingLine } from "../logic/ending";
 import { measuredLine } from "../logic/format";
 import { movieFacts, playingKind } from "../logic/movies";
-import { VOD_SKIP_SECONDS } from "../logic/vodTransport";
+import { episodeLine } from "../logic/shows";
+import { VOD_SKIP_SECONDS, isOnDemandKind } from "../logic/vodTransport";
 import { atScreenEdge } from "../logic/fade";
 import { volumeAfterWheel } from "../logic/volume";
 import { run, useApp, useDispatch } from "../store";
@@ -36,9 +38,24 @@ import { VideoFeedback } from "./VideoFeedback";
 import { PictureCorner } from "./PictureCorner";
 
 export function PlayerChrome() {
-  const { player, nowChannel, stacked, zoom, movies } = useApp();
-  const isMovie = playingKind(player) === "movie";
-  const movie = isMovie ? movies.playing : null;
+  const { player, nowChannel, stacked, zoom, movies, shows } = useApp();
+  const kind = playingKind(player);
+  // A movie or an episode: the title's transport, steps and click.
+  const isMovie = isOnDemandKind(kind);
+  const movie = kind === "movie" ? movies.playing : null;
+  const episode = kind === "episode" ? shows.playing : null;
+  // The title and the line beneath it: the movie's name and facts; the
+  // show's name and "S2 E4 · Night Shift · 52m"; else the channel's name and
+  // what is on.
+  const title = movie
+    ? { tip: movie.name, text: movie.cleanName, line: movieFacts(movie) }
+    : episode
+      ? { tip: episode.series.name, text: episode.series.cleanName, line: episodeLine(episode.episode) }
+      : {
+          tip: nowChannel?.name ?? "",
+          text: nowChannel?.cleanName ?? "Nothing playing",
+          line: nowChannel?.nowPlaying?.title ?? "no guide data",
+        };
   const dispatch = useDispatch();
   // Offered only when the window can actually take the layout. Below that the
   // control is absent rather than present and cramped.
@@ -59,7 +76,8 @@ export function PlayerChrome() {
       .catch((err: unknown) => dispatch({ type: "toast", text: `fullscreen: ${String(err)}` }));
 
   const gestures = useVideoGestures({
-    // A movie has no live edge to be held back by: forward always seeks.
+    // A movie or an episode has no live edge to be held back by: forward
+    // always seeks.
     atLiveEdge: isMovie ? false : player.atLiveEdge,
     muted: player.muted,
     onFullscreen: toggle,
@@ -84,7 +102,7 @@ export function PlayerChrome() {
         // A click on a paused picture resumes it. On a channel only that way
         // round: a click never pauses there (see logic/gestures.ts), so this
         // cannot misfire on live TV — the worst a stray click does is what
-        // was wanted. A movie's click toggles.
+        // was wanted. A movie's or an episode's click toggles.
         if (player.state !== "paused" && !(isMovie && player.state === "playing")) return;
         if ((e.target as HTMLElement).closest(".chrome-top, .chrome-bottom")) return;
         on({ type: "activity" });
@@ -136,18 +154,8 @@ export function PlayerChrome() {
         </button>
 
         <div className="chrome-title">
-          <h2 data-tip-overflow={movie ? movie.name : (nowChannel?.name ?? "")}>
-            {movie ? movie.cleanName : (nowChannel?.cleanName ?? "Nothing playing")}
-          </h2>
-          <p>
-            {starting
-              ? starting
-              : ended
-                ? ended.title
-                : movie
-                  ? movieFacts(movie)
-                  : (nowChannel?.nowPlaying?.title ?? "no guide data")}
-          </p>
+          <h2 data-tip-overflow={title.tip}>{title.text}</h2>
+          <p>{starting ? starting : ended ? ended.title : title.line}</p>
         </div>
 
         {/* The honest numbers, in the corner of the picture. The channel name
