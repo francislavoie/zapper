@@ -61,9 +61,9 @@ export function fixedMovieItems(s: MoviesSummaryDto | null): FixedRailItem[] {
   ];
 }
 
-/** The search box's placeholder: what it searches, the syntax in brief, and
- *  the key that gets there (as logic/searchQuery.ts says it for channels). */
-export const MOVIE_SEARCH_PLACEHOLDER = "Search movies  ·  a|b for either    /";
+/** The search box's placeholder: what it searches, the syntax in
+ *  brief (the key that gets there is the box's key hint). */
+export const MOVIE_SEARCH_PLACEHOLDER = "Search movies  ·  a|b for either";
 
 export const MOVIE_SORTS: readonly MovieSort[] = ["added", "az", "year", "rating"];
 

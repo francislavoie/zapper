@@ -355,6 +355,7 @@ export function MoviesList({ besideRail = true }: { besideRail?: boolean }) {
           className="list-search"
           inputRef={searchRef}
           placeholder={MOVIE_SEARCH_PLACEHOLDER}
+          keyHint="/"
           value={movies.query}
           onChange={(text) => dispatch({ type: "movies/query", text })}
           clearLabel="Clear search"
