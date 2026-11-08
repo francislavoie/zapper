@@ -10,6 +10,8 @@
 // other; a viewer is never cut off for it, so it waits — docs/recording.md),
 // with the two ways out, and a channel whose sound is left out. A movie
 // gives the connection up when paused for a while, so its note says so.
+// What else goes wrong there with no control to say it (a downloaded
+// subtitle file that can't be read) is said once, as a toast.
 
 import { useEffect, useSyncExternalStore, type MutableRefObject } from "react";
 import { backend } from "../backend";
@@ -17,7 +19,7 @@ import { playChannel } from "../actions";
 import { hhmm } from "../logic/format";
 import { noticeText } from "../logic/webPlayback";
 import { run, useApp, useDispatch } from "../store";
-import { attachVideo, noticeFeed, type WebNotice } from "../webPlayer";
+import { attachVideo, noticeFeed, sayFeed, type WebNotice } from "../webPlayer";
 
 export interface WebVideoProps {
   /** Where useVideoRect paints the picture's place. */
@@ -25,7 +27,12 @@ export interface WebVideoProps {
 }
 
 export function WebVideo({ planeRef }: WebVideoProps) {
+  const dispatch = useDispatch();
   useEffect(() => () => attachVideo(null), []);
+  useEffect(
+    () => sayFeed.on((m) => m && dispatch({ type: "toast", text: m.text })),
+    [dispatch],
+  );
   return (
     <>
       <video

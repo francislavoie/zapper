@@ -12,6 +12,8 @@ import {
   carriedIndex,
   cueTimes,
   fileCueWindow,
+  fileReadCounts,
+  FILE_READ_TRIES,
   movedAt,
   needsData,
   openDue,
@@ -263,4 +265,12 @@ test("drops more than a minute apart start the count over", () => {
   assert.equal(r.fail, false);
   // One still inside the minute, one out: reopened.
   assert.deepEqual(reopenDue([1_000, 30_000], 62_000), { keep: [30_000], fail: false });
+});
+
+test("a file the service doesn't keep, or fails to read, counts toward giving up", () => {
+  assert.equal(fileReadCounts(404), true);
+  for (const status of [500, 502, 503, 504]) assert.equal(fileReadCounts(status), true);
+  // Read, or signed out (asked again once signed in): never.
+  for (const status of [200, 401, 403, 429]) assert.equal(fileReadCounts(status), false);
+  assert.equal(FILE_READ_TRIES, 2);
 });
