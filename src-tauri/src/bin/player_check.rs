@@ -189,8 +189,14 @@ fn main() {
             });
 
             // A hung open must not leave a GUI process on the user's session.
-            gtk::glib::timeout_add_seconds_local(240, || {
-                eprintln!("FAIL: the run did not finish within 240s");
+            // `ZAPPER_CHECK_TIMEOUT_SECS` for a run meant to be longer
+            // (`--trickplay-vod` on a 4K film, whose worker paces itself).
+            let limit: u32 = std::env::var("ZAPPER_CHECK_TIMEOUT_SECS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(240);
+            gtk::glib::timeout_add_seconds_local(limit, move || {
+                eprintln!("FAIL: the run did not finish within {limit}s");
                 std::process::exit(1);
             });
 

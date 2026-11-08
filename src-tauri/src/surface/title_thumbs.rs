@@ -87,11 +87,20 @@ const MAX_STRIDE: i64 = 8;
 const EXCERPT_DIR: &str = "previews";
 const EXCERPT_PREFIX: &str = "preview-";
 
-/// The pause after writing an excerpt of `bytes`: [`PACE`], or longer to
-/// keep to [`BYTES_PER_SEC`].
-fn pause_after(bytes: u64) -> Duration {
-    PACE.max(Duration::from_secs_f64(bytes as f64 / BYTES_PER_SEC))
+/// The pause after a slot whose excerpt was `bytes` and which took `busy`:
+/// [`PACE`], or longer to keep to [`BYTES_PER_SEC`], or longer still to keep
+/// to [`CPU_SHARE`] of one core, whichever is longest. The time is the
+/// slot's own, so a 4K keyframe on a busy machine waits far longer than a
+/// 1080p one on an idle machine, whatever the film.
+fn pause_after(bytes: u64, busy: Duration) -> Duration {
+    let for_bytes = Duration::from_secs_f64(bytes as f64 / BYTES_PER_SEC);
+    let for_time = busy.mul_f64((1.0 - CPU_SHARE) / CPU_SHARE);
+    PACE.max(for_bytes).max(for_time)
 }
+
+/// The share of one core the worker keeps to, on average: each slot's time
+/// is followed by a pause nineteen times as long.
+const CPU_SHARE: f64 = 0.05;
 
 /// How many slots apart to try, after an excerpt of `bytes`.
 fn stride_after(stride: i64, bytes: u64) -> i64 {
@@ -381,10 +390,10 @@ fn run(epoch: u64) {
             continue;
         };
         walk.tried.insert(slot);
-        let bytes = fill(mpv, &mut walk, slot as f64 * spacing, &base, &mut container);
+        let (bytes, busy) = fill(mpv, &mut walk, slot as f64 * spacing, &base, &mut container);
         walk.stride = stride_after(walk.stride, bytes);
         STRIDE.store(walk.stride, Ordering::Release);
-        wait = pause_after(bytes);
+        wait = pause_after(bytes, busy);
     }
     for ext in CONTAINERS {
         let _ = std::fs::remove_file(base.with_extension(ext));
@@ -395,9 +404,10 @@ fn run(epoch: u64) {
 const CONTAINERS: [&str; 2] = ["mkv", "ts"];
 
 /// Reads, decodes and files the picture for the slot at `t`, and returns
-/// how many bytes the excerpt was. The excerpt is `base` with the extension
+/// how many bytes the excerpt was and how long the slot took. The excerpt
+/// is `base` with the extension
 /// of `CONTAINERS[*container]`, or a later one when mpv cannot write that.
-fn fill(mpv: &Mpv, walk: &mut Walk, t: f64, base: &Path, container: &mut usize) -> u64 {
+fn fill(mpv: &Mpv, walk: &mut Walk, t: f64, base: &Path, container: &mut usize) -> (u64, Duration) {
     let began = Instant::now();
     // mpv writes the title's selected tracks, and picks the container from
     // the name. Matroska takes any video, but not every subtitle format (an
@@ -452,7 +462,7 @@ fn fill(mpv: &Mpv, walk: &mut Walk, t: f64, base: &Path, container: &mut usize) 
     MAX_US.fetch_max(us, Ordering::AcqRel);
     BYTES.fetch_add(bytes, Ordering::AcqRel);
     MAX_BYTES.fetch_max(bytes, Ordering::AcqRel);
-    bytes
+    (bytes, began.elapsed())
 }
 
 /// This thread's processor time so far, in microseconds (Linux only).
@@ -544,11 +554,27 @@ mod tests {
 
     #[test]
     fn a_big_excerpt_is_followed_by_a_longer_pause() {
-        assert_eq!(pause_after(0), PACE);
-        assert_eq!(pause_after(100_000), PACE);
+        let quick = Duration::from_millis(5);
+        assert_eq!(pause_after(0, quick), PACE);
+        assert_eq!(pause_after(100_000, quick), PACE);
         // 20MB at 4MB a second: five seconds before the next.
-        let p = pause_after(20 * 1024 * 1024);
+        let p = pause_after(20 * 1024 * 1024, quick);
         assert!((p.as_secs_f64() - 5.0).abs() < 0.01, "{p:?}");
+    }
+
+    #[test]
+    fn a_slow_slot_is_followed_by_a_pause_that_keeps_the_worker_to_a_twentieth_of_a_core() {
+        // A small excerpt that took 1.4s to decode (a 4K keyframe on a
+        // busy machine): 19 times that before the next, so that slot and
+        // its pause together are one part work in twenty.
+        let busy = Duration::from_millis(1400);
+        let p = pause_after(1024, busy);
+        assert!((p.as_secs_f64() - 26.6).abs() < 0.01, "{p:?}");
+        let share = busy.as_secs_f64() / (busy + p).as_secs_f64();
+        assert!(share <= 0.05 + 1e-9, "{share}");
+        // Whichever is longer: the bytes' pause or the time's.
+        let p = pause_after(200 * 1024 * 1024, Duration::from_millis(100));
+        assert!((p.as_secs_f64() - 50.0).abs() < 0.01, "{p:?}");
     }
 
     #[test]
