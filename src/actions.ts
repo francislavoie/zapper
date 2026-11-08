@@ -29,6 +29,7 @@ import type {
   SeriesDto,
 } from "./types";
 import { episodeCode } from "./logic/shows";
+import { createAdvanceGuard } from "./logic/upNext";
 import {
   conflictLosesProgramme,
   conflictText,
@@ -468,6 +469,8 @@ export async function playEpisode(
     return;
   }
   const e = playing.episode;
+  // Another playing of it, which Up next may move on from again.
+  advanceGuard.reset(e.episodeId);
   dispatch({ type: "shows/playing", playing });
   dispatch({ type: "shows/sheet", id: null });
   dispatch({ type: "mode", mode: "watch" });
@@ -480,6 +483,44 @@ export async function playEpisode(
     dispatch({ type: "shows/playing", playing: null });
     dispatch({ type: "mode", mode: "browse" });
   }
+}
+
+/** The one claim on moving on from an episode, shared by the countdown,
+ *  Play now and Enter: whichever asks first moves on, and the rest find it
+ *  taken. */
+const advanceGuard = createAdvanceGuard();
+
+/** Up next: moves on from the episode playing, or the one that has just
+ *  played to its end (`from`), to `next`, from its start, `from` marked
+ *  watched by the backend. Once per playing of `from`, however many ask.
+ *  Where the picture is (docked or full) stays as it is. A paused episode
+ *  moved on from leaves the player paused (mpv's pause outlives the file),
+ *  so it is resumed: the next one plays. A refusal is shown as Play's is. */
+export async function playNextEpisode(
+  dispatch: Dispatch<Action>,
+  from: PlayingEpisodeDto,
+  next: EpisodeDto,
+): Promise<void> {
+  if (!advanceGuard.claim(from.episode.episodeId)) return;
+  advanceGuard.reset(next.episodeId);
+  dispatch({ type: "shows/playing", playing: { series: from.series, episode: next } });
+  // Asked before moving on, which makes the player's state "opening".
+  const wasPaused = await backend
+    .playerState()
+    .then((p) => p.state === "paused")
+    .catch(() => false);
+  const ok = await run(
+    dispatch,
+    `play ${from.series.cleanName} ${episodeCode(next.season, next.episode, next.episodeEnd)}`,
+    backend.playNextEpisode(from.episode.episodeId, next.episodeId),
+  );
+  if (!ok) {
+    dispatch({ type: "shows/playing", playing: null });
+    dispatch({ type: "mode", mode: "browse" });
+    return;
+  }
+  if (wasPaused) void run(dispatch, "pause", backend.togglePause());
+  dispatch({ type: "shows/played", seriesId: from.series.seriesId });
 }
 
 /** Sets one of a show's marks and reports it, then re-reads the counts the

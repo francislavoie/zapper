@@ -43,6 +43,7 @@ import {
   NOT_STUCK,
   SUBTITLE_POLL_MS,
   bufferedEnd,
+  carriedIndex,
   cueTimes,
   movedAt,
   needsData,
@@ -58,6 +59,7 @@ import {
   stuckAgain,
   stuckTooOften,
   subtitleAfter,
+  upNextAllowed,
   vodStreamUrl,
   watchBody,
   type Stuck,
@@ -166,6 +168,23 @@ let seq = 0;
 let lastFailure: { item: VodItemRef; ending: StreamEnding | null } | null = null;
 let ticker: ReturnType<typeof setInterval> | undefined;
 let poller: ReturnType<typeof setInterval> | undefined;
+/** The title that has just played to its end, which Up next may move on
+ *  from, with the languages it was heard and read in; cleared by any watch
+ *  or stop. The stopped state says so as `finished`. */
+let finished: VodItemRef | null = null;
+let finishedLanguages: Languages | null = null;
+
+/** The sound's and the subtitles' languages, carried to the next episode. */
+interface Languages {
+  audio: string | null;
+  subtitle: string | null;
+}
+
+function languagesOf(s: Session): Languages {
+  const audio = s.audioIndex === null ? null : (s.tracks[s.audioIndex]?.lang ?? null);
+  const subtitle = s.subtitle === null ? null : (s.subtitles[s.subtitle]?.language ?? null);
+  return { audio, subtitle };
+}
 
 /** Whether a title is open (playing, paused or opening). */
 export const active = (): boolean => session !== null;
@@ -271,6 +290,9 @@ interface Keep {
   subtitle: number | null;
   duration: number | null;
   wantPlay: boolean;
+  /** Another title's languages, whose tracks are chosen once this one's
+   *  are known (Up next), in place of `audio` and `subtitle`. */
+  carry?: Languages;
 }
 
 /** Asks the service for the film, from `from`, keeping what was chosen on
@@ -280,6 +302,8 @@ async function watch(item: VodItemRef, from: number, keep: Keep): Promise<void> 
   const anyway =
     lastFailure !== null && sameItem(lastFailure.item, item) && meansAnyway(lastFailure.ending);
   lastFailure = null;
+  finished = null;
+  finishedLanguages = null;
   // What was on goes first; the service is told to let its viewer go as
   // this one is made, so a single connection serves the next.
   const replaces = leave() ?? takeLive();
@@ -319,6 +343,18 @@ async function watch(item: VodItemRef, from: number, keep: Keep): Promise<void> 
   }
   const a = body as VodAnswer;
   const subtitles = a.subtitles ?? [];
+  // Up next: the sound and subtitles in the languages of the episode before
+  // (only text subtitles can be shown).
+  const carried = keep.carry
+    ? {
+        audio: carriedIndex(keep.carry.audio, (a.audio ?? []).map((t) => ({ lang: t.lang }))),
+        subtitle: carriedIndex(
+          keep.carry.subtitle,
+          subtitles.map((t) => ({ lang: t.text ? t.language : null })),
+        ),
+      }
+    : null;
+  const subtitle = carried ? carried.subtitle : keep.subtitle;
   const s: Session = {
     item,
     viewer: a.viewer,
@@ -328,7 +364,7 @@ async function watch(item: VodItemRef, from: number, keep: Keep): Promise<void> 
     tracks: a.audio ?? [],
     audioIndex: a.audioIndex ?? null,
     subtitles,
-    subtitle: keep.subtitle !== null && subtitles[keep.subtitle]?.text ? keep.subtitle : null,
+    subtitle: subtitle !== null && subtitles[subtitle]?.text ? subtitle : null,
     reading: 0,
     from,
     start: null,
@@ -348,6 +384,21 @@ async function watch(item: VodItemRef, from: number, keep: Keep): Promise<void> 
     cues: { lastEnd: null, held: new Set(), askedAt: 0, asking: false },
   };
   session = s;
+  if (carried?.audio != null && carried.audio !== s.audioIndex) {
+    if (s.mode === "direct") {
+      // A direct file plays its first sound: another is a remux, watched in
+      // this one's place (as choosing it from the menu does).
+      await watch(item, from, {
+        audio: carried.audio,
+        subtitle: s.subtitle,
+        duration: s.duration,
+        wantPlay: keep.wantPlay,
+      });
+      return;
+    }
+    // A remux reads the sound it is asked for.
+    s.audioIndex = carried.audio;
+  }
   optionsFeed.set(optionsOf(s));
   noticeFeed.set({ recording: a.notice ?? null, silent: null });
   showPlace(s, null);
@@ -515,8 +566,16 @@ async function ended(s: Session) {
   const d = durationOf(s);
   if (s.mode === "direct" || d === null || s.position >= d - 10) {
     s.position = d ?? s.position;
+    const languages = languagesOf(s);
     await stop();
     await stopPlayer();
+    // Finished, not stopped: Up next may move on from it. Unless something
+    // was watched meanwhile.
+    if (session === null && playerFeed.last.state === "stopped") {
+      finished = s.item;
+      finishedLanguages = languages;
+      patch({ finished: onDemandOf(s.item, s.position, d, null) });
+    }
     return;
   }
   await broke(s, s.reading);
@@ -562,7 +621,10 @@ async function broke(s: Session, reading: number) {
   }
   s.reopens.push(now);
   const el = currentVideo();
-  await openReading(s, s.position, el ? !el.paused || !s.started : true);
+  // An element that ran out of the stream (`ended`) says it is paused, but
+  // was playing: it plays on when opened again, and a stream that keeps
+  // stopping short ends in the failure above rather than a quiet pause.
+  await openReading(s, s.position, el ? !el.paused || el.ended || !s.started : true);
 }
 
 const endedBy = (kind: StreamEnding["kind"]): StreamEnding => ({
@@ -624,6 +686,8 @@ function leave(): string | null {
  *  channel's watch to replace. */
 export function handOver(): string | null {
   lastFailure = null;
+  finished = null;
+  finishedLanguages = null;
   return leave();
 }
 
@@ -631,8 +695,46 @@ export function handOver(): string | null {
  *  clears the picture after. */
 export async function stop(): Promise<void> {
   lastFailure = null;
+  finished = null;
+  finishedLanguages = null;
   const viewer = leave();
   if (viewer) await forget(viewer);
+}
+
+/** Up next: moves on from episode `from`, playing or just played to its
+ *  end, to episode `next` from its start, in the languages `from` was in.
+ *  `from` is marked watched first. The next one's viewer replaces the old
+ *  one's, so one connection serves both. It opens paused when `from` was
+ *  paused, as the app's player does; the action that asked resumes it.
+ *  Refused unless `from` is still what is open or what finished. */
+export async function playNextEpisode(from: number, next: number): Promise<void> {
+  if (from === next) throw new Error("That is the episode playing.");
+  const s = session;
+  const subject = () =>
+    session
+      ? { item: session.item, state: playerFeed.last.state, finished: false }
+      : finished
+        ? { item: finished, state: playerFeed.last.state, finished: true }
+        : null;
+  const refused = new Error("That episode is no longer the one playing.");
+  if (!upNextAllowed(subject(), from)) throw refused;
+  const carry = s ? languagesOf(s) : (finishedLanguages ?? { audio: null, subtitle: null });
+  const paused = s !== null && playerFeed.last.state === "paused";
+  try {
+    const r = await fetch(`/api/vod/episodes/${from}/marks`, requestInit("PUT", { watched: true }));
+    if (r.status === 401) signedOutNow();
+  } catch {
+    // Its place, reported as it played, still says how far it got.
+  }
+  // Stopped, or something else played, while it was being marked.
+  if (session !== s || !upNextAllowed(subject(), from)) throw refused;
+  await watch({ kind: "episode", id: next }, 0, {
+    audio: null,
+    subtitle: null,
+    duration: null,
+    wantPlay: !paused,
+    carry,
+  });
 }
 
 /** Lets the service's viewer go. `keepalive`: sent even as the page goes. */

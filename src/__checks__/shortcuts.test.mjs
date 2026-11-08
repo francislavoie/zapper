@@ -117,6 +117,16 @@ test("a browser lists the player's keys but not mpv's or the window's, and the a
   }
 });
 
+test("Up next's keys are listed", () => {
+  const items = SHORTCUT_GROUPS.flatMap((g) => g.items);
+  const enter = items.find((it) => it.does === "Play the next episode now (Up next)");
+  assert.ok(enter, "Enter plays now");
+  assert.deepEqual(enter.keys, [["Enter"]]);
+  const esc = items.find((it) => it.does === "Cancel Up next");
+  assert.ok(esc, "Escape cancels");
+  assert.deepEqual(esc.keys, [["Esc"]]);
+});
+
 test("the arrows' step names both kinds of title", () => {
   const does = SHORTCUT_GROUPS.flatMap((g) => g.items)
     .filter((it) => it.keys.some((c) => c[0] === "←"))

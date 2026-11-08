@@ -5069,6 +5069,144 @@ textarea.field {
   margin-top: 0.5rem;
 }
 
+/* --------------------------------------------------------- up next */
+
+/* Near an episode's end, the next one, over the picture: bottom right,
+   above the player's bar, as a panel of its own that does not fade with the
+   bar (the count is the thing to see). Opaque enough to read over anything:
+   it is chrome, and only as big as what it says. */
+.upnext {
+  position: absolute;
+  right: 1.5rem;
+  bottom: 7rem;
+  z-index: 3;
+  width: 22rem;
+  max-width: calc(100% - 3rem);
+  display: flex;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 0.625rem;
+  background: rgba(20, 23, 28, 0.95);
+  cursor: auto;
+}
+
+.upnext-still {
+  flex: none;
+  align-self: flex-start;
+  width: 8rem;
+  aspect-ratio: 16 / 9;
+  border-radius: 0.375rem;
+  overflow: hidden;
+}
+
+.upnext-still-img {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  font-size: 1.25rem;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.upnext-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1875rem;
+}
+
+.upnext-label {
+  font-size: 0.6875rem;
+  color: var(--dim);
+}
+
+.upnext-title {
+  margin: 0;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.upnext-meta {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--dimmer);
+}
+
+.upnext-count {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--dim);
+}
+
+/* The count as a ring filling up, from the top, a second at a time. */
+.upnext-ring {
+  width: 0.875rem;
+  height: 0.875rem;
+  transform: rotate(-90deg);
+}
+
+.upnext-ring circle {
+  fill: none;
+  stroke-width: 2.5;
+}
+
+.upnext-ring-track {
+  stroke: var(--track);
+}
+
+.upnext-ring-done {
+  stroke: var(--accent);
+  transition: stroke-dashoffset 1s linear;
+}
+
+.upnext-btns {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.3125rem;
+}
+
+.upnext .ctl.upnext-play {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* The docked picture is a few rem tall: top left, clear of the corner's
+   badges and of the bar along the bottom, and no still. */
+.upnext.compact {
+  left: 0.375rem;
+  right: auto;
+  top: 0.375rem;
+  bottom: auto;
+  width: auto;
+  max-width: calc(100% - 0.75rem);
+  padding: 0.375rem 0.5rem;
+  border-radius: 0.375rem;
+}
+
+.upnext.compact .upnext-title {
+  font-size: 0.75rem;
+}
+
+.upnext.compact .upnext-btns {
+  margin-top: 0.125rem;
+}
+
+.upnext.compact .ctl {
+  padding: 0.125rem 0.4375rem;
+  font-size: 0.6875rem;
+}
+
 /* --------------------------------------------------- stats for nerds */
 
 /* Over the picture, top-left, where it does not fight the measured readout

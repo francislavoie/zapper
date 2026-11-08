@@ -70,6 +70,8 @@ export const SHORTCUT_GROUPS: readonly ShortcutGroup[] = [
       { keys: [["L"]], does: "Jump to live (not in a movie or episode)" },
       { keys: [["T"]], does: "Theater: the picture fills the window" },
       { keys: [["R"]], does: "Record the programme on now (not in a movie or episode)" },
+      { keys: [["Enter"]], does: "Play the next episode now (Up next)" },
+      { keys: [["Esc"]], does: "Cancel Up next" },
     ],
   },
   {

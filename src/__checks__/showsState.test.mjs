@@ -53,6 +53,14 @@ test("the playing episode is set, and cleared with null", () => {
   s = showsReducer(s, { type: "shows/playing", playing: null });
   assert.equal(s.playing, null);
 });
+test("Cancel on Up next is kept for its episode, and a new open forgets it", () => {
+  let s = initialShows("list");
+  assert.equal(s.upNextCancelled, null);
+  s = showsReducer(s, { type: "shows/upNextCancel", episodeId: 101 });
+  assert.equal(s.upNextCancelled, 101);
+  s = showsReducer(s, { type: "shows/playing", playing: { series: show(1), episode: episode(102) } });
+  assert.equal(s.upNextCancelled, null);
+});
 test("an episode played or marked has its show's details and the lists read again", () => {
   let s = initialShows("list");
   const before = s.revision;

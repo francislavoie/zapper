@@ -35,6 +35,27 @@ export function progressPath(item: VodItemRef): string {
     : `/api/vod/movies/${item.id}/progress`;
 }
 
+/** Whether Up next may move on from episode `from`: only while it is open
+ *  (playing or paused) or has just played to its end, as the app's player
+ *  has it. Never after a drop, a Stop, or once anything else is open. */
+export function upNextAllowed(
+  s: { item: VodItemRef; state: string; finished: boolean } | null,
+  from: number,
+): boolean {
+  if (s === null || s.item.kind !== "episode" || s.item.id !== from) return false;
+  if (s.state === "playing" || s.state === "paused") return !s.finished;
+  return s.state === "stopped" && s.finished;
+}
+
+/** The place in the next title's track list (audio, or subtitles) of the
+ *  first one in the language of the one chosen before (`prevLang`); `null`
+ *  without a language or a match, which leaves the next title's default. */
+export function carriedIndex(prevLang: string | null, list: readonly { lang: string | null }[]): number | null {
+  if (prevLang === null) return null;
+  const i = list.findIndex((t) => t.lang === prevLang);
+  return i < 0 ? null : i;
+}
+
 /** A remux's address: from `from` seconds into the film (whole seconds; the
  *  remux starts on the keyframe at or before it), with sound `audio` (its
  *  place in the watch answer's list) when one is chosen. */

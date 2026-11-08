@@ -30,6 +30,7 @@ import { moviesAvailable } from "./logic/movies";
 import { heldEpisode, showsAvailable } from "./logic/shows";
 import { errorMessage } from "./logic/async";
 import { useGlobalKeys } from "./hooks/useGlobalKeys";
+import { useUpNext } from "./hooks/useUpNext";
 import { useMenuCommands } from "./hooks/useMenuCommands";
 import { useMediaControls } from "./mediaKeys";
 import { useWheelSteps } from "./hooks/useWheelSteps";
@@ -142,7 +143,10 @@ export function App() {
     wasFullscreen.current = fullscreen;
   }, [fullscreen, cameFrom, dispatch]);
 
-  useGlobalKeys(state, dispatch);
+  // Up next counts and moves on from here, whichever view is up; the cards
+  // and the keys are handed where it stands.
+  const upNext = useUpNext();
+  useGlobalKeys(state, dispatch, upNext);
   useMenuCommands(dispatch);
   // The desktop's media keys, when Settings › Playback turns them on.
   useMediaControls(state, dispatch);
@@ -652,7 +656,7 @@ export function App() {
                 the band is where the hole for the picture is. Where nothing
                 plays (a browser, for now) there is no picture to show, and
                 the list and the guide take its room. */}
-            {bandShown ? <WatchBand videoRef={dockRef} picture={capabilities.playback} /> : null}
+            {bandShown ? <WatchBand videoRef={dockRef} picture={capabilities.playback} upNext={upNext} /> : null}
             <Activity mode={state.railCollapsed || onDemandOn ? "hidden" : "visible"}>
               <Rail />
             </Activity>
@@ -705,7 +709,7 @@ export function App() {
 
         {/* Chrome belongs to watch mode. Browsing shows the docked picture and
             the metadata beside it, not a full set of transport controls. */}
-        {state.mode === "watch" && !stacked ? <PlayerChrome /> : null}
+        {state.mode === "watch" && !stacked ? <PlayerChrome upNext={upNext} /> : null}
 
         {/* Stacked: the picture across the top at full width, the guide
             underneath it. The slot is an empty transparent box — the video is
@@ -715,7 +719,7 @@ export function App() {
         {stacked ? (
           <div className="stacked">
             <div className="stacked-video" ref={dockRef}>
-              <PlayerChrome />
+              <PlayerChrome upNext={upNext} />
             </div>
             <div className="stacked-guide">
               {moviesOn ? (

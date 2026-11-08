@@ -61,6 +61,7 @@ import { Alternatives } from "./Alternatives";
 import { usePlayerRecord } from "../hooks/usePlayerRecord";
 import { PlayerRecordLine } from "./PlayerRecord";
 import type { ChannelDto, ProgrammeDto } from "../types";
+import type { UpNext } from "../logic/upNext";
 
 export interface WatchBandProps {
   /** The transparent hole mpv is told to draw into. */
@@ -68,9 +69,11 @@ export interface WatchBandProps {
   /** Whether there is a picture to draw. Without one (a browser, for now) the
    *  band is only the information: no slot, no handle. */
   picture: boolean;
+  /** Up next, for the docked picture's card (App's useUpNext). */
+  upNext: UpNext;
 }
 
-export function WatchBand({ videoRef, picture }: WatchBandProps) {
+export function WatchBand({ videoRef, picture, upNext }: WatchBandProps) {
   const app = useApp();
   const { nowChannel, player } = app;
   // The width on screen, not the one remembered: a drag starts from what
@@ -331,7 +334,7 @@ export function WatchBand({ videoRef, picture }: WatchBandProps) {
         {player.state === "failed" || player.reconnect ? (
           <StreamEnded compact />
         ) : live ? (
-          <MiniControls onActivate={activate} />
+          <MiniControls onActivate={activate} upNext={upNext} />
         ) : null}
       </div>
         </>

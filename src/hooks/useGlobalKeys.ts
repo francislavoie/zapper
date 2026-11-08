@@ -9,7 +9,7 @@
 
 import { useEffect } from "react";
 import { backend, capabilities } from "../backend";
-import { playPrevious, recordFromPlayer, runAction } from "../actions";
+import { playNextEpisode, playPrevious, recordFromPlayer, runAction } from "../actions";
 import { focusSearch, typingInto } from "../focus";
 import { exitFullscreen, toggleFullscreen } from "../fullscreen";
 import { fullscreenNow, refreshFullscreen } from "./useFullscreen";
@@ -18,6 +18,7 @@ import { moviesAvailable, playingKind } from "../logic/movies";
 import { showsAvailable } from "../logic/shows";
 import { ALL_CATEGORIES, railItemKind } from "../logic/railItems";
 import { playerRecord } from "../logic/recordings";
+import type { UpNext } from "../logic/upNext";
 import { VOD_SKIP_SECONDS, isOnDemandKind } from "../logic/vodTransport";
 import { IS_MAC } from "../platform";
 import { run } from "../store";
@@ -25,8 +26,14 @@ import type { State } from "../store";
 import type { Action } from "../store";
 import type { Dispatch } from "react";
 
-export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
+export function useGlobalKeys(state: State, dispatch: Dispatch<Action>, upNext: UpNext) {
+  // The episode Up next would play: the same object while the count runs.
+  const upNextEpisode = upNext.kind === "none" ? null : upNext.next;
   useEffect(() => {
+    // The Up next card in the full player (docked, no key is taken from the
+    // lists beside it: its buttons are in the tab order).
+    const card = state.mode === "watch" && upNextEpisode ? state.shows.playing : null;
+
     const onKey = (e: KeyboardEvent) => {
       if (shortcutModifier(e, IS_MAC) && (e.key === "p" || e.key === "P")) {
         e.preventDefault();
@@ -99,6 +106,10 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
         ) {
           // A show's sheet, the same way.
           dispatch({ type: "shows/sheet", id: null });
+        } else if (card) {
+          // The Up next card, over the player: cancelled, and the player
+          // stays as it is. A second press goes on to the steps below.
+          dispatch({ type: "shows/upNextCancel", episodeId: card.episode.episodeId });
         } else if (fullscreenNow()) {
           // Fullscreen is the one thing Escape means everywhere else on the
           // desktop, so it is the whole meaning here: leave fullscreen and
@@ -130,6 +141,27 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
 
       if (typingInto(e.target)) return;
       if (blocksPlainKey(e, IS_MAC)) return;
+
+      // Up next's Play now, in the full player, wherever focus is — except
+      // on the card's own buttons, which answer for themselves — and with
+      // nothing open over the player.
+      if (
+        e.key === "Enter" &&
+        card &&
+        upNextEpisode &&
+        !(e.target instanceof Element && e.target.closest(".upnext")) &&
+        !state.paletteOpen &&
+        !state.settingsOpen &&
+        !state.aboutOpen &&
+        !state.updateOpen &&
+        !state.menuOpen &&
+        !state.videoMenu
+      ) {
+        // Not also the click of whichever control has focus.
+        e.preventDefault();
+        void playNextEpisode(dispatch, card, upNextEpisode);
+        return;
+      }
 
       if (e.key === "/") {
         e.preventDefault();
@@ -292,6 +324,8 @@ export function useGlobalKeys(state: State, dispatch: Dispatch<Action>) {
     state.shows.sheetId,
     state.shows.query,
     state.shows.summary,
+    state.shows.playing,
+    upNextEpisode,
     state.settings.guideHours,
     state.settingsOpen,
     state.menuOpen,
