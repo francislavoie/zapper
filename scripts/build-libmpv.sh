@@ -408,12 +408,16 @@ unpack ffmpeg
 # which here means its LGPL set. Encoders: PNG and MJPEG for mpv's screenshots, and FFmpeg's own
 # AAC encoder (LGPL), which zapper-server uses to turn sound a browser can't play (AC-3, MP2)
 # into AAC while a browser watches (src-tauri/src/recording/livemux.c).
+#
+# The names are configure's (allcodecs.c's ff_<name>_decoder), not the codecs' own: MP4's text
+# subtitles are movtext, though FFmpeg calls the codec mov_text. A name configure doesn't know is
+# dropped without an error, so check a new one against allcodecs.c and allformats.c.
 decoders=(
   h264 hevc mpeg1video mpeg2video mpeg4 msmpeg4v1 msmpeg4v2 msmpeg4v3 h263 flv vc1 wmv1 wmv2 wmv3
   vp8 vp9 av1 libdav1d mjpeg png rawvideo wrapped_avframe
   aac aac_fixed aac_latm ac3 ac3_fixed eac3 dca truehd mlp mp1 mp1float mp2 mp2float mp3 mp3float
   opus vorbis flac alac wmav1 wmav2 wmapro s302m 'pcm_*'
-  dvbsub dvdsub pgssub ccaption subrip srt ass ssa webvtt mov_text text xsub
+  dvbsub dvdsub pgssub ccaption subrip srt ass ssa webvtt movtext text xsub
 )
 demuxers=(
   mpegts mpegtsraw hls mov matroska avi asf flv live_flv mpegps mpegvideo h264 hevc m4v
