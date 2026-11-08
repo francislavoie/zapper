@@ -515,7 +515,7 @@ export async function playNextEpisode(
     backend.playNextEpisode(from.episode.episodeId, next.episodeId),
   );
   if (!ok) {
-    // Refused with `from` still open (it was reopening, say): it plays on,
+    // Refused with `from` still open (playing or paused): it plays on,
     // as it was, where it was. Anything else failed as Play's open does.
     const still = await backend.playerState().catch(() => null);
     if (still && isOpenEpisode(still, from.episode.episodeId)) {
@@ -550,7 +550,7 @@ async function resumeOnceOpen(dispatch: Dispatch<Action>, id: number): Promise<v
     const p = await backend.playerState().catch(() => null);
     if (!p || p.onDemand?.kind !== "episode" || p.onDemand.id !== id) return;
     if (p.state !== "opening") {
-      if (p.state === "paused") await run(dispatch, "pause", backend.togglePause());
+      if (p.state === "paused") await run(dispatch, "resume", backend.togglePause());
       return;
     }
     if (Date.now() > until) return;

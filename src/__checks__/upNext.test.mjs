@@ -73,6 +73,7 @@ test("Enter is Play now only in the full player, and only when nothing else answ
   assert.equal(upNextTakesEnter(key(el(null)), true), true, "focus on nothing in particular");
   assert.equal(upNextTakesEnter(key(el("body")), true), true, "the page");
   assert.equal(upNextTakesEnter(key(el(".chrome")), true), true, "the player itself");
+  assert.equal(upNextTakesEnter(key(el("video")), true), true, "the browser's picture");
   assert.equal(upNextTakesEnter(key(null), true), true);
   assert.equal(upNextTakesEnter(key(el("button")), true), false, "Pause, focused after a click");
   assert.equal(upNextTakesEnter(key(el("[role=option]")), true), false, "a list's row");

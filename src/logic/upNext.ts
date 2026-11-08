@@ -78,8 +78,9 @@ export function upNextState(
 export const ENTER_OWNERS =
   "button, a, input, textarea, select, [role=button], [role=option], [role=row], [role=tab], " +
   "[contenteditable], [tabindex]";
-/** Where focus rests without a control of its own: the page, the player. */
-const NO_OWNER = "body, .chrome";
+/** Where focus rests without a control of its own: the page, the player,
+ *  the browser's picture (focusable only to take clicks). */
+const NO_OWNER = "body, .chrome, video";
 
 interface KeyTarget {
   closest(selector: string): { matches(selector: string): boolean } | null;
