@@ -480,12 +480,15 @@ function ChannelProgramme({
   now,
   badge,
   notice,
+  lead,
 }: {
   channel: ChannelDto;
   onNow: ProgrammeDto | null;
   next: ProgrammeDto | null;
   now: number;
   badge?: string;
+  /** Said above the title, beside the logo ("Where you left off"). */
+  lead?: ReactNode;
   /** Said straight under the channel's line, before the programme's
    *  details: what must be in view without scrolling the column. */
   notice?: ReactNode;
@@ -496,47 +499,38 @@ function ChannelProgramme({
   const quality = channel.streamId in qualityNews ? qualityNews[channel.streamId] : channel.quality;
   const off = offAirLabel(quality, now);
   const category = useCategoryName(channel);
+  // The logo is square, so it sits beside the head only (title, channel line,
+  // how far along) and what follows runs the band's full width under both.
   return (
     <>
-      <h2 className="watch-title-h" data-tip-overflow={onNow ? onNow.title : channel.name}>
-        {onNow ? onNow.title : channel.cleanName}
-      </h2>
-      {category ? (
-        <p className="watch-cat chan-extra" data-tip-overflow="">
-          {category}
-        </p>
-      ) : null}
-      <div className="watch-sub">
-        <span className="watch-chan" data-tip-overflow={channel.name}>
-          {channel.cleanName}
-        </span>
-        {channel.num != null ? <span className="watch-num">#{channel.numLabel ?? channel.num}</span> : null}
-        {badge ? <span className="badge">{badge}</span> : null}
-        {channel.hasArchive ? (
-          <span className="badge archive" data-tip={`${channel.archiveDays ?? "?"}-day catchup`}>
-            ⏱ {channel.archiveDays ?? "?"}d catchup
-          </span>
-        ) : null}
-        {onNow ? <span className="watch-time">{timeRange(onNow.start, onNow.stop)}</span> : null}
-        {off ? (
-          <span className="badge offair" data-tip="Your provider sent a placeholder instead of the channel">
-            {off}
-          </span>
-        ) : null}
+      <div className="band-head">
+        <BandLogo url={channel.logoUrl} name={channel.cleanName} />
+        <div className="band-head-text">
+          {lead}
+          <h2 className="watch-title-h" data-tip-overflow={onNow ? onNow.title : channel.name}>
+            {onNow ? onNow.title : channel.cleanName}
+          </h2>
+          {category ? (
+            <p className="watch-cat chan-extra" data-tip-overflow="">
+              {category}
+            </p>
+          ) : null}
+          <ChannelLine channel={channel} badge={badge} onNow={onNow} off={off} />
+          {onNow ? (
+            <ProgressLine
+              fraction={programmeProgress(onNow.start, onNow.stop, now)}
+              label={`${duration(Math.max(0, onNow.stop - now))} left`}
+            />
+          ) : null}
+        </div>
       </div>
       {notice}
       {onNow ? (
-        <>
-          <ProgressLine
-            fraction={programmeProgress(onNow.start, onNow.stop, now)}
-            label={`${duration(Math.max(0, onNow.stop - now))} left`}
-          />
-          {onNow.description ? (
-            <p className="watch-desc band-plot" data-tip-overflow="">
-              {onNow.description}
-            </p>
-          ) : null}
-        </>
+        onNow.description ? (
+          <p className="watch-desc band-plot" data-tip-overflow="">
+            {onNow.description}
+          </p>
+        ) : null
       ) : (
         // 15% EPG coverage: this is the common case, and it is not an error.
         <p className="watch-none">no guide data for this channel</p>
@@ -547,6 +541,40 @@ function ChannelProgramme({
         </p>
       ) : null}
     </>
+  );
+}
+
+/** The channel's name and number, its badges, and the programme's times. */
+function ChannelLine({
+  channel,
+  badge,
+  onNow,
+  off,
+}: {
+  channel: ChannelDto;
+  badge?: string;
+  onNow: ProgrammeDto | null;
+  off: string | null;
+}) {
+  return (
+    <div className="watch-sub">
+      <span className="watch-chan" data-tip-overflow={channel.name}>
+        {channel.cleanName}
+      </span>
+      {channel.num != null ? <span className="watch-num">#{channel.numLabel ?? channel.num}</span> : null}
+      {badge ? <span className="badge">{badge}</span> : null}
+      {channel.hasArchive ? (
+        <span className="badge archive" data-tip={`${channel.archiveDays ?? "?"}-day catchup`}>
+          ⏱ {channel.archiveDays ?? "?"}d catchup
+        </span>
+      ) : null}
+      {onNow ? <span className="watch-time">{timeRange(onNow.start, onNow.stop)}</span> : null}
+      {off ? (
+        <span className="badge offair" data-tip="Your provider sent a placeholder instead of the channel">
+          {off}
+        </span>
+      ) : null}
+    </div>
   );
 }
 
@@ -611,7 +639,6 @@ function ChannelBand(
       {props.mode === "ready" ? (
         <BandMain
           className="channel-band"
-          thumb={<BandLogo url={channel.logoUrl} name={channel.cleanName} />}
           actions={
             <>
               <button className="ctl primary" onClick={props.onPlay}>
@@ -621,8 +648,13 @@ function ChannelBand(
             </>
           }
         >
-          <p className="watch-state">Where you left off</p>
-          <ChannelProgramme channel={channel} onNow={onNow} next={next} now={now} />
+          <ChannelProgramme
+            channel={channel}
+            onNow={onNow}
+            next={next}
+            now={now}
+            lead={<p className="watch-state">Where you left off</p>}
+          />
         </BandMain>
       ) : (
         <Playing
@@ -763,7 +795,6 @@ function Playing({
   return (
     <BandMain
       className="channel-band"
-      thumb={<BandLogo url={channel.logoUrl} name={channel.cleanName} />}
       kicker={dual ? <Kicker what="live" /> : null}
       actions={
         <>

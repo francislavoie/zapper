@@ -7349,9 +7349,9 @@ html[data-backend="web"] {
    column beside the picture. The side column is what plays while a
    selection leads, the selection while what plays does (↩ Show), or context
    for the one thing told of. Wide bands add a credits column to the main
-   one; narrow ones fold the side column into a line under it. Both are
-   container queries on .watch-info, whose width is what the picture
-   leaves. */
+   one; narrow ones fold the side column into a line under it, or, with the
+   height to spare, put it whole under it. Container queries: on .watch-info
+   for its width (what the picture leaves), on .band for its height too. */
 .watch-info {
   container: band / inline-size;
 }
@@ -7362,6 +7362,7 @@ html[data-backend="web"] {
   min-width: 0;
   display: flex;
   gap: 1rem;
+  container: band-box / size;
 }
 
 .band-main {
@@ -7387,6 +7388,28 @@ html[data-backend="web"] {
   height: 100%;
   border-radius: 0;
   font-size: 1.5rem;
+}
+
+/* A channel's square logo sits beside the head of its text (the title, the
+   channel's line, how far along); what follows runs the full width under
+   both, rather than in a column indented by the logo. */
+.band-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.875rem;
+}
+
+.band-head-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3125rem;
+}
+
+.band-head-text > * {
+  flex: 0 0 auto;
+  min-width: 0;
 }
 
 /* A channel's logo: a square tile at the top, not a poster's full height. */
@@ -7716,6 +7739,56 @@ html[data-backend="web"] {
 
   .band.one .watch-cat.chan-extra {
     display: -webkit-box;
+  }
+}
+
+/* Narrow but tall (a large picture beside a tall window): the side column
+   comes back whole under the main one, context included, instead of as one
+   line. What it says (the category, what follows) leaves the main column
+   again. */
+@container band-box (max-width: 47rem) and (min-height: 30rem) {
+  .band-side {
+    flex: 0 1 auto;
+    min-height: 0;
+    overflow: hidden;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.3125rem;
+    padding-top: 0.625rem;
+  }
+
+  .band-side.context {
+    display: flex;
+  }
+
+  .band-side .band-sched {
+    display: grid;
+  }
+
+  .band-side .band-side-foot {
+    display: block;
+  }
+
+  .band-side-t {
+    font-size: 0.875rem;
+  }
+
+  .band-side .watch-progress {
+    flex: 1 1 auto;
+  }
+
+  .band-side .watch-actions {
+    margin-left: 0;
+  }
+
+  .band-plot.long {
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+  }
+
+  .band.one:has(> .band-side.context) .chan-extra,
+  .band.one:has(> .band-side.context) .watch-cat.chan-extra {
+    display: none;
   }
 }
 
