@@ -37,7 +37,7 @@ pub fn backdrop_path(id: i64, n: usize) -> String {
 }
 
 /// Swaps a movie's provider poster for this service's address for it.
-fn local_movie(m: &mut MovieDto) {
+pub(super) fn local_movie(m: &mut MovieDto) {
     if m.poster_url.is_some() {
         m.poster_url = Some(poster_path(m.movie_id));
     }
@@ -201,7 +201,10 @@ pub fn routes<S: Clone + Send + Sync + 'static>() -> Router<S> {
         .route("/api/vod/movies", get(movies))
         .route("/api/vod/movies/{id}", get(details))
         .route("/api/vod/movies/{id}/similar", get(similar))
-        .route("/api/vod/movies/{id}/marks", put(set_marks))
+        .route(
+            "/api/vod/movies/{id}/marks",
+            get(super::continue_browse::movie_marks).put(set_marks),
+        )
         .route("/api/vod/movies/{id}/progress", put(save_progress))
         .route("/api/poster/movie/{id}", get(poster))
         .route("/api/backdrop/movie/{id}/{n}", get(backdrop))
