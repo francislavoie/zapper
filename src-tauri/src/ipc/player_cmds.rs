@@ -2402,7 +2402,7 @@ pub async fn play_catchup(
             // The server reads the timestamp as wall time in its own time
             // zone, which need not be this computer's: see
             // `catalog::panel_clock`.
-            let offset = crate::catalog::panel_clock::offset_for(server.credentials(), start);
+            let offset = crate::catalog::panel_clock::offset_now(server, start).await;
             let stamp = timeshift_stamp(start, offset);
             Playable::plain(server.timeshift_url(stream_id, &stamp, duration_minutes))
         }
