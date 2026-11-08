@@ -17,6 +17,13 @@ test("the app's window can do everything but sign out", () => {
   assert.deepEqual(settingsSections(DESKTOP), [...SETTINGS_SECTIONS]);
 });
 
+test("Online services follow Data, in the app and in a browser", () => {
+  for (const caps of [DESKTOP, BROWSER]) {
+    const s = settingsSections(caps);
+    assert.equal(s[s.indexOf("Data") + 1], "Online services");
+  }
+});
+
 test("Movies are on offer in the app and in a browser alike", () => {
   assert.equal(DESKTOP.onDemand, true);
   assert.equal(BROWSER.onDemand, true);
@@ -33,6 +40,7 @@ test("a browser keeps the guide, recordings, the account, refreshing and watchin
     "Guide",
     "Recording",
     "Data",
+    "Online services",
     "Keyboard",
     "About",
   ]);
