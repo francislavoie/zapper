@@ -177,8 +177,10 @@ interface have their own page: [recording.md](recording.md).
   forced-only and trusted-uploader files.
 - Matches are found by the title's TMDB id when the provider gives one, and otherwise by name
   (with the year, or the season and episode); the dialog says which.
-- Choosing one downloads it, adds it to the player at once and keeps it. The title goes on playing
-  where it was, and subtitles stay on, in that language, for what you open next.
+- A row's **Download** button (or `Enter`, or a double-click) downloads it, adds it to the player at
+  once and keeps it. A single click only highlights a row, so a stray one never spends a download.
+  The title goes on playing where it was, and subtitles stay on, in that language, for what you
+  open next.
 - OpenSubtitles allows a number of downloads per day on a free account (the Online services page
   shows what is left). When they run out, the dialog says so, and files you already kept still work.
 - Files kept for a title are listed first in Find subtitles… and in the Subtitles menu the next

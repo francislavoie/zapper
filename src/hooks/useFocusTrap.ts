@@ -12,9 +12,10 @@ export function useFocusTrap(
       if (e.key !== "Tab" || e.altKey || e.ctrlKey || e.metaKey) return;
       const box = ref.current;
       if (!box) return;
-      // Only what is shown: a control in a collapsed part has no box.
+      // Only what is shown (a control in a collapsed part has no box) and
+      // in the tab order (a button made `tabIndex={-1}` is skipped).
       const all = [...box.querySelectorAll<HTMLElement>(TABBABLE)].filter(
-        (el) => el.getClientRects().length > 0,
+        (el) => el.tabIndex >= 0 && el.getClientRects().length > 0,
       );
       e.preventDefault();
       const next = trapStep(all.length, all.indexOf(document.activeElement as HTMLElement), e.shiftKey);

@@ -7017,12 +7017,40 @@ html[data-backend="web"] {
   padding: 0.3125rem 0.5rem;
   border-radius: 0.3125rem;
   font-size: 0.8125rem;
-  cursor: default;
+  cursor: pointer;
   user-select: none;
 }
 
 .find-subs-row.active {
   background: var(--accent-dim);
+}
+
+/* A row's Download (Add, for a file already here): on the row highlighted
+   and the one under the pointer, and on every row where there is no hover
+   to find it by. Hidden, it keeps its place, so rows don't shift. */
+.find-subs-get {
+  flex: 0 0 auto;
+  align-self: center;
+  padding: 0.125rem 0.5rem;
+  font-size: 0.6875rem;
+  cursor: pointer;
+  visibility: hidden;
+}
+
+.find-subs-row.active .find-subs-get,
+.find-subs-row:hover .find-subs-get {
+  visibility: visible;
+}
+
+@media (pointer: coarse) {
+  .find-subs-get {
+    visibility: visible;
+  }
+}
+
+.find-subs-get[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .find-subs-lang {
