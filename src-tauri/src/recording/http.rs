@@ -2637,6 +2637,31 @@ pub(crate) mod tests {
 
     #[allow(clippy::await_holding_lock)]
     #[tokio::test]
+    async fn an_up_next_entry_names_no_provider() {
+        let _catalogue = movie_catalogue();
+        let s = server("continue-up-next");
+        let token = seed_continue(&s).await;
+        // The first episode watched: the show's entry is the next, from its start.
+        let body = serde_json::json!({"position": 95, "duration": 100});
+        let r = from_page("PUT", "/api/vod/episodes/9200101/progress", Some(&token), Some(body));
+        let (st, m) = call(&s, r).await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(m["watched"], true, "{m}");
+
+        let (st, _, body) = call_raw(&s, from_page("GET", "/api/vod/continue", Some(&token), None)).await;
+        assert_eq!(st, StatusCode::OK);
+        let text = String::from_utf8(body).unwrap();
+        let list: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(entries(&list), [("episode".to_owned(), 9_200_102)]);
+        let entry = &list[0];
+        assert_eq!(entry["upNext"], true, "{entry}");
+        assert!(entry["episode"]["stillUrl"].as_str().unwrap().starts_with("/api/"), "{entry}");
+        assert!(!text.contains("provider.example"), "{text}");
+        assert!(!text.contains("secret"), "{text}");
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
     async fn a_browser_and_the_app_see_the_same_list() {
         let _catalogue = movie_catalogue();
         let s = server("continue-same");
