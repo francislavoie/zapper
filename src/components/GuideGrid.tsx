@@ -689,16 +689,22 @@ function Programme({
     );
   }
 
+  // A tip only where the title cannot be read: a block too narrow to carry
+  // one at all, or one that cuts it short. A title that is all there needs
+  // nothing repeating it.
+  const full = `${time}  ${programme.title}${recTip}`;
   return (
     <button
       className={classes}
       style={style}
-      data-tip={`${time}  ${programme.title} — ${act === "play" ? "on now: play" : "play from the archive"}${recTip}`}
+      data-tip={label ? undefined : full}
       onClick={() => (act === "play" ? onPlay(channel, programme) : onCatchup(channel, programme))}
       {...menuProps}
     >
       {dot}
-      <span className="prog-title">{label}</span>
+      <span className="prog-title" data-tip-overflow={label ? full : undefined}>
+        {label}
+      </span>
       {span.width >= TIME_MIN_PX ? <span className="prog-time">{time}</span> : null}
     </button>
   );

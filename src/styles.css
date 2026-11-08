@@ -98,6 +98,20 @@ button {
   cursor: pointer;
 }
 
+/* The hand on everything else a click opens or plays, whatever element it
+   is drawn with. Buttons have it from above; these are what is not one:
+   rows and poster cards (options in a listbox, so the list stays one focus
+   stop), tabs, the docked picture (a div with role="button" while it takes
+   the click), and an episode's still, which plays on a single click. One
+   rule, so a new row or card gets it by its role rather than by somebody
+   remembering. */
+[role="option"]:not(:disabled):not([aria-disabled="true"]),
+[role="tab"]:not(:disabled),
+[role="button"]:not([aria-disabled="true"]),
+.ep-still {
+  cursor: pointer;
+}
+
 input {
   font: inherit;
   color: inherit;
@@ -639,6 +653,8 @@ select option {
   grid-template-columns: var(--rail-w) minmax(0, 1fr);
   grid-template-rows: var(--video-h) minmax(0, 1fr);
   z-index: 10;
+  /* The layer for whatever covers the rail and the list (.browse > .rail). */
+  --over-rail: 5;
 }
 
 /* The rail folded away: one column, so the list or the guide takes the whole
@@ -660,6 +676,11 @@ select option {
 .browse > .rail {
   grid-row: 2;
   grid-column: 1;
+  /* A layer of its own, so its grip (z-index 5 inside it) stays over the
+     list's edge and header but can never come up through what covers the
+     rail: anything drawn over the rail and the list in browse — the sheets,
+     and whatever comes after them — sits at --over-rail or above. */
+  z-index: 4;
 }
 
 .browse > .list-pane,
@@ -1922,10 +1943,6 @@ select option {
   text-align: right;
 }
 
-.movie-row {
-  cursor: default;
-}
-
 .movie-year,
 .movie-length,
 .movie-rating {
@@ -1961,10 +1978,6 @@ select option {
 .show-row-seasons,
 .show-row-rating {
   text-align: right;
-}
-
-.show-row {
-  cursor: default;
 }
 
 .show-row-year,
@@ -2020,7 +2033,6 @@ select option {
 .poster-card {
   position: absolute;
   contain: content;
-  cursor: default;
 }
 
 .poster-card.gap {
@@ -2344,6 +2356,8 @@ select option {
   height: 1.625rem;
   background: var(--bg-3);
   border-bottom: 1px solid var(--line);
+  /* As the Show sheet's seasons bar: no hairline of the rows above it. */
+  box-shadow: 0 -0.1875rem 0 var(--bg-3);
 }
 
 .axis-corner {
@@ -6910,7 +6924,9 @@ html[data-backend="web"] {
 .browse > .show-sheet {
   grid-row: 2;
   grid-column: 1 / -1;
-  z-index: 2;
+  /* Over the rail's layer (.browse > .rail), grip and all: a covered grip
+     must neither show, light up, take the pointer nor offer its tip. */
+  z-index: var(--over-rail);
 }
 
 .movie-sheet,
@@ -6962,6 +6978,23 @@ html[data-backend="web"] {
   top: 0.75rem;
   right: 1rem;
   z-index: 1;
+}
+
+/* The sheet's ‹ Back, opposite the ✕ and level with it. */
+.sheet-back {
+  position: absolute;
+  top: 0.75rem;
+  left: 1rem;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.125rem;
+  padding-left: 0.3125rem;
+}
+
+.sheet-back .i {
+  width: 1rem;
+  height: 1rem;
 }
 
 .sheet-top {
@@ -7103,6 +7136,11 @@ html[data-backend="web"] {
   padding: 0 2rem;
   background: var(--bg-2);
   border-bottom: 1px solid var(--line);
+  /* Stuck, the bar's top lands on a fraction of a pixel under some zooms
+     and scales, and the row of content scrolling past above it showed as a
+     hairline. Its own colour, painted a little above it, closes the gap
+     whatever the rounding. */
+  box-shadow: 0 -0.1875rem 0 var(--bg-2);
 }
 
 /* More seasons than fit scroll sideways; the counts stay at the end. */
@@ -7168,7 +7206,6 @@ html[data-backend="web"] {
   align-items: center;
   padding: 0 0.5rem;
   border-bottom: 1px solid #1d2129;
-  cursor: default;
 }
 
 .ep:hover {
@@ -7203,7 +7240,6 @@ html[data-backend="web"] {
   border-radius: 0.25rem;
   overflow: hidden;
   background: var(--bg-3);
-  cursor: pointer;
 }
 
 .ep-still-img {

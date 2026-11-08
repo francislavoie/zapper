@@ -1,10 +1,11 @@
 // A movie's Details: a sheet over the rail and the list (never the band, so
 // the picture and what is playing stay in view). The backdrop, the poster,
 // everything the band says and in full, the same actions, and a shelf of
-// "More like this". Opening it plays nothing; closing it (Escape or the ✕,
-// which useGlobalKeys also answers) returns focus to the list it came from.
+// "More like this". Opening it plays nothing; closing it (‹ Back, ✕, or
+// Escape and the mouse's back button, which useGlobalKeys answers) returns
+// focus to the list it came from.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { backend } from "../backend";
 import { useMovieDetails } from "../hooks/useMovieDetails";
 import { playingKind, languagesLine, peopleLine } from "../logic/movies";
@@ -12,6 +13,7 @@ import { useApp, useDispatch } from "../store";
 import type { MovieDto } from "../types";
 import { MovieActions, MovieFacts } from "./MovieBand";
 import { Poster } from "./Poster";
+import { SheetControls } from "./SheetControls";
 
 /** How many titles the shelf offers. */
 const SIMILAR = 12;
@@ -55,10 +57,15 @@ export function MovieSheet({ id }: { id: number }) {
   }, [id]);
   const shelf = similar?.id === id ? similar.items : [];
 
-  // Another title's sheet starts at its top.
-  useEffect(() => {
-    root.current?.scrollTo({ top: 0 });
-  }, [id]);
+  // Every title's sheet starts at its top, the poster and the facts in
+  // sight: on opening, and on going to another title from its shelf. Before
+  // the frame is drawn, so the old title's scroll never shows under the new
+  // one; and again once the title is there, as the sheet draws nothing
+  // until it is.
+  const shown = movie !== null;
+  useLayoutEffect(() => {
+    if (root.current) root.current.scrollTop = 0;
+  }, [id, shown]);
 
   if (!movie) return null;
   const d = details.status === "ready" ? details.data : null;
@@ -88,14 +95,7 @@ export function MovieSheet({ id }: { id: number }) {
           <Poster url={movie.posterUrl} name={movie.cleanName} className="movie-sheet-blur" />
         )}
       </div>
-      <button
-        className="ctl icon movie-sheet-close"
-        aria-label="Close"
-        data-tip="Close (Esc)"
-        onClick={() => dispatch({ type: "movies/sheet", id: null })}
-      >
-        ✕
-      </button>
+      <SheetControls onClose={() => dispatch({ type: "movies/sheet", id: null })} />
       <div className="sheet-top">
         <Poster url={movie.posterUrl} name={movie.cleanName} className="poster sheet-poster" />
         <div className="sheet-text">

@@ -6,7 +6,8 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { TIP_GAP, TIP_MARGIN, placeTip } from "../logic/tooltip.ts";
+import { readFileSync } from "node:fs";
+import { TIP_GAP, TIP_MARGIN, WIDE_TARGET, placeTip, tipAnchor } from "../logic/tooltip.ts";
 
 const box = (left, top, width, height) => ({
   left,
@@ -62,4 +63,48 @@ test("a tip wider than the window starts at the margin", () => {
   // The first words are the ones that matter; it runs off the far side.
   const p = placeTip(box(100, 50, 40, 20), 500, 24, 300, 400);
   assert.equal(p.left, TIP_MARGIN);
+});
+
+// Wide targets: a row, a heading. Centred on one, the tip lands in the middle
+// of the window, nowhere near the text or the pointer.
+
+test("a cut-short name's tip starts where the name does, however wide its box", () => {
+  const row = box(220, 480, 940, 18);
+  const anchor = tipAnchor(row, true, 228, 700);
+  assert.deepEqual(anchor, { x: 228, align: "start" });
+  const p = placeTip(row, 300, 24, 1280, 800, anchor);
+  assert.equal(p.left, 228);
+});
+
+test("any other tip over a wide target goes by the pointer", () => {
+  const row = box(0, 300, 1000, 40);
+  const anchor = tipAnchor(row, false, 10, 640);
+  assert.deepEqual(anchor, { x: 640, align: "centre" });
+  assert.equal(placeTip(row, 200, 24, 1280, 800, anchor).left, 540);
+});
+
+test("from the keyboard, over a wide target, it goes by the text", () => {
+  assert.deepEqual(tipAnchor(box(0, 300, 1000, 40), false, 12, null), { x: 12, align: "start" });
+});
+
+test("a control's tip still centres on it", () => {
+  const button = box(400, 100, 28, 28);
+  assert.equal(tipAnchor(button, false, 404, 410), null);
+  assert.equal(tipAnchor(box(0, 0, WIDE_TARGET, 20), false, 0, 5), null);
+});
+
+test("an anchored tip stays inside the window", () => {
+  const near = placeTip(box(0, 100, 1280, 20), 300, 24, 1280, 800, { x: 1270, align: "centre" });
+  assert.equal(near.left, 1280 - TIP_MARGIN - 300);
+  const start = placeTip(box(1100, 100, 170, 20), 300, 24, 1280, 800, { x: 1100, align: "start" });
+  assert.equal(start.left, 1280 - TIP_MARGIN - 300);
+});
+
+test("a tip shows only when the text is cut short by more than rounding", () => {
+  // WebKit can round a fractional box's scroll width up and its client
+  // width down: a pixel apart with nothing hidden. The difference alone
+  // must not decide it (src/tooltip.ts isTruncated).
+  const src = readFileSync(new URL("../tooltip.ts", import.meta.url), "utf8");
+  assert.match(src, /el\.scrollWidth - el\.clientWidth > 1/);
+  assert.doesNotMatch(src, /el\.scrollWidth > el\.clientWidth/);
 });

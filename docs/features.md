@@ -98,7 +98,8 @@ interface have their own page: [recording.md](recording.md).
   language you last picked, across launches too.
 - Subtitle font, size, colour and backdrop.
 - Mouse: wheel for volume, double-click for fullscreen, double-click the edges to skip. Theater
-  mode (`T`).
+  mode (`T`). The back button steps back like `Esc` (a menu, a sheet, the player), then to the
+  tab or category before; forward goes ahead again.
 - Stats (`S`): bitrate, buffer, resolution, codec, dropped frames and stalls.
 - When a provider ends or refuses a stream (for example because another device took the
   connection), zapper says so and doesn't reconnect on its own.

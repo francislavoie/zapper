@@ -99,6 +99,16 @@ export const SHORTCUT_GROUPS: readonly ShortcutGroup[] = [
   {
     title: "Mouse",
     items: [
+      {
+        keys: [["Mouse back"]],
+        does: "Back: a menu, a sheet, the player, then the last tab or rail",
+        mouse: true,
+      },
+      {
+        keys: [["Mouse forward"]],
+        does: "Forward again to the tab or rail choice Back left",
+        mouse: true,
+      },
       { keys: [["Wheel"]], does: "Over the picture: volume", mouse: true, needs: "playback" },
       {
         keys: [["Click"]],
@@ -140,4 +150,11 @@ export function shortcutGroups(caps: Capabilities): ShortcutGroup[] {
 }
 
 /** Keys that are mouse words rather than keyboard keys, for the check. */
-export const MOUSE_WORDS = new Set(["Wheel", "Click", "Double-click", "Right-click"]);
+export const MOUSE_WORDS = new Set([
+  "Wheel",
+  "Click",
+  "Double-click",
+  "Right-click",
+  "Mouse back",
+  "Mouse forward",
+]);
