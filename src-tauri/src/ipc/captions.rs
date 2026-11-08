@@ -6,13 +6,13 @@
 //! out on a 384×288 canvas, which is 4:3. On wide video mpv widens that
 //! canvas to the picture's shape but leaves the positions as they were, so
 //! the captions drift into the left of the frame, and the viewer's font in
-//! place of the grid's breaks the indents. So while captions are shown mpv
-//! is told to ignore the positions (`sub-ass-override=strip`, which also
-//! draws them in the viewer's subtitle style), and the placement is rebuilt
-//! here from the caption's own grid cells: its rows as `sub-pos`, its side
-//! as `sub-align-x` with a margin that keeps it inside the 4:3 frame a
-//! television would draw the grid in, measured against where the picture
-//! really is in the window.
+//! place of the grid's breaks the indents. So a channel's subtitles are
+//! drawn without their positions (`sub-ass-override=strip`, which also draws
+//! them in the viewer's subtitle style; set as the channel opens, by
+//! `player_cmds`), and the placement is rebuilt here from the caption's own
+//! grid cells: its rows as `sub-pos`, its side as `sub-align-x` with a margin
+//! that keeps it inside the 4:3 frame a television would draw the grid in,
+//! measured against where the picture really is in the window.
 //!
 //! Pure but for one place to keep what was last written: the heartbeat in
 //! `player_cmds` reads the track list, `sub-text/ass` and the window's
@@ -42,7 +42,7 @@ const CENTRED_WITHIN: f64 = 2.0;
 
 /// Everything set here. mpv's own values for them are read before the
 /// first is written, and put back when captions are no longer shown.
-pub const KEYS: [&str; 5] = ["sub-ass-override", "sub-align-y", "sub-pos", "sub-align-x", "sub-margin-x"];
+pub const KEYS: [&str; 4] = ["sub-align-y", "sub-pos", "sub-align-x", "sub-margin-x"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Side {
@@ -221,11 +221,11 @@ fn margin_x(p: &CaptionPlacement, view: Option<&View>) -> i64 {
     (pixels * 960.0 / pw).round() as i64
 }
 
-/// The properties that draw captions placed at `p` (or, before any
-/// placement is known, only plainly in the viewer's style). A centred
-/// caption keeps the margin there was (`None` for `sub-margin-x`).
+/// The properties that draw captions placed at `p` (none before any
+/// placement is known). A centred caption keeps the margin there was
+/// (`None` for `sub-margin-x`).
 pub fn caption_properties(p: Option<&CaptionPlacement>, view: Option<&View>) -> Vec<(&'static str, Option<String>)> {
-    let mut out = vec![("sub-ass-override", Some("strip".to_owned()))];
+    let mut out = Vec::new();
     if let Some(p) = p {
         out.push(("sub-align-y", Some("bottom".to_owned())));
         out.push(("sub-pos", Some(sub_pos(p, view).to_string())));
@@ -345,11 +345,6 @@ impl Captions {
         }
         changes
     }
-
-    /// A property mpv refused: written again next time it is wanted.
-    pub fn forget(&mut self, key: &str) {
-        self.written.retain(|(k, _)| *k != key);
-    }
 }
 
 #[cfg(test)]
@@ -404,7 +399,6 @@ mod tests {
         // Inside the 4:3 frame (160 in on 16:9), at the grid's first
         // column, a tenth of 960 further: 256 pixels, asked for as 192.
         assert_eq!(value(&at, "sub-margin-x").as_deref(), Some("192"));
-        assert_eq!(value(&at, "sub-ass-override").as_deref(), Some("strip"));
         // A real roll-up a little higher, its first row indented by one.
         let p = placed(ROLL_UP);
         assert_eq!((p.side, p.last_row, p.start), (Side::Left, 11, 0.0));
@@ -510,7 +504,6 @@ mod tests {
     fn mpv_reads(key: &str) -> Option<String> {
         Some(
             match key {
-                "sub-ass-override" => "scale",
                 "sub-align-y" => "bottom",
                 "sub-pos" => "100.000000",
                 "sub-align-x" => "center",
@@ -528,8 +521,8 @@ mod tests {
         let never = |_: &str| -> Option<String> { panic!("nothing read before captions") };
         // A film's subtitles: nothing read, nothing written.
         assert!(c.update(Some(false), Some(CENTRED_BOTTOM), wide, never).is_empty());
-        // Captions chosen: drawn plainly at once, placed with the first one.
-        assert_eq!(c.update(Some(true), None, wide, mpv_reads), [("sub-ass-override", "strip".to_owned())]);
+        // Captions chosen: placed with the first one.
+        assert!(c.update(Some(true), None, wide, mpv_reads).is_empty());
         assert_eq!(
             c.update(None, Some(TOP_LEFT), wide, mpv_reads),
             [
@@ -561,7 +554,7 @@ mod tests {
         // was changed.
         assert_eq!(
             c.update(Some(false), None, wide, never),
-            [("sub-ass-override", "scale".to_owned()), ("sub-pos", "100.000000".to_owned())]
+            [("sub-pos", "100.000000".to_owned())]
         );
         // And left alone after that, whatever the text.
         assert!(c.update(Some(false), Some(TOP_LEFT), wide, never).is_empty());

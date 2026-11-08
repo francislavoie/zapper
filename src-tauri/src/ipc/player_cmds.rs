@@ -1304,18 +1304,21 @@ enum SubtitleAsk {
     Choose(Vec<(&'static str, String)>, Option<TrackDto>),
     /// A track no longer listed: another stream opened since the choice was
     /// made (a zap got there first). Subtitles were asked for, so they stay
-    /// on, in the language there was; nothing is set, and the new stream's
-    /// own choice is still to come.
-    Gone,
+    /// on, in the language there was, and are shown (what to set: the new
+    /// stream opened them hidden, if they were off); no track is switched,
+    /// and the new stream's own choice is still to come.
+    Gone(Vec<(&'static str, String)>),
 }
 
-fn subtitle_ask(subtitles: &[TrackDto], id: Option<i64>) -> SubtitleAsk {
-    let selected = subtitles.iter().find(|t| t.selected).map(|t| t.id);
+/// `selected` is the track mpv has chosen now, as mpv says rather than as
+/// the last track list did: setting `sid` to the track it already has makes
+/// mpv start that track over, which can draw a caption twice.
+fn subtitle_ask(subtitles: &[TrackDto], id: Option<i64>, selected: Option<i64>) -> SubtitleAsk {
     let track = match id {
         None => None,
         Some(id) => match subtitles.iter().find(|t| t.id == id) {
             Some(t) => Some(t.clone()),
-            None => return SubtitleAsk::Gone,
+            None => return SubtitleAsk::Gone(vec![("sub-visibility", "yes".to_owned())]),
         },
     };
     SubtitleAsk::Choose(subtitle_command(selected, id), track)
@@ -1869,7 +1872,16 @@ fn tick(app: &AppHandle, p: &Player) {
         Signal::SubText(text) => Some(text.as_str()),
         _ => None,
     });
-    let captions_chosen = track_lists.as_ref().map(|(_, subtitles)| captions::captions_selected(subtitles));
+    // Only a channel's (live or from its archive): a title's subtitles keep
+    // their own positions (see `ass_override`).
+    let broadcast = LAST_OPEN
+        .lock()
+        .ok()
+        .and_then(|l| l.as_ref().map(|(_, _, kind, _)| *kind != OpenKind::OnDemand))
+        .unwrap_or(false);
+    let captions_chosen = track_lists
+        .as_ref()
+        .map(|(_, subtitles)| broadcast && captions::captions_selected(subtitles));
     place_captions(p, captions_chosen, caption_text);
     let mut finished = None;
     // Whether the file mpv has is the one the current open loaded: its
@@ -2827,6 +2839,15 @@ async fn open_as(
         if let Err(e) = p.set_property("stream-lavf-o", &stream_options(kind)) {
             tracing::warn!("could not set the stream's HTTP options: {e}");
         }
+        // Read before it is first written: mpv's own.
+        let own = ASS_OVERRIDE_OWN.get_or_init(|| p.get_string("sub-ass-override").unwrap_or_else(|| "scale".into()));
+        // Only a change: setting it at all starts a caption track over.
+        let wanted = ass_override(kind, own);
+        if p.get_string("sub-ass-override").as_deref() != Some(wanted) {
+            if let Err(e) = p.set_property("sub-ass-override", wanted) {
+                tracing::warn!("could not set how subtitles are styled: {e}");
+            }
+        }
         match &tracks {
             TrackChoice::Keep(aid, sid) => {
                 for (key, value) in [("aid", aid), ("sid", sid)] {
@@ -3344,6 +3365,27 @@ fn stream_options(kind: OpenKind) -> String {
     }
 }
 
+/// How an open of `kind` draws ASS subtitles: a channel's, live or from its
+/// archive, without their positions (`strip`), and anything else as mpv
+/// would (`own`, mpv's own value).
+///
+/// A channel's text subtitles are its closed captions, pinned to a 4:3
+/// grid that mpv misplaces on wide video; `ipc::captions` places them
+/// again. Set before the open rather than when captions are chosen:
+/// changing it while a caption track plays makes mpv start the track over,
+/// and the captions it had are then drawn twice. A movie's or an episode's
+/// subtitles keep what their author placed: real ASS (signs, positioned
+/// dialogue) would be flattened.
+fn ass_override(kind: OpenKind, own: &str) -> &str {
+    match kind {
+        OpenKind::Live | OpenKind::CatchUp(_) => "strip",
+        OpenKind::OnDemand => own,
+    }
+}
+
+/// mpv's own `sub-ass-override`, read before the first open sets it.
+static ASS_OVERRIDE_OWN: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
 /// Where mpv starts the file it is about to open. Set by every open, since
 /// the option outlives the file: a channel opened after a resumed movie must
 /// not begin where the movie did.
@@ -3446,10 +3488,12 @@ fn place_captions(p: &Player, selected: Option<bool>, text: Option<&str>) {
             mb: dim("mb")?,
         })
     })();
+    // A value mpv refuses stays written down as wanted, so it is tried (and
+    // warned about) again only when the value wanted changes, not on every
+    // heartbeat.
     for (key, value) in c.update(selected, text, view.as_ref(), |k| p.get_string(k)) {
         if let Err(e) = p.set_property(key, &value) {
-            tracing::warn!("could not set {key} for the captions: {e}");
-            c.forget(key);
+            tracing::warn!("could not set {key} to {value} for the captions: {e}");
         }
     }
 }
@@ -3489,10 +3533,13 @@ pub async fn set_subtitle_track(
     id: Option<i64>,
 ) -> Result<PlayerOptionsDto, String> {
     let listed = OPTIONS.lock().map(|o| o.subtitles.clone()).unwrap_or_default();
-    let (props, chosen) = match subtitle_ask(&listed, id) {
+    let selected = on_player(&app, |p| Ok(p.get_i64("current-tracks/sub/id"))).await?;
+    let (props, chosen) = match subtitle_ask(&listed, id, selected) {
         SubtitleAsk::Choose(props, chosen) => (props, chosen),
-        SubtitleAsk::Gone => {
+        SubtitleAsk::Gone(props) => {
             set_subtitle_pref(|p| p.on = true);
+            on_player(&app, move |p| apply_properties(p, &props)).await?;
+            commit_options(&app, |o| o.subtitles_visible = true);
             return player_options().await;
         }
     };
@@ -4318,23 +4365,37 @@ mod tests {
         }
 
         #[test]
+        fn the_track_mpv_has_is_never_chosen_again() {
+            // The list may not say yet what mpv chose a moment ago (the
+            // heartbeat's choice of late captions): mpv's word is taken, and
+            // the same track is only shown.
+            let listed = [track(1, "eng"), track(2, "fra")];
+            assert_eq!(
+                subtitle_ask(&listed, Some(1), Some(1)),
+                SubtitleAsk::Choose(vec![("sub-visibility", "yes".to_owned())], Some(track(1, "eng")))
+            );
+        }
+
+        #[test]
         fn a_track_no_longer_listed_keeps_subtitles_on_and_sets_nothing() {
             let listed = [selected(track(1, "eng")), track(2, "fra")];
-            assert_eq!(subtitle_ask(&listed, Some(7)), SubtitleAsk::Gone);
+            // Shown, with no switch: the stream opening may have hidden them.
+            let shown = SubtitleAsk::Gone(vec![("sub-visibility", "yes".to_owned())]);
+            assert_eq!(subtitle_ask(&listed, Some(7), Some(1)), shown);
             // What is listed is chosen as ever.
             assert_eq!(
-                subtitle_ask(&listed, Some(2)),
+                subtitle_ask(&listed, Some(2), Some(1)),
                 SubtitleAsk::Choose(
                     vec![("sid", "2".to_owned()), ("sub-visibility", "yes".to_owned())],
                     Some(track(2, "fra"))
                 )
             );
             assert_eq!(
-                subtitle_ask(&listed, None),
+                subtitle_ask(&listed, None, Some(1)),
                 SubtitleAsk::Choose(vec![("sub-visibility", "no".to_owned())], None)
             );
             // Nothing listed at all (a zap under way): gone too.
-            assert_eq!(subtitle_ask(&[], Some(1)), SubtitleAsk::Gone);
+            assert_eq!(subtitle_ask(&[], Some(1), None), shown);
         }
 
         #[test]
@@ -4586,6 +4647,14 @@ mod tests {
         assert_eq!(stream_options(OpenKind::Live), mpv::NO_RECONNECT);
         let catch_up = OpenKind::CatchUp(CatchUp { near_edge: false });
         assert_eq!(stream_options(catch_up), mpv::NO_RECONNECT);
+    }
+
+    #[test]
+    fn a_channels_subtitles_are_drawn_without_their_positions_and_nothing_else_is() {
+        assert_eq!(ass_override(OpenKind::Live, "scale"), "strip");
+        assert_eq!(ass_override(OpenKind::CatchUp(CatchUp { near_edge: false }), "scale"), "strip");
+        assert_eq!(ass_override(OpenKind::OnDemand, "scale"), "scale");
+        assert_eq!(ass_override(OpenKind::OnDemand, "force"), "force");
     }
 
     #[test]
