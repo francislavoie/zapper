@@ -978,6 +978,35 @@ mod tests {
     }
 
     #[test]
+    fn an_episodes_own_season_beats_where_it_was_listed() {
+        let info: SeriesInfo = serde_json::from_str(
+            r#"{"episodes":{"2":[{"id":1,"season":3,"episode_num":1}]}}"#,
+        )
+        .unwrap();
+        assert_eq!(episode_keys(&info), [(3, 1)]);
+    }
+
+    #[test]
+    fn episodes_come_out_in_season_order_not_key_order() {
+        let info: SeriesInfo = serde_json::from_str(
+            r#"{"episodes":{"10":[{"id":1,"episode_num":1}],"2":[{"id":2,"episode_num":1}]}}"#,
+        )
+        .unwrap();
+        assert_eq!(episode_keys(&info), [(2, 1), (10, 1)]);
+    }
+
+    #[test]
+    fn an_episode_with_no_season_to_go_by_is_in_season_one() {
+        for body in [
+            r#"{"episodes":[{"id":1,"episode_num":1}]}"#,
+            r#"{"episodes":{"extras":[{"id":1,"episode_num":1}]}}"#,
+        ] {
+            let info: SeriesInfo = serde_json::from_str(body).unwrap();
+            assert_eq!(episode_keys(&info), [(1, 1)], "{body}");
+        }
+    }
+
+    #[test]
     fn an_unreadable_episode_is_left_out() {
         let info: SeriesInfo = serde_json::from_str(
             r#"{"episodes":{"1":[{"id":1,"episode_num":1},{"episode_num":2},{"id":3,"episode_num":3}]}}"#,

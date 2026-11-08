@@ -295,6 +295,9 @@ impl XtreamClient {
         Ok(readable(rows, "shows"))
     }
 
+    /// One show's details, seasons and every episode, asked only for the
+    /// show someone opened (never in bulk). Episodes that do not read are
+    /// left out and counted in the log, never failing the rest.
     pub async fn series_info(&self, series_id: i64) -> Result<SeriesInfo> {
         let info: SeriesInfo = self
             .http
