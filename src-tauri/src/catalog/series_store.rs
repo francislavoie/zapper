@@ -467,10 +467,10 @@ pub fn seasons_of(eps: &[EpisodeRow], listed: &[(i32, String)]) -> Vec<SeasonRow
 
 /// The episode a show's main action plays, from its episodes in any order.
 ///
-/// The rule is the spec's: "the episode in progress, else the next unwatched
-/// one after the last watched". Episodes run in order of season, (first)
-/// number and id; specials (season 0) never take part; a multi-episode entry
-/// is one item, and "after" it means after its last number.
+/// The rule: the episode in progress, else the next unwatched one after the
+/// last watched. Episodes run in order of season, (first) number and id;
+/// specials (season 0) never take part; a multi-episode entry is one item,
+/// and "after" it means after its last number.
 ///
 /// 1. The episode in progress (past [`STARTED_FRACTION`], short of
 ///    [`WATCHED_FRACTION`], not marked watched) played most recently. Its

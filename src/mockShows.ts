@@ -77,7 +77,7 @@ const CLOSERS = [
 ];
 const SINGLES = [
   "Undertow", "Outliers", "The Wardens", "Small Hours", "Second Shift", "The Tallies",
-  "Driftwood", "The Keepers", "Low Tide", "Foxglove", "The Lamplighters", "Wayfinders",
+  "Driftwood", "The Lockwardens", "Low Tide", "Foxglove", "The Lamplighters", "Wayfinders",
   "Paper Kingdoms", "Lodestar", "The Understudies", "Quiet Waters",
 ];
 const EPISODE_WORDS_A = [

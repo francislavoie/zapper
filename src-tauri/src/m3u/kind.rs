@@ -206,7 +206,7 @@ mod tests {
         "A Show S2024E01",
         "SUNDIAL 1",
         "Film 2019",
-        "KTV 1x",
+        "Northwind 1x",
         "S1",
         "News 2024.11.07",
         "07.11.2024",
