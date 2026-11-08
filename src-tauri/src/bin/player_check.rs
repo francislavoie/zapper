@@ -27,8 +27,8 @@
 //!
 //! `--held` (with `fake_stream.py --movies 2`) opens a movie held at 30 s,
 //! as Resume / Start over asks: paused there and staying put; Resume
-//! (`toggle_pause`) plays it on from there; held again and then replaced
-//! by an open of the same movie, that one plays.
+//! (`set_paused(false)`, sent twice) plays it on from there; held again
+//! and then replaced by an open of the same movie, that one plays.
 //!
 //! `--pause-then-play` (with `fake_stream.py --movies 2`) checks that Play
 //! plays even when something was paused: a movie paused and stopped, then
@@ -808,7 +808,9 @@ async fn run_held(app: &tauri::AppHandle) -> Result<String, String> {
     }
 
     let held = held_at_30(app, "the first held open").await?;
-    cmds::toggle_pause(app.clone()).await?;
+    // Resume, sent twice (a double press): asking twice is asking once.
+    cmds::set_paused(app.clone(), false).await?;
+    cmds::set_paused(app.clone(), false).await?;
     let (from, to) = plays_on("Resume").await?;
     if !(28.0..=34.0).contains(&from) {
         return Err(format!("Resume played on from {from:.1}s, not where it was held"));
