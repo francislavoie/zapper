@@ -1867,6 +1867,12 @@ export const mockApi = {
     else if (p.state === "paused") patchPlayer({ state: "playing" });
   },
 
+  setPaused: async (paused: boolean) => {
+    const p = playerEmitter.last;
+    if (p.state === "playing" && paused) patchPlayer({ state: "paused" });
+    else if (p.state === "paused" && !paused) patchPlayer({ state: "playing" });
+  },
+
   seekRelative: async (seconds: number) => {
     const p = playerEmitter.last;
     if (p.onDemand?.kind === "episode") return mockShows.seekRelative(seconds);

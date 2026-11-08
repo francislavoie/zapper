@@ -240,6 +240,7 @@ export const webBackend: typeof api = {
     await player.stop();
   },
   togglePause: () => (vod.active() ? vod.togglePause() : player.togglePause()),
+  setPaused: notHere,
   seekRelative: (seconds) =>
     vod.active() ? vod.seekRelative(seconds) : player.seekRelative(seconds),
   seekLive: () => (vod.active() ? Promise.resolve() : player.seekLive()),

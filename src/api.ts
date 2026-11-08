@@ -102,6 +102,9 @@ export const api = {
     invoke<void>("play_catchup", { streamId, start, durationMinutes }),
   stop: () => invoke<void>("stop"),
   togglePause: () => invoke<void>("toggle_pause"),
+  /** Pauses or plays, as `paused` says: asking twice is asking once. Playing
+   *  a title opened held ends its hold. */
+  setPaused: (paused: boolean) => invoke<void>("set_paused", { paused }),
   seekRelative: (seconds: number) => invoke<void>("seek_relative", { seconds }),
   seekLive: () => invoke<void>("seek_live"),
   /** Plays a movie, from `start` seconds or, with `null`, from the start.
