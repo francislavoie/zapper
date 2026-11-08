@@ -17,11 +17,11 @@ import {
   toSearchLanguage,
   trackLanguage,
 } from "../logic/onlineSubtitles.ts";
-import { dateTime, hhmm } from "../logic/format.ts";
+import { dateTime, setTimeFormat } from "../logic/format.ts";
 
 const at = (h, m, day = 4) => new Date(2027, 2, day, h, m).getTime() / 1000;
 const NOW = at(12, 0);
-const WAIT = "OpenSubtitles asked zapper to wait. Try again at ";
+const WAIT = "OpenSubtitles asked zapper to wait. Try again at 14:05.";
 const SPENT = "Your OpenSubtitles downloads for today are used up.";
 
 test("the language table", () => {
@@ -34,6 +34,11 @@ test("toSearchLanguage", () => {
   assert.equal(toSearchLanguage("por"), "pt-pt");
   assert.equal(toSearchLanguage("pt-BR"), "pt-br");
   assert.equal(toSearchLanguage("zho"), "zh-cn");
+  for (const c of ["nb", "nb-NO", "nn", "no"]) assert.equal(toSearchLanguage(c), "no");
+  for (const c of ["zh-Hant", "zh-TW", "zh-HK", "zh-MO", "zh-Hant-TW"]) assert.equal(toSearchLanguage(c), "zh-tw");
+  for (const c of ["zh", "zh-CN", "zh-Hans"]) assert.equal(toSearchLanguage(c), "zh-cn");
+  assert.equal(toSearchLanguage("pt"), "pt-pt");
+  assert.equal(toSearchLanguage("pt-XX"), "pt-pt");
   assert.equal(toSearchLanguage("xx"), null);
   assert.equal(toSearchLanguage(null), null);
   assert.equal(toSearchLanguage(""), null);
@@ -94,12 +99,21 @@ test("resultLine", () => {
 });
 
 test("searchNotice", () => {
+  setTimeFormat("24h");
+  try {
+    searchNoticeChecks();
+  } finally {
+    setTimeFormat("auto");
+  }
+});
+
+function searchNoticeChecks() {
   assert.equal(searchNotice({ kind: "off" }, NOW), "OpenSubtitles is off in Settings › Online services.");
   assert.equal(
     searchNotice({ kind: "unknownTitle" }, NOW),
     "This title isn't in the catalogue, so there is nothing to search by.",
   );
-  assert.equal(searchNotice({ kind: "busy", retryAt: at(14, 5) }, NOW), `${WAIT}${hhmm(at(14, 5))}.`);
+  assert.equal(searchNotice({ kind: "busy", retryAt: at(14, 5) }, NOW), WAIT);
   const res = { kind: "results", results: [], languages: ["en", "fr"], matchedBy: "id" };
   assert.equal(searchNotice(res, NOW), "Nothing found in English and French.");
   const one = { fileId: 1, language: "en", release: "r", hearingImpaired: false, forced: false, trusted: false, downloads: 0, kept: false };
@@ -108,14 +122,25 @@ test("searchNotice", () => {
     "Matched by name: check the release fits this video.",
   );
   assert.equal(searchNotice({ ...res, results: [one] }, NOW), null);
-});
+  assert.equal(searchNotice({ ...res, languages: [] }, NOW), "Nothing found.");
+  assert.equal(searchNotice({ ...res, matchedBy: "name" }, NOW), "Nothing found in English and French.");
+}
 
 test("downloadNotice", () => {
+  setTimeFormat("24h");
+  try {
+    downloadNoticeChecks();
+  } finally {
+    setTimeFormat("auto");
+  }
+});
+
+function downloadNoticeChecks() {
   assert.equal(downloadNotice({ kind: "off" }, NOW), "OpenSubtitles is off in Settings › Online services.");
-  assert.equal(downloadNotice({ kind: "busy", retryAt: at(14, 5) }, NOW), `${WAIT}${hhmm(at(14, 5))}.`);
+  assert.equal(downloadNotice({ kind: "busy", retryAt: at(14, 5) }, NOW), WAIT);
   assert.equal(
     downloadNotice({ kind: "quota", resetAt: at(18, 30) }, NOW),
-    `${SPENT} More from ${hhmm(at(18, 30))}.`,
+    "Your OpenSubtitles downloads for today are used up. More from 18:30.",
   );
   assert.equal(
     downloadNotice({ kind: "quota", resetAt: at(18, 30, 6) }, NOW),
@@ -123,7 +148,7 @@ test("downloadNotice", () => {
   );
   assert.equal(downloadNotice({ kind: "quota", resetAt: null }, NOW), SPENT);
   assert.equal(downloadNotice({ kind: "signIn", refused: false, email: false }, NOW), null);
-});
+}
 
 test("findHeading", () => {
   assert.equal(findHeading({ cleanName: "Film 0001" }, null), "Film 0001");

@@ -84,12 +84,11 @@ export function toSearchLanguage(code: string | null): string | null {
   if (known(c)) return c;
   const byIso3 = OPENSUBTITLES_LANGUAGES.find((l) => l.iso3.includes(c));
   if (byIso3) return byIso3.code;
-  const base = c.split("-")[0];
-  if (base !== c) {
-    if (known(base)) return base;
-    if (BASE_ALIAS[base]) return BASE_ALIAS[base];
-  }
-  return BASE_ALIAS[c] ?? null;
+  const [base, ...rest] = c.split("-");
+  if (base === "zh" && rest.some((r) => ["hant", "tw", "hk", "mo"].includes(r))) return "zh-tw";
+  if (base === "nb" || base === "nn") return "no";
+  if (base !== c && known(base)) return base;
+  return BASE_ALIAS[base] ?? null;
 }
 
 /** The languages to search in, at most two, never none: the ones set in
@@ -175,7 +174,9 @@ export function searchNotice(s: SubtitleSearchDto, _now: number): string | null 
       return tryAt(s.retryAt);
     case "results":
       if (s.results.length === 0) {
-        return `Nothing found in ${list(s.languages.map((l) => languageName(l) ?? l))}.`;
+        return s.languages.length
+          ? `Nothing found in ${list(s.languages.map((l) => languageName(l) ?? l))}.`
+          : "Nothing found.";
       }
       return s.matchedBy === "name" ? "Matched by name: check the release fits this video." : null;
   }
@@ -196,8 +197,14 @@ export function downloadNotice(d: SubtitleDownloadDto, now: number): string | nu
       if (d.resetAt === null) return base;
       return `${base} More from ${sameDay(d.resetAt, now) ? hhmm(d.resetAt) : dateTime(d.resetAt)}.`;
     }
-    default:
+    case "signIn":
+    case "downloaded":
       return null;
+    default: {
+      // A new kind of download must be given its words above.
+      const unhandled: never = d;
+      return unhandled;
+    }
   }
 }
 
