@@ -27,6 +27,7 @@ import {
   showFacts,
   watchedSummary,
 } from "../logic/shows";
+import { showPlayStart } from "../logic/resume";
 import { nextEpisode } from "../logic/upNext";
 import { useApp, useDispatch } from "../store";
 import type { EpisodeDto, PlayingEpisodeDto, SeriesDetailsDto, SeriesDto } from "../types";
@@ -307,7 +308,8 @@ function FavouriteButton({ show }: { show: SeriesDto }) {
 }
 
 /** ▶ Play S2 E4: what is next (disabled for a show without episodes). Opens
- *  the full player and closes the sheet. */
+ *  the full player and closes the sheet. A place given to it since its
+ *  details were read (on another device) is asked about, not played over. */
 export function ShowPlayButton({ show, details }: { show: SeriesDto; details: Async<SeriesDetailsDto> }) {
   const dispatch = useDispatch();
   const d = details.status === "ready" ? details.data : null;
@@ -318,7 +320,7 @@ export function ShowPlayButton({ show, details }: { show: SeriesDto; details: As
       className="ctl primary movie-play show-play"
       disabled={!episode}
       onClick={() => {
-        if (episode) void playEpisode(dispatch, { series: show, episode }, action?.resume ? "resume" : null);
+        if (episode) void playEpisode(dispatch, { series: show, episode }, showPlayStart(action?.resume ?? false));
       }}
     >
       <Play className="i" /> {action ? action.label : "Play"}

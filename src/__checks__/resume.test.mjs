@@ -14,6 +14,7 @@ import {
   promptStep,
   seenFor,
   resumeLabel,
+  showPlayStart,
   resumePoint,
   startPlan,
   timeLeft,
@@ -184,4 +185,11 @@ test("a held title stays held until it plays", () => {
   assert.equal(heldAfter(true, "reopen"), true);    // read again after a break
   assert.equal(heldAfter(false, "seek"), false);
   assert.equal(heldAfter(false, "pause"), false);
+});
+
+test("a show's Play asks about a place it may have been given elsewhere", () => {
+  // Its details say in progress: Resume, from the place as read now.
+  assert.equal(showPlayStart(true), "resume");
+  // Not in progress as far as they know: the place is read as it opens, and asked about if there is one.
+  assert.equal(showPlayStart(false), "ask");
 });
