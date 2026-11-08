@@ -21,9 +21,6 @@ export interface BandItem {
 /** Which of the two leads while both are told of. */
 export type BandLead = "selection" | "playing";
 
-/** What fills the side column with one thing told of. */
-export type BandContext = "later" | "next-episode" | "up-next" | "languages";
-
 export interface BandLayout {
   /** What the main column tells of. */
   main: "selection" | "playing" | null;
@@ -54,23 +51,18 @@ export function bandLayout({ playing, selected, sheetOpen, lead }: BandInput): B
   return { main: null, side: null };
 }
 
-/** The side column's context for the one thing the band tells of. */
-export function bandContext(kind: BandKind): BandContext {
-  switch (kind) {
-    case "channel":
-      return "later";
-    case "episode":
-      return "next-episode";
-    case "show":
-      return "up-next";
-    case "movie":
-      return "languages";
+/** The lead after a store action: a selection in a list (a movie's, a
+ *  show's) puts the selection back in front; ↩ Show (`bandSwap`) puts the
+ *  other one there; anything else leaves it. The store applies this to every
+ *  action, so swapping lasts exactly until the next selection. */
+export function bandLeadAfter(lead: BandLead, action: { type: string }): BandLead {
+  switch (action.type) {
+    case "movies/selectMovie":
+    case "shows/selectShow":
+      return "selection";
+    case "bandSwap":
+      return lead === "selection" ? "playing" : "selection";
+    default:
+      return lead;
   }
-}
-
-/** The lead after a selection (back to the selection) or ↩ Show (the other
- *  one). Swapping lasts until the next selection. */
-export function nextBandLead(lead: BandLead, event: "select" | "swap"): BandLead {
-  if (event === "select") return "selection";
-  return lead === "selection" ? "playing" : "selection";
 }

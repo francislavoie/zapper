@@ -332,18 +332,21 @@ export function ShowActions({
   details,
   playing,
   onDetails,
+  main,
 }: {
   show: SeriesDto;
   details: Async<SeriesDetailsDto>;
   playing: boolean;
   onDetails?: () => void;
+  /** In place of ▶ Play: the episode pane's own main action. */
+  main?: ReactNode;
 }) {
   const dispatch = useDispatch();
   const d = details.status === "ready" ? details.data : null;
   const action = d ? showAction(d) : null;
   return (
     <>
-      {playing ? null : <ShowPlayButton show={show} details={details} />}
+      {main ?? (playing ? null : <ShowPlayButton show={show} details={details} />)}
       {d && !action ? <span className="show-band-none">No episodes yet</span> : null}
       <FavouriteButton show={show} />
       <button className="ctl" onClick={() => void setShowWatched(dispatch, show, !show.watched)}>

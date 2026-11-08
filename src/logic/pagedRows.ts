@@ -128,6 +128,17 @@ export class PageBook<T> {
     this.error = null;
   }
 
+  /** Whether row `index`'s page has been read since the last refresh, not
+   *  only kept from before it. */
+  fresh(index: number): boolean {
+    return this.pages.has(pageOf(index, PAGE_SIZE));
+  }
+
+  /** The rows read since the last refresh. */
+  freshRows(): T[] {
+    return [...this.pages.values()].flat();
+  }
+
   rowAt(index: number): T | undefined {
     if (index < 0 || index >= this.total) return undefined;
     const p = pageOf(index, PAGE_SIZE);

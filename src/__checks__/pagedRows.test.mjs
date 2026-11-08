@@ -112,3 +112,20 @@ test("another list starts empty, not showing the last one's rows", () => {
   assert.equal(b.total, 0);
   assert.equal(b.rowAt(0), undefined);
 });
+
+test("after a refresh, what was read since is told apart from what was kept", () => {
+  const b = new PageBook();
+  b.sync("k", 0);
+  b.begin(b.ticket, 0);
+  b.accept(b.ticket, 0, 3, ["a", "b", "c"]);
+  assert.equal(b.fresh(1), true);
+  b.sync("k", 1);
+  // Still drawn from before, but not read again yet.
+  assert.equal(b.rowAt(1), "b");
+  assert.equal(b.fresh(1), false);
+  assert.deepEqual(b.freshRows(), []);
+  b.begin(b.ticket, 0);
+  b.accept(b.ticket, 0, 2, ["a", "c"]);
+  assert.equal(b.fresh(1), true);
+  assert.deepEqual(b.freshRows(), ["a", "c"]);
+});

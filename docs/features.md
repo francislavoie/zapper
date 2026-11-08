@@ -79,7 +79,7 @@ interface have their own page: [recording.md](recording.md).
 - A click on a show opens its episodes in a pane beside the list: Play for the next episode, the
   seasons as tabs, and each episode with its still, title, plot, length and watched mark, the next
   one and the one playing tagged. `↑`/`↓` in the list and the pane follows; `Enter` or `→` go into
-  the episodes, `Enter` plays, `[`/`]` change season, `←` or `Esc` go back to the list, and `Esc`
+  the episodes (in Posters, `←`/`→` move along the row and `Enter` goes in), `Enter` plays, `[`/`]` change season, `←` or `Esc` go back to the list, and `Esc`
   again (or the mouse's back button) closes the pane. Stacked under the picture, the pane opens in
   the list's place.
 - Details (or a double-click) opens the show's sheet: the backdrop and poster, the plot and cast,
@@ -110,7 +110,7 @@ interface have their own page: [recording.md](recording.md).
   language you last picked, across launches too.
 - Subtitle font, size, colour and backdrop.
 - Mouse: wheel for volume, double-click for fullscreen, double-click the edges to skip. Theater
-  mode (`T`). The back button steps back like `Esc` (a menu, a sheet, the player), then to the
+  mode (`T`). The back button steps back like `Esc` (a menu, a sheet, the Shows pane, the player), then to the
   tab or category before; forward goes ahead again.
 - Stats (`S`): bitrate, buffer, resolution, codec, dropped frames and stalls.
 - When a provider ends or refuses a stream (for example because another device took the

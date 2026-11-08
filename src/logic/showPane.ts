@@ -3,8 +3,8 @@
 // exercised by src/__checks__/showPane.test.mjs.
 //
 //   list      ↑ ↓ move the selection (the pane follows); Enter or → go into
-//             the episodes, opening the pane if it is closed; Esc closes it
-//             (the Escape chain, logic/escape.ts).
+//             the episodes, opening the pane if it is closed. Esc there is
+//             the Escape chain's (logic/escape.ts), which closes the pane.
 //   episodes  ↑ ↓ move the cursor; Enter plays; [ ] change season; ← or Esc
 //             go back to the list, the pane staying open.
 
@@ -40,6 +40,9 @@ export function paneKey(
       case "ArrowLeft":
       case "Escape":
         return { zone: "list" };
+      case "ArrowRight":
+        // Nowhere further right; taken so it does not seek the player.
+        return { zone };
       default:
         return null;
     }
@@ -47,7 +50,6 @@ export function paneKey(
   if (key === "Enter" || (key === "ArrowRight" && !o.posters)) {
     return o.selected ? { zone: "episodes" } : null;
   }
-  if (key === "Escape" && zone === "list") return { zone: "closed" };
   return null;
 }
 
