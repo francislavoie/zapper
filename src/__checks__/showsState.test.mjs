@@ -127,6 +127,12 @@ test("a sync reads the lists again with the service's marks", () => {
   assert.deepEqual(s.seriesMarks, {});
   assert.equal(s.revision, rev + 1);
 });
+test("choosing a rail item marks the selection as chosen", () => {
+  let s = initialShows("list");
+  assert.equal(s.chosen, false);
+  s = showsReducer(s, { type: "shows/select", id: SHOW_FAVOURITES });
+  assert.equal(s.chosen, true);
+});
 test("only shows/ actions are the shows reducer's", () => {
   assert.equal(isShowsAction({ type: "movies/query" }), false);
   assert.equal(isShowsAction({ type: "shows/query" }), true);

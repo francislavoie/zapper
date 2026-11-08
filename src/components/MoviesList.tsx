@@ -22,7 +22,7 @@ import { saveMoviesView } from "../moviesView";
 import { useApp, useDispatch } from "../store";
 import type { MovieDto, MovieSort } from "../types";
 import { MovieRow } from "./MovieRow";
-import { OnDemandList } from "./OnDemandList";
+import { OnDemandList, type Marks } from "./OnDemandList";
 
 /** The one cache every Movies list draws from: the browse grid's and the one
  *  stacked under the picture show the same titles. */
@@ -30,10 +30,13 @@ const MOVIE_PAGES = new PageBook<MovieDto>();
 
 const MOVIE_COLUMNS = ["", "Title", "Year", "Length", "Rating", ""] as const;
 const idOf = (m: MovieDto) => m.movieId;
-const withMarks = (m: MovieDto, k: { favourite: boolean; watched: boolean }): MovieDto => ({
+const withMarks = (m: MovieDto, k: Marks): MovieDto => ({
   ...m,
   favourite: k.favourite,
   watched: k.watched,
+  position: k.position === undefined ? m.position : k.position,
+  duration: k.duration === undefined ? m.duration : k.duration,
+  playedAt: k.playedAt === undefined ? m.playedAt : k.playedAt,
 });
 
 /** `besideRail`: this list shares the browse grid with the rail, so the
