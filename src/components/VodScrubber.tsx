@@ -13,7 +13,7 @@
 // keys do; the event stops here so the one press is not two seeks.
 
 import { useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
-import { backend } from "../backend";
+import { seekBy, seekTo } from "../actions";
 import { clock } from "../logic/format";
 import {
   VOD_SKIP_SECONDS,
@@ -22,7 +22,7 @@ import {
   seekTarget,
   vodTimes,
 } from "../logic/vodTransport";
-import { run, useDispatch } from "../store";
+import { useDispatch } from "../store";
 import type { OnDemandDto } from "../types";
 
 export interface VodScrubberProps {
@@ -55,7 +55,7 @@ export function VodScrubber({ onDemand, compact = false, onPin }: VodScrubberPro
 
   const seek = (seconds: number | null) => {
     if (seconds === null) return;
-    void run(dispatch, "seek", backend.seekTo(seconds));
+    void seekTo(dispatch, seconds);
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
@@ -64,7 +64,7 @@ export function VodScrubber({ onDemand, compact = false, onPin }: VodScrubberPro
     if (by === 0) return;
     e.preventDefault();
     e.stopPropagation();
-    void run(dispatch, "seek", backend.seekRelative(by));
+    void seekBy(dispatch, by);
   };
 
   const onPointerDown = (e: PointerEvent<HTMLDivElement>) => {
