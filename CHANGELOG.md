@@ -11,6 +11,7 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
 
 ### Added
 
+- **Progress at a glance**: movies you are partway through show a progress bar, and the posters view has a Continue watching strip above it.
 - **Resume or start over**: opening a movie or episode you left partway pauses it at your place and asks whether to resume or start over.
 - **Movies**: a tab (`M`) for an Xtream account's or a playlist's movies. Browse by category as a
   list or posters, sort, filter by year, search, mark favourites and watched, and open a details

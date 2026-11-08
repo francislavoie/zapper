@@ -5,6 +5,7 @@
 import { useCallback, useMemo } from "react";
 import { backend } from "../backend";
 import { useSettledSearch } from "../hooks/useSettledSearch";
+import { useStrip } from "../hooks/useStrip";
 import { continueShown } from "../logic/continueWatching";
 import {
   MOVIE_SEARCH_PLACEHOLDER,
@@ -30,7 +31,7 @@ import { OnDemandList, type Marks } from "./OnDemandList";
  *  stacked under the picture show the same titles. */
 const MOVIE_PAGES = new PageBook<MovieDto>();
 
-const MOVIE_COLUMNS = ["", "Title", "Year", "Length", "Rating", ""] as const;
+const MOVIE_COLUMNS = ["", "Title", "Year", "Length", "Rating", "Progress", ""] as const;
 const idOf = (m: MovieDto) => m.movieId;
 const withMarks = (m: MovieDto, k: Marks): MovieDto => ({
   ...m,
@@ -67,6 +68,8 @@ export function MoviesList({ besideRail = true }: { besideRail?: boolean }) {
   const continuing = continueShown(movies.selection, searched);
   const categories = movies.categories.status === "ready" ? movies.categories.data : [];
   const heading = searching ? "Search results" : movieTitle(movies.selection, categories);
+
+  const above = useStrip("movies", movies.view, movies.selection, searched);
 
   const selectedId = movies.selected?.movieId ?? null;
   const state = useMemo(
@@ -126,6 +129,7 @@ export function MoviesList({ besideRail = true }: { besideRail?: boolean }) {
         countLabel={movieCount}
         placeholder={MOVIE_SEARCH_PLACEHOLDER}
         emptyNote={emptyNote(movies.selection, searching, searched, movies.years)}
+        above={above}
         columns={MOVIE_COLUMNS}
         Row={MovieRow}
         card={movieCard}

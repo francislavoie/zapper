@@ -5,7 +5,7 @@
 
 import type { ContinueItemDto, ContinueKind } from "../types";
 import { runtime } from "./format.ts";
-import type { PosterCard } from "./movies.ts";
+import type { MoviesView, PosterCard } from "./movies.ts";
 import { CONTINUE } from "./railItems.ts";
 import { progressOf, timeLeft, watchedWhen, type Place } from "./resume.ts";
 import { episodeCode, episodeTitle } from "./shows.ts";
@@ -145,4 +145,29 @@ export function stripCard(i: ContinueItemDto, now: number): StripCard {
 /** "1 title", "4 titles". */
 export function continueCount(n: number): string {
   return `${n.toLocaleString()} ${n === 1 ? "title" : "titles"}`;
+}
+
+/** The pane narrower than this has no room for a strip above the posters. */
+export const STRIP_MIN_PANE_PX = 480;
+/** A strip card's width: 16:9 art. */
+export const STRIP_CARD_WIDTH = 240;
+
+/** Whether the strip of Continue watching cards is drawn above the posters:
+ *  in Posters view, not on Continue watching itself, with no title search
+ *  typed, with something to show, and a pane tall enough to leave the
+ *  posters room. */
+export function stripShown(
+  view: MoviesView,
+  selection: string,
+  query: string,
+  items: number,
+  paneHeight: number,
+): boolean {
+  return (
+    view === "posters" &&
+    selection !== CONTINUE &&
+    !isTitleSearch(query) &&
+    items > 0 &&
+    paneHeight >= STRIP_MIN_PANE_PX
+  );
 }

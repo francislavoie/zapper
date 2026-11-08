@@ -24,6 +24,7 @@ import {
   useState,
   type ComponentType,
   type KeyboardEvent,
+  type ReactNode,
 } from "react";
 import { searchInputRegistration } from "../focus";
 import { useClock } from "../hooks/useClock";
@@ -131,6 +132,9 @@ export interface OnDemandListProps<T> {
   emptyNote: string;
   /** The .list-cols labels, an empty string for an unlabelled column. */
   columns: readonly string[];
+  /** Drawn between the header and the list, in the posters view only: what
+   *  sits above the grid. A function is given the pane's height. */
+  above?: ReactNode | ((paneHeight: number) => ReactNode);
   /** Memoised; it keeps its render while its props do. */
   Row: ComponentType<VodRowProps<T>>;
   /** What a poster card draws; the same function from render to render. */
@@ -187,6 +191,8 @@ function sameRow(a: object, b: object): boolean {
 export function OnDemandList<T extends object>(p: OnDemandListProps<T>) {
   const { state, on, idOf, withMarks, Row } = p;
   const viewportRef = useRef<HTMLDivElement | null>(null);
+  const paneRef = useRef<HTMLElement | null>(null);
+  const [paneHeight, setPaneHeight] = useState(0);
   const sortRef = useRef<HTMLButtonElement | null>(null);
   const yearsRef = useRef<HTMLButtonElement | null>(null);
   const searchRef = useMemo(searchInputRegistration, []);
@@ -236,6 +242,17 @@ export function OnDemandList<T extends object>(p: OnDemandListProps<T>) {
     const el = viewportRef.current;
     if (!el) return;
     const measure = () => setSize({ width: el.clientWidth, height: el.clientHeight });
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const el = paneRef.current;
+    if (!el) return;
+    const measure = () => setPaneHeight(el.clientHeight);
     measure();
     if (typeof ResizeObserver === "undefined") return;
     const ro = new ResizeObserver(measure);
@@ -524,7 +541,7 @@ export function OnDemandList<T extends object>(p: OnDemandListProps<T>) {
   const empty = total === 0 && !loading && !error;
 
   return (
-    <main className={`list-pane ${p.kindClass}-pane`}>
+    <main className={`list-pane ${p.kindClass}-pane`} ref={paneRef}>
       <div className="list-head">
         {p.besideRail ? <RailToggle /> : null}
         <span className="list-title" data-tip-overflow="">
@@ -603,6 +620,8 @@ export function OnDemandList<T extends object>(p: OnDemandListProps<T>) {
           ))}
         </div>
       )}
+
+      {posters ? (typeof p.above === "function" ? p.above(paneHeight) : (p.above ?? null)) : null}
 
       {error ? (
         <div className="pane-error">
