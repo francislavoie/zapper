@@ -50,6 +50,13 @@ answers player_api.php's get_vod_categories, get_vod_streams (optionally
 even mp4) as a file: Accept-Ranges, and 206 with Content-Range for a Range
 header. A movie being sent counts in active_cons like a live stream.
 
+A client that keeps its connection for another request (HTTP/1.1
+keep-alive) has it kept until it closes it, unless told otherwise:
+
+  tools/fake_stream.py --series 1 --keep-alive-timeout 5   # an idle one is closed after 5 s
+
+as many servers do with a connection nobody has used for a while.
+
 Made-up series (also needs the movie fixtures):
 
   tools/fake_stream.py --series 30    # 30 shows, "Show 0001"..., over 3 categories
@@ -918,8 +925,15 @@ def main():
     ap.add_argument("--live-fixture", default=None, metavar="NAME",
                     help="the fixture /live/<user>/<pass>/<id>.ts and catch-up serve "
                          "(default sample1080.ts, or the first there is)")
+    ap.add_argument("--keep-alive-timeout", type=float, default=0.0, metavar="SECONDS",
+                    help="close a connection kept alive for another request once it has been "
+                         "idle this long (default: never)")
     ap.add_argument("--verbose", action="store_true")
     a = ap.parse_args()
+    if a.keep_alive_timeout > 0:
+        # The socket's timeout: waiting for the next request on a kept
+        # connection gives up after it, and the connection is closed.
+        Handler.timeout = a.keep_alive_timeout
     if a.panel_utc_offset is not None:
         Handler.panel_offset = round(a.panel_utc_offset * 3600)
     Handler.archive_days = a.archive_days

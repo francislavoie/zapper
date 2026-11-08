@@ -3282,21 +3282,30 @@ fn commit_options(app: &AppHandle, f: impl FnOnce(&mut PlayerOptionsDto)) -> Pla
 }
 
 /// FFmpeg's HTTP options for an open of `kind`: never reconnecting by
-/// itself ([`mpv::NO_RECONNECT`]), and for a movie or an episode, asking to
-/// keep the connection for another request.
+/// itself to a stream that was cut off ([`mpv::NO_RECONNECT`]), and for a
+/// movie or an episode, a seek's request made again, once, on a fresh
+/// connection when the one it was made on has gone.
 ///
 /// A title is seekable, and mpv seeks it below its cache whenever a track
 /// is switched while it plays (it goes back for the new track's packets, and
 /// a Matroska file reads its index from the end first). Once the whole of a
-/// small file has arrived, FFmpeg (8.1) makes that seek on the connection
-/// that carried it, which it had asked the server to close: the request
-/// meets the end of the connection, the seek fails, and the title ends as
-/// if dropped. Keeping the connection open makes that request work. Live
-/// channels never seek below the cache, and are left as they were. Set by
-/// every open, since the option outlives the file.
+/// small file has arrived, FFmpeg (8.1) makes that request on the
+/// connection that carried it: closed at once when FFmpeg had asked the
+/// server to close it, and after the server's idle timeout when it had
+/// asked to keep it (`multiple_requests`). Either way the request meets the
+/// end of the connection, the seek fails, and the title ends as if dropped.
+/// `reconnect_on_network_error` makes that one request again on a new
+/// connection (it is about failing to connect, not about a stream cut off
+/// as it played, which stays ended); `multiple_requests` saves that second
+/// connection while the first is still open. Live channels never seek below
+/// the cache, and are left as they were. Set by every open, since the
+/// option outlives the file.
 fn stream_options(kind: OpenKind) -> String {
     match kind {
-        OpenKind::OnDemand => format!("{},multiple_requests=1", mpv::NO_RECONNECT),
+        OpenKind::OnDemand => format!(
+            "{},multiple_requests=1,reconnect_on_network_error=1,reconnect_max_retries=1",
+            mpv::NO_RECONNECT
+        ),
         OpenKind::Live | OpenKind::CatchUp(_) => mpv::NO_RECONNECT.to_owned(),
     }
 }
@@ -4444,10 +4453,12 @@ mod tests {
     }
 
     #[test]
-    fn only_a_title_keeps_its_connection_for_another_request() {
+    fn only_a_title_makes_a_seeks_request_again_on_a_fresh_connection() {
         let title = stream_options(OpenKind::OnDemand);
         assert!(title.starts_with(mpv::NO_RECONNECT));
-        assert!(title.ends_with(",multiple_requests=1"));
+        assert!(title.contains(",multiple_requests=1"));
+        // Once: a provider refusing is not asked again and again.
+        assert!(title.ends_with(",reconnect_on_network_error=1,reconnect_max_retries=1"));
         assert_eq!(stream_options(OpenKind::Live), mpv::NO_RECONNECT);
         let catch_up = OpenKind::CatchUp(CatchUp { near_edge: false });
         assert_eq!(stream_options(catch_up), mpv::NO_RECONNECT);
