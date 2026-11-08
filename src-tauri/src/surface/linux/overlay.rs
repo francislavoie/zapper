@@ -572,17 +572,8 @@ fn survive_a_failed_interface(webview: &webkit2gtk::WebView, win: &gtk::Window) 
     });
 }
 
-/// Stops WebKit offering Back / Forward / Stop / Reload / Inspect Element.
-///
-/// Those are a browser's menu, and this is not a browser: none of them mean
-/// anything here, and "Reload" would throw away the running player. The one
-/// case worth keeping is editing, where Cut / Copy / Paste are genuinely
-/// useful, so a right-click in a text field gets a menu trimmed to exactly
-/// those and nothing else.
-///
-/// This lives at the GTK level rather than as a `contextmenu` handler in the
-/// page because a missed listener is a leaked browser menu, and the failure is
-/// invisible until somebody right-clicks the one element nobody covered.
+/// Takes the mouse's back and forward buttons before wry does, and hands
+/// the page which one was pressed.
 fn side_buttons(webview: &webkit2gtk::WebView) {
     use gtk::gdk::EventType;
 
@@ -628,6 +619,17 @@ fn side_buttons(webview: &webkit2gtk::WebView) {
     });
 }
 
+/// Stops WebKit offering Back / Forward / Stop / Reload / Inspect Element.
+///
+/// Those are a browser's menu, and this is not a browser: none of them mean
+/// anything here, and "Reload" would throw away the running player. The one
+/// case worth keeping is editing, where Cut / Copy / Paste are genuinely
+/// useful, so a right-click in a text field gets a menu trimmed to exactly
+/// those and nothing else.
+///
+/// This lives at the GTK level rather than as a `contextmenu` handler in the
+/// page because a missed listener is a leaked browser menu, and the failure is
+/// invisible until somebody right-clicks the one element nobody covered.
 fn suppress_browser_menu(webview: &webkit2gtk::WebView) {
     use webkit2gtk::{ContextMenuAction, ContextMenuExt, ContextMenuItem, HitTestResultExt};
 
