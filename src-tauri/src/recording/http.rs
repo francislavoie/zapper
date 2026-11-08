@@ -481,6 +481,7 @@ pub(crate) mod tests {
     use crate::catalog::vod_store::VodItem;
     use crate::recording::budget::{Budget, Slots};
     use crate::recording::config::{self, ServerConfig};
+    use crate::recording::test_fixtures::{aac_encoder_or_skip, decoder_or_skip, skip, NO_FIXTURE};
     use crate::recording::api::RecordingState;
     use crate::recording::store;
 
@@ -3198,7 +3199,7 @@ pub(crate) mod tests {
                 .ok()?
                 .success();
             let bytes = made.then(|| std::fs::read(&out).ok()).flatten();
-            crate::recording::vodmux::tests::keep_or_remove(&dir);
+            crate::recording::test_fixtures::keep_or_remove(&dir);
             bytes.map(Arc::new)
         })
         .clone()
@@ -3206,12 +3207,12 @@ pub(crate) mod tests {
 
     /// Every movie's file is a plain [`mp4`] at the fake provider; the
     /// provider's address and counts, and the file. `None` without the
-    /// ffmpeg command, said so.
+    /// ffmpeg command, said so (a failure where it is required).
     async fn mp4s_from(
         s: &Shared,
     ) -> Option<(String, Arc<crate::recording::upstream::fake::Counts>, Arc<Vec<u8>>)> {
         let Some(film) = mp4(false) else {
-            eprintln!("skipped: no ffmpeg command to make a fixture with");
+            skip(NO_FIXTURE);
             return None;
         };
         let (base, counts) = films_from(s, &film, "").await;
@@ -3670,8 +3671,7 @@ pub(crate) mod tests {
     async fn a_seek_reopens_from_the_new_time() {
         use std::sync::atomic::Ordering;
         let Some(film) = film() else {
-            eprintln!("skipped: no ffmpeg command to make a fixture with");
-            return;
+            return skip(NO_FIXTURE);
         };
         let _catalogue = movie_catalogue();
         let s = server("vod-remux");
@@ -3733,8 +3733,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn the_watch_answer_lists_the_films_audio() {
         let Some(film) = film() else {
-            eprintln!("skipped: no ffmpeg command to make a fixture with");
-            return;
+            return skip(NO_FIXTURE);
         };
         let _catalogue = movie_catalogue();
         let s = server("vod-tracks");
@@ -3759,7 +3758,7 @@ pub(crate) mod tests {
             [(0, "aac".into(), "eng".into()), (1, "ac3".into(), "fre".into())],
             "the file's, not the details'"
         );
-        if crate::recording::livemux::can_encode_aac() {
+        if aac_encoder_or_skip() {
             assert_eq!(body["audioIndex"], 1);
             assert_eq!(body["converting"], true, "no AC-3 in this browser");
         }
@@ -3805,11 +3804,9 @@ pub(crate) mod tests {
     async fn an_mp4_with_text_subtitles_is_remuxed_to_show_them() {
         use std::sync::atomic::Ordering;
         let Some(film) = mp4(true) else {
-            eprintln!("skipped: no ffmpeg command to make a fixture with");
-            return;
+            return skip(NO_FIXTURE);
         };
-        if !crate::recording::vodmux::can_decode("mov_text") {
-            eprintln!("skipped: this FFmpeg has no decoder for MP4's subtitles");
+        if !decoder_or_skip("mov_text") {
             return;
         }
         let _catalogue = movie_catalogue();
@@ -3867,8 +3864,7 @@ pub(crate) mod tests {
     async fn subtitles_come_from_the_same_read_in_the_films_time() {
         use std::sync::atomic::Ordering;
         let Some(film) = film() else {
-            eprintln!("skipped: no ffmpeg command to make a fixture with");
-            return;
+            return skip(NO_FIXTURE);
         };
         let _catalogue = movie_catalogue();
         let s = server("vod-subs");
@@ -4027,8 +4023,7 @@ pub(crate) mod tests {
         use crate::recording::vodwatch::vod_feed;
         use std::sync::atomic::Ordering;
         let (Some(plain), Some(film)) = (mp4(false), film()) else {
-            eprintln!("skipped: no ffmpeg command to make a fixture with");
-            return;
+            return skip(NO_FIXTURE);
         };
         let _catalogue = movie_catalogue();
         let s = server("vod-episode");
@@ -4302,8 +4297,7 @@ pub(crate) mod tests {
         let folder = s.dir_for_test().join("Recorded");
         std::fs::create_dir_all(&folder).unwrap();
         let Some(ts) = ts_fixture(&folder) else {
-            eprintln!("skipped: no ffmpeg command to make a fixture with");
-            return;
+            return skip(NO_FIXTURE);
         };
         let t = now();
         let id = s

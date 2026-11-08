@@ -435,9 +435,11 @@ pub fn spawn(
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
+mod tests {
     use super::*;
-    use crate::recording::livemux::can_encode_aac;
+    use crate::recording::test_fixtures::{
+        aac_encoder_or_skip, decoder_or_skip, keep_or_remove, skip, NO_FIXTURE,
+    };
     use crate::recording::tsprobe::{Audio, Tables, Video};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex, OnceLock};
@@ -537,15 +539,6 @@ pub(crate) mod tests {
         bytes
     }
 
-    /// Removes a fixture's directory, or keeps it and says where when
-    /// `ZAPPER_KEEP_FIXTURES` is set, to look at the file a test read.
-    pub(crate) fn keep_or_remove(dir: &std::path::Path) {
-        if std::env::var_os("ZAPPER_KEEP_FIXTURES").is_some() {
-            eprintln!("fixture kept in {}", dir.display());
-        } else {
-            let _ = std::fs::remove_dir_all(dir);
-        }
-    }
 
     fn encode_plan(info: &MediaInfo) -> Result<VodPlan, String> {
         Ok(VodPlan {
@@ -593,11 +586,9 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn an_mkv_with_ac3_comes_out_as_ts_with_aac() {
         let Some(file) = fixture(true, false) else {
-            eprintln!("skipped: no ffmpeg command to make a fixture with");
-            return;
+            return skip(NO_FIXTURE);
         };
-        if !can_encode_aac() {
-            eprintln!("skipped: this FFmpeg has no AAC encoder");
+        if !aac_encoder_or_skip() {
             return;
         }
         let (input, _) = mem(&file);
@@ -630,8 +621,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn text_subtitles_come_out_as_cues_on_the_outputs_timeline() {
         let Some(file) = fixture(true, false) else {
-            eprintln!("skipped: no ffmpeg command to make a fixture with");
-            return;
+            return skip(NO_FIXTURE);
         };
         let (input, _) = mem(&file);
         let (info, mut vod) = spawn(input, 0.0, |_| Ok(VodPlan { audio: None, encode: false }));
@@ -656,11 +646,9 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn starting_at_ten_seconds_seeks_rather_than_reading_from_the_start() {
         let Some(file) = fixture(false, false) else {
-            eprintln!("skipped: no ffmpeg command to make a fixture with");
-            return;
+            return skip(NO_FIXTURE);
         };
-        if !can_decode("mov_text") {
-            eprintln!("skipped: this FFmpeg has no decoder for MP4's subtitles");
+        if !decoder_or_skip("mov_text") {
             return;
         }
         let (input, seeks) = mem(&file);
@@ -710,8 +698,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn text_subtitles_are_offered_only_when_this_ffmpeg_reads_them() {
         let Some(file) = fixture(false, false) else {
-            eprintln!("skipped: no ffmpeg command to make a fixture with");
-            return;
+            return skip(NO_FIXTURE);
         };
         let (input, _) = mem(&file);
         let (info, mut vod) = spawn(input, 0.0, |_| Ok(VodPlan { audio: None, encode: false }));
@@ -732,8 +719,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn a_refused_plan_reports_its_reason_and_writes_nothing() {
         let Some(file) = fixture(false, false) else {
-            eprintln!("skipped: no ffmpeg command to make a fixture with");
-            return;
+            return skip(NO_FIXTURE);
         };
         let (input, _) = mem(&file);
         let (info, mut vod) = spawn(input, 0.0, |_| Err("no browser here plays this video".into()));
@@ -756,8 +742,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn a_panicking_plan_is_an_error_not_an_abort() {
         let Some(file) = fixture(false, false) else {
-            eprintln!("skipped: no ffmpeg command to make a fixture with");
-            return;
+            return skip(NO_FIXTURE);
         };
         let (input, _) = mem(&file);
         let (info, mut vod) = spawn(input, 0.0, |_| panic!("plan bug"));
@@ -801,8 +786,7 @@ pub(crate) mod tests {
         let file = made.ok().filter(|s| s.success()).and_then(|_| std::fs::read(&out).ok());
         let _ = std::fs::remove_dir_all(&dir);
         let Some(file) = file else {
-            eprintln!("skipped: no ffmpeg command to make a fixture with");
-            return;
+            return skip(NO_FIXTURE);
         };
         let (input, _) = mem(&file);
         let (info, mut vod) = spawn(input, 0.0, |_| Ok(VodPlan { audio: None, encode: false }));
@@ -818,8 +802,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn the_remuxer_stops_when_its_reader_leaves() {
         let Some(file) = fixture(false, true) else {
-            eprintln!("skipped: no ffmpeg command to make a fixture with");
-            return;
+            return skip(NO_FIXTURE);
         };
         let (input, _) = mem(&file);
         let (info, mut vod) = spawn(input, 0.0, |_| Ok(VodPlan { audio: None, encode: false }));
