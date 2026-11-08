@@ -24,6 +24,11 @@ export function titleNeedles(query: string): string[] {
     .filter((a) => a !== "");
 }
 
+/** Whether the text asks for anything: only pipes and spaces do not. */
+export function isTitleSearch(text: string): boolean {
+  return titleNeedles(text).length > 0;
+}
+
 const WORD = /[\p{L}\p{N}]/u;
 
 /** Whether `name` matches any of `needles` (from titleNeedles); with none,

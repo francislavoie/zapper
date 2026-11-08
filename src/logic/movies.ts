@@ -13,6 +13,7 @@ import type {
 } from "../types";
 import type { Async } from "./async.ts";
 import type { FixedRailItem } from "./railItems.ts";
+import { isTitleSearch } from "./titleMatch.ts";
 
 export const MOVIE_FAVOURITES = "*favourites*";
 export const MOVIE_RECENT = "*added*";
@@ -117,10 +118,11 @@ export function vodQuery(
   years: YearRange | null,
   search: string,
 ): MovieQueryDto {
-  const text = search.trim();
   const yearFrom = years?.from ?? null;
   const yearTo = years?.to ?? null;
-  if (text !== "") return { list: "all", categoryId: null, sort, yearFrom, yearTo, search: text };
+  if (isTitleSearch(search)) {
+    return { list: "all", categoryId: null, sort, yearFrom, yearTo, search: search.trim() };
+  }
   return {
     list: kind,
     categoryId: kind === "category" ? selection : null,

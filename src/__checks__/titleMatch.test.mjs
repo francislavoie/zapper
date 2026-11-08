@@ -5,7 +5,7 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { foldTitle, titleMatches, titleNeedles } from "../logic/titleMatch.ts";
+import { foldTitle, isTitleSearch, titleMatches, titleNeedles } from "../logic/titleMatch.ts";
 
 const matches = (query, name) => titleMatches(titleNeedles(query), name);
 
@@ -21,16 +21,16 @@ test("a slash ends a word", () => {
 });
 
 test("a phrase matches in order, from a word's start", () => {
-  assert.equal(matches("dark kni", "The Dark Knight"), true);
-  assert.equal(matches("knight dark", "The Dark Knight"), false);
-  assert.equal(matches("ark", "The Dark Knight"), false);
+  assert.equal(matches("amber lan", "The Amber Lantern"), true);
+  assert.equal(matches("lantern amber", "The Amber Lantern"), false);
+  assert.equal(matches("mber", "The Amber Lantern"), false);
 });
 
 test("case, accents and runs of spaces do not count", () => {
   assert.equal(matches("en -", "EN - A Movie"), true);
   assert.equal(matches("éte", "L'Été"), true);
   assert.equal(matches("ete", "L'Été"), true);
-  assert.equal(matches("dark   kni", "The  Dark \t Knight"), true);
+  assert.equal(matches("amber   lan", "The  Amber \t Lantern"), true);
   assert.equal(foldTitle("  L'Été \t à  la plage "), "l'ete a la plage");
 });
 
@@ -40,4 +40,7 @@ test("a pipe is either side, and empty sides are no search", () => {
   assert.equal(matches("|harbour|", "Harbour Lights"), true);
   assert.deepEqual(titleNeedles(" | "), []);
   assert.equal(matches("", "Anything"), true);
+  assert.equal(isTitleSearch(" | "), false);
+  assert.equal(isTitleSearch("|"), false);
+  assert.equal(isTitleSearch("|en -"), true);
 });
