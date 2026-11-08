@@ -26,8 +26,7 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
 - Up next plays a next episode you had started from where you left it.
 - Movies and episodes play in the browser through the recording service, converted on the fly when
   the browser can't play the file. Text subtitles included.
-- Subtitles from OpenSubtitles for movies and episodes, downloaded with your own free OpenSubtitles
-  account and kept with the title for next time.
+- Subtitles from OpenSubtitles for movies and episodes, with your own free account.
 - Off-air channels: when the provider sends a placeholder clip instead of the broadcast, zapper
   says so and suggests channels showing the same programmes. Recordings retry until the broadcast
   starts.
