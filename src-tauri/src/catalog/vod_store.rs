@@ -8,11 +8,12 @@
 use anyhow::Result;
 use rusqlite::types::Value;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Row};
+use std::sync::OnceLock;
 
 use crate::catalog::origin::current_origin_sql;
 use crate::catalog::series_store;
 use crate::catalog::title_search::searched_name_sql;
-use crate::catalog::vod_progress::is_finished;
+use crate::catalog::vod_progress::{is_finished, STARTED_FRACTION, WATCHED_FRACTION};
 
 /// "Recently added" is this many days back.
 pub const RECENT_DAYS: i64 = 30;
@@ -144,7 +145,7 @@ pub struct Marks {
 }
 
 /// What [`row`] reads: the movie, then its marks.
-pub(crate) const COLUMNS: &str = "m.movie_id, m.name, m.clean_name, m.year, m.rating,
+const COLUMNS: &str = "m.movie_id, m.name, m.clean_name, m.year, m.rating,
     m.poster_url, m.added, m.duration_secs, m.category_id,
     k.favourite_at IS NOT NULL, k.watched_at IS NOT NULL,
     k.position, k.duration, k.played_at";
@@ -158,13 +159,13 @@ const MARKED: &str = concat!(
 
 /// The marks first, for the lists that are marks: a few rows to look up in
 /// the movies, rather than every movie to look up a mark for.
-pub(crate) const MARKS_FIRST: &str = concat!(
+const MARKS_FIRST: &str = concat!(
     "vod_marks k JOIN movies m ON m.movie_id = k.item_id AND k.origin = ",
     current_origin_sql!(),
     " AND k.kind = 'movie'"
 );
 
-pub(crate) fn row(r: &Row) -> rusqlite::Result<MovieRow> {
+fn row(r: &Row) -> rusqlite::Result<MovieRow> {
     Ok(MovieRow {
         movie_id: r.get(0)?,
         name: r.get(1)?,
@@ -374,6 +375,37 @@ pub fn movie_counts(conn: &Connection, now: i64) -> Result<MovieCounts> {
         recent,
         watched: marked("watched_at")?,
     })
+}
+
+/// The movies in progress, most recently played first: the marks first,
+/// read in order from `vod_marks_by_played` (a test holds it to that). In
+/// progress is a place between [`STARTED_FRACTION`] and
+/// [`WATCHED_FRACTION`] of the length (the player's measured `duration`,
+/// else the provider's; an unknown length never is), not marked watched,
+/// and played since any removal from Continue watching (`dismissed_at`).
+/// `?1`/`?2` are those bounds, `?3` the limit.
+pub(crate) fn movies_in_progress_sql() -> &'static str {
+    static SQL: OnceLock<String> = OnceLock::new();
+    SQL.get_or_init(|| {
+        format!(
+            "SELECT {COLUMNS} FROM {MARKS_FIRST}
+             WHERE m.deleted_at IS NULL AND k.watched_at IS NULL
+               AND k.played_at > COALESCE(k.dismissed_at, -1)
+               AND k.position / COALESCE(k.duration, m.duration_secs) >= ?1
+               AND k.position / COALESCE(k.duration, m.duration_secs) < ?2
+             ORDER BY k.played_at DESC, k.item_id LIMIT ?3"
+        )
+    })
+}
+
+/// The `limit` movies in progress played most recently, newest first
+/// ([`movies_in_progress_sql`]).
+pub(crate) fn movies_in_progress(conn: &Connection, limit: u32) -> Result<Vec<MovieRow>> {
+    let mut stmt = conn.prepare_cached(movies_in_progress_sql())?;
+    let rows = stmt
+        .query_map(params![STARTED_FRACTION, WATCHED_FRACTION, limit], row)?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(rows)
 }
 
 /// What playing a movie needs, or None for one that is unknown or deleted.

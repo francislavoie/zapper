@@ -22,6 +22,9 @@
 //!   show's is its episodes' latest `played_at` or `watched_at`, so playing
 //!   or marking any episode brings the show back.
 //! - The list holds the [`CONTINUE_MAX`] most recent entries.
+//!
+//! [`STARTED_FRACTION`]: crate::catalog::vod_progress::STARTED_FRACTION
+//! [`WATCHED_FRACTION`]: crate::catalog::vod_progress::WATCHED_FRACTION
 
 use anyhow::Result;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -30,8 +33,8 @@ use crate::catalog::origin::current_origin_sql;
 use crate::catalog::series_store::{
     next_up, series_by_ids, series_episodes, EpisodeRow, SeriesRow,
 };
-use crate::catalog::vod_progress::{resume_point, STARTED_FRACTION, WATCHED_FRACTION};
-use crate::catalog::vod_store::{self, ItemKind, MovieRow, VodItem, COLUMNS, MARKS_FIRST};
+use crate::catalog::vod_progress::resume_point;
+use crate::catalog::vod_store::{self, ItemKind, MovieRow, VodItem};
 
 /// The most entries the list holds.
 pub const CONTINUE_MAX: u32 = 100;
@@ -100,22 +103,31 @@ pub fn show_entry(eps: &[EpisodeRow]) -> Option<(i64, bool)> {
     Some((id, !in_progress(episode)))
 }
 
-/// The movies in progress, most recently played first: the marks first,
-/// read in order from `vod_marks_by_played` (a test holds it to that).
-/// `?1`/`?2` are the in-progress bounds, `?3` the limit.
-fn movies_sql() -> String {
-    format!(
-        "SELECT {COLUMNS} FROM {MARKS_FIRST}
-         WHERE m.deleted_at IS NULL AND k.watched_at IS NULL
-           AND k.played_at > COALESCE(k.dismissed_at, -1)
-           AND k.position / COALESCE(k.duration, m.duration_secs) >= ?1
-           AND k.position / COALESCE(k.duration, m.duration_secs) < ?2
-         ORDER BY k.played_at DESC, k.item_id LIMIT ?3"
-    )
-}
+/// How many shows' episodes, at most, one build reads per entry it may
+/// list: a backstop. The candidates are already only those
+/// [`show_entry`] would most likely list (see [`SHOWS_SQL`]), so only a
+/// show whose places are all under [`STARTED_FRACTION`] or of unknown
+/// length can be read and not listed.
+///
+/// [`STARTED_FRACTION`]: crate::catalog::vod_progress::STARTED_FRACTION
+const CANDIDATES_PER_ENTRY: u32 = 4;
 
-/// The live shows with an episode played or marked, each with its last
-/// activity, newest first, leaving out those removed since.
+/// The shows that may be entries, each with its last activity, newest
+/// first, at most `?1`. A live show with a live episode played or marked,
+/// and:
+///
+/// - played or marked since it was last removed (`dismissed_at`);
+/// - not watched: the show's own mark, kept current by
+///   [`refresh_series_watched_in_tx`], is set exactly when every live
+///   episode, specials aside, is, which is when there is no next-up
+///   episode;
+/// - with an episode, specials aside, watched or holding a place: a show
+///   started over keeps its episodes' `played_at` but neither of those.
+///
+/// What is left is exact but for the place's fraction, which
+/// [`show_entry`] judges from the episodes.
+///
+/// [`refresh_series_watched_in_tx`]: crate::catalog::series_store::refresh_series_watched_in_tx
 const SHOWS_SQL: &str = concat!(
     "SELECT e.series_id,
             MAX(MAX(COALESCE(k.played_at, k.watched_at),
@@ -130,29 +142,36 @@ const SHOWS_SQL: &str = concat!(
     " AND k.kind = 'episode'
      GROUP BY e.series_id
      HAVING last IS NOT NULL AND last > COALESCE(MAX(d.dismissed_at), -1)
-     ORDER BY last DESC, e.series_id"
+        AND MAX(d.watched_at) IS NULL
+        AND MAX(e.season <> 0 AND (k.watched_at IS NOT NULL OR k.position IS NOT NULL))
+     ORDER BY last DESC, e.series_id LIMIT ?1"
 );
 
+/// The shows that may be entries, for a list of `limit`: (show, last
+/// activity), newest first.
+fn show_candidates(conn: &Connection, limit: u32) -> Result<Vec<(i64, i64)>> {
+    let mut stmt = conn.prepare_cached(SHOWS_SQL)?;
+    let rows = stmt
+        .query_map([limit * CANDIDATES_PER_ENTRY], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(rows)
+}
+
 fn movies_in_progress(conn: &Connection, limit: u32) -> Result<Vec<ContinueRow>> {
-    let mut stmt = conn.prepare_cached(&movies_sql())?;
-    let rows = stmt.query_map(params![STARTED_FRACTION, WATCHED_FRACTION, limit], |r| {
-        let movie = vod_store::row(r)?;
-        let last_watched = movie.played_at.unwrap_or_default();
-        Ok(ContinueRow::Movie {
+    Ok(vod_store::movies_in_progress(conn, limit)?
+        .into_iter()
+        .map(|movie| ContinueRow::Movie {
+            last_watched: movie.played_at.unwrap_or_default(),
             movie,
-            last_watched,
         })
-    })?;
-    Ok(rows.collect::<rusqlite::Result<_>>()?)
+        .collect())
 }
 
 fn shows_in_progress(conn: &Connection, limit: u32) -> Result<Vec<ContinueRow>> {
-    let mut stmt = conn.prepare_cached(SHOWS_SQL)?;
-    let candidates: Vec<(i64, i64)> = stmt
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
-        .collect::<rusqlite::Result<_>>()?;
     let mut out = Vec::new();
-    for (series_id, last_watched) in candidates {
+    for (series_id, last_watched) in show_candidates(conn, limit)? {
         if out.len() >= limit as usize {
             break;
         }
@@ -248,6 +267,7 @@ mod tests {
     use crate::catalog::open_in_memory;
     use crate::catalog::series_store::set_series_marks;
     use crate::catalog::series_sync::{land_series, land_series_details, NewEpisode, NewSeries};
+    use crate::catalog::vod_progress::{STARTED_FRACTION, WATCHED_FRACTION};
     use crate::catalog::vod_store::{marks_of, origin, record_progress, set_marks, ItemKind};
     use rusqlite::params;
 
@@ -642,23 +662,97 @@ mod tests {
         assert_eq!(continue_watching(&c, 500).unwrap().len(), 100);
     }
 
-    #[test]
-    fn the_continue_query_uses_an_index() {
-        let c = open_in_memory().unwrap();
-        let sql = format!("EXPLAIN QUERY PLAN {}", movies_sql());
-        let mut stmt = c.prepare(&sql).unwrap();
-        let plan: Vec<String> = stmt
-            .query_map(
-                params![STARTED_FRACTION, WATCHED_FRACTION, CONTINUE_MAX],
-                |r| r.get(3),
-            )
+    fn plan(c: &Connection, sql: &str, args: impl rusqlite::Params) -> String {
+        let mut stmt = c.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+        let rows: Vec<String> = stmt
+            .query_map(args, |r| r.get(3))
             .unwrap()
             .map(Result::unwrap)
             .collect();
-        let plan = plan.join("\n");
-        assert!(plan.contains("vod_marks_by_played"), "{plan}");
-        assert!(!plan.contains("SCAN m"), "{plan}");
-        assert!(!plan.contains("SCAN movies"), "{plan}");
+        rows.join("\n")
+    }
+
+    #[test]
+    fn the_continue_query_uses_an_index() {
+        let c = open_in_memory().unwrap();
+        let p = plan(
+            &c,
+            vod_store::movies_in_progress_sql(),
+            params![STARTED_FRACTION, WATCHED_FRACTION, CONTINUE_MAX],
+        );
+        assert!(p.contains("vod_marks_by_played"), "{p}");
+        assert!(!p.contains("SCAN m"), "{p}");
+        assert!(!p.contains("SCAN movies"), "{p}");
+        let p = plan(&c, SHOWS_SQL, [CONTINUE_MAX * CANDIDATES_PER_ENTRY]);
+        for full in [
+            "SCAN k",
+            "SCAN d",
+            "SCAN e",
+            "SCAN s",
+            "SCAN episodes",
+            "SCAN series",
+        ] {
+            assert!(!p.contains(full), "{full}: {p}");
+        }
+    }
+
+    #[test]
+    fn finished_and_started_over_shows_are_never_read() {
+        let c = open_in_memory().unwrap();
+        shows(&c, &[1, 2, 3]);
+        episodes(&c, 1, &[ep(1, 11, 1, 1), ep(1, 12, 1, 2)]);
+        episodes(&c, 2, &[ep(2, 21, 1, 1), ep(2, 22, 1, 2)]);
+        episodes(&c, 3, &[ep(3, 31, 1, 1), ep(3, 32, 1, 2)]);
+        // Show 1 finished; show 2 played, then started over; show 3 going.
+        watch_episode(&c, 11, 10);
+        play_episode(&c, 12, 99.0, 11);
+        play_episode(&c, 21, 95.0, 20);
+        play_episode(&c, 22, 40.0, 21);
+        set_series_marks(&c, 2, None, Some(false), 22).unwrap();
+        play_episode(&c, 31, 40.0, 5);
+        assert_eq!(show_candidates(&c, CONTINUE_MAX).unwrap(), [(3, 5)]);
+        assert_eq!(listed(&c), ["show 3: 31"]);
+        // A finished show that gains an episode is a candidate again.
+        episodes(&c, 1, &[ep(1, 11, 1, 1), ep(1, 12, 1, 2), ep(1, 13, 1, 3)]);
+        assert_eq!(
+            show_candidates(&c, CONTINUE_MAX).unwrap(),
+            [(1, 11), (3, 5)]
+        );
+        assert_eq!(listed(&c), ["show 1: 13 next", "show 3: 31"]);
+    }
+
+    #[test]
+    fn the_show_candidates_are_capped() {
+        let c = open_in_memory().unwrap();
+        let ids: Vec<i64> = (1..=10).collect();
+        shows(&c, &ids);
+        for &s in &ids {
+            episodes(&c, s, &[ep(s, s * 10, 1, 1), ep(s, s * 10 + 1, 1, 2)]);
+            // Barely started: a candidate, but never an entry.
+            play_episode(&c, s * 10, 0.5, s);
+        }
+        assert_eq!(show_candidates(&c, 2).unwrap().len(), 8);
+        assert!(listed(&c).is_empty());
+    }
+
+    #[test]
+    fn a_movie_and_a_show_watched_in_the_same_second_go_by_id() {
+        let c = open_in_memory().unwrap();
+        movie(&c, 1, None);
+        movie(&c, 2, None);
+        a_show(&c);
+        play_movie(&c, 2, 30.0, Some(100.0), 10);
+        play_episode(&c, 11, 40.0, 10);
+        play_movie(&c, 1, 30.0, Some(100.0), 10);
+        assert_eq!(listed(&c), ["movie 1", "show 1: 11", "movie 2"]);
+    }
+
+    #[test]
+    fn just_under_ninety_two_percent_is_in_progress() {
+        let c = open_in_memory().unwrap();
+        movie(&c, 1, None);
+        play_movie(&c, 1, 91.9, Some(100.0), 10);
+        assert_eq!(listed(&c), ["movie 1"]);
     }
 
     #[test]
