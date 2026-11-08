@@ -147,7 +147,8 @@ interface have their own page: [recording.md](recording.md).
   what you downloaded before for that title first, and adds the one you pick to the player at once.
   The title plays on where it was, and subtitles stay on, in that language, for what you open next.
   The first download asks you to sign in to your own free OpenSubtitles account. Downloads kept for
-  a title are offered in the Subtitles menu the next time it plays.
+  a title are offered in the Subtitles menu the next time it plays. In the browser the recording
+  service keeps the file, and it is shown in time with the picture after a seek too.
 - Mouse: wheel for volume, double-click for fullscreen, double-click the edges to skip. Theater
   mode (`T`). The back button steps back like `Esc` (a menu, a sheet, the Shows pane, the
   player), then to the tab or category before; forward goes ahead again.

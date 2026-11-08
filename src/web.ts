@@ -131,8 +131,7 @@ const put = <T>(url: string, body?: unknown) => request<T>("PUT", url, body);
 const del = <T>(url: string) => request<T>("DELETE", url);
 
 const notHere = (): Promise<never> => Promise.reject(new Error(NOT_HERE));
-/** What the service answers no route for yet. */
-const notYet = (): Promise<never> => Promise.reject(new Error("not available yet"));
+/** What has nothing to do in a browser. */
 const nothing = (): Promise<void> => Promise.resolve();
 
 // ----------------------------------------------------------------- session
@@ -375,7 +374,10 @@ export const webBackend: typeof api = {
   downloadSubtitle: (kind, id, fileId) =>
     post<SubtitleDownloadDto>(subtitlesPath(kind, id, "download"), { fileId }),
   keptSubtitles: (kind, id) => get<KeptSubtitleDto[]>(subtitlesPath(kind, id, "kept")),
-  addSubtitleFile: notYet,
+  // Added to the movie or episode playing here, read from the service's
+  // kept copy (src/webVod.ts).
+  addSubtitleFile: (kind, id, fileId, title, lang) =>
+    vod.addSubtitleFile(kind, id, fileId, title, lang),
 
   activityRows: notHere,
   importActivity: notHere,
