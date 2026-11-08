@@ -180,6 +180,9 @@ const HANDLERS: Record<ActionId, (ctx: ActionContext) => void> = {
   liveTv: ({ dispatch }) => dispatch({ type: "section", section: "live" }),
   continue: ({ dispatch, state }) => {
     if (state) goToContinue(dispatch, state);
+    // Every place that offers it passes the store; one that does not is a
+    // bug, said where it can be seen rather than as a choice that does nothing.
+    else if (import.meta.env.DEV) console.warn("continue: runAction was not given the store's state");
   },
   settings: ({ dispatch }) => dispatch({ type: "settings", open: true }),
   updates: ({ dispatch }) => {

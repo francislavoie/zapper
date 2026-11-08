@@ -59,8 +59,20 @@ export function continueReducer(s: ContinueState, a: ContinueAction): ContinueSt
       if (a.value.status !== "ready") return { ...s, items: a.value };
       const fresh = a.value.data;
       const was = s.selected ? continueKey(s.selected) : null;
-      const selected = was === null ? null : (fresh.find((i) => continueKey(i) === was) ?? null);
-      return { ...s, items: a.value, selected };
+      // An entry gone (removed, marked watched) hands the selection to the
+      // one now in its place, clamped to the end: only the selection moves,
+      // nothing plays.
+      let selected: ContinueItemDto | null = null;
+      if (was !== null) {
+        selected = fresh.find((i) => continueKey(i) === was) ?? null;
+        if (selected === null && fresh.length > 0) {
+          const old = s.items.status === "ready" ? s.items.data.findIndex((i) => continueKey(i) === was) : -1;
+          selected = fresh[Math.min(Math.max(old, 0), fresh.length - 1)];
+        }
+      }
+      // A menu over an entry that has gone goes with it.
+      const menu = s.menu && fresh.some((i) => continueKey(i) === s.menu?.key) ? s.menu : null;
+      return { ...s, items: a.value, selected, menu };
     }
     case "continue/select":
       return { ...s, selected: a.item, menu: null };

@@ -326,10 +326,17 @@ export function OnDemandList<T extends object>(p: OnDemandListProps<T>) {
   // shown; the pages around it are read again, and the answer waits for
   // them (logic/pagedRows.ts `selectionGone`).
   const goneCheck = useRef<GoneCheck | null>(null);
-  const seenRevision = useRef(state.revision);
+  const seen = useRef({ revision: state.revision, key: listKey });
   useEffect(() => {
-    if (seenRevision.current === state.revision) return;
-    seenRevision.current = state.revision;
+    const was = seen.current;
+    seen.current = { revision: state.revision, key: listKey };
+    if (was.revision === state.revision) return;
+    // Another list in the same render (Continue watching into a search, a
+    // new category) is not this one read again: nothing to look for.
+    if (was.key !== listKey) {
+      goneCheck.current = null;
+      return;
+    }
     const at = selectedId === null || !on.gone ? -1 : currentIndex();
     goneCheck.current = at >= 0 && selectedId !== null ? { at, id: selectedId, key: listKey } : null;
     if (goneCheck.current) {
@@ -337,7 +344,7 @@ export function OnDemandList<T extends object>(p: OnDemandListProps<T>) {
       paged.ensure(around[0], around[around.length - 1] + 1);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.revision]);
+  }, [state.revision, listKey]);
   useEffect(() => {
     const g = goneCheck.current;
     if (!g) return;

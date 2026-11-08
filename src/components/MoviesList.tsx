@@ -5,7 +5,7 @@
 import { useCallback, useMemo } from "react";
 import { backend } from "../backend";
 import { useSettledSearch } from "../hooks/useSettledSearch";
-import { CONTINUE } from "../logic/continueWatching";
+import { continueShown } from "../logic/continueWatching";
 import {
   MOVIE_SEARCH_PLACEHOLDER,
   movieCard,
@@ -64,7 +64,7 @@ export function MoviesList({ besideRail = true }: { besideRail?: boolean }) {
   // the moment of the pause.
   const searching = isTitleSearch(searched);
   // Continue watching, until a search there makes it the tab's results.
-  const continuing = movies.selection === CONTINUE && !searching;
+  const continuing = continueShown(movies.selection, searched);
   const categories = movies.categories.status === "ready" ? movies.categories.data : [];
   const heading = searching ? "Search results" : movieTitle(movies.selection, categories);
 

@@ -8,6 +8,7 @@ import {
   continueCard,
   continueCode,
   continueCount,
+  continueShown,
   continueKey,
   continuePlace,
   continueTarget,
@@ -95,4 +96,12 @@ test("counts, first selection and coming back", () => {
   assert.equal(freshOnReturn(null, now), false);
   assert.equal(freshOnReturn(now - 31_000, now), true);
   assert.equal(freshOnReturn(now - 5_000, now), false);
+});
+test("the Continue pane shows while it is chosen and no title search is typed", () => {
+  assert.equal(continueShown(CONTINUE, ""), true);
+  assert.equal(continueShown(CONTINUE, "   "), true, "blank is no search");
+  assert.equal(continueShown(CONTINUE, " | "), true, "only pipes is no search");
+  assert.equal(continueShown(CONTINUE, "a"), false, "a search is the tab's results");
+  assert.equal(continueShown("*added*", ""), false);
+  assert.equal(continueShown("c7", ""), false);
 });
