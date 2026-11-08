@@ -87,7 +87,8 @@ export function VideoMenu({ menu, onClose }: VideoMenuProps) {
     return (
       <ContextMenu x={menu.x} y={menu.y} heading="Subtitles" onClose={onClose}
                    takeFocus={menu.keyboard} anchor={anchor} above={menu.above}>
-        <SubtitleItems options={options} shown={shown} choose={choose} onClose={onClose} />
+        <SubtitleItems options={options} shown={shown} choose={choose} onClose={onClose}
+                       opener={menu.anchor} />
       </ContextMenu>
     );
   }
@@ -219,11 +220,14 @@ function SubtitleItems({
   shown,
   choose,
   onClose,
+  opener,
 }: {
   options: PlayerOptionsDto;
   shown: ReturnType<typeof shownTrack>;
   choose: (what: string, p: Promise<PlayerOptionsDto>) => void;
   onClose: () => void;
+  /** The control the menu was opened from, if one was. */
+  opener?: HTMLElement | null;
 }) {
   // A choice here is the standing one: every open after shows the same.
   const subtitles = useSubtitles();
@@ -252,7 +256,7 @@ function SubtitleItems({
       {!capabilities.pictureSubtitles && options.subtitles.some(isPictureSubtitle) ? (
         <p className="ctx-note">{PICTURE_SUBTITLES_NOTE}</p>
       ) : null}
-      <OnlineSubtitleItems onClose={onClose} />
+      <OnlineSubtitleItems onClose={onClose} opener={opener} />
     </>
   );
 }

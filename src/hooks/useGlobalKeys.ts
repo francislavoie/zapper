@@ -49,6 +49,7 @@ import { playerRecord } from "../logic/recordings";
 import { upNextTakesEnter, type UpNext } from "../logic/upNext";
 import { VOD_SKIP_SECONDS, isOnDemandKind } from "../logic/vodTransport";
 import { IS_MAC } from "../platform";
+import { closeFindSubtitles, useFindSubtitles } from "../onlineSubtitles";
 import { run } from "../store";
 import type { State } from "../store";
 import type { Action } from "../store";
@@ -77,6 +78,8 @@ export function useGlobalKeys(
   // Read when C is pressed, rather than listened again for every change of
   // the tracks or the settings it depends on.
   const latestSubtitles = useSubtitles();
+  // Its own store (src/onlineSubtitles.ts), not the app's.
+  const findOpen = useFindSubtitles() !== null;
 
   // The tabs and rail choices visited, for the mouse's back and forward
   // buttons once nothing is open (logic/navHistory.ts). Each place the
@@ -143,11 +146,11 @@ export function useGlobalKeys(
   // What the handlers below read, as of the latest render. They are added
   // once and read it when they run, so no field they use can be missing
   // from a list of dependencies and leave them acting on an old state.
-  const latest = useRef({ state, upNextEpisode, stacked, promptShown });
-  latest.current = { state, upNextEpisode, stacked, promptShown };
+  const latest = useRef({ state, upNextEpisode, stacked, promptShown, findOpen });
+  latest.current = { state, upNextEpisode, stacked, promptShown, findOpen };
   useEffect(() => {
     const handlers = () => {
-      const { state, upNextEpisode, stacked, promptShown } = latest.current;
+      const { state, upNextEpisode, stacked, promptShown, findOpen } = latest.current;
       // The Up next card in the full player (docked, no key is taken from the
       // lists beside it: its buttons are in the tab order).
       const card = state.mode === "watch" && upNextEpisode ? state.shows.playing : null;
@@ -161,7 +164,8 @@ export function useGlobalKeys(
         !state.aboutOpen &&
         !state.updateOpen &&
         !state.menuOpen &&
-        !state.videoMenu;
+        !state.videoMenu &&
+        !findOpen;
 
       const overlayOpen = () =>
         state.paletteOpen ||
@@ -169,10 +173,12 @@ export function useGlobalKeys(
         state.aboutOpen ||
         state.updateOpen ||
         state.menuOpen ||
-        state.videoMenu !== null;
+        state.videoMenu !== null ||
+        findOpen;
 
       // What is open, for the Escape chain (logic/escape.ts).
       const context = (): EscapeContext => ({
+        findSubtitles: findOpen,
         programmeMenu: state.programmeMenu !== null,
         favouriteMenu: state.favouriteMenu !== null,
         categoryMenu: state.categoryMenu !== null,
@@ -229,6 +235,9 @@ export function useGlobalKeys(
       const unwind = (via: "key" | "mouse") => {
         const step = escapeStep(context(), via);
         switch (step) {
+          case "findSubtitles":
+            closeFindSubtitles();
+            break;
           case "programmeMenu":
             dispatch({ type: "programmeMenu", menu: null });
             break;
