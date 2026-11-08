@@ -295,7 +295,8 @@ What a browser can do there:
 - browse shows (the **Shows** tab, there only when the account has some: an Xtream account, or a
   playlist with episode entries): categories, favourites, watched, search, a show's details,
   seasons and episodes, marking episodes or a whole show watched, and play episodes, with Up next
-  moving on to the next one near an episode's end, as in the app;
+  moving on to the next one near an episode's end (from where it was left, when it was started),
+  as in the app;
 - watch live TV: choosing a channel plays it in the page, with the same picture band, player,
   transport, volume, fullscreen and audio tracks as the app ([Watching in the
   browser](#watching-in-the-browser));
@@ -445,7 +446,9 @@ pictures (DVD, Blu-ray, DVB) can't be shown in a browser: the player's menu list
 The page reports how far the film got every ten seconds and when it is paused, so the place is kept
 and a film played past most of its length counts as watched, as in the app. Paused for a minute,
 the film lets its connection go (a recording may be waiting for one) and keeps its place; Play
-watches it again from there. While the page is open it asks after its film every few seconds, which
+watches it again from there. A title opened at its place to ask Resume or Start over is paused
+from the moment it opens, so a question left unanswered for a minute lets the connection go the
+same way, and Resume then watches it again from there. While the page is open it asks after its film every few seconds, which
 keeps the film's place on the service even when the browser holds all it needs for now and reads
 nothing (a page that has asked within the last 90 seconds keeps it: a background tab may ask only
 once a minute); a closed page's goes within 90 seconds. A film that doesn't start within half a
