@@ -36,16 +36,15 @@ test("in the episodes: Enter plays, [ ] change season, ← or Esc go back", () =
   assert.deepEqual(paneKey("episodes", "Escape", list), { zone: "list" });
   // ↑ ↓ are the episode list's own.
   assert.equal(paneKey("episodes", "ArrowDown", list), null);
+  // → is taken and goes nowhere: it must not seek the player.
+  assert.deepEqual(paneKey("episodes", "ArrowRight", list), { zone: "episodes" });
 });
 
-test("Esc, Esc from the episodes: back to the list, then the pane closes", () => {
-  let zone = "episodes";
-  zone = paneKey(zone, "Escape", list).zone;
-  assert.equal(zone, "list");
-  zone = paneKey(zone, "Escape", list).zone;
-  assert.equal(zone, "closed");
-  // A closed pane leaves Escape to whatever is next in the chain.
-  assert.equal(paneKey(zone, "Escape", list), null);
+test("Esc from the episodes goes back to the list; from the list it is the Escape chain's", () => {
+  assert.equal(paneKey("episodes", "Escape", list).zone, "list");
+  // The chain closes the pane (logic/escape.ts, checked in back.test.mjs).
+  assert.equal(paneKey("list", "Escape", list), null);
+  assert.equal(paneKey("closed", "Escape", list), null);
 });
 
 test("[ and ] step through the show's seasons, held at either end", () => {

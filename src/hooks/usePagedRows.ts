@@ -11,6 +11,10 @@ import { PAGE_SIZE } from "../logic/virtual";
 export interface PagedRows<T> {
   total: number;
   rowAt: (index: number) => T | undefined;
+  /** Row `index`'s page has been read since the last refresh. */
+  fresh: (index: number) => boolean;
+  /** The rows read since the last refresh. */
+  freshRows: () => T[];
   ensure: (start: number, end: number) => void;
   loading: boolean;
   error: string | null;
@@ -74,6 +78,8 @@ export function usePagedRows<T>(
   }, [book, ensure]);
 
   const rowAt = useCallback((index: number) => book.rowAt(index), [book]);
+  const fresh = useCallback((index: number) => book.fresh(index), [book]);
+  const freshRows = useCallback(() => book.freshRows(), [book]);
 
-  return { total: book.total, rowAt, ensure, loading: book.loading, error: book.error, retry };
+  return { total: book.total, rowAt, fresh, freshRows, ensure, loading: book.loading, error: book.error, retry };
 }

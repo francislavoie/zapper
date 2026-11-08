@@ -4,7 +4,8 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { bandContext, bandLayout, nextBandLead } from "../logic/band.ts";
+import { readFileSync } from "node:fs";
+import { bandLayout, bandLeadAfter } from "../logic/band.ts";
 
 const channel = { kind: "channel", key: "channel:1" };
 const movie = { kind: "movie", key: "movie:7" };
@@ -50,20 +51,28 @@ test("with a sheet open the band shows what plays, not a copy of the sheet", () 
   assert.deepEqual(bandLayout({ ...base, selected: movie, sheetOpen: true }), { main: "selection", side: "context" });
 });
 
-test("the context beside one thing depends on what it is", () => {
-  assert.equal(bandContext("channel"), "later");
-  assert.equal(bandContext("episode"), "next-episode");
-  assert.equal(bandContext("show"), "up-next");
-  assert.equal(bandContext("movie"), "languages");
+test("↩ Show swaps, and lasts until the next selection", () => {
+  const swap = { type: "bandSwap" };
+  let lead = "selection";
+  lead = bandLeadAfter(lead, swap);
+  assert.equal(lead, "playing");
+  // Anything else leaves it: a sheet, a menu, a mark, the player.
+  for (const type of ["movies/sheet", "shows/pane", "shows/marked", "mode", "player", "section"]) {
+    assert.equal(bandLeadAfter(lead, { type }), "playing", type);
+  }
+  assert.equal(bandLeadAfter(lead, swap), "selection");
+  assert.equal(bandLeadAfter("playing", { type: "movies/selectMovie", movie: null }), "selection");
+  assert.equal(bandLeadAfter("playing", { type: "shows/selectShow", show: null }), "selection");
 });
 
-test("↩ Show swaps, and lasts until the next selection", () => {
-  let lead = "selection";
-  lead = nextBandLead(lead, "swap");
-  assert.equal(lead, "playing");
-  lead = nextBandLead(lead, "swap");
-  assert.equal(lead, "selection");
-  lead = nextBandLead(nextBandLead(lead, "swap"), "select");
-  assert.equal(lead, "selection");
-  assert.equal(nextBandLead("selection", "select"), "selection");
+test("the store runs every action through it, after its own reducer", () => {
+  // store.tsx is TSX, so it is read rather than imported.
+  const store = readFileSync(new URL("../store.tsx", import.meta.url), "utf8");
+  const at = store.indexOf("export function reducer(");
+  assert.ok(at >= 0);
+  const body = store.slice(at, store.indexOf("\n}\n", at));
+  assert.match(body, /bandLeadAfter\(state\.bandLead, action\)/);
+  assert.match(body, /const next = reduce\(state, action\)/);
+  assert.equal(body.match(/return /g)?.length, 1, "one way out, through the lead");
+  assert.ok(!/nextBandLead|bandLead:/.test(store.slice(store.indexOf("function reduce("))), "no other place sets it");
 });

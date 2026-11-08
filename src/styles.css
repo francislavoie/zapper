@@ -7545,7 +7545,7 @@ html[data-backend="web"] {
 @container list (max-width: 40rem) {
   .show-cols,
   .show-row {
-    --list-cols: 1.625rem minmax(0, 1fr) 3.5rem 4rem 2rem;
+    --list-cols: 1.625rem minmax(0, 1fr) 3.5rem 4rem 2.75rem;
   }
 
   .show-cols > :nth-child(4),
@@ -7557,21 +7557,34 @@ html[data-backend="web"] {
     flex-basis: 12rem;
   }
 
-  /* The years menu goes while it has nothing chosen; a range chosen keeps
-     it, so what filters the list stays in sight. */
-  .list-head .movies-menu-btn[aria-label="Years: All years"] {
+  /* The years menu says just "Years" while nothing is chosen; a range
+     chosen keeps its own label, so what filters the list stays in sight. */
+  .years-menu:not(.set) .years-label {
     display: none;
+  }
+
+  .years-menu:not(.set) .years-short {
+    display: inline;
   }
 }
 
-/* What is listed keeps its name while the search box has room to give. */
+.years-short {
+  display: none;
+}
+
+/* What is listed keeps its name, and the search box some room to type in;
+   the count goes, the rail beside it saying the same. */
 @container list (min-width: 30rem) and (max-width: 40rem) {
   .list-head .list-title {
     flex-shrink: 0;
   }
+
+  .list-head .list-search {
+    min-width: 8rem;
+  }
 }
 
-@container list (max-width: 30rem) {
+@container list (max-width: 40rem) {
   .list-head .list-count {
     display: none;
   }

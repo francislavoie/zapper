@@ -63,7 +63,7 @@ import {
   type ShowsState,
 } from "./showsState";
 import { SHOWS_VIEW_STORAGE_KEY } from "./logic/shows";
-import { nextBandLead, type BandLead } from "./logic/band";
+import { bandLeadAfter, type BandLead } from "./logic/band";
 
 import { ALL_CATEGORIES, RECORDINGS, modeSelection } from "./logic/railItems";
 import { keepSelected } from "./logic/recordings";
@@ -531,17 +531,19 @@ export type Action =
 let toastSeq = 0;
 
 export function reducer(state: State, action: Action): State {
-  if (isMoviesAction(action) || isShowsAction(action)) {
-    // A selection in a list puts it back in front of the band.
-    const selects = action.type === "movies/selectMovie" || action.type === "shows/selectShow";
-    const bandLead = selects ? nextBandLead(state.bandLead, "select") : state.bandLead;
-    return isMoviesAction(action)
-      ? { ...state, bandLead, movies: moviesReducer(state.movies, action) }
-      : { ...state, bandLead, shows: showsReducer(state.shows, action as ShowsAction) };
-  }
+  const next = reduce(state, action);
+  // Which of a selection and what plays leads the band (logic/band.ts).
+  const bandLead = bandLeadAfter(state.bandLead, action);
+  return bandLead === next.bandLead ? next : { ...next, bandLead };
+}
+
+function reduce(state: State, action: Action): State {
+  if (isMoviesAction(action)) return { ...state, movies: moviesReducer(state.movies, action) };
+  if (isShowsAction(action)) return { ...state, shows: showsReducer(state.shows, action) };
   switch (action.type) {
     case "bandSwap":
-      return { ...state, bandLead: nextBandLead(state.bandLead, "swap") };
+      // `reducer` answers it.
+      return state;
     case "categories":
       return { ...state, categories: action.value };
     case "selectCategory":

@@ -5,7 +5,7 @@
 // picture, the pane takes the list's place while it is open. Everything here
 // is memoised so the list's rows keep their renders.
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { backend } from "../backend";
 import { useSettledSearch } from "../hooks/useSettledSearch";
 import { playingKind } from "../logic/movies";
@@ -50,10 +50,11 @@ export function ShowsList({ besideRail = true }: { besideRail?: boolean }) {
   const { shows, player } = useApp();
   const dispatch = useDispatch();
   const split = useRef<HTMLDivElement | null>(null);
-  // Enter or → asked to go into the episodes: the pane takes focus once
-  // they are there.
-  const [wantsFocus, setWantsFocus] = useState(false);
-  const focused = useCallback(() => setWantsFocus(false), []);
+  // The show whose episodes Enter or → asked to go into: the pane takes
+  // focus once they are there, for that show only. Another selection, the
+  // pane closing, or the episodes failing to load drop the ask.
+  const [wantsFocus, setWantsFocus] = useState<number | null>(null);
+  const settled = useCallback(() => setWantsFocus(null), []);
   const stacked = !besideRail;
 
   const searched = useSettledSearch(shows.query);
@@ -100,13 +101,22 @@ export function ShowsList({ besideRail = true }: { besideRail?: boolean }) {
       const move = paneKey(paneOpen ? "list" : "closed", key, { selected: selected !== null, posters });
       if (move?.zone !== "episodes" || !selected) return false;
       if (!paneOpen) dispatch({ type: "shows/pane", open: true });
-      setWantsFocus(true);
+      setWantsFocus(selected.seriesId);
       return true;
     };
     return {
-      select: (s: SeriesDto) => dispatch({ type: "shows/selectShow", show: s }),
+      select: (s: SeriesDto) => {
+        setWantsFocus(null);
+        dispatch({ type: "shows/selectShow", show: s });
+      },
       // A click opens the pane on it.
-      pick: (s: SeriesDto) => dispatch({ type: "shows/selectShow", show: s, pane: true }),
+      pick: (s: SeriesDto) => {
+        setWantsFocus(null);
+        dispatch({ type: "shows/selectShow", show: s, pane: true });
+      },
+      // The show the pane is on has left the list (unfavourited under
+      // Favourites, dropped by a sync): the pane goes with it.
+      gone: () => dispatch({ type: "shows/pane", open: false }),
       open: (s: SeriesDto) => {
         dispatch({ type: "shows/selectShow", show: s });
         dispatch({ type: "shows/sheet", id: s.seriesId });
@@ -125,6 +135,10 @@ export function ShowsList({ besideRail = true }: { besideRail?: boolean }) {
       years: (range: YearRange | null) => dispatch({ type: "shows/years", range }),
     };
   }, [dispatch, selected, paneOpen, posters]);
+
+  useEffect(() => {
+    if (!paneOpen) setWantsFocus(null);
+  }, [paneOpen]);
 
   const toList = useCallback(() => {
     const list = split.current?.querySelector<HTMLElement>(".shows-viewport");
@@ -166,8 +180,8 @@ export function ShowsList({ besideRail = true }: { besideRail?: boolean }) {
         show={selected}
         stacked={stacked}
         listName={heading}
-        wantsFocus={wantsFocus}
-        focused={focused}
+        wantsFocus={wantsFocus === selected.seriesId}
+        settled={settled}
         toList={toList}
       />
     ) : null}
