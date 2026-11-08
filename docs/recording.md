@@ -540,6 +540,17 @@ would be sent the start after the middle. So Jellyfin following a recording sees
 service received, and the buffer is in the finished `… - part1.mkv`. The recording lists it
 with `handedOver: true`.
 
+### Subtitles from OpenSubtitles in the browser
+
+The service asks OpenSubtitles for the browser; the page never talks to it, and never sees the
+app's key, your password or a download link. Settings › Online services signs the service in
+with your own OpenSubtitles account (`POST /api/online/opensubtitles/sign-in`). The service keeps
+the password in its config directory, readable only by it, and turns the browser's request for a
+file into a WebVTT one. Signing in is needed for the first download only; searching works without.
+
+Downloaded files are kept with the title, per OpenSubtitles account, and listed again when the
+title is next opened. Turning the service off in Settings makes the service stop asking it. The requests are in the API table below.
+
 ## How it behaves
 
 **Connections.** Most providers allow few streams at once per account, often one, and end the
