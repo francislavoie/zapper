@@ -4,8 +4,8 @@
 //! start of a word: the start of the name, or just after anything that is not
 //! a letter or a digit. Case and accents do not count, and a run of spaces is
 //! one space. So `EN -` finds "EN - A Movie" and "FR/EN - A Movie" (a slash
-//! ends a word as a space does) but not "Garden - A Movie", and `dark kni`
-//! finds "The Dark Knight". `a|b` finds either, each side read the same way
+//! ends a word as a space does) but not "Garden - A Movie", and `amber lan`
+//! finds "The Amber Lantern". `a|b` finds either, each side read the same way
 //! ([`search::alternatives`]).
 //!
 //! It is an SQLite function, `title_match(name, query)`, so that a search is
@@ -252,11 +252,11 @@ mod tests {
 
     #[test]
     fn a_phrase_matches_in_order_from_a_word_start() {
-        assert!(matches("dark kni", "The Dark Knight"));
-        assert!(matches("the dark", "The Dark Knight"));
-        assert!(!matches("knight dark", "The Dark Knight"));
-        assert!(!matches("ark", "The Dark Knight"));
-        assert!(!matches("he dark", "The Dark Knight"));
+        assert!(matches("amber lan", "The Amber Lantern"));
+        assert!(matches("the amber", "The Amber Lantern"));
+        assert!(!matches("lantern amber", "The Amber Lantern"));
+        assert!(!matches("mber", "The Amber Lantern"));
+        assert!(!matches("he amber", "The Amber Lantern"));
     }
 
     #[test]
@@ -277,8 +277,8 @@ mod tests {
 
     #[test]
     fn whitespace_runs_are_one_space() {
-        assert!(matches("dark   kni", "The Dark Knight"));
-        assert!(matches("dark kni", "The  Dark \t Knight"));
+        assert!(matches("amber   lan", "The Amber Lantern"));
+        assert!(matches("amber lan", "The  Amber \t Lantern"));
         assert!(matches("  harbour  ", "Harbour Lights"));
     }
 
@@ -328,7 +328,7 @@ mod tests {
             "EN - A Movie",
             "FR/EN - A Movie",
             "Garden - X",
-            "The Dark  Knight",
+            "The Amber  Lantern",
             "  Harbour\tLights ",
             "L'Été",
             "L'E\u{301}te\u{301} - EN",
@@ -345,7 +345,7 @@ mod tests {
             "e",
             "ete",
             "été",
-            "dark kni",
+            "amber lan",
             "harbour lights",
             "a|x",
             "n -",
