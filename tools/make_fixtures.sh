@@ -71,7 +71,10 @@ movie() {
     echo "exists: $out (--force regenerates)"
     return
   fi
-  local srt; srt=$(mktemp --suffix=.srt)
+  # A folder of its own, so the file can be named .srt: ffmpeg reads the format
+  # from the extension, and BSD mktemp (macOS) has no --suffix.
+  local tmp; tmp=$(mktemp -d)
+  local srt="$tmp/subtitles.srt"
   local i
   for ((i = 0; i < 12; i++)); do
     printf '%d\n00:%02d:%02d,000 --> 00:%02d:%02d,000\nMade-up line %d of the test film.\n\n' \
@@ -91,7 +94,7 @@ movie() {
     -c:v libx264 -preset veryfast -pix_fmt yuv420p -g 50 -keyint_min 50 -sc_threshold 0 -b:v 800k \
     -c:a "$acodec" -ac 2 -b:a 96k "${opts[@]}" \
     -movflags +faststart "$out"
-  rm -f "$srt"
+  rm -rf "$tmp"
   echo "wrote $out"
 }
 
