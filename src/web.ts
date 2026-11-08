@@ -164,12 +164,17 @@ function storedSettings(): unknown {
 }
 
 function keepSettings(s: SettingsDto) {
+  // Every title opened from now on shows the subtitles these say.
+  vod.setSubtitlePreference(s);
   try {
     localStorage.setItem(BROWSER_SETTINGS_KEY, JSON.stringify(browserSettings(s)));
   } catch {
     // Storage refused (private mode): the change lasts until the page goes.
   }
 }
+
+// The subtitles this browser last chose, for the first title it opens.
+vod.setSubtitlePreference(withBrowserSettings(DEFAULT_SETTINGS, storedSettings()));
 
 // ------------------------------------------------------------------- sync
 
@@ -226,7 +231,7 @@ export const webBackend: typeof api = {
   // The player is a <video> element here (src/webPlayer.ts), a movie's
   // controls its own (src/webVod.ts) while one is open. The provider's
   // archive, mpv's statistics and deinterlacing are not; subtitles are a
-  // movie's.
+  // movie's or an episode's.
   play: (streamId) => player.play(streamId, vod.handOver()),
   playCatchup: notHere,
   stop: async () => {

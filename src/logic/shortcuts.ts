@@ -69,6 +69,7 @@ export const SHORTCUT_GROUPS: readonly ShortcutGroup[] = [
       { keys: [["←"], ["→"]], pair: true, does: "Back or forward 5 seconds (10 in a movie or episode)" },
       { keys: [["L"]], does: "Jump to live (not in a movie or episode)" },
       { keys: [["T"]], does: "Theater: the picture fills the window" },
+      { keys: [["C"]], does: "Subtitles on or off, kept for what you watch next" },
       { keys: [["R"]], does: "Record the programme on now (not in a movie or episode)" },
       { keys: [["Enter"]], does: "Play the next episode now (Up next)" },
       { keys: [["Esc"]], does: "Cancel Up next" },

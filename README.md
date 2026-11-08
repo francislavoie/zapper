@@ -86,6 +86,7 @@ The short list; [docs/features.md](docs/features.md) has how each part behaves.
 - **Up next**: a countdown into the next episode, keeping your audio and subtitle languages.
 - `P` for the previous channel; type a number to tune.
 - Volume to 200 %, a compressor, track choice, aspect ratio, deinterlacing and a sleep timer.
+- A subtitles button (`C`), remembered across channels and restarts.
 - Subtitle font, size, colour and backdrop.
 - Theater mode (`T`) and stats (`S`).
 - A refused or ended stream says why; zapper reconnects on its own only after network failures.

@@ -154,6 +154,8 @@ mod tests {
             time_format: "12h".into(),
             live_start: crate::ipc::types::LiveStart::Wait,
             simultaneous_streams: 2,
+            subtitles_on: true,
+            subtitle_language: Some("fra".into()),
         };
         save(&c, &want).unwrap();
 
@@ -163,6 +165,8 @@ mod tests {
         assert!(got.media_controls);
         assert_eq!(got.live_start, crate::ipc::types::LiveStart::Wait);
         assert_eq!(got.simultaneous_streams, 2);
+        assert!(got.subtitles_on);
+        assert_eq!(got.subtitle_language.as_deref(), Some("fra"));
         assert_eq!(got.rewind_mb, 1280);
         assert!(!got.hardware_decode);
         assert!(!got.tone_map_hdr);
@@ -311,6 +315,25 @@ mod tests {
         assert_eq!(s.subtitle.font, "sans-serif");
         assert_eq!(s.subtitle.backdrop, SubtitleBackdrop::Background);
         assert_eq!(s.subtitle.backdrop_opacity, 0.25);
+    }
+
+    #[test]
+    fn a_blob_from_before_the_subtitle_choice_has_them_off() {
+        let c = open_in_memory().unwrap();
+        write_raw(&c, r#"{"guideHours":5}"#);
+        let got = load(&c);
+        assert!(!got.subtitles_on);
+        assert_eq!(got.subtitle_language, None);
+        assert_eq!(got.guide_hours, 5);
+        // Off, in a language: the language is kept for the next time.
+        write_raw(&c, r#"{"subtitlesOn":false,"subtitleLanguage":"eng"}"#);
+        let got = load(&c);
+        assert!(!got.subtitles_on);
+        assert_eq!(got.subtitle_language.as_deref(), Some("eng"));
+        write_raw(&c, r#"{"subtitlesOn":true,"subtitleLanguage":null}"#);
+        let got = load(&c);
+        assert!(got.subtitles_on);
+        assert_eq!(got.subtitle_language, None);
     }
 
     #[test]

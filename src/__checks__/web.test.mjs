@@ -93,11 +93,18 @@ test("a password crosses the network in the clear only over plain HTTP to anothe
   assert.equal(passwordInClear("http:", "127.0.0.1.evil.example"), true);
 });
 
-test("a browser keeps how its guide looks, and nothing else", () => {
-  assert.deepEqual([...BROWSER_SETTINGS], ["guideHours", "timeFormat"]);
-  const mine = withBrowserSettings(DEFAULT_SETTINGS, { guideHours: 5, timeFormat: "24h" });
+test("a browser keeps how its guide looks and its subtitles, and nothing else", () => {
+  assert.deepEqual([...BROWSER_SETTINGS], ["guideHours", "timeFormat", "subtitlesOn", "subtitleLanguage"]);
+  const mine = withBrowserSettings(DEFAULT_SETTINGS, {
+    guideHours: 5,
+    timeFormat: "24h",
+    subtitlesOn: true,
+    subtitleLanguage: "fra",
+  });
   assert.equal(mine.guideHours, 5);
   assert.equal(mine.timeFormat, "24h");
+  assert.equal(mine.subtitlesOn, true);
+  assert.equal(mine.subtitleLanguage, "fra");
   assert.equal(mine.rewindMb, DEFAULT_SETTINGS.rewindMb);
   // Whatever else storage holds is not taken.
   const junk = withBrowserSettings(DEFAULT_SETTINGS, {
@@ -105,12 +112,22 @@ test("a browser keeps how its guide looks, and nothing else", () => {
     timeFormat: "36h",
     simultaneousStreams: 9,
     syncIntervalHours: 1,
+    subtitlesOn: "yes",
+    subtitleLanguage: 12,
   });
   assert.deepEqual(junk, DEFAULT_SETTINGS);
   assert.deepEqual(withBrowserSettings(DEFAULT_SETTINGS, null), DEFAULT_SETTINGS);
   assert.deepEqual(withBrowserSettings(DEFAULT_SETTINGS, "x"), DEFAULT_SETTINGS);
-  assert.deepEqual(browserSettings({ ...DEFAULT_SETTINGS, guideHours: 4, simultaneousStreams: 3 }), {
-    guideHours: 4,
-    timeFormat: DEFAULT_SETTINGS.timeFormat,
-  });
+  // No language yet, stored as such.
+  const none = withBrowserSettings({ ...DEFAULT_SETTINGS, subtitleLanguage: "eng" }, { subtitleLanguage: null });
+  assert.equal(none.subtitleLanguage, null);
+  assert.deepEqual(
+    browserSettings({ ...DEFAULT_SETTINGS, guideHours: 4, simultaneousStreams: 3, subtitlesOn: true }),
+    {
+      guideHours: 4,
+      timeFormat: DEFAULT_SETTINGS.timeFormat,
+      subtitlesOn: true,
+      subtitleLanguage: null,
+    },
+  );
 });
