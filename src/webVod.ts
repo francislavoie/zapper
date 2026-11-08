@@ -24,12 +24,15 @@
 // what the current remux has decoded, and the page asks for a chosen
 // track's newer cues every couple of seconds, put on a text track of the
 // element. Subtitles that are pictures are listed and not shown.
+// A file downloaded from OpenSubtitles is added after the stream's own
+// tracks: read once from the service, and put on the same text track, a
+// window at a time, on the picture's own clock.
 //
 // The pure half is src/logic/webVod.ts.
 
 import type MpegtsType from "mpegts.js";
 import { afterChoosing, preferredIndex, type SubtitlePreference } from "./logic/subtitles";
-import { requestInit } from "./logic/web";
+import { requestInit, subtitlesPath } from "./logic/web";
 import {
   UNSUPPORTED,
   browserCan,
@@ -46,6 +49,7 @@ import {
   bufferedEnd,
   carriedIndex,
   cueTimes,
+  fileCueWindow,
   movedAt,
   needsData,
   openDue,
@@ -64,6 +68,7 @@ import {
   vodStreamUrl,
   watchBody,
   type Stuck,
+  type VodCue,
   type VodItemRef,
   type VodMode,
 } from "./logic/webVod";
@@ -71,6 +76,7 @@ import { heldAfter, nextStart, placeReportDue, playsOnReopen } from "./logic/res
 import type {
   MarksDto,
   OnDemandDto,
+  OnDemandKind,
   PlayerOptionsDto,
   PlayingEpisodeDto,
   StreamEnding,
@@ -112,6 +118,9 @@ interface Subtitle {
   title: string | null;
   /** Text, which the page shows; pictures it cannot. */
   text: boolean;
+  /** A downloaded file's id (read from the service's kept copy), or null
+   *  for one of the stream's own tracks. */
+  file: number | null;
 }
 
 interface VodAnswer {
@@ -121,7 +130,7 @@ interface VodAnswer {
   duration: number | null;
   audio: Track[];
   audioIndex: number | null;
-  subtitles: Subtitle[];
+  subtitles: Omit<Subtitle, "file">[];
   converting: boolean;
   notice: WatchNotice | null;
 }
@@ -174,6 +183,8 @@ interface Session {
   stuck: Stuck;
   /** The subtitle cues put on the element's track for this reading. */
   cues: { lastEnd: number | null; held: Set<string>; askedAt: number; asking: boolean };
+  /** The downloaded files' cues, read once each, in the film's time. */
+  fileCues: Map<number, VodCue[]>;
 }
 
 let session: Session | null = null;
@@ -328,6 +339,9 @@ interface Keep {
   /** A title opened anew: the standing subtitle choice, in place of
    *  `subtitle` and `shown`, once its tracks are known. */
   preferred?: boolean;
+  /** The files added to the same title, watched again: listed after its
+   *  own tracks again, with the cues read already. */
+  files?: KeptFiles;
   duration: number | null;
   wantPlay: boolean;
   /** Opened held for the Resume question (paused, `wantPlay` false). */
@@ -335,6 +349,19 @@ interface Keep {
   /** Another title's language, whose sound is chosen once this one's
    *  tracks are known (Up next), in place of `audio`. */
   carry?: Languages;
+}
+
+interface KeptFiles {
+  tracks: Subtitle[];
+  cues: Map<number, VodCue[]>;
+  /** How many of the stream's own tracks came before them. */
+  own: number;
+}
+
+/** The files added to a session, for watching the same title again. */
+function filesOf(s: Session): KeptFiles {
+  const tracks = s.subtitles.filter((t) => t.file !== null);
+  return { tracks, cues: s.fileCues, own: s.subtitles.length - tracks.length };
 }
 
 /** Asks the service for the film, from `from`, keeping what was chosen on
@@ -390,14 +417,20 @@ async function watch(item: VodItemRef, from: number, keep: Keep): Promise<void> 
     return;
   }
   const a = body as VodAnswer;
-  const subtitles = a.subtitles ?? [];
+  const own: Subtitle[] = (a.subtitles ?? []).map((t) => ({ ...t, file: null }));
+  const files = keep.files;
+  const subtitles = files ? [...own, ...files.tracks] : own;
   // Up next: the sound in the language of the episode before.
   const carried = keep.carry
     ? { audio: carriedIndex(keep.carry.audio, (a.audio ?? []).map((t) => ({ lang: t.lang }))) }
     : null;
   // A title opened anew shows the subtitles the settings say (only text
   // subtitles can be shown); one watched again keeps what it had.
-  const subtitle = keep.preferred ? preferredSubtitle(subtitles) : keep.subtitle;
+  let subtitle = keep.preferred ? preferredSubtitle(subtitles) : keep.subtitle;
+  // A file chosen stays chosen, after however many tracks the stream has.
+  if (files && subtitle !== null && subtitle >= files.own) {
+    subtitle = own.length + (subtitle - files.own);
+  }
   const subtitlesShown = keep.preferred ? subtitlePref.subtitlesOn : (keep.shown ?? true);
   const s: Session = {
     item,
@@ -428,6 +461,7 @@ async function watch(item: VodItemRef, from: number, keep: Keep): Promise<void> 
     moved: null,
     stuck: NOT_STUCK,
     cues: { lastEnd: null, held: new Set(), askedAt: 0, asking: false },
+    fileCues: files?.cues ?? new Map(),
   };
   session = s;
   if (carried?.audio != null && carried.audio !== s.audioIndex) {
@@ -438,6 +472,7 @@ async function watch(item: VodItemRef, from: number, keep: Keep): Promise<void> 
         audio: carried.audio,
         subtitle: s.subtitle,
         shown: s.subtitlesShown,
+        files: filesOf(s),
         duration: s.duration,
         wantPlay: keep.wantPlay,
         held: keep.held,
@@ -875,6 +910,7 @@ async function rewatch(s: Session) {
     audio: s.audioIndex,
     subtitle: s.subtitle,
     shown: s.subtitlesShown,
+    files: filesOf(s),
     duration: s.duration,
     wantPlay: playsAgain(s, el),
     held: s.held,
@@ -1054,6 +1090,7 @@ export async function setPaused(paused: boolean): Promise<void> {
       audio: s.audioIndex,
       subtitle: s.subtitle,
       shown: s.subtitlesShown,
+      files: filesOf(s),
       duration: s.duration,
       wantPlay: true,
     });
@@ -1091,6 +1128,8 @@ export async function seekTo(seconds: number): Promise<void> {
     el.currentTime = plan.time;
     s.position = target;
     s.cues.lastEnd = null;
+    // Asked at once from the new place.
+    s.cues.askedAt = 0;
     showPlace(s, null);
     return;
   }
@@ -1156,6 +1195,7 @@ export async function setAudioTrack(id: number): Promise<PlayerOptionsDto> {
       audio: index,
       subtitle: s.subtitle,
       shown: s.subtitlesShown,
+      files: filesOf(s),
       duration: s.duration,
       wantPlay: playing || s.released,
       held: s.held,
@@ -1192,6 +1232,26 @@ export async function setSubtitleTrack(id: number | null): Promise<PlayerOptions
   const o = optionsOf(s);
   optionsFeed.set(o);
   return o;
+}
+
+/** Adds a downloaded subtitle file (kept by the service) to the title
+ *  playing, once, and shows it. Refused, with nothing changed, unless that
+ *  title is the one playing. */
+export async function addSubtitleFile(
+  kind: OnDemandKind,
+  id: number,
+  fileId: number,
+  title: string,
+  lang: string,
+): Promise<PlayerOptionsDto> {
+  const s = session;
+  if (!s || !sameItem(s.item, { kind, id })) return optionsFeed.last;
+  let index = s.subtitles.findIndex((t) => t.file === fileId);
+  if (index < 0) {
+    s.subtitles.push({ index: -1, language: lang, title, text: true, file: fileId });
+    index = s.subtitles.length - 1;
+  }
+  return setSubtitleTrack(index + 1);
 }
 
 export const options = (): PlayerOptionsDto => optionsFeed.last;
@@ -1237,6 +1297,8 @@ async function askCues(s: Session) {
   const index = s.subtitle;
   const el = currentVideo();
   if (index === null || !el || s.start === null || s.cues.asking) return;
+  const file = s.subtitles[index]?.file ?? null;
+  if (file !== null) return fileCues(s, el, index, file);
   const reading = s.reading;
   const cues = s.cues;
   cues.asking = true;
@@ -1262,6 +1324,54 @@ async function askCues(s: Session) {
   for (const c of parseVtt(doc)) {
     const key = `${c.start}|${c.end}|${c.text}`;
     cues.lastEnd = Math.max(cues.lastEnd ?? c.end, c.end);
+    if (cues.held.has(key)) continue;
+    const t = cueTimes(c, start);
+    if (!t) continue;
+    cues.held.add(key);
+    try {
+      track.addCue(new VTTCue(t.start, t.end, c.text));
+    } catch {
+      // A browser without VTTCue shows none.
+    }
+  }
+}
+
+/** A downloaded file's cues: read from the service once a session (each
+ *  new reading puts them again from the copy kept), then the window around
+ *  the picture put on the element's clock, widened as it moves. */
+async function fileCues(s: Session, el: HTMLVideoElement, index: number, file: number) {
+  const reading = s.reading;
+  const cues = s.cues;
+  cues.askedAt = Date.now();
+  let all = s.fileCues.get(file);
+  if (!all) {
+    cues.asking = true;
+    let doc: string | null = null;
+    let gone = false;
+    try {
+      const r = await fetch(
+        subtitlesPath(s.item.kind, s.item.id, "file", file),
+        requestInit("GET"),
+      );
+      if (r.status === 401) signedOutNow();
+      // Not kept (any more): nothing to show, not asked again.
+      gone = r.status === 404;
+      if (r.ok) doc = await r.text();
+    } catch {
+      // Asked again in a moment.
+    }
+    cues.asking = false;
+    if (doc === null && !gone) return;
+    all = doc === null ? [] : parseVtt(doc);
+    if (session === s) s.fileCues.set(file, all);
+  }
+  const start = s.start;
+  const still = session === s && s.reading === reading && s.subtitle === index && s.cues === cues;
+  if (!still || start === null) return;
+  const track = textTrack(el);
+  track.mode = s.subtitlesShown ? "showing" : "hidden";
+  for (const c of fileCueWindow(all, start, s.position)) {
+    const key = `${c.start}|${c.end}|${c.text}`;
     if (cues.held.has(key)) continue;
     const t = cueTimes(c, start);
     if (!t) continue;

@@ -11,6 +11,7 @@ import {
   bufferedEnd,
   carriedIndex,
   cueTimes,
+  fileCueWindow,
   movedAt,
   needsData,
   openDue,
@@ -147,6 +148,24 @@ test("a cue in the film's time is put on the element's clock, which starts at th
   // A cue begun before the stream did shows from its first moment.
   assert.deepEqual(cueTimes({ start: 898, end: 903, text: "x" }, 900), { start: 0, end: 3 });
   assert.equal(cueTimes({ start: 890, end: 899, text: "x" }, 900), null);
+});
+
+test("a downloaded file's cues go on the element a window at a time, on the picture's clock", () => {
+  const cue = (start, end) => ({ start, end, text: `at ${start}` });
+  const cues = [cue(10, 12), cue(590, 595), cue(601, 603), cue(700, 702), cue(1190, 1195), cue(1300, 1302)];
+  // A remux starting at 600 s: what ended before it is left out, and the cue
+  // at 601-603 s is shown at 1-3 s on the element.
+  const w = fileCueWindow(cues, 600, 600);
+  assert.deepEqual(w.map((c) => c.start), [601, 700, 1190]);
+  assert.deepEqual(cueTimes(w[0], 600), { start: 1, end: 3 });
+  // Nothing beyond position + ahead.
+  assert.deepEqual(fileCueWindow(cues, 600, 600, 100).map((c) => c.start), [601]);
+  // Further in, the window moves on: what ended over 30 s ago is left out.
+  assert.deepEqual(fileCueWindow(cues, 600, 740).map((c) => c.start), [1190, 1300]);
+  assert.deepEqual(fileCueWindow(cues, 600, 720).map((c) => c.start), [700, 1190, 1300]);
+  // A direct file, from its start.
+  assert.deepEqual(fileCueWindow(cues, 0, 0).map((c) => c.start), [10, 590]);
+  assert.deepEqual(fileCueWindow([], 0, 0), []);
 });
 
 test("the service's WebVTT is read into cues", () => {
