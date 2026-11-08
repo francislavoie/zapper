@@ -393,7 +393,8 @@ struct Account {
     /// which OpenSubtitles user. Each cost one of that user's downloads, so
     /// a failed fetch tries the link again rather than paying for another
     /// (for [`LINK_KEEP`]); a sign-in, a sign-out or turning the service off
-    /// forgets them.
+    /// forgets them. A download counted whose answer was lost is kept
+    /// without a link, so that it is not paid for again meanwhile either.
     links: Mutex<HashMap<i64, PaidLink>>,
     /// Held while the token is renewed, so that downloads waiting on a
     /// renewal share it rather than each signing in.
@@ -444,11 +445,12 @@ impl Account {
     }
 }
 
-/// A download link, when it was had and by whom.
+/// A download paid for, when and by whom, and its link unless the answer
+/// that held it was lost.
 struct PaidLink {
     at: Instant,
     username: String,
-    link: Link,
+    link: Option<Link>,
 }
 
 /// Everything a search or a download uses: OpenSubtitles' client (with its
@@ -650,6 +652,10 @@ async fn renew(
 ) -> Result<OpenSubtitlesConfig, OnlineError> {
     let _one_at_a_time = ctx.account.renewing.lock().await;
     let os = ctx.settings();
+    // Turned off while this waited its turn.
+    if !os.enabled {
+        return Err(OnlineError::Off);
+    }
     if os.username.trim().is_empty() || os.username != seen.username {
         return Err(OnlineError::SignInNeeded);
     }
@@ -929,6 +935,11 @@ async fn download_locked(
         });
     }
     let os = ctx.settings();
+    // Turned off while this waited for another download of the file.
+    if !os.enabled {
+        ctx.account.forget_links();
+        return Ok(SubtitleDownloadDto::Off);
+    }
     if os.username.trim().is_empty() {
         return Ok(SubtitleDownloadDto::SignIn {
             refused: false,
@@ -953,11 +964,14 @@ async fn download_locked(
         Some(paid) => (paid, true),
         None => {
             let link = match link_for(ctx, os, file_id).await {
-                Ok(link) => link,
+                Ok(link) => Some(link),
+                Err(OnlineError::AnswerLost) => None,
                 Err(e) => return answer(ctx, e),
             };
-            if let Some(left) = link.remaining {
-                ctx.account.set_quota(Some((left, link.reset_at)));
+            if let Some(link) = &link {
+                if let Some(left) = link.remaining {
+                    ctx.account.set_quota(Some((left, link.reset_at)));
+                }
             }
             let paid = PaidLink {
                 at: Instant::now(),
@@ -967,7 +981,12 @@ async fn download_locked(
             (paid, false)
         }
     };
-    let link = &paid.link;
+    let Some(link) = &paid.link else {
+        // Counted, with no link to show for it: kept as it is, so that the
+        // file is not paid for again until it would be anyway.
+        ctx.account.put_link(file_id, paid);
+        return Err(OnlineError::AnswerLost.to_string());
+    };
     match fetch_and_keep(ctx, origin, item, file_id, &link.url).await {
         Ok(subtitle) => {
             tracing::info!("OpenSubtitles: downloaded file {file_id}");
@@ -2249,11 +2268,11 @@ mod tests {
         let paid = |at| PaidLink {
             at,
             username: "tester".into(),
-            link: Link {
+            link: Some(Link {
                 url: "http://127.0.0.1:9/files/a.srt".into(),
                 remaining: Some(4),
                 reset_at: None,
-            },
+            }),
         };
         let a = Account::default();
         let t0 = Instant::now();
@@ -2336,6 +2355,62 @@ mod tests {
         ));
         assert_eq!(count(&server, "/api/v1/download"), 2, "then paid for again");
         assert_eq!(count(&server, "/files/a.srt"), 4);
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn a_counted_download_whose_answer_was_lost_is_not_paid_for_again() {
+        let _catalogue = db::movie_catalogue();
+        seed();
+        let server = serve(|req, _| match req.route() {
+            "/api/v1/download" => Reply::ok("<html>not json</html>"),
+            _ => Reply::new(404, ""),
+        });
+        let (ctx, _scratch) = context(&server, "answer-lost");
+        signed_in(&ctx, unix_now());
+        let film = VodItem::movie(FILM_1);
+        let lost = Err(OnlineError::AnswerLost.to_string());
+        assert_eq!(download_with(&ctx, film, 7000001).await, lost);
+        assert_eq!(download_with(&ctx, film, 7000001).await, lost);
+        assert_eq!(count(&server, "/api/v1/download"), 1, "counted once");
+        // Another file is asked for as usual.
+        assert_eq!(download_with(&ctx, film, 7000002).await, lost);
+        assert_eq!(count(&server, "/api/v1/download"), 2);
+        // Another user (signed in by the other process sharing the
+        // settings) pays for their own.
+        config::update_in(&ctx.config_path, |c| {
+            c.opensubtitles.username = "someone-else".into()
+        })
+        .unwrap();
+        assert_eq!(download_with(&ctx, film, 7000001).await, lost);
+        assert_eq!(count(&server, "/api/v1/download"), 3);
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn turned_off_while_waiting_asks_nothing() {
+        let _catalogue = db::movie_catalogue();
+        seed();
+        let server = stand_in();
+        let (ctx, _scratch) = context(&server, "off-after-wait");
+        signed_in(&ctx, unix_now() - TOKEN_RENEW_SECS - 1);
+        let film = VodItem::movie(FILM_1);
+        // Another download of the file holds it while the service is
+        // turned off.
+        let held = ctx.account.file_lock(7000001);
+        let turn = held.lock().await;
+        let waiting = tokio::spawn({
+            let ctx = Arc::clone(&ctx);
+            async move { download_with(&ctx, film, 7000001).await }
+        });
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        config::update_in(&ctx.config_path, |c| c.opensubtitles.enabled = false).unwrap();
+        drop(turn);
+        assert_eq!(waiting.await.unwrap(), Ok(SubtitleDownloadDto::Off));
+        // A renewal that waited on another finds it off too.
+        let seen = ctx.settings();
+        assert_eq!(renew(&ctx, &seen).await.err(), Some(OnlineError::Off));
+        assert_eq!(server.requests().len(), 0);
     }
 
     #[allow(clippy::await_holding_lock)]

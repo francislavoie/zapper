@@ -446,6 +446,15 @@ pub struct Client {
     pace: Pace,
 }
 
+/// A JSON answer's text, at most [`http::ANSWER_MAX_BYTES`].
+async fn answer_text(resp: reqwest::Response) -> Result<String, OnlineError> {
+    let bytes = http::read_capped(resp, http::ANSWER_MAX_BYTES, || {
+        OnlineError::invalid("the answer is too large")
+    })
+    .await?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
 impl Default for Client {
     fn default() -> Self {
         Self::new()
@@ -526,7 +535,7 @@ impl Client {
             }
             s => return Err(OnlineError::Refused(s)),
         }
-        let text = resp.text().await.map_err(OnlineError::unreachable)?;
+        let text = answer_text(resp).await?;
         // Never quoted in an error: it holds the token.
         let a: LoginAnswer = serde_json::from_str(&text)
             .map_err(|_| OnlineError::invalid("the sign-in answer is not JSON"))?;
@@ -549,7 +558,7 @@ impl Client {
         if !status.is_success() {
             return Err(OnlineError::Refused(status.as_u16()));
         }
-        let text = resp.text().await.map_err(OnlineError::unreachable)?;
+        let text = answer_text(resp).await?;
         parse_search(&text).map_err(|e| OnlineError::invalid(format!("{e:#}")))
     }
 
@@ -572,12 +581,21 @@ impl Client {
             .json(&body);
         let resp = http::send(self.pacer(), req).await?;
         let status = resp.status().as_u16();
-        let text = resp.text().await.map_err(OnlineError::unreachable)?;
+        let text = answer_text(resp).await;
         match status {
-            200..=299 => parse_download(&text).map_err(|e| OnlineError::invalid(format!("{e:#}"))),
+            // Counted however its answer reads: one that cannot be read is
+            // AnswerLost, so that the caller does not pay for it again.
+            200..=299 => text
+                .and_then(|t| {
+                    parse_download(&t).map_err(|e| OnlineError::invalid(format!("{e:#}")))
+                })
+                .map_err(|e| {
+                    tracing::warn!("OpenSubtitles counted a download whose answer was lost: {e}");
+                    OnlineError::AnswerLost
+                }),
             401 => Err(OnlineError::SignInNeeded),
             406 => Err(OnlineError::Quota {
-                reset_at: quota_reset(&text),
+                reset_at: text.ok().and_then(|t| quota_reset(&t)),
             }),
             s => Err(OnlineError::Refused(s)),
         }
@@ -591,26 +609,15 @@ impl Client {
                 "the download link is not an OpenSubtitles address",
             ));
         }
-        let mut resp = http::send_link(self.pacer(), self.http.get(link)).await?;
+        let resp = http::send_link(self.pacer(), self.http.get(link)).await?;
         let status = resp.status();
         if !status.is_success() {
             return Err(OnlineError::Refused(status.as_u16()));
         }
-        let too_big = || OnlineError::invalid("the subtitle file is too large");
-        if resp
-            .content_length()
-            .is_some_and(|n| n > srt::SUBTITLE_MAX_BYTES as u64)
-        {
-            return Err(too_big());
-        }
-        let mut bytes = Vec::new();
-        while let Some(chunk) = resp.chunk().await.map_err(OnlineError::unreachable)? {
-            if bytes.len() + chunk.len() > srt::SUBTITLE_MAX_BYTES {
-                return Err(too_big());
-            }
-            bytes.extend_from_slice(&chunk);
-        }
-        Ok(bytes)
+        http::read_capped(resp, srt::SUBTITLE_MAX_BYTES, || {
+            OnlineError::invalid("the subtitle file is too large")
+        })
+        .await
     }
 
     /// Ends the sign-in's token; best effort.
@@ -1239,5 +1246,70 @@ mod tests {
             .await
             .is_err());
         assert_eq!(server.requests().len(), 9, "the fourth hop is not followed");
+    }
+
+    /// Valid JSON followed by `extra` bytes of spaces.
+    fn padded(json: &str, extra: usize) -> String {
+        format!("{json}{}", " ".repeat(extra))
+    }
+
+    #[tokio::test]
+    async fn an_answer_past_a_mebibyte_is_not_read() {
+        let over = 1024 * 1024;
+        let server = serve(move |req, base| match req.route() {
+            "/api/v1/subtitles" => Reply::ok(padded(&page(&[ROW]), over)),
+            "/api/v1/login" => Reply::ok(padded(r#"{"token":"fake-os-token-1"}"#, over)),
+            "/api/v1/download" => Reply::ok(padded(
+                &format!(r#"{{"link":"{base}/files/7000001.srt","remaining":4}}"#),
+                over,
+            )),
+            _ => Reply::new(404, ""),
+        });
+        let c = Client::at(&api(&server.base));
+        let too_large = || OnlineError::invalid("the answer is too large");
+        match c.search(&film()).await {
+            Err(e) => assert_eq!(e, too_large()),
+            Ok(found) => panic!("read in full: {} rows", found.len()),
+        }
+        match c.login("tester", "test-pass").await {
+            Err(e) => assert_eq!(e, too_large()),
+            Ok(_) => panic!("read in full"),
+        }
+        // A download answered is counted, however its answer reads.
+        match c
+            .download_link(&api(&server.base), "fake-os-token-1", 7000001)
+            .await
+        {
+            Err(e) => assert_eq!(e, OnlineError::AnswerLost),
+            Ok(_) => panic!("read in full"),
+        }
+        // Just under the cap is read.
+        let server = serve(move |_, _| {
+            let json = page(&[ROW]);
+            Reply::ok(padded(&json, over - json.len()))
+        });
+        let c = Client::at(&api(&server.base));
+        assert!(c.search(&film()).await.is_ok_and(|f| f.len() == 1));
+    }
+
+    #[tokio::test]
+    async fn a_download_answer_that_is_not_json_was_still_counted() {
+        let server = serve(|_, _| Reply::ok("<html>not json</html>"));
+        let c = Client::at(&api(&server.base));
+        match c
+            .download_link(&api(&server.base), "fake-os-token-1", 7000001)
+            .await
+        {
+            Err(e) => assert_eq!(e, OnlineError::AnswerLost),
+            Ok(_) => panic!("read"),
+        }
+        // A refusal is not counted: it says what it is.
+        let server = serve(|_, _| Reply::new(403, "<html>no</html>"));
+        let c = Client::at(&api(&server.base));
+        assert!(matches!(
+            c.download_link(&api(&server.base), "fake-os-token-1", 7000001)
+                .await,
+            Err(OnlineError::Refused(403))
+        ));
     }
 }
