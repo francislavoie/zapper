@@ -223,6 +223,32 @@ directories; the check reads the nonce and the session back from WebKit's
 local-storage database, and the setting from zapper's own. `--quit-by
 sigterm` ends each run with SIGTERM instead of the close.
 
+## OpenSubtitles, without OpenSubtitles
+
+`tools/fake_opensubtitles.py --port N` stands in for the OpenSubtitles REST
+API with made-up data, so tests never reach the real service. Point zapper at
+it with `ZAPPER_OPENSUBTITLES_URL=http://127.0.0.1:N`. It needs an `Api-Key`
+and a `User-Agent` starting `zapper v` (else 403), signs in `tester` /
+`test-pass` (tokens are always `fake-os-token-<n>`), redirects an unsorted or
+mixed-case search query as the real one does, answers a few fixed titles
+(`tmdb_id=900001`, `parent_tmdb_id=800001` with season 1 episode 2,
+`query=film 0002`, `query=show 0002`), and serves downloads only with a
+bearer token, up to `--quota` per user (then 406). It also serves
+`DELETE /api/v1/logout` and `GET /api/v1/infos/user`.
+
+Failure switches: `--busy-after N` (429 with `Retry-After` after N requests
+in 10 s, `--retry-after S`), `--down` (503), `--token-ttl S` (a token stops
+working on `/download` after S seconds). `/files/<file_id>.srt` serves 20 cues
+(`7000099`: Latin-1 with CRLF; `7000098`: an HTML page; `7000097`: empty).
+`GET /_stats` returns counters (logins, logouts, infos, searches, downloads,
+files, refused, and the hosts that received an `Authorization` header) and
+never a token or password.
+
+`fake_stream.py` gives odd movies a `tmdb_id` (900000 + id) and odd shows a
+`tmdb` (800000 + id) in `get_vod_streams`/`get_vod_info` and
+`get_series`/`get_series_info`; even ones have none, which is the search-by-name
+path.
+
 ## Never the real account
 
 Many providers allow one connection per account, and end the older one when
