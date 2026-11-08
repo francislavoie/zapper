@@ -110,7 +110,10 @@ interface have their own page: [recording.md](recording.md).
   view, of Continue watching itself, of a search, and of a window too short to leave the posters
   room.
 - Playing a movie or episode left partway opens it paused at your place and asks **Resume** or
-  **Start over**, with the time left (`Enter` resumes, `Esc` closes the question); the title keeps its connection for both answers. A
+  **Start over**, saying where you stopped and when ("You stopped at 46:10, yesterday at 22:40.").
+  `Enter` resumes; `Esc` or a seek closes the question and leaves the title paused where it is. The
+  title keeps its connection for both answers, and looking at the question changes neither the
+  place nor when it was last watched. Up next waits until the title has played. In a browser, a
   question left for a minute lets the connection go, and Resume watches again from the place. On
   a row in the Shows pane, `Enter` asks the same.
 - The list and the places are shared: the app on the computer that runs the recording service and
@@ -127,7 +130,8 @@ interface have their own page: [recording.md](recording.md).
   channel's. The picture gets a seek bar with the time played and left, `←`/`→` skip 10 seconds,
   Space or a click pauses. How far you got is kept, and a title played past 92 % counts as
   watched. A title that stops or can't start says why and can be played again from where it
-  stopped. An episode you left partway asks whether to resume or start over (see Continue watching). Episodes play with the show as the title and the episode beneath
+  stopped. An episode you left partway asks whether to resume or start over (see Continue
+  watching). Episodes play with the show as the title and the episode beneath
   (`S2 E4 · Night Shift · 52m`).
 - `P` switches to the previous channel; typing a channel number tunes it.
 - Volume up to 200 %, on a perceptual scale, remembered between launches.

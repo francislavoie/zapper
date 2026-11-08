@@ -448,13 +448,14 @@ and a film played past most of its length counts as watched, as in the app. Paus
 the film lets its connection go (a recording may be waiting for one) and keeps its place; Play
 watches it again from there. A title opened at its place to ask Resume or Start over is paused
 from the moment it opens, so a question left unanswered for a minute lets the connection go the
-same way, and Resume then watches it again from there. While the page is open it asks after its film every few seconds, which
-keeps the film's place on the service even when the browser holds all it needs for now and reads
-nothing (a page that has asked within the last 90 seconds keeps it: a background tab may ask only
-once a minute); a closed page's goes within 90 seconds. A film that doesn't start within half a
-minute, stands still for half a minute while playing, or whose converted stream ends before the
-film does, is opened again where it was, twice at most, before the page says it stopped and
-offers **Retry**, which plays it from there.
+same way, and Resume then watches it again from there; until it plays, its place is not reported.
+While the page is open it asks after its film every few seconds, which keeps the film's place on
+the service even when the browser holds all it needs for now and reads nothing (a page that has
+asked within the last 90 seconds keeps it: a background tab may ask only once a minute); a closed
+page's goes within 90 seconds. A film that doesn't start within half a minute, stands still for
+half a minute while playing, or whose converted stream ends before the film does, is opened again
+where it was, twice at most, before the page says it stopped and offers **Retry**, which plays it
+from there.
 
 An episode of a show plays in the browser exactly as a movie does, on a connection of its own
 under the same rules, played as it is or converted, with the same subtitles; another device turned
