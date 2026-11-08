@@ -99,6 +99,25 @@ export function placeTip(
   return { left, top, side };
 }
 
+/** Whether text is cut short, from what the DOM reports (src/tooltip.ts
+ *  isTruncated measures; this decides).
+ *
+ *  `scroll` and `client` are the element's scroll and client sizes along
+ *  the axis it can overflow on. Both are whole pixels, and WebKit can round
+ *  a fractional box's scroll size up and its client size down — a pixel
+ *  apart with nothing hidden — so a pixel's difference proves nothing;
+ *  more than that is text that does not fit.
+ *
+ *  `text` is the text's own laid-out width, unrounded, and `room` the
+ *  width it has, for an element drawn with an ellipsis; null for any other.
+ *  Within that pixel they decide: a name overflowing by half a pixel still
+ *  gets its ellipsis, and so its tip. */
+export function overflows(scroll: number, client: number, text: number | null, room: number): boolean {
+  if (scroll - client > 1) return true;
+  if (text === null) return false;
+  return text > room + 0.5;
+}
+
 /** The anchor for a tip over `target`, or null to centre on it.
  *
  *  A truncation tip starts where its text starts (`textLeft`), whatever the

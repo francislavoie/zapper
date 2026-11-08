@@ -22,6 +22,7 @@ import {
   type RefObject,
 } from "react";
 import { documentScale } from "../zoom";
+import { isSideButton } from "../logic/navHistory";
 import { menuPosition } from "../logic/favourites";
 import { SubMenuHost } from "./SubMenu";
 
@@ -98,6 +99,9 @@ export function ContextMenu({
 
   useEffect(() => {
     const onDown = (e: MouseEvent) => {
+      // The mouse's back button closes this as one step of its own
+      // (useGlobalKeys); its press must not close it first.
+      if (isSideButton(e)) return;
       const target = e.target as Node;
       if (ref.current?.contains(target)) return;
       if (e.type === "mousedown" && anchor?.current?.contains(target)) return;

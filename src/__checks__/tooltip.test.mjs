@@ -6,8 +6,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { TIP_GAP, TIP_MARGIN, WIDE_TARGET, placeTip, tipAnchor } from "../logic/tooltip.ts";
+import { TIP_GAP, TIP_MARGIN, WIDE_TARGET, overflows, placeTip, tipAnchor } from "../logic/tooltip.ts";
 
 const box = (left, top, width, height) => ({
   left,
@@ -100,11 +99,25 @@ test("an anchored tip stays inside the window", () => {
   assert.equal(start.left, 1280 - TIP_MARGIN - 300);
 });
 
-test("a tip shows only when the text is cut short by more than rounding", () => {
-  // WebKit can round a fractional box's scroll width up and its client
-  // width down: a pixel apart with nothing hidden. The difference alone
-  // must not decide it (src/tooltip.ts isTruncated).
-  const src = readFileSync(new URL("../tooltip.ts", import.meta.url), "utf8");
-  assert.match(src, /el\.scrollWidth - el\.clientWidth > 1/);
-  assert.doesNotMatch(src, /el\.scrollWidth > el\.clientWidth/);
+test("a pixel between scroll and client width is rounding, not truncation", () => {
+  // WebKit: a 939.05px box reports 940 and 939, with a 150px name in it.
+  assert.equal(overflows(940, 939, 150, 939.05), false);
+  // Not an ellipsizing element: nothing else to go on.
+  assert.equal(overflows(940, 939, null, 0), false);
+});
+
+test("more than a pixel over is cut short", () => {
+  assert.equal(overflows(63, 48, null, 0), true);
+  assert.equal(overflows(63, 48, 63, 48), true);
+  // A clamp that bites hides a whole line.
+  assert.equal(overflows(36, 18, null, 0), true);
+});
+
+test("within the pixel, the text's own width decides", () => {
+  // Overflowing by a fraction: the integers agree, the ellipsis is drawn.
+  assert.equal(overflows(120, 120, 120.8, 120.2), true);
+  assert.equal(overflows(121, 120, 120.8, 120.2), true);
+  // Fits, to the half pixel.
+  assert.equal(overflows(120, 120, 120.4, 120.2), false);
+  assert.equal(overflows(120, 120, 80, 120), false);
 });

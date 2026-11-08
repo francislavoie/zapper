@@ -149,6 +149,7 @@ pub fn install(window: &tauri::WebviewWindow) -> Result<Overlay> {
 
         suppress_browser_menu(&webview);
         tune_scrolling(&webview);
+        side_buttons(&webview);
 
         let Some(parent) = webview.parent() else {
             tracing::error!("webview has no parent container; cannot install overlay");
@@ -582,6 +583,51 @@ fn survive_a_failed_interface(webview: &webkit2gtk::WebView, win: &gtk::Window) 
 /// This lives at the GTK level rather than as a `contextmenu` handler in the
 /// page because a missed listener is a leaked browser menu, and the failure is
 /// invisible until somebody right-clicks the one element nobody covered.
+fn side_buttons(webview: &webkit2gtk::WebView) {
+    use gtk::gdk::EventType;
+
+    // The mouse's back and forward buttons (8 and 9), for the page's own
+    // history of screens (src/hooks/useGlobalKeys.ts).
+    //
+    // wry handles these itself: it turns them into a synthetic `mousedown`
+    // and `mouseup` dispatched on `document.elementFromPoint(x, y)`, with x
+    // and y in window pixels. elementFromPoint takes CSS pixels, and under
+    // the app's page zoom the two differ: past width ÷ zoom it finds
+    // nothing, the dispatch throws, and the button does nothing. Its press,
+    // arriving as a `mousedown`, also reached every click-outside listener
+    // before the release did anything.
+    //
+    // So the press and release are taken here first. `event` is emitted
+    // before `button-press-event` and `button-release-event`, where wry's
+    // handlers are, and stopping it stops those. The release tells the page
+    // which button, with no coordinates to get wrong; the press says
+    // nothing, so nothing in the page takes it for a click.
+    webview.connect_event(|webview, event| {
+        let Some(button @ (8 | 9)) = event.button() else {
+            return glib::Propagation::Proceed;
+        };
+        match event.event_type() {
+            EventType::ButtonRelease => {
+                let which = if button == 8 { "back" } else { "forward" };
+                webview.evaluate_javascript(
+                    &format!(
+                        "window.dispatchEvent(new CustomEvent('zapper:side-button', {{ detail: '{which}' }}))"
+                    ),
+                    None,
+                    None,
+                    None::<&gtk::gio::Cancellable>,
+                    |_| {},
+                );
+                glib::Propagation::Stop
+            }
+            EventType::ButtonPress | EventType::DoubleButtonPress | EventType::TripleButtonPress => {
+                glib::Propagation::Stop
+            }
+            _ => glib::Propagation::Proceed,
+        }
+    });
+}
+
 fn suppress_browser_menu(webview: &webkit2gtk::WebView) {
     use webkit2gtk::{ContextMenuAction, ContextMenuExt, ContextMenuItem, HitTestResultExt};
 

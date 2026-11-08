@@ -30,6 +30,7 @@ import {
 } from "../logic/updates";
 import { useApp, useDispatch } from "../store";
 import type { InstallOutcomeDto, InstallWhen } from "../types";
+import { isSideButton } from "../logic/navHistory";
 
 export function UpdateModal() {
   const { update } = useApp();
@@ -126,7 +127,8 @@ export function UpdateModal() {
     <div
       className="modal-backdrop"
       onMouseDown={(e) => {
-        if (e.target === e.currentTarget) close();
+        // Not the mouse's back button: it closes this as a step of its own.
+        if (e.target === e.currentTarget && !isSideButton(e)) close();
       }}
     >
       <div className="about update" role="dialog" aria-label="Updates">

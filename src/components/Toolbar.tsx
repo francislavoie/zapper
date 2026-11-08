@@ -60,6 +60,7 @@ import { Bolt, Gear, UpdateArrow } from "./icons";
 import { RecordingBadge } from "./RecordingBadge";
 import { SleepSubMenu } from "./SleepMenu";
 import { SubMenuHost } from "./SubMenu";
+import { isSideButton } from "../logic/navHistory";
 
 export function Toolbar() {
   const state = useApp();
@@ -76,6 +77,8 @@ export function Toolbar() {
   useEffect(() => {
     if (!state.menuOpen) return;
     const onDown = (e: MouseEvent) => {
+      // The mouse's back button closes the menu as a step of its own.
+      if (isSideButton(e)) return;
       if (!menuRef.current?.contains(e.target as Node)) closeMenu();
     };
     // Capture, so a click on a button somewhere else closes the menu before
