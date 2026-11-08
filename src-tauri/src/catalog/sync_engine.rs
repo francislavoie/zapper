@@ -494,8 +494,10 @@ pub async fn run_once<S: StatusSink>(app: &S) -> Result<Option<PassOutcome>> {
         }
     };
     // Which catalogue this is, and whether the mirror holds a different one.
+    // A mirror holding none is claimed now, so movies, shows and marks know
+    // their account even while the channels phase keeps failing.
     let from = origin::of_xtream(&creds);
-    let switched = db::with_write_db(|conn| origin::changed(conn, &from))?;
+    let switched = db::with_write_db(|conn| origin::claim(conn, &from))?;
     let client = XtreamClient::new(creds)?;
     // The server's time zone, for catch-up: not a phase, because the
     // catalogue does not depend on it and the toolbar has nothing to say.
@@ -1714,6 +1716,78 @@ mod tests {
         let shown = rec.messages().join("\n");
         assert!(shown.contains("refused this account"), "{shown}");
         assert!(!shown.contains("hunter2-secret"), "{shown}");
+    }
+
+    /// A fresh mirror whose channels phase fails on every pass: its shows and
+    /// movies still land, and know their account, and marks made meanwhile
+    /// are filed under it rather than under no account.
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn a_failing_channels_phase_does_not_leave_shows_and_marks_without_an_account() {
+        let _guard = status::test_lock();
+        let _catalogue = db::movie_catalogue();
+        db::install_test_db();
+        let server = crate::test_http::serve(|req, _| match req.query("action") {
+            Some("get_live_streams") => crate::test_http::Reply::new(503, "busy"),
+            Some("get_series") => crate::test_http::Reply::ok(
+                r#"[{"series_id":7,"name":"Harbour Lights","category_id":"3"}]"#,
+            ),
+            Some("get_series_categories") => {
+                crate::test_http::Reply::ok(r#"[{"category_id":"3","category_name":"Drama"}]"#)
+            }
+            _ => crate::test_http::Reply::ok("[]"),
+        });
+        let creds = crate::xtream::Credentials {
+            host: server.base.clone(),
+            username: "u".into(),
+            password: "p".into(),
+        };
+        let from = origin::of_xtream(&creds);
+        let client = XtreamClient::new(creds).unwrap();
+        // Forget any origin an earlier test left in the shared mirror.
+        let before = db::with_write_db(|c| origin::recorded(c)).unwrap();
+        db::with_write_db(|c| {
+            c.execute("DELETE FROM meta WHERE key = 'catalogue_origin'", [])?;
+            Ok(())
+        })
+        .unwrap();
+
+        // The start of `run_once`'s Xtream pass, then its steps.
+        let switched = db::with_write_db(|c| origin::claim(c, &from)).unwrap();
+        let rec = Recorder::default();
+        run_steps(
+            &rec,
+            vec![
+                (SyncPhase::Categories, Box::pin(step_categories(&client, switched))),
+                (SyncPhase::Channels, Box::pin(step_channels(&client, &from))),
+                (SyncPhase::Movies, Box::pin(step_movies(&client, &from))),
+                (SyncPhase::Shows, Box::pin(step_shows(&client, &from))),
+            ],
+        )
+        .await;
+        let landed = db::with_write_db(|c| series_sync::series_landed_from(c)).unwrap();
+        let marks_key = db::with_write_db(|c| crate::catalog::vod_store::origin(c)).unwrap();
+        // The steps built the process-wide indexes over this test's rows.
+        index::forget_vod();
+        db::with_write_db(|c| {
+            match &before {
+                Some(b) => origin::record(c, b)?,
+                None => {
+                    c.execute("DELETE FROM meta WHERE key = 'catalogue_origin'", [])?;
+                }
+            }
+            Ok(())
+        })
+        .unwrap();
+
+        assert!(!switched);
+        assert!(
+            rec.messages().iter().any(|m| m.contains("503")),
+            "{:?}",
+            rec.messages()
+        );
+        assert_eq!(landed.as_deref(), Some(from.as_str()));
+        assert_eq!(marks_key, from);
     }
 
     #[allow(clippy::await_holding_lock)]

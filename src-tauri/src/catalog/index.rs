@@ -46,6 +46,13 @@ impl Slot {
         }
     }
 
+    /// Back to not built, for a test that rebuilt a process-wide index over
+    /// a catalogue other tests do not share.
+    #[cfg(test)]
+    pub fn forget(&self) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+
     pub fn is_built(&self) -> bool {
         let guard = self.0.lock().unwrap_or_else(|e| e.into_inner());
         guard.is_some()
@@ -106,6 +113,14 @@ pub fn rebuild_series(conn: &Connection) -> Result<usize> {
 
 pub fn query_series(needle: &str, limit: usize) -> Vec<i64> {
     SERIES.query(needle, limit)
+}
+
+/// Test-only: leaves the movie and show indexes unbuilt, so the next search
+/// builds them over what that test seeded.
+#[cfg(test)]
+pub fn forget_vod() {
+    MOVIES.forget();
+    SERIES.forget();
 }
 
 pub fn series_built() -> bool {

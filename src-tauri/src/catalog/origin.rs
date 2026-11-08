@@ -108,6 +108,24 @@ pub fn changed(conn: &Connection, origin: &str) -> Result<bool> {
     })
 }
 
+/// The mirror's origin, claimed for `origin` when none is on record and the
+/// mirror holds no other catalogue; whether the mirror holds another
+/// catalogue (as [`changed`]).
+///
+/// An Xtream pass claims at its start rather than leaving the record to its
+/// channels phase: the movies and shows phases and the marks on them key on
+/// the record, so an account whose channels keep failing would otherwise
+/// have them filed under no account at all. A mirror that holds another
+/// account's catalogue is not claimed; that waits for the channels, which
+/// replace it.
+pub fn claim(conn: &Connection, origin: &str) -> Result<bool> {
+    let other = changed(conn, origin)?;
+    if !other && recorded(conn)?.is_none() {
+        record(conn, origin)?;
+    }
+    Ok(other)
+}
+
 /// Drops every category not in `keep`. For an Xtream server's first pass after
 /// the catalogue changed hands.
 pub fn prune_categories(conn: &Connection, keep: &[&str]) -> Result<usize> {
@@ -183,6 +201,23 @@ mod tests {
         record(&c, "xtream:1").unwrap();
         assert!(!changed(&c, "xtream:1").unwrap());
         assert!(changed(&c, "m3u:2").unwrap());
+    }
+
+    #[test]
+    fn claiming_records_only_for_a_mirror_without_another_catalogue() {
+        let c = open_in_memory().unwrap();
+        assert!(!claim(&c, "xtream:1").unwrap());
+        assert_eq!(recorded(&c).unwrap().as_deref(), Some("xtream:1"));
+        assert!(!claim(&c, "xtream:1").unwrap());
+        assert_eq!(recorded(&c).unwrap().as_deref(), Some("xtream:1"));
+        assert!(claim(&c, "xtream:2").unwrap());
+        assert_eq!(recorded(&c).unwrap().as_deref(), Some("xtream:1"));
+
+        let p = open_in_memory().unwrap();
+        p.execute("INSERT INTO categories (id, name) VALUES ('m3u-ab', 'Group')", [])
+            .unwrap();
+        assert!(claim(&p, "xtream:1").unwrap());
+        assert_eq!(recorded(&p).unwrap(), None);
     }
 
     #[test]
