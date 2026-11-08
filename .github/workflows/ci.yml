@@ -88,3 +88,57 @@ jobs:
 
       - name: Release scripts
         run: scripts/test-scripts.sh
+
+  # The recording service (feature `server`, off by default) has its own tests, which the job
+  # above never builds. They run against the libmpv bundle that ships, not Ubuntu's; ffmpeg only
+  # makes their fixtures. Two of them need dist/, so the frontend is built first.
+  server:
+    name: Recording service tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: System packages
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev librsvg2-dev libxdo-dev libayatana-appindicator3-dev \
+            libepoxy-dev pkg-config ffmpeg
+
+      - name: libmpv
+        run: scripts/fetch-libmpv.sh linux-x86_64
+
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+        with:
+          toolchain: stable
+          components: clippy
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: src-tauri
+          key: server
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - run: npm ci
+
+      - name: Frontend build
+        run: npm run build
+
+      - name: Rust tests, server feature
+        working-directory: src-tauri
+        run: cargo test --lib --no-default-features --features server
+
+      - name: Clippy, server feature
+        working-directory: src-tauri
+        run: cargo clippy --lib --bins --no-default-features --features server -- -D warnings
