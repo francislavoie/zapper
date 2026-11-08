@@ -34,6 +34,21 @@ pub fn is_started(position: f64, duration: Option<f64>) -> bool {
     }
 }
 
+/// Where to resume a title: its kept `position` while it is in progress
+/// ([`is_started`]) and not marked watched, else None (play from the start).
+/// Its length is what the player `measured`, else the provider's
+/// (`listed_secs`).
+pub fn resume_point(
+    position: Option<f64>,
+    measured: Option<f64>,
+    listed_secs: Option<i64>,
+    watched: bool,
+) -> Option<f64> {
+    let p = position?;
+    let length = measured.or(listed_secs.map(|s| s as f64));
+    (!watched && is_started(p, length)).then_some(p)
+}
+
 /// A place to write down: a movie's or an episode's, never mistaken for
 /// the other kind's with the same id.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -224,6 +239,18 @@ mod tests {
         assert!(!is_finished(91.9, Some(100.0)));
         assert!(is_finished(92.0, Some(100.0)));
         assert!(!is_finished(5000.0, None));
+    }
+
+    #[test]
+    fn the_resume_point_is_the_place_while_in_progress() {
+        assert_eq!(resume_point(Some(30.0), Some(100.0), None, false), Some(30.0));
+        assert_eq!(resume_point(Some(30.0), None, Some(100), false), Some(30.0));
+        assert_eq!(resume_point(Some(30.0), Some(100.0), None, true), None);
+        assert_eq!(resume_point(Some(0.5), Some(100.0), None, false), None);
+        assert_eq!(resume_point(Some(30.0), None, None, false), None);
+        // The measured length wins over the listed one.
+        assert_eq!(resume_point(Some(95.0), Some(100.0), Some(6000), false), None);
+        assert_eq!(resume_point(None, Some(100.0), None, false), None);
     }
 
     #[test]

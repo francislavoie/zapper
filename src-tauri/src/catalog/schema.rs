@@ -324,6 +324,24 @@ CREATE TABLE IF NOT EXISTS episodes (
 CREATE INDEX IF NOT EXISTS episodes_by_series ON episodes(series_id, season, episode);
 "#;
 
+/// Migration step `continue_watching`, part one: `vod_marks.dismissed_at`,
+/// when the title was removed from Continue watching.
+///
+/// Set on the movie's row (kind `movie`) or the show's (kind `series`),
+/// never an episode's. Removing hides the entry until it is watched again
+/// and keeps the place: a movie shows while its `played_at` is later than
+/// this; a show while its episodes' latest `played_at` or `watched_at` is.
+/// So playing the movie, or playing or marking any episode of the show,
+/// brings it back, and Resume still starts where it was left.
+const CONTINUE_COLUMNS: &[(&str, &str, &str)] = &[("vod_marks", "dismissed_at", "INTEGER")];
+
+/// Migration step `continue_watching`, part two: the catalogue's places by
+/// kind, most recently played last, so the Continue watching list reads its
+/// newest movies in order from the index rather than every mark.
+const CONTINUE_INDEXES: &str = r#"
+CREATE INDEX IF NOT EXISTS vod_marks_by_played ON vod_marks(origin, kind, played_at);
+"#;
+
 fn add_missing_columns(conn: &Connection, columns: &[(&str, &str, &str)]) -> Result<()> {
     for (table, column, decl) in columns {
         let present: bool = conn
@@ -353,6 +371,9 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     conn.execute_batch(VOD_TABLES).context("migrating vod")?;
     conn.execute_batch(SERIES_TABLES)
         .context("migrating series")?;
+    add_missing_columns(conn, CONTINUE_COLUMNS).context("migrating continue_watching")?;
+    conn.execute_batch(CONTINUE_INDEXES)
+        .context("migrating continue_watching")?;
     crate::catalog::guide_search::install(conn)
 }
 
@@ -544,6 +565,41 @@ mod tests {
             )
             .unwrap();
         assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn marks_from_before_continue_watching_gain_dismissed_at_and_the_index() {
+        // `vod_marks` as the build before this step created it.
+        let c = open_in_memory().unwrap();
+        c.execute_batch(
+            "DROP TABLE vod_marks;
+             CREATE TABLE vod_marks (
+                origin TEXT NOT NULL, kind TEXT NOT NULL, item_id INTEGER NOT NULL,
+                favourite_at INTEGER, watched_at INTEGER, position REAL, duration REAL,
+                played_at INTEGER, PRIMARY KEY (origin, kind, item_id));
+             INSERT INTO vod_marks (origin, kind, item_id, position, played_at)
+                VALUES ('', 'movie', 7, 30.0, 10);",
+        )
+        .unwrap();
+        migrate(&c).unwrap();
+        migrate(&c).unwrap();
+        let (position, dismissed): (f64, Option<i64>) = c
+            .query_row(
+                "SELECT position, dismissed_at FROM vod_marks WHERE item_id = 7",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((position, dismissed), (30.0, None));
+        let indexed: bool = c
+            .query_row(
+                "SELECT COUNT(*) = 1 FROM sqlite_master
+                 WHERE type = 'index' AND name = 'vod_marks_by_played'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(indexed);
     }
 
     #[test]
