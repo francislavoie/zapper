@@ -417,12 +417,18 @@ struct Reader;
 
 impl Reader {
     fn take() -> Option<Self> {
-        READERS
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
-                (n < MAX_READERS).then_some(n + 1)
-            })
-            .ok()
-            .map(|_| Reader)
+        // A compare-and-swap loop rather than `fetch_update`, which newer Rust
+        // deprecates under a new name the older toolchains don't have.
+        let mut n = READERS.load(Ordering::SeqCst);
+        loop {
+            if n >= MAX_READERS {
+                return None;
+            }
+            match READERS.compare_exchange_weak(n, n + 1, Ordering::SeqCst, Ordering::SeqCst) {
+                Ok(_) => return Some(Reader),
+                Err(now) => n = now,
+            }
+        }
     }
 }
 
