@@ -1333,16 +1333,14 @@ fn preferred_subtitle(language: Option<&str>, tracks: &[TrackDto]) -> Option<i64
         .or_else(|| tracks.first().map(|t| t.id))
 }
 
-/// The `sid` that puts an open's subtitles where `pref` says, or `None` when
-/// they are there already or there are none: off is none shown; on is
-/// [`preferred_subtitle`]. A track mpv picked itself in the language wanted
-/// (or any, when that language is not there) is left: switching costs a
-/// trip back through the file ([`subtitle_open_properties`]).
+/// The `sid` that chooses an open's subtitle track as `pref` says, or `None`
+/// when it is chosen already or there are none: [`preferred_subtitle`],
+/// whether subtitles are on or off (off hides it: `sub-visibility`). A
+/// track mpv picked itself in the language wanted (or any, when that
+/// language is not there) is left: switching costs a trip back through the
+/// file ([`subtitle_open_properties`]).
 fn subtitle_choice(pref: &SubtitlePref, subtitles: &[TrackDto]) -> Option<String> {
     let selected = subtitles.iter().find(|t| t.selected);
-    if !pref.on {
-        return selected.map(|_| "no".to_owned());
-    }
     let id = preferred_subtitle(pref.language.as_deref(), subtitles)?;
     let in_language = |t: &TrackDto| match pref.language.as_deref() {
         Some(want) => t.lang.as_deref().is_some_and(|l| l.eq_ignore_ascii_case(want)),
@@ -2786,6 +2784,9 @@ async fn open_as(
         }
     });
     let subtitles = subtitle_pref();
+    if !matches!(tracks, TrackChoice::Keep(..)) {
+        commit_options(app, |o| o.subtitles_visible = subtitles.on);
+    }
     let r = on_player(app, move |p| {
         apply_http_headers(p, &target, &via);
         apply_start(p, start);
@@ -3327,24 +3328,38 @@ fn reset_track_choice(p: &Player) {
 }
 
 /// The subtitle options an open starts with, under the standing choice:
-/// none when it is off (where mpv's own choice would show a track flagged
-/// default); when on, mpv's own pick of a full track in that language, else
-/// of any full track, made as the file loads.
+/// mpv's own pick of a full track in its language, else of any full track,
+/// made as the file loads; shown when subtitles are on, hidden when off
+/// (`sub-visibility`).
 ///
-/// Chosen before the load rather than once the tracks are listed: changing
-/// tracks on a file that is playing makes mpv go back for the packets it
-/// passed, which a server that cannot seek answers with the end of the
-/// stream. The heartbeat still settles anything mpv did not pick
+/// A track is chosen even with subtitles off, and before the load rather
+/// than once the tracks are listed: changing tracks on a file that is
+/// playing makes mpv go back for the packets it passed, a trip through the
+/// file that a server can answer with the end of the stream. So turning
+/// subtitles on or off is only ever `sub-visibility` ([`subtitle_command`]).
+/// The heartbeat still settles anything mpv did not pick
 /// ([`subtitle_choice`]): captions a live channel lists only later.
 fn subtitle_open_properties(pref: &SubtitlePref) -> Vec<(&'static str, String)> {
-    if !pref.on {
-        return vec![("sid", "no".to_owned())];
-    }
     vec![
         ("slang", pref.language.clone().unwrap_or_default()),
         ("subs-fallback", "yes".to_owned()),
         ("sid", "auto".to_owned()),
+        ("sub-visibility", if pref.on { "yes" } else { "no" }.to_owned()),
     ]
+}
+
+/// What showing subtitle track `id`, or none with `None`, takes when
+/// `selected` is the track chosen now: none is hiding them, the track kept;
+/// the track chosen is showing it; another track is a switch, and showing.
+/// A switch is the one thing that sends mpv back through the file
+/// ([`subtitle_open_properties`]), so it is made only when the track asked
+/// for is not the one there.
+fn subtitle_command(selected: Option<i64>, id: Option<i64>) -> Vec<(&'static str, String)> {
+    match id {
+        None => vec![("sub-visibility", "no".to_owned())],
+        Some(id) if selected == Some(id) => vec![("sub-visibility", "yes".to_owned())],
+        Some(id) => vec![("sid", id.to_string()), ("sub-visibility", "yes".to_owned())],
+    }
 }
 
 fn open_subtitles(p: &Player, pref: &SubtitlePref) {
@@ -3397,7 +3412,9 @@ pub async fn set_audio_track(app: AppHandle, id: i64) -> Result<PlayerOptionsDto
     }))
 }
 
-/// Shows one of the stream's subtitle tracks, or none.
+/// Shows one of the stream's subtitle tracks, or hides them with `None`:
+/// the picture menu's choice, and the toggle's. Hiding keeps the track, and
+/// showing the track already chosen is not a switch ([`subtitle_command`]).
 ///
 /// The viewer's choice: it is the standing one from now, for every open
 /// after this (the interface saves it in the settings as well), and this
@@ -3407,21 +3424,23 @@ pub async fn set_subtitle_track(
     app: AppHandle,
     id: Option<i64>,
 ) -> Result<PlayerOptionsDto, String> {
-    on_player(&app, move |p| {
-        p.set_property("sid", &tracks::track_value(id))
-            .map_err(|e| e.to_string())
-    })
-    .await?;
-    commit(&app, Machine::chose_subtitles);
-    let chosen = id.and_then(|id| {
-        let o = OPTIONS.lock().ok()?;
-        o.subtitles.iter().find(|t| t.id == id).cloned()
+    let (selected, chosen) = OPTIONS.lock().map_or((None, None), |o| {
+        (
+            o.subtitles.iter().find(|t| t.selected).map(|t| t.id),
+            id.and_then(|id| o.subtitles.iter().find(|t| t.id == id).cloned()),
+        )
     });
+    let props = subtitle_command(selected, id);
+    on_player(&app, move |p| apply_properties(p, &props)).await?;
+    commit(&app, Machine::chose_subtitles);
     set_subtitle_pref(|p| p.chose(chosen.as_ref()));
     Ok(commit_options(&app, |o| {
-        for t in &mut o.subtitles {
-            t.selected = Some(t.id) == id;
+        if let Some(id) = id {
+            for t in &mut o.subtitles {
+                t.selected = t.id == id;
+            }
         }
+        o.subtitles_visible = id.is_some();
     }))
 }
 
@@ -4182,12 +4201,33 @@ mod tests {
         }
 
         #[test]
-        fn subtitles_off_are_none() {
-            let showing = [selected(track(1, "eng")), track(2, "fra")];
-            assert_eq!(subtitle_choice(&off(), &showing).as_deref(), Some("no"));
-            // None shown already (each open starts with none): nothing to do.
+        fn subtitles_off_still_have_a_track_chosen_hidden() {
+            // Off is sub-visibility, not the track: one is chosen all the
+            // same, so turning them on later is never a switch of tracks.
             let subtitles = [track(1, "eng"), track(2, "fra")];
-            assert_eq!(subtitle_choice(&off(), &subtitles), None);
+            assert_eq!(subtitle_choice(&off(), &subtitles).as_deref(), Some("2"));
+            let chosen = [selected(track(1, "eng")), track(2, "fra")];
+            assert_eq!(subtitle_choice(&off(), &chosen).as_deref(), Some("2"));
+            let right = [track(1, "eng"), selected(track(2, "fra"))];
+            assert_eq!(subtitle_choice(&off(), &right), None);
+        }
+
+        #[test]
+        fn the_menu_and_the_toggle_show_and_hide_without_switching() {
+            // Off: hidden, the track kept.
+            assert_eq!(subtitle_command(Some(2), None), [("sub-visibility", "no".to_owned())]);
+            // The track already chosen (the toggle turning them on): shown.
+            assert_eq!(subtitle_command(Some(2), Some(2)), [("sub-visibility", "yes".to_owned())]);
+            // Another track from the menu: switched, and shown.
+            assert_eq!(
+                subtitle_command(Some(2), Some(1)),
+                [("sid", "1".to_owned()), ("sub-visibility", "yes".to_owned())]
+            );
+            // None chosen yet: the only time the toggle switches.
+            assert_eq!(
+                subtitle_command(None, Some(1)),
+                [("sid", "1".to_owned()), ("sub-visibility", "yes".to_owned())]
+            );
         }
 
         #[test]
@@ -4206,13 +4246,23 @@ mod tests {
 
         #[test]
         fn an_open_asks_mpv_for_the_standing_subtitles_as_the_file_loads() {
-            assert_eq!(subtitle_open_properties(&off()), [("sid", "no".to_owned())]);
+            // Off: the track chosen all the same, and hidden.
+            assert_eq!(
+                subtitle_open_properties(&off()),
+                [
+                    ("slang", "fra".to_owned()),
+                    ("subs-fallback", "yes".to_owned()),
+                    ("sid", "auto".to_owned()),
+                    ("sub-visibility", "no".to_owned())
+                ]
+            );
             assert_eq!(
                 subtitle_open_properties(&on(Some("fra"))),
                 [
                     ("slang", "fra".to_owned()),
                     ("subs-fallback", "yes".to_owned()),
-                    ("sid", "auto".to_owned())
+                    ("sid", "auto".to_owned()),
+                    ("sub-visibility", "yes".to_owned())
                 ]
             );
             assert_eq!(subtitle_open_properties(&on(None))[0], ("slang", String::new()));
@@ -4249,15 +4299,12 @@ mod tests {
                 carried_choice(Some(&german), Some(&on(Some("eng"))), &audio, &subtitles),
                 [("aid", "auto".to_owned())]
             );
-            // Subtitles that are off stay off.
-            assert_eq!(
-                carried_choice(Some(&french), Some(&off()), &audio, &subtitles),
-                [("sid", "no".to_owned())]
-            );
+            // Subtitles that are off keep their track, hidden.
+            assert!(carried_choice(Some(&french), Some(&off()), &audio, &subtitles).is_empty());
             // Any other open leaves the sound to mpv.
             assert_eq!(
-                carried_choice(None, Some(&off()), &audio, &subtitles),
-                [("sid", "no".to_owned())]
+                carried_choice(None, Some(&off()), &audio, &[track(1, "eng"), track(2, "fra")]),
+                [("sid", "2".to_owned())]
             );
             assert!(carried_choice(None, None, &audio, &subtitles).is_empty());
             assert_eq!(

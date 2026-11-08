@@ -212,6 +212,9 @@ export type DeinterlaceMode = "auto" | "on" | "off";
 export interface PlayerOptionsDto {
   audio: TrackDto[];
   subtitles: TrackDto[];
+  /** Whether the subtitle track selected is shown. Subtitles turned off
+   *  keep their track, hidden, so turning them on is never a switch. */
+  subtitlesVisible: boolean;
   aspect: AspectMode;
   deinterlace: DeinterlaceMode;
 }

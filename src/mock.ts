@@ -642,6 +642,7 @@ const playerEmitter = new Emitter<PlayerStateDto>({
 const optionsEmitter = new Emitter<PlayerOptionsDto>({
   audio: [],
   subtitles: [],
+  subtitlesVisible: false,
   aspect: "auto",
   deinterlace: "auto",
 });
@@ -700,13 +701,18 @@ function mockTracks(streamId: number): Pick<PlayerOptionsDto, "audio" | "subtitl
 let mockSubtitles: SubtitlePreference = { subtitlesOn: false, subtitleLanguage: null };
 
 /** A stream's tracks with the standing subtitle choice applied, as the
- *  backend applies it once a stream's tracks are known. */
+ *  backend applies it: a track chosen whenever there is one, shown when
+ *  subtitles are on and hidden when they are off. */
 function withStandingSubtitles(
   t: Pick<PlayerOptionsDto, "audio" | "subtitles">,
-): Pick<PlayerOptionsDto, "audio" | "subtitles"> {
-  const id = openChoice(mockSubtitles, t.subtitles, true);
-  if (id === undefined) return t;
-  return { ...t, subtitles: t.subtitles.map((s) => ({ ...s, selected: s.id === id })) };
+): Pick<PlayerOptionsDto, "audio" | "subtitles" | "subtitlesVisible"> {
+  const choice = openChoice(mockSubtitles, t.subtitles, true);
+  if (choice === undefined) return { ...t, subtitlesVisible: false };
+  return {
+    ...t,
+    subtitles: t.subtitles.map((s) => ({ ...s, selected: s.id === choice.id })),
+    subtitlesVisible: choice.visible,
+  };
 }
 
 function patchOptions(p: Partial<PlayerOptionsDto>): PlayerOptionsDto {
@@ -1902,8 +1908,14 @@ export const mockApi = {
     // The viewer's choice is the standing one from now, as the backend's.
     const chosen = id === null ? null : (optionsEmitter.last.subtitles.find((t) => t.id === id) ?? null);
     mockSubtitles = afterChoosing(chosen, mockSubtitles);
+    // Off hides the track and keeps it, as the backend's player does.
+    if (id === null) return patchOptions({ subtitlesVisible: false });
+    (globalThis as Record<string, unknown>).__mockSubtitleSwitches =
+      ((globalThis as Record<string, unknown>).__mockSubtitleSwitches as number | undefined ?? 0) +
+      (optionsEmitter.last.subtitles.some((t) => t.selected && t.id === id) ? 0 : 1);
     return patchOptions({
       subtitles: optionsEmitter.last.subtitles.map((t) => ({ ...t, selected: t.id === id })),
+      subtitlesVisible: true,
     });
   },
   setAspect: async (aspect: AspectMode) => patchOptions({ aspect }),

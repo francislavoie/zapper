@@ -47,16 +47,19 @@
 //!
 //! `--subtitles` opens episodes (`ZAPPER_FIXTURE_EPISODE`, default
 //! `movie.mkv`, which has English and French subtitles) one after another,
-//! each opened afresh: subtitles start off; French chosen on one shows on
-//! the next; turned off, they stay off on the next; and the settings'
-//! choice, applied as the interface applies it, is what the next shows.
+//! each opened afresh: subtitles start off (a track chosen, hidden); turned
+//! on, off and on again mid-play, and switched from English to French, the
+//! episode plays on; French chosen on one shows on the next; turned off,
+//! they stay off on the next; and the settings' choice, applied as the
+//! interface applies it, is what the next shows.
 //!
 //! `--captions` plays a channel with closed captions (CEA-608 in the
 //! picture, on 16:9 video) that shows one caption top left, one centred at
 //! the bottom and one on the right, chooses the captions, and checks that
 //! mpv draws each where the caption's grid says, not where mpv's own
-//! rescaling would put it; then that choosing no subtitles puts mpv's own
-//! placement back. `ZAPPER_CAPTION_SHOTS=<dir>` saves each frame there.
+//! rescaling would put it; then that turning them off hides them and keeps
+//! the track, and that with no captions track mpv's own placement is back.
+//! `ZAPPER_CAPTION_SHOTS=<dir>` saves each frame there.
 //!
 //! `--ending <kind>` plays a channel that is expected to stop by itself, and
 //! checks it stops the way the app explains it (`offAir`, `dropped`, …), as
@@ -743,19 +746,23 @@ async fn run_episode(app: &tauri::AppHandle) -> Result<String, String> {
 /// The `--subtitles` run: subtitles chosen on one title are the standing
 /// choice for the next ones opened (not Up next: a title opened afresh),
 /// in the language chosen; turned off, they stay off across an open, even
-/// on a file whose first subtitle track is flagged default; and the
-/// settings' choice, applied as the interface applies it, is what an open
-/// shows.
+/// on a file whose first subtitle track is flagged default, with the track
+/// chosen and hidden; and the settings' choice, applied as the interface
+/// applies it, is what an open shows. Mid-play, turning them off and on
+/// again (the toggle) and switching from English to French (the menu) keep
+/// the title playing.
 #[cfg(target_os = "linux")]
 async fn run_subtitles(app: &tauri::AppHandle) -> Result<String, String> {
     use std::time::Duration;
     use zapper_lib::ipc::player_cmds as cmds;
-    use zapper_lib::ipc::types::{OnDemandKind, PlaybackState, PlayerStateDto, SettingsDto, TrackDto};
+    use zapper_lib::ipc::types::{
+        OnDemandKind, PlaybackState, PlayerOptionsDto, PlayerStateDto, SettingsDto,
+    };
 
     /// Opens episode `id` (the fixture's `movie.mkv`: English and French
-    /// subtitles) and returns its subtitle tracks once they are known and
+    /// subtitles) and returns its options once its tracks are known and
     /// have had a moment to be chosen.
-    async fn open(app: &tauri::AppHandle, id: i64) -> Result<Vec<TrackDto>, String> {
+    async fn open(app: &tauri::AppHandle, id: i64) -> Result<PlayerOptionsDto, String> {
         // Stopped first, until the last title's tracks are gone: every id
         // plays the same file, so its tracks cannot tell the two apart. A
         // Stop changes nothing about the subtitles chosen.
@@ -787,40 +794,101 @@ async fn run_subtitles(app: &tauri::AppHandle) -> Result<String, String> {
         }
         // The choice is made on the heartbeat after the tracks are known.
         tokio::time::sleep(Duration::from_millis(1500)).await;
-        let subtitles = cmds::player_options().await?.subtitles;
-        if subtitles.len() < 2 {
-            return Err(format!("episode {id} listed {} subtitle tracks, not 2", subtitles.len()));
+        let o = cmds::player_options().await?;
+        if o.subtitles.len() < 2 {
+            return Err(format!("episode {id} listed {} subtitle tracks, not 2", o.subtitles.len()));
         }
-        Ok(subtitles)
+        Ok(o)
     }
-    fn shown(tracks: &[TrackDto]) -> Option<String> {
-        tracks.iter().find(|t| t.selected).map(|t| t.lang.clone().unwrap_or_else(|| "?".into()))
+    /// The language of the track chosen.
+    fn chosen(o: &PlayerOptionsDto) -> Option<String> {
+        o.subtitles.iter().find(|t| t.selected).map(|t| t.lang.clone().unwrap_or_else(|| "?".into()))
+    }
+    /// The language on screen: chosen and visible.
+    fn shown(o: &PlayerOptionsDto) -> Option<String> {
+        chosen(o).filter(|_| o.subtitles_visible)
+    }
+    /// Whether the title is still playing a few seconds on, its place
+    /// moving: what a change of subtitles must not end.
+    async fn plays_on(what: &str) -> Result<(), String> {
+        let at = |s: &PlayerStateDto| s.on_demand.map_or(-1.0, |o| o.position);
+        let before = cmds::player_state().await?;
+        tokio::time::sleep(Duration::from_secs(4)).await;
+        let after = cmds::player_state().await?;
+        if after.state != PlaybackState::Playing || after.ending.is_some() || at(&after) < at(&before) + 2.0 {
+            return Err(format!(
+                "after {what}, the title was {:?} at {:.1}s (from {:.1}s): {}",
+                after.state,
+                at(&after),
+                at(&before),
+                after.error.as_deref().unwrap_or("no reason given")
+            ));
+        }
+        Ok(())
     }
 
-    // Off, as a fresh install has them: none shown, though the file's first
-    // track is flagged default.
+    // Off, as a fresh install has them: none shown, though a track is
+    // chosen (hidden), so turning them on is never a switch.
     let first = open(app, 100_111).await?;
     if let Some(lang) = shown(&first) {
         return Err(format!("subtitles were off, but the first title showed {lang}"));
     }
+    let hidden = first
+        .subtitles
+        .iter()
+        .find(|t| t.selected)
+        .ok_or("subtitles were off, and no track was chosen to show later")?
+        .id;
 
-    // French, chosen by hand: the next title shows French.
+    // Mid-play, the toggle: on (the track chosen, shown), then off.
+    cmds::set_subtitle_track(app.clone(), Some(hidden)).await?;
+    plays_on("turning subtitles on").await?;
+    let on = cmds::player_options().await?;
+    if shown(&on).is_none() {
+        return Err("turning subtitles on did not show them".into());
+    }
+    cmds::set_subtitle_track(app.clone(), None).await?;
+    plays_on("turning subtitles off").await?;
+    let off = cmds::player_options().await?;
+    if shown(&off).is_some() || chosen(&off).is_none() {
+        return Err(format!("turning subtitles off left {:?} shown, {:?} chosen", shown(&off), chosen(&off)));
+    }
+    cmds::set_subtitle_track(app.clone(), Some(hidden)).await?;
+    plays_on("turning subtitles on again").await?;
+    if shown(&cmds::player_options().await?).is_none() {
+        return Err("turning subtitles on again did not show them".into());
+    }
+
+    // Mid-play, the menu: another track, English to French, plays on and
+    // shows French. The next title shows French too.
     let french = first
+        .subtitles
         .iter()
         .find(|t| t.lang.as_deref() == Some("fra"))
         .ok_or("the fixture has no French subtitles")?
         .id;
+    if chosen(&cmds::player_options().await?).as_deref() == Some("fra") {
+        return Err("the switch to French had nothing to switch from".into());
+    }
     cmds::set_subtitle_track(app.clone(), Some(french)).await?;
+    plays_on("switching from English to French").await?;
+    let switched = cmds::player_options().await?;
+    if shown(&switched).as_deref() != Some("fra") {
+        return Err(format!("switched to French, the title showed {:?}", shown(&switched)));
+    }
     let second = open(app, 100_112).await?;
     if shown(&second).as_deref() != Some("fra") {
         return Err(format!("French was chosen, but the next title showed {:?}", shown(&second)));
     }
 
-    // Off, chosen by hand: the next stays off.
+    // Off, chosen by hand: the next stays off, with French chosen, hidden.
     cmds::set_subtitle_track(app.clone(), None).await?;
     let third = open(app, 100_113).await?;
     if let Some(lang) = shown(&third) {
         return Err(format!("subtitles were turned off, but the next title showed {lang}"));
+    }
+    if chosen(&third).as_deref() != Some("fra") {
+        return Err(format!("off, the next title chose {:?}, not French hidden", chosen(&third)));
     }
 
     // The settings' choice, as saved settings reach the player.
@@ -836,8 +904,10 @@ async fn run_subtitles(app: &tauri::AppHandle) -> Result<String, String> {
     }
 
     cmds::stop(app.clone()).await?;
-    Ok("off by default though a track is flagged default; French chosen showed French on the next \
-        title; off chosen stayed off on the next; the settings' English showed English"
+    Ok("off by default (a track chosen, hidden) though a track is flagged default; mid-play on, \
+        off and on again played on; a mid-play switch from English to French played on and showed \
+        French, as did the next title; off chosen stayed off on the next, French hidden; the \
+        settings' English showed English"
         .into())
 }
 
@@ -929,8 +999,18 @@ async fn run_captions(app: &tauri::AppHandle) -> Result<String, String> {
         }
     }
 
-    // Another track, or none: everything back as mpv has it.
+    // Off: hidden, the caption track kept, and the channel plays on.
     cmds::set_subtitle_track(app.clone(), None).await?;
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    let o = cmds::player_options().await?;
+    if o.subtitles_visible || !o.subtitles.iter().any(|t| t.selected && t.id == track) {
+        return Err("captions turned off were not hidden with their track kept".into());
+    }
+    if cmds::player_state().await?.state != PlaybackState::Playing {
+        return Err("turning captions off stopped the channel".into());
+    }
+    // No captions track any more (stopped): everything back as mpv has it.
+    cmds::stop(app.clone()).await?;
     tokio::time::sleep(Duration::from_millis(1200)).await;
     let v = read(app, None).await.ok_or("could not read mpv's properties")?;
     let defaults = v[1] == "scale"
@@ -938,10 +1018,13 @@ async fn run_captions(app: &tauri::AppHandle) -> Result<String, String> {
         && v[3] == "center"
         && v[4] == "19";
     if !defaults {
-        return Err(format!("with captions off, mpv was left with {:?}", &v[1..]));
+        return Err(format!("with no captions track, mpv was left with {:?}", &v[1..]));
     }
-    cmds::stop(app.clone()).await?;
-    Ok(format!("{}; with captions off, mpv's own placement again", seen.join("; ")))
+    Ok(format!(
+        "{}; turned off, hidden with the track kept, playing on; with no captions track, mpv's \
+         own placement again",
+        seen.join("; ")
+    ))
 }
 
 /// The `--up-next` run; see the top of the file.

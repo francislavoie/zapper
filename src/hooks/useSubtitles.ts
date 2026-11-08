@@ -23,10 +23,12 @@ export interface Subtitles {
   available: boolean;
   /** Subtitles are showing: the toggle is lit. */
   showing: boolean;
-  /** Shows track `id`, or none with `null`, and keeps that as the standing
-   *  choice. Resolves to the options as they are after. */
+  /** Shows track `id`, or hides subtitles with `null` (the track is kept),
+   *  and keeps that as the standing choice. Resolves to the options as they
+   *  are after. */
   choose: (id: number | null) => Promise<PlayerOptionsDto>;
-  /** Off when they show; on, in the language last chosen, when they don't. */
+  /** Hides them when they show; shows the track chosen when they don't
+   *  (or, with none chosen yet, the one an open would choose). */
   toggle: () => void;
 }
 
@@ -50,18 +52,23 @@ export function useSubtitles(): Subtitles {
   );
 
   const toggle = useCallback(() => {
-    const id = toggleChoice(options.subtitles, settings.subtitleLanguage, pictures);
+    const id = toggleChoice(
+      options.subtitles,
+      options.subtitlesVisible,
+      settings.subtitleLanguage,
+      pictures,
+    );
     if (id === undefined) return;
     void run(
       dispatch,
       "subtitles",
       choose(id).then((value) => dispatch({ type: "options", value })),
     );
-  }, [choose, dispatch, options.subtitles, pictures, settings.subtitleLanguage]);
+  }, [choose, dispatch, options.subtitles, options.subtitlesVisible, pictures, settings.subtitleLanguage]);
 
   return {
     available: hasSubtitles(options.subtitles, pictures),
-    showing: subtitlesShowing(options.subtitles),
+    showing: subtitlesShowing(options),
     choose,
     toggle,
   };

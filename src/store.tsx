@@ -377,7 +377,7 @@ export const initialState: State = {
   qualityNews: {},
   categoryOptions: null,
   videoMenu: null,
-  options: { audio: [], subtitles: [], aspect: "auto", deinterlace: "auto" },
+  options: { audio: [], subtitles: [], subtitlesVisible: false, aspect: "auto", deinterlace: "auto" },
   sleep: null,
   sleepProgramme: null,
   nowProgramme: null,
