@@ -35,7 +35,8 @@
 //! plays `ZAPPER_FIXTURE_EPISODE`, so give it the 120 s episode): one
 //! played to its end reports itself as `finished`; moving on from it opens
 //! the next and marks it watched in the scratch catalogue; moving on from
-//! one still playing does the same, once however often it is asked; and no
+//! one still playing does the same, once however often it is asked; moving
+//! on from one paused opens the next playing; and no
 //! second stream lingers on the fixture server (it sends a title as fast as
 //! it is read, so this catches a stream left open, not a brief overlap).
 //! With `--past-end` the first episode is ended by a skip past its end
@@ -732,6 +733,7 @@ async fn run_up_next(app: &tauri::AppHandle, drop: bool, past_end: bool) -> Resu
     const A: i64 = 100_111;
     const B: i64 = 100_112;
     const C: i64 = 100_113;
+    const D: i64 = 100_114;
 
     fn episode(o: Option<zapper_lib::ipc::types::OnDemandDto>) -> Option<i64> {
         o.filter(|o| o.kind == OnDemandKind::Episode).map(|o| o.id)
@@ -861,6 +863,19 @@ async fn run_up_next(app: &tauri::AppHandle, drop: bool, past_end: bool) -> Resu
         return Err(format!("the next episode's subtitles were {subtitles:?}, not the English chosen"));
     }
 
+    // Moving on from one paused (Play now on a paused picture): the next
+    // opens playing, not paused as the last one was left.
+    cmds::toggle_pause(app.clone()).await?;
+    let paused = await_state(Duration::from_secs(5), |s| s.state == PlaybackState::Paused).await;
+    if paused.state != PlaybackState::Paused || episode(paused.on_demand) != Some(C) {
+        return Err(format!("toggle_pause() left C in {:?}", paused.state));
+    }
+    cmds::play_next_episode(app.clone(), C, D).await?;
+    let resumed = await_state(Duration::from_secs(25), playing(D)).await;
+    if !playing(D)(&resumed) {
+        return Err(failure("play_next_episode(C, D) from a paused C", &resumed));
+    }
+
     cmds::stop(app.clone()).await?;
     let most = streams.stop()?;
     if most >= 2 {
@@ -868,7 +883,8 @@ async fn run_up_next(app: &tauri::AppHandle, drop: bool, past_end: bool) -> Resu
     }
     Ok(format!(
         "A {} as finished; A to B opened B and marked A watched; B to C at {:.0}s \
-         opened C once, marked B watched and kept the subtitles; no second stream lingered",
+         opened C once, marked B watched and kept the subtitles; a paused C to D opened D \
+         playing; no second stream lingered",
         if past_end { "skipped past its end" } else { "played to its end" },
         at(&near)
     ))

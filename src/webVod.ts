@@ -706,9 +706,9 @@ export async function stop(): Promise<void> {
 /** Up next: moves on from episode `from`, playing or just played to its
  *  end, to episode `next` from its start, in the languages `from` was in.
  *  `from` is marked watched first. The next one's viewer replaces the old
- *  one's, so one connection serves both. It opens paused when `from` was
- *  paused, as the app's player does; the action that asked resumes it.
- *  Refused unless `from` is still what is open or what finished. */
+ *  one's, so one connection serves both. It opens playing, even when `from`
+ *  was paused, as the app's player does. Refused unless `from` is still what
+ *  is open or what finished. */
 export async function playNextEpisode(from: number, next: number): Promise<void> {
   if (from === next) throw new Error("That is the episode playing.");
   const s = session;
@@ -721,7 +721,6 @@ export async function playNextEpisode(from: number, next: number): Promise<void>
   const refused = new Error("That episode is no longer the one playing.");
   if (!upNextAllowed(subject(), from)) throw refused;
   const carry = s ? languagesOf(s) : (finishedLanguages ?? { audio: null, subtitle: null });
-  const paused = s !== null && playerFeed.last.state === "paused";
   try {
     const r = await fetch(`/api/vod/episodes/${from}/marks`, requestInit("PUT", { watched: true }));
     if (r.status === 401) signedOutNow();
@@ -739,7 +738,7 @@ export async function playNextEpisode(from: number, next: number): Promise<void>
     audio: null,
     subtitle: null,
     duration: null,
-    wantPlay: !paused,
+    wantPlay: true,
     carry,
   });
 }
