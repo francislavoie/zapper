@@ -12,6 +12,7 @@ use anyhow::{anyhow, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::{BTreeSet, HashSet};
 
+use crate::catalog::series_store;
 use crate::catalog::sync::{clean_name, SyncStats};
 use crate::catalog::vod_sync::{self, year_from_name, CategoryList};
 use crate::xtream::{Category, SeriesInfo, SeriesStream};
@@ -509,6 +510,10 @@ impl<'t> SeriesWriter<'t> {
                 update.execute([show])?;
             }
         }
+        // A show that gained or lost episodes may be watched now, or not.
+        for &show in &changed {
+            series_store::refresh_series_watched_in_tx(conn, show, now)?;
+        }
         categories.replace(conn, "series")?;
         Ok(SeriesLanded {
             stats,
@@ -609,6 +614,8 @@ pub fn land_series_details(
         &format!("UPDATE series SET {COUNTS} WHERE series_id = ?1"),
         [series_id],
     )?;
+    // A watched show that gained an episode is not watched any more.
+    series_store::refresh_series_watched_in_tx(&tx, series_id, at)?;
     tx.commit()?;
     Ok(())
 }

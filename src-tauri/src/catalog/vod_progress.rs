@@ -20,6 +20,15 @@ pub fn is_finished(position: f64, duration: Option<f64>) -> bool {
     }
 }
 
+/// Whether `position` is "in progress": past [`STARTED_FRACTION`] and short
+/// of [`WATCHED_FRACTION`]. Unknown length never is.
+pub fn is_started(position: f64, duration: Option<f64>) -> bool {
+    match duration {
+        Some(d) if d > 0.0 => (STARTED_FRACTION..WATCHED_FRACTION).contains(&(position / d)),
+        _ => false,
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ProgressWrite {
     pub id: i64,
@@ -164,5 +173,15 @@ mod tests {
         assert!(!is_finished(91.9, Some(100.0)));
         assert!(is_finished(92.0, Some(100.0)));
         assert!(!is_finished(5000.0, None));
+    }
+
+    #[test]
+    fn in_progress_is_one_to_ninety_two_percent() {
+        assert!(!is_started(0.9, Some(100.0)));
+        assert!(is_started(1.0, Some(100.0)));
+        assert!(is_started(91.9, Some(100.0)));
+        assert!(!is_started(92.0, Some(100.0)));
+        assert!(!is_started(30.0, None));
+        assert!(!is_started(30.0, Some(0.0)));
     }
 }

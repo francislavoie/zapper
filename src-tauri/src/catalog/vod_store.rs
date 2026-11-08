@@ -10,20 +10,50 @@ use rusqlite::types::Value;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Row};
 
 use crate::catalog::origin::current_origin_sql;
+use crate::catalog::series_store;
 use crate::catalog::vod_progress::is_finished;
 
 /// "Recently added" is this many days back.
 pub const RECENT_DAYS: i64 = 30;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// What a mark is on: `vod_marks.kind`. Each kind has its own id space.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ItemKind {
     Movie,
+    Series,
+    Episode,
 }
 
 impl ItemKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Movie => "movie",
+            Self::Series => "series",
+            Self::Episode => "episode",
+        }
+    }
+}
+
+/// One title that plays: a movie or an episode, never confused with the
+/// other kind's equal id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct VodItem {
+    pub kind: ItemKind,
+    pub id: i64,
+}
+
+impl VodItem {
+    pub fn movie(id: i64) -> Self {
+        Self {
+            kind: ItemKind::Movie,
+            id,
+        }
+    }
+
+    pub fn episode(id: i64) -> Self {
+        Self {
+            kind: ItemKind::Episode,
+            id,
         }
     }
 }
@@ -370,11 +400,11 @@ pub fn store_details(
     Ok(())
 }
 
-fn origin(conn: &Connection) -> Result<String> {
+pub(crate) fn origin(conn: &Connection) -> Result<String> {
     Ok(crate::catalog::origin::recorded(conn)?.unwrap_or_default())
 }
 
-fn marks_of(conn: &Connection, origin: &str, kind: ItemKind, id: i64) -> Result<Marks> {
+pub(crate) fn marks_of(conn: &Connection, origin: &str, kind: ItemKind, id: i64) -> Result<Marks> {
     Ok(conn
         .query_row(
             "SELECT favourite_at IS NOT NULL, watched_at IS NOT NULL, position, duration
@@ -395,7 +425,9 @@ fn marks_of(conn: &Connection, origin: &str, kind: ItemKind, id: i64) -> Result<
 
 /// Sets or clears the favourite and watched marks (`None` leaves one alone).
 /// Marking watched keeps the time it was first marked; un-marking it starts
-/// the title over, so it clears the resume point too.
+/// the title over, so it clears the resume point too. An episode's watched
+/// mark also reaches the episodes a multi-episode entry covers and its
+/// show's ([`series_store::episode_marked_in_tx`]), in the same transaction.
 pub fn set_marks(
     conn: &Connection,
     kind: ItemKind,
@@ -435,6 +467,9 @@ pub fn set_marks(
         }
         None => {}
     }
+    if kind == ItemKind::Episode && watched.is_some() {
+        series_store::episode_marked_in_tx(&tx, id, at)?;
+    }
     let marks = marks_of(&tx, &origin, kind, id)?;
     tx.commit()?;
     Ok(marks)
@@ -442,7 +477,8 @@ pub fn set_marks(
 
 /// Writes down how far into a title the player is. Keeps the longest length
 /// ever reported, since a stream's first reports can under-state it, and
-/// marks the title watched the first time the position is past the line.
+/// marks the title watched the first time the position is past the line
+/// (an episode's reaching what it covers and its show, as in [`set_marks`]).
 pub fn record_progress(
     conn: &Connection,
     kind: ItemKind,
@@ -470,6 +506,9 @@ pub fn record_progress(
          WHERE origin = ?1 AND kind = ?2 AND item_id = ?3",
         params![origin, kind.as_str(), id, position, duration, at, finished],
     )?;
+    if kind == ItemKind::Episode {
+        series_store::episode_marked_in_tx(&tx, id, at)?;
+    }
     let marks = marks_of(&tx, &origin, kind, id)?;
     tx.commit()?;
     Ok(marks)
