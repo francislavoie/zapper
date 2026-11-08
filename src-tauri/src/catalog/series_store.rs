@@ -2,8 +2,8 @@
 //! and seasons, which episode is next up, and what was watched.
 //!
 //! The lists are the movies' ([`crate::catalog::vod_store`]): paged, served
-//! by the `series_by_*` indexes (a test holds them to it), each row with the
-//! current catalogue's marks beside it. Marks are `vod_marks` rows of kind
+//! by the `series_live_by_*` indexes (a test holds them to it), each row with
+//! the current catalogue's marks beside it. Marks are `vod_marks` rows of kind
 //! `series` (★ and watched) and `episode` (watched and how far in).
 //!
 //! Watched has two levels. An episode is watched as a movie is: marked, or
@@ -863,7 +863,7 @@ mod tests {
         assert!(!p.contains("SCAN"), "{p}");
         assert!(!p.contains("TEMP B-TREE"), "{p}");
         let p = page(&q(MovieList::Recent, MovieSort::Added));
-        assert!(p.contains("series_by_added"), "{p}");
+        assert!(p.contains("series_live_by_added"), "{p}");
         assert!(!p.contains("SCAN"), "{p}");
         assert!(!p.contains("TEMP B-TREE"), "{p}");
         let p = page(&q(MovieList::Favourites, MovieSort::Az));
