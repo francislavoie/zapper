@@ -71,6 +71,7 @@ import { GuideGrid } from "./components/GuideGrid";
 import { PlayerChrome } from "./components/PlayerChrome";
 import { SettingsModal } from "./components/SettingsModal";
 import { UpdateModal } from "./components/UpdateModal";
+import { FindSubtitles } from "./components/FindSubtitles";
 import { useUpdates } from "./hooks/useUpdates";
 import { Toolbar } from "./components/Toolbar";
 import { ResizeEdges } from "./components/ResizeEdges";
@@ -810,6 +811,9 @@ export function App() {
       <Boundary what="Updates">{state.updateOpen ? <UpdateModal /> : null}</Boundary>
       <Boundary what="Continue watching">
         <ContinueMenu />
+      </Boundary>
+      <Boundary what="Find subtitles">
+        <FindSubtitles />
       </Boundary>
 
       {/* While browsing, a channel number being typed floats over the views;

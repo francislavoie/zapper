@@ -142,6 +142,11 @@ interface have their own page: [recording.md](recording.md).
   them on or off. Every channel, movie or episode you open afterwards keeps that choice and the
   language you last picked, across launches too.
 - Subtitle font, size, colour and backdrop.
+- **Find subtitles…**, in the Subtitles menu of a movie or an episode (and behind the subtitles
+  button when the title has none): searches OpenSubtitles.com in your subtitle languages, lists
+  what you downloaded before for that title first, and adds the one you pick to the player at once.
+  The first download asks you to sign in to your own free OpenSubtitles account. Downloads kept for
+  a title are offered in the Subtitles menu the next time it plays.
 - Mouse: wheel for volume, double-click for fullscreen, double-click the edges to skip. Theater
   mode (`T`). The back button steps back like `Esc` (a menu, a sheet, the Shows pane, the
   player), then to the tab or category before; forward goes ahead again.
