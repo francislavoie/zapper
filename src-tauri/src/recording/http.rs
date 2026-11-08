@@ -2426,6 +2426,11 @@ pub(crate) mod tests {
                 "{uri}"
             );
         }
+        let mark = serde_json::json!({"favourite": false});
+        assert_eq!(
+            call(&s, from_page("PUT", "/api/vod/series/9200001/marks", None, Some(mark))).await.0,
+            StatusCode::UNAUTHORIZED
+        );
     }
 
     #[allow(clippy::await_holding_lock)]
@@ -2512,9 +2517,20 @@ pub(crate) mod tests {
                 call_raw(&s, from_page("GET", "/api/vod/series/9201001", Some(&token), None)).await;
             assert_eq!(st, StatusCode::BAD_GATEWAY);
             let text = String::from_utf8(body).unwrap();
-            assert!(text.contains("could not be fetched"), "{text}");
+            assert_eq!(text, r#"{"error":"the show's episodes could not be fetched"}"#);
             for leak in [provider.base.as_str(), "127.0.0.1", "player_api", "series-secret-42", "viewer"] {
                 assert!(!text.contains(leak), "{leak} reached the browser: {text}");
+            }
+            // Its ★, or unwatching it, asks nothing of the provider. (Marking
+            // it watched reads the account on another thread, which this
+            // test's account directory does not reach; `series_browse`'s
+            // tests hold that a failure then is the provider's.)
+            let put = |body: serde_json::Value| {
+                from_page("PUT", "/api/vod/series/9201001/marks", Some(&token), Some(body))
+            };
+            for body in [serde_json::json!({"favourite": true}), serde_json::json!({"watched": false})] {
+                let (st, _) = call(&s, put(body.clone())).await;
+                assert_eq!(st, StatusCode::OK, "{body}");
             }
         });
     }

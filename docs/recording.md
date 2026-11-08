@@ -915,7 +915,7 @@ The catalogue, for the web interface (the app or a device); channels come as the
 | `GET /api/vod/shows/summary`, `GET /api/vod/series/categories` | `ShowsSummaryDto` (whether there are shows, and how many); the show categories with their counts |
 | `GET /api/vod/series?list=&category=&sort=&from=&to=&offset=&limit=` | a page of shows, `{total, items}`, with the movies' words, lists and sorts (`list=category` without `category` is a `400`; `limit` at most 1000) |
 | `GET /api/vod/series/search?q=&limit=` | shows by name, best match first |
-| `GET /api/vod/series/{id}` | a show's details, seasons and episodes, and which one is next up (asked of the provider the first time it is opened in a week, then kept). `404` for one not in the catalogue; `502` when the provider could not be asked and nothing is kept, saying why with no address in it |
+| `GET /api/vod/series/{id}` | a show's details, seasons and episodes, and which one is next up (asked of the provider the first time it is opened in a week, then kept). `404` for one not in the catalogue; `502` when the provider could not be asked and nothing is kept, in the service's own words (why in full goes to its log) |
 | `PUT /api/vod/series/{id}/marks` | `{favourite?, watched?}`; answers the show's marks. Watched reaches every episode, specials aside (a show whose episodes are not here yet has them asked for first) |
 | `GET /api/vod/episodes/{id}` | the episode and its show, `{series, episode}`, for the player's title. `404` for one not in the catalogue |
 | `PUT /api/vod/episodes/{id}/marks`, `PUT /api/vod/episodes/{id}/progress` | `{watched}` and `{position, duration?}` (seconds); both answer the episode's marks. Past 92 % counts as watched, and a show is watched once every episode is |

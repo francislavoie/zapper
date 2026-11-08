@@ -17,8 +17,11 @@ use axum::routing::{get, put};
 use axum::{Json, Router};
 use serde::Deserialize;
 
+use crate::catalog::sync_engine::scrub;
 use crate::catalog::{db, series_details, series_reads, series_store};
-use crate::ipc::types::{EpisodeDto, SeriesDetailsDto, SeriesDto, SeriesQueryDto};
+use crate::ipc::types::{
+    EpisodeDto, PlayingEpisodeDto, SeriesDetailsDto, SeriesDto, SeriesQueryDto,
+};
 
 use super::browse::{bad_request, proxy_image, read, Failed};
 use super::vod_browse::{movie_query, ListParams, PAGE_MAX, POSTER_MAX_BYTES};
@@ -89,12 +92,55 @@ fn without_addresses(text: &str) -> String {
         .join(" ")
 }
 
-/// A provider's failure, for the page: `502`, with why (scrubbed already)
-/// and no address.
-fn provider_failed(e: anyhow::Error) -> Failed {
+/// What a show's details say when they could not be fetched and nothing is
+/// kept; `catalog::series_details` logs why when the fetch fails.
+const FETCH_FAILED: &str = "the show's episodes could not be fetched";
+/// What they say when the show went while it was asked about.
+const GONE: &str = "that show is not in the catalogue any more";
+/// The words `catalog::series_details` writes itself, which may reach the
+/// page as they are: only ever the text before the first ": ", since what
+/// follows can be the provider's own words or a transport error naming its
+/// host (a URL, or a certificate's `not valid for name "host"`).
+const SAID: [&str; 4] = [
+    FETCH_FAILED,
+    "The shows are being refreshed for this account; open it again shortly.",
+    "the show changed while it was being fetched; open it again",
+    "the catalogue changed while the show was being fetched; open it again",
+];
+/// Any other failure, as a movie's is said.
+const NO_ANSWER: &str = "the provider did not answer for this show";
+
+/// A failure of a read that may ask the provider, for the page: `502`, with
+/// only words of our own, and `404` for a show that went meanwhile. Why in
+/// full (scrubbed of the account) goes to the service's log alone.
+fn provider_failed(id: i64, e: anyhow::Error) -> Failed {
+    let why = scrub(&format!("{e:#}"));
+    let lead = why.split(": ").next().unwrap_or_default();
+    if lead != FETCH_FAILED {
+        tracing::warn!("show {id}: {why}");
+    }
+    if lead == GONE {
+        return not_found("show");
+    }
+    let said = SAID
+        .iter()
+        .copied()
+        .find(|s| *s == lead)
+        .unwrap_or(NO_ANSWER);
+    // A second guard, in case a phrase above ever carries an address.
+    Failed(StatusCode::BAD_GATEWAY, without_addresses(said))
+}
+
+/// A failure to set a show's marks: the provider's (`502`) only when
+/// marking watched, which may ask it for the show's episodes; any other is
+/// this service's own (`500`), as a movie's is.
+fn marks_failed(id: i64, watched: Option<bool>, e: anyhow::Error) -> Failed {
+    if watched == Some(true) {
+        return provider_failed(id, e);
+    }
     Failed(
-        StatusCode::BAD_GATEWAY,
-        without_addresses(&format!("{e:#}")),
+        StatusCode::INTERNAL_SERVER_ERROR,
+        without_addresses(&scrub(&format!("{e:#}"))),
     )
 }
 
@@ -188,10 +234,11 @@ async fn search(Query(p): Query<SearchParams>) -> Result<Response, Failed> {
 async fn details(Path(id): Path<i64>) -> Result<Response, Failed> {
     present(id).await?;
     // The one read here that may ask the provider, the first time a show is
-    // opened in a week; it logs its failure where it happens.
+    // opened in a week. Every failure of it is a 502, as a movie's details'
+    // are, its local ones included: the page has the one answer to give.
     let mut d = series_details::series_details(id)
         .await
-        .map_err(provider_failed)?;
+        .map_err(|e| provider_failed(id, e))?;
     local_series_details(&mut d);
     Ok(Json(d).into_response())
 }
@@ -201,13 +248,19 @@ async fn set_marks(Path(id): Path<i64>, Json(b): Json<MarksBody>) -> Result<Resp
     // Marking watched a show whose episodes are not here yet asks for them.
     let marks = series_reads::set_series_marks(id, b.favourite, b.watched)
         .await
-        .map_err(provider_failed)?;
+        .map_err(|e| marks_failed(id, b.watched, e))?;
     Ok(Json(marks).into_response())
 }
 
+/// The episode and its show, in one read; a 404 for one not here.
 async fn episode(Path(id): Path<i64>) -> Result<Response, Failed> {
-    episode_present(id).await?;
-    let mut playing = read(move || series_reads::playing_episode(id)).await?;
+    let (series, episode) = read(move || db::with_db(|c| series_store::episode_by_id(c, id)))
+        .await?
+        .ok_or_else(|| not_found("episode"))?;
+    let mut playing = PlayingEpisodeDto {
+        series: series_reads::series_dto(series),
+        episode: series_reads::episode_dto(episode),
+    };
     local_series(&mut playing.series);
     local_episode(&mut playing.episode);
     Ok(Json(playing).into_response())
@@ -424,5 +477,82 @@ mod tests {
         assert!(out.contains("for url (the provider):"), "{out}");
         let fixed = "The shows are being refreshed for this account; open it again shortly.";
         assert_eq!(without_addresses(fixed), fixed);
+    }
+
+    /// The page's whole answer for a failure, as its body is written.
+    async fn body(f: Failed) -> (StatusCode, String) {
+        let resp = f.into_response();
+        let status = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 16)
+            .await
+            .unwrap();
+        (status, String::from_utf8(bytes.to_vec()).unwrap())
+    }
+
+    #[tokio::test]
+    async fn a_failure_never_names_the_provider_even_bare_or_quoted() {
+        let failures = [
+            // A certificate for another name: bare and quoted hostnames.
+            "the show's episodes could not be fetched: error sending request: invalid peer \
+             certificate: certificate not valid for name \"iptv-host.example\"; certificate is \
+             only valid for DnsName(\"cdn-host.example\")",
+            "the show's episodes could not be fetched: tcp connect error to [::1]:8080 at \
+             iptv-host.example",
+            // Not a phrase of ours: none of it is said.
+            "dns error looking up iptv-host.example: no such host",
+            "error decoding response body from cdn-host.example [2001:db8::7]:443",
+        ];
+        for text in failures {
+            let (st, out) = body(provider_failed(7, anyhow::anyhow!("{text}"))).await;
+            assert_eq!(st, StatusCode::BAD_GATEWAY, "{text}");
+            for leak in [
+                "iptv-host",
+                "cdn-host",
+                "example",
+                "::1",
+                "2001",
+                "8080",
+                "443",
+                "DnsName",
+            ] {
+                assert!(!out.contains(leak), "{leak} reached the page: {out}");
+            }
+        }
+        let (_, out) = body(provider_failed(7, anyhow::anyhow!("{}", failures[0]))).await;
+        assert_eq!(
+            out,
+            r#"{"error":"the show's episodes could not be fetched"}"#
+        );
+        let (_, out) = body(provider_failed(7, anyhow::anyhow!("{}", failures[2]))).await;
+        assert_eq!(out, format!(r#"{{"error":"{NO_ANSWER}"}}"#));
+    }
+
+    #[tokio::test]
+    async fn the_details_own_words_reach_the_page_as_they_are() {
+        for said in SAID {
+            let (st, out) = body(provider_failed(7, anyhow::anyhow!("{said}"))).await;
+            assert_eq!(st, StatusCode::BAD_GATEWAY);
+            assert_eq!(out, serde_json::json!({ "error": said }).to_string());
+        }
+        // A show that went while it was asked about is a 404.
+        let (st, _) = body(provider_failed(7, anyhow::anyhow!("{GONE}"))).await;
+        assert_eq!(st, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn only_marking_watched_can_be_the_providers_failure() {
+        let e = || anyhow::anyhow!("{FETCH_FAILED}: connect to iptv-host.example");
+        let (st, out) = body(marks_failed(7, Some(true), e())).await;
+        assert_eq!(st, StatusCode::BAD_GATEWAY);
+        assert!(!out.contains("iptv-host"), "{out}");
+        for watched in [None, Some(false)] {
+            let (st, _) = body(marks_failed(
+                7,
+                watched,
+                anyhow::anyhow!("database is locked"),
+            ))
+            .await;
+            assert_eq!(st, StatusCode::INTERNAL_SERVER_ERROR, "{watched:?}");
+        }
     }
 }
