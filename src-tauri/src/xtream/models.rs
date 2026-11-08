@@ -303,19 +303,22 @@ impl VodInfoBody {
         if let Some(s) = self.duration_secs.filter(|s| *s > 0) {
             return Some(s);
         }
-        let parts: Option<Vec<i64>> = self
-            .duration
-            .as_deref()?
-            .trim()
-            .split(':')
-            .map(|p| p.trim().parse::<i64>().ok().filter(|n| *n >= 0))
-            .collect();
-        let parts = parts?;
-        if parts.len() != 3 {
-            return None;
-        }
-        Some(parts[0] * 3600 + parts[1] * 60 + parts[2]).filter(|s| *s > 0)
+        hms_secs(self.duration.as_deref()?)
     }
+}
+
+/// `HH:MM:SS` as seconds; zero and anything else is `None`.
+fn hms_secs(s: &str) -> Option<i64> {
+    let parts: Option<Vec<i64>> = s
+        .trim()
+        .split(':')
+        .map(|p| p.trim().parse::<i64>().ok().filter(|n| *n >= 0))
+        .collect();
+    let parts = parts?;
+    if parts.len() != 3 {
+        return None;
+    }
+    Some(parts[0] * 3600 + parts[1] * 60 + parts[2]).filter(|s| *s > 0)
 }
 
 /// Only a JSON object counts: a derived struct would also accept `[]` as an
@@ -444,6 +447,398 @@ impl<'de> Deserialize<'de> for VodInfoBody {
     }
 }
 
+/// One show in `get_series`. Forgiving like [`VodStream`]; a row without a
+/// usable id or a name does not read (and is left out: [`Rows`]).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(try_from = "RawSeriesStream")]
+pub struct SeriesStream {
+    pub series_id: i64,
+    pub name: String,
+    pub category_id: Option<i64>,
+    pub cover: Option<String>,
+    /// The ten-point rating, as the server sent it.
+    pub rating: Option<f64>,
+    pub rating_5based: Option<f64>,
+    /// Unix seconds the provider last changed it.
+    pub last_modified: Option<i64>,
+    /// The first four digits of the release date, else `year`.
+    pub year: Option<i64>,
+    pub tmdb: Option<i64>,
+}
+
+/// The wire shape of [`SeriesStream`]: both spellings of the release date
+/// and of the TMDB id are read and merged, never aliased (an alias turns a
+/// server that sends both into a duplicate-field error).
+#[derive(Deserialize)]
+struct RawSeriesStream {
+    #[serde(default, deserialize_with = "flexible_i64")]
+    series_id: Option<i64>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default, deserialize_with = "flexible_i64")]
+    category_id: Option<i64>,
+    #[serde(default, deserialize_with = "nonempty_string")]
+    cover: Option<String>,
+    #[serde(default, deserialize_with = "flexible_f64")]
+    rating: Option<f64>,
+    #[serde(default, deserialize_with = "flexible_f64")]
+    rating_5based: Option<f64>,
+    #[serde(default, deserialize_with = "flexible_i64")]
+    last_modified: Option<i64>,
+    #[serde(default, deserialize_with = "nonempty_string", rename = "releaseDate")]
+    release_date_camel: Option<String>,
+    #[serde(default, deserialize_with = "nonempty_string")]
+    release_date: Option<String>,
+    #[serde(default, deserialize_with = "flexible_i64")]
+    year: Option<i64>,
+    #[serde(default, deserialize_with = "flexible_i64")]
+    tmdb: Option<i64>,
+    #[serde(default, deserialize_with = "flexible_i64")]
+    tmdb_id: Option<i64>,
+}
+
+/// The year a release date (`2021-03-01`) starts with.
+fn year_of(date: &str) -> Option<i64> {
+    let d = date.trim().get(..4)?;
+    d.bytes()
+        .all(|b| b.is_ascii_digit())
+        .then(|| d.parse().ok())
+        .flatten()
+}
+
+impl TryFrom<RawSeriesStream> for SeriesStream {
+    type Error = &'static str;
+
+    fn try_from(r: RawSeriesStream) -> Result<Self, Self::Error> {
+        let series_id = r
+            .series_id
+            .filter(|&id| id > 0)
+            .ok_or("a show without an id")?;
+        let name = r.name.unwrap_or_default();
+        if name.trim().is_empty() {
+            return Err("a show without a name");
+        }
+        let tmdb = |t: Option<i64>| t.filter(|&t| t > 0);
+        let year = r
+            .release_date_camel
+            .as_deref()
+            .and_then(year_of)
+            .or_else(|| r.release_date.as_deref().and_then(year_of))
+            .or(r.year);
+        Ok(Self {
+            series_id,
+            name,
+            category_id: r.category_id,
+            cover: r.cover,
+            rating: r.rating,
+            rating_5based: r.rating_5based,
+            last_modified: r.last_modified,
+            year,
+            tmdb: tmdb(r.tmdb).or(tmdb(r.tmdb_id)),
+        })
+    }
+}
+
+impl SeriesStream {
+    /// Divider rows, as in the live list: nothing to open.
+    pub fn is_separator(&self) -> bool {
+        let t = self.name.trim();
+        t.starts_with("##") && t.ends_with("##")
+    }
+
+    /// A rating out of ten, by the movies' rule ([`VodStream::rating10`]).
+    pub fn rating10(&self) -> Option<f64> {
+        let ok = |r: f64| (r > 0.0 && r <= 10.0).then_some(r);
+        self.rating
+            .and_then(ok)
+            .or_else(|| self.rating_5based.and_then(|r| ok(r * 2.0)))
+    }
+}
+
+/// `get_series_info`: the show, its seasons and every episode.
+#[derive(Debug, Clone, Default)]
+pub struct SeriesInfo {
+    pub info: SeriesInfoBody,
+    pub seasons: Vec<SeasonInfo>,
+    pub episodes: Vec<EpisodeInfo>,
+    /// Episode rows that did not read and were left out.
+    pub skipped: usize,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SeriesInfoBody {
+    pub name: Option<String>,
+    pub cover: Option<String>,
+    pub plot: Option<String>,
+    pub cast: Option<String>,
+    pub director: Option<String>,
+    pub genre: Option<String>,
+    pub release_date: Option<String>,
+    /// A string or an array on the wire; always a list here.
+    pub backdrop_path: Vec<String>,
+    pub rating: Option<f64>,
+    pub tmdb: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SeasonInfo {
+    #[serde(deserialize_with = "required_i32")]
+    pub season_number: i32,
+    #[serde(default, deserialize_with = "nonempty_string")]
+    pub name: Option<String>,
+    #[serde(default, deserialize_with = "nonempty_string")]
+    pub cover: Option<String>,
+    #[serde(default, deserialize_with = "nonempty_string")]
+    pub air_date: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct EpisodeInfo {
+    pub id: i64,
+    pub season: i32,
+    pub episode_num: i32,
+    pub title: Option<String>,
+    pub container_extension: Option<String>,
+    /// Unix seconds the provider added it.
+    pub added: Option<i64>,
+    pub info: EpisodeInfoBody,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct EpisodeInfoBody {
+    /// The episode's still.
+    pub movie_image: Option<String>,
+    pub plot: Option<String>,
+    /// `releasedate`, `release_date` or `air_date`, whichever the server used.
+    pub air_date: Option<String>,
+    pub duration_secs: Option<i64>,
+    /// `"00:52:00"`.
+    pub duration: Option<String>,
+    pub rating: Option<f64>,
+    pub video: Option<StreamTags>,
+    pub audio: Option<StreamTags>,
+}
+
+impl EpisodeInfoBody {
+    /// The runtime in seconds: the numeric field, else `duration` parsed as
+    /// `HH:MM:SS`.
+    pub fn runtime_secs(&self) -> Option<i64> {
+        if let Some(s) = self.duration_secs.filter(|s| *s > 0) {
+            return Some(s);
+        }
+        hms_secs(self.duration.as_deref()?)
+    }
+}
+
+fn required_i32<'de, D: Deserializer<'de>>(d: D) -> Result<i32, D::Error> {
+    flexible_i64(d)?
+        .and_then(|n| i32::try_from(n).ok())
+        .ok_or_else(|| serde::de::Error::custom("missing required integer"))
+}
+
+fn flexible_i32<'de, D: Deserializer<'de>>(d: D) -> Result<Option<i32>, D::Error> {
+    Ok(flexible_i64(d)?.and_then(|n| i32::try_from(n).ok()))
+}
+
+#[derive(Deserialize)]
+struct RawSeriesInfoBody {
+    #[serde(default, deserialize_with = "nonempty_string")]
+    name: Option<String>,
+    #[serde(default, deserialize_with = "nonempty_string")]
+    cover: Option<String>,
+    #[serde(default, deserialize_with = "nonempty_string")]
+    plot: Option<String>,
+    #[serde(default, deserialize_with = "nonempty_string")]
+    cast: Option<String>,
+    #[serde(default, deserialize_with = "nonempty_string")]
+    director: Option<String>,
+    #[serde(default, deserialize_with = "nonempty_string")]
+    genre: Option<String>,
+    #[serde(default, deserialize_with = "nonempty_string", rename = "releaseDate")]
+    release_date_camel: Option<String>,
+    #[serde(default, deserialize_with = "nonempty_string")]
+    release_date: Option<String>,
+    #[serde(default, deserialize_with = "nonempty_string")]
+    releasedate: Option<String>,
+    #[serde(default, deserialize_with = "string_list")]
+    backdrop_path: Vec<String>,
+    #[serde(default, deserialize_with = "flexible_f64")]
+    rating: Option<f64>,
+    #[serde(default, deserialize_with = "flexible_i64")]
+    tmdb: Option<i64>,
+    #[serde(default, deserialize_with = "flexible_i64")]
+    tmdb_id: Option<i64>,
+}
+
+impl<'de> Deserialize<'de> for SeriesInfoBody {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let r = RawSeriesInfoBody::deserialize(d)?;
+        let tmdb = |t: Option<i64>| t.filter(|&t| t > 0);
+        Ok(Self {
+            name: r.name,
+            cover: r.cover,
+            plot: r.plot,
+            cast: r.cast,
+            director: r.director,
+            genre: r.genre,
+            release_date: r
+                .release_date_camel
+                .or(r.release_date)
+                .or(r.releasedate),
+            backdrop_path: r.backdrop_path,
+            rating: r.rating,
+            tmdb: tmdb(r.tmdb).or(tmdb(r.tmdb_id)),
+        })
+    }
+}
+
+#[derive(Deserialize)]
+struct RawEpisodeInfoBody {
+    #[serde(default, deserialize_with = "nonempty_string")]
+    movie_image: Option<String>,
+    #[serde(default, deserialize_with = "nonempty_string")]
+    plot: Option<String>,
+    #[serde(default, deserialize_with = "nonempty_string")]
+    releasedate: Option<String>,
+    #[serde(default, deserialize_with = "nonempty_string")]
+    release_date: Option<String>,
+    #[serde(default, deserialize_with = "nonempty_string")]
+    air_date: Option<String>,
+    #[serde(default, deserialize_with = "flexible_i64")]
+    duration_secs: Option<i64>,
+    #[serde(default, deserialize_with = "nonempty_string")]
+    duration: Option<String>,
+    #[serde(default, deserialize_with = "flexible_f64")]
+    rating: Option<f64>,
+    #[serde(default, deserialize_with = "lenient")]
+    video: Option<RawStreamTags>,
+    #[serde(default, deserialize_with = "lenient")]
+    audio: Option<RawStreamTags>,
+}
+
+impl<'de> Deserialize<'de> for EpisodeInfoBody {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let r = RawEpisodeInfoBody::deserialize(d)?;
+        Ok(Self {
+            movie_image: r.movie_image,
+            plot: r.plot,
+            air_date: r.releasedate.or(r.release_date).or(r.air_date),
+            duration_secs: r.duration_secs,
+            duration: r.duration,
+            rating: r.rating,
+            video: r.video.map(Into::into),
+            audio: r.audio.map(Into::into),
+        })
+    }
+}
+
+#[derive(Deserialize)]
+struct RawEpisode {
+    #[serde(default, deserialize_with = "flexible_i64")]
+    id: Option<i64>,
+    #[serde(default, deserialize_with = "flexible_i32")]
+    season: Option<i32>,
+    #[serde(default, deserialize_with = "flexible_i32")]
+    episode_num: Option<i32>,
+    #[serde(default, deserialize_with = "nonempty_string")]
+    title: Option<String>,
+    #[serde(default, deserialize_with = "nonempty_string")]
+    container_extension: Option<String>,
+    #[serde(default, deserialize_with = "flexible_i64")]
+    added: Option<i64>,
+    #[serde(default, deserialize_with = "lenient")]
+    info: Option<EpisodeInfoBody>,
+}
+
+impl RawEpisode {
+    /// `listed_under` is the season its key or position put it in.
+    fn read(row: serde_json::Value, listed_under: i32) -> Option<EpisodeInfo> {
+        let r: RawEpisode = serde_json::from_value(row).ok()?;
+        Some(EpisodeInfo {
+            id: r.id.filter(|&id| id > 0)?,
+            season: r.season.unwrap_or(listed_under),
+            episode_num: r.episode_num.unwrap_or(0),
+            title: r.title,
+            container_extension: r.container_extension,
+            added: r.added,
+            info: r.info.unwrap_or_default(),
+        })
+    }
+}
+
+/// The episodes in any of the three shapes servers send: an object of
+/// arrays keyed by season (`{"1":[…]}`), an array of arrays (by position,
+/// the first being season 1), or one flat array. An episode's season is its
+/// own `season` field, else where it was listed (season 1 in a flat array).
+/// Rows that do not read are counted.
+fn read_episodes(v: serde_json::Value) -> (Vec<EpisodeInfo>, usize) {
+    use serde_json::Value;
+    let mut out = Vec::new();
+    let mut skipped = 0;
+    let mut take = |rows: Value, season: i32| match rows {
+        Value::Array(rows) => {
+            for row in rows {
+                match RawEpisode::read(row, season) {
+                    Some(e) => out.push(e),
+                    None => skipped += 1,
+                }
+            }
+        }
+        // A season that is not a list holds no episodes we can name.
+        Value::Null => {}
+        _ => skipped += 1,
+    };
+    match v {
+        Value::Object(map) => {
+            // Keys are season numbers; a key that is not one is left to the
+            // episodes' own `season` fields.
+            for (key, rows) in map {
+                take(rows, key.trim().parse().unwrap_or(1));
+            }
+        }
+        Value::Array(items) if items.iter().any(Value::is_array) => {
+            for (i, rows) in items.into_iter().enumerate() {
+                take(rows, i as i32 + 1);
+            }
+        }
+        rows @ Value::Array(_) => take(rows, 1),
+        _ => {}
+    }
+    (out, skipped)
+}
+
+impl<'de> Deserialize<'de> for SeriesInfo {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Raw {
+            /// `[]` when the server has nothing, as in [`VodInfo`].
+            #[serde(default, deserialize_with = "lenient")]
+            info: Option<SeriesInfoBody>,
+            #[serde(default)]
+            seasons: serde_json::Value,
+            #[serde(default)]
+            episodes: serde_json::Value,
+        }
+        let r = Raw::deserialize(d)?;
+        let seasons = match r.seasons {
+            serde_json::Value::Array(rows) => rows
+                .into_iter()
+                .filter_map(|v| serde_json::from_value(v).ok())
+                .collect(),
+            _ => Vec::new(),
+        };
+        let (mut episodes, skipped) = read_episodes(r.episodes);
+        // Object keys arrive in no useful order.
+        episodes.sort_by_key(|e| (e.season, e.episode_num));
+        Ok(Self {
+            info: r.info.unwrap_or_default(),
+            seasons,
+            episodes,
+            skipped,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct UserInfo {
     #[serde(default, deserialize_with = "flexible_bool")]
@@ -527,6 +922,118 @@ fn naive_unix(s: &str) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn series_rows_read_strings_numbers_and_both_spellings() {
+        let s: SeriesStream = serde_json::from_str(
+            r#"{"series_id":"12","name":"A Show","category_id":"3",
+            "rating":"","rating_5based":"4","last_modified":"1767225600","releaseDate":"2021-03-01","tmdb_id":"9"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            (s.series_id, s.category_id, s.last_modified, s.year, s.tmdb),
+            (12, Some(3), Some(1_767_225_600), Some(2021), Some(9))
+        );
+        assert_eq!(s.rating10(), Some(8.0));
+        // Both spellings, `0` as none, the year field as the last resort.
+        let s: SeriesStream = serde_json::from_str(
+            r#"{"series_id":1,"name":"B","tmdb":"0","tmdb_id":4,"release_date":"1999-12-31","releaseDate":"","year":"2005"}"#,
+        )
+        .unwrap();
+        assert_eq!((s.year, s.tmdb), (Some(1999), Some(4)));
+        let s: SeriesStream =
+            serde_json::from_str(r#"{"series_id":1,"name":"B","year":"2005"}"#).unwrap();
+        assert_eq!(s.year, Some(2005));
+        assert!(serde_json::from_str::<SeriesStream>(r#"{"series_id":0,"name":"B"}"#).is_err());
+        assert!(serde_json::from_str::<SeriesStream>(r#"{"series_id":3,"name":" "}"#).is_err());
+        let d: SeriesStream =
+            serde_json::from_str(r###"{"series_id":3,"name":"## ROW ##"}"###).unwrap();
+        assert!(d.is_separator());
+    }
+
+    fn episode_keys(info: &SeriesInfo) -> Vec<(i32, i32)> {
+        info.episodes.iter().map(|e| (e.season, e.episode_num)).collect()
+    }
+
+    #[test]
+    fn every_episode_shape_reads() {
+        let ep = |id: u32, n: &str| format!(r#"{{"id":"{id}","episode_num":{n},"title":"T{id}"}}"#);
+        let (a, b, c) = (ep(1, "1"), ep(2, r#""2""#), ep(3, "1"));
+        let shapes = [
+            format!(r#"{{"1":[{a},{b}],"2":[{c}]}}"#),
+            format!(r#"[[{a},{b}],[{c}]]"#),
+            format!(
+                r#"[{},{},{}]"#,
+                a.replace('{', r#"{"season":1,"#),
+                b.replace('{', r#"{"season":"1","#),
+                c.replace('{', r#"{"season":2,"#)
+            ),
+        ];
+        for shape in shapes {
+            let info: SeriesInfo =
+                serde_json::from_str(&format!(r#"{{"episodes":{shape}}}"#)).unwrap();
+            assert_eq!(episode_keys(&info), [(1, 1), (1, 2), (2, 1)], "{shape}");
+            assert_eq!(info.skipped, 0, "{shape}");
+        }
+    }
+
+    #[test]
+    fn an_unreadable_episode_is_left_out() {
+        let info: SeriesInfo = serde_json::from_str(
+            r#"{"episodes":{"1":[{"id":1,"episode_num":1},{"episode_num":2},{"id":3,"episode_num":3}]}}"#,
+        )
+        .unwrap();
+        assert_eq!(info.episodes.len(), 2);
+        assert_eq!(info.skipped, 1);
+    }
+
+    #[test]
+    fn an_empty_info_and_no_seasons_still_give_the_episodes() {
+        let info: SeriesInfo = serde_json::from_str(
+            r#"{"info":[],"seasons":[],"episodes":{"1":[{"id":"5","episode_num":1}]}}"#,
+        )
+        .unwrap();
+        assert!(info.info.name.is_none() && info.info.backdrop_path.is_empty());
+        assert!(info.seasons.is_empty());
+        assert_eq!(info.episodes.len(), 1);
+        assert_eq!((info.episodes[0].id, info.episodes[0].season), (5, 1));
+    }
+
+    #[test]
+    fn a_show_reads_its_body_and_seasons() {
+        let info: SeriesInfo = serde_json::from_str(
+            r#"{"info":{"name":"A Show","cover":"http://x/c.jpg","releaseDate":"2021-03-01",
+                "backdrop_path":["http://x/b.jpg"],"rating":"7.5","tmdb":"0","tmdb_id":"9"},
+                "seasons":[{"season_number":"1","name":"Season 1","air_date":"2021-03-01"},{"name":"no number"}],
+                "episodes":[]}"#,
+        )
+        .unwrap();
+        assert_eq!(info.info.release_date.as_deref(), Some("2021-03-01"));
+        assert_eq!((info.info.tmdb, info.info.rating), (Some(9), Some(7.5)));
+        assert_eq!(info.info.backdrop_path, ["http://x/b.jpg"]);
+        assert_eq!(info.seasons.len(), 1);
+        assert_eq!(info.seasons[0].season_number, 1);
+    }
+
+    #[test]
+    fn an_episode_reads_its_still_plot_and_runtime() {
+        let info: SeriesInfo = serde_json::from_str(
+            r#"{"episodes":{"1":[{"id":"7","episode_num":"1","container_extension":"mkv","added":"1700000000",
+                "info":{"movie_image":"http://x/s.jpg","plot":"It happens.","air_date":"2021-03-02",
+                        "duration":"00:52:00","duration_secs":0,"rating":"8.1",
+                        "video":{"codec_name":"h264"},"audio":{"codec_name":"aac","tags":{"language":"eng"}}}}]}}"#,
+        )
+        .unwrap();
+        let e = &info.episodes[0];
+        assert_eq!(e.container_extension.as_deref(), Some("mkv"));
+        assert_eq!(e.added, Some(1_700_000_000));
+        assert_eq!(e.info.movie_image.as_deref(), Some("http://x/s.jpg"));
+        assert_eq!(e.info.plot.as_deref(), Some("It happens."));
+        assert_eq!(e.info.air_date.as_deref(), Some("2021-03-02"));
+        assert_eq!(e.info.runtime_secs(), Some(3120));
+        assert_eq!(e.info.rating, Some(8.1));
+        assert_eq!(e.info.audio.as_ref().unwrap().language.as_deref(), Some("eng"));
+    }
 
     #[test]
     fn stream_id_survives_beyond_i32() {
