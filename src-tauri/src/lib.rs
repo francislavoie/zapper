@@ -418,7 +418,7 @@ fn dev_hooks(app: &tauri::AppHandle) {
                              .find((b) => b.textContent.trim() === 'Playback')?.click(), 100);"
                         );
                         let change = "{ document.querySelector('button[aria-label=\"Hide the \
-                             categories and favourites\"]')?.click(); \
+                             rail\"]')?.click(); \
                              const hw = document.getElementById('set-hwdec'); \
                              localStorage.setItem('zapper.quit-check-switch', \
                              String(hw?.getAttribute('aria-checked'))); \
