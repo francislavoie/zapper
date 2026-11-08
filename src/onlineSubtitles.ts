@@ -17,11 +17,18 @@ export const KEPT_TITLES = 20;
 // ------------------------------------------------------------ the dialog
 
 let open: TitleRef | null = null;
+/** What focus goes back to when the dialog closes. */
+let opener: HTMLElement | null = null;
 const dialogListeners = new Set<() => void>();
 const notifyDialog = () => dialogListeners.forEach((f) => f());
 
-export function openFindSubtitles(t: TitleRef): void {
+/** `from` is the control it was opened from (the subtitles button), when
+ *  there is one; else whatever has focus. */
+export function openFindSubtitles(t: TitleRef, from?: HTMLElement | null): void {
   open = { kind: t.kind, id: t.id };
+  opener =
+    from ??
+    (typeof document !== "undefined" ? (document.activeElement as HTMLElement | null) : null);
   notifyDialog();
 }
 
@@ -30,6 +37,9 @@ export function closeFindSubtitles(): void {
   open = null;
   notifyDialog();
 }
+
+/** The control the dialog was opened from, as it was opened. */
+export const findOpener = (): HTMLElement | null => opener;
 
 /** The title the dialog is open on, outside a component. */
 export const currentFind = (): TitleRef | null => open;

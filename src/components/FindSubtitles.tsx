@@ -13,10 +13,10 @@
 
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { backend } from "../backend";
+import { useFocusTrap } from "../hooks/useFocusTrap";
 import { useOnDemandTitle } from "../hooks/useOnDemandTitle";
 import { useSubtitles } from "../hooks/useSubtitles";
 import { errorMessage, failed, loading, ready, type Async } from "../logic/async";
-import { isSideButton } from "../logic/navHistory";
 import {
   downloadNotice,
   downloadTrackTitle,
@@ -30,6 +30,7 @@ import {
 import { languageName } from "../logic/tracks";
 import {
   closeFindSubtitles,
+  findOpener,
   keptChanged,
   openFindSubtitles,
   useFindSubtitles,
@@ -61,8 +62,16 @@ function useAddKept() {
   };
 }
 
-/** In the Subtitles menu, after the stream's own tracks. */
-export function OnlineSubtitleItems({ onClose }: { onClose: () => void }) {
+/** In the Subtitles menu, after the stream's own tracks. `opener` is the
+ *  control the menu was opened from, which focus goes back to after the
+ *  dialog. */
+export function OnlineSubtitleItems({
+  onClose,
+  opener,
+}: {
+  onClose: () => void;
+  opener?: HTMLElement | null;
+}) {
   const { options } = useApp();
   const dispatch = useDispatch();
   const title = useOnDemandTitle();
@@ -90,7 +99,7 @@ export function OnlineSubtitleItems({ onClose }: { onClose: () => void }) {
         role="menuitem"
         onClick={() => {
           onClose();
-          openFindSubtitles(title);
+          openFindSubtitles(title, opener);
         }}
       >
         <span className="ctx-check" />
@@ -114,6 +123,15 @@ function languages(codes: string[]): string {
 }
 
 const now = () => Math.floor(Date.now() / 1000);
+
+/** The player's own control to give focus back to: its subtitles button,
+ *  else the first of its transport controls (play/pause). */
+function playerControl(): HTMLElement | null {
+  return (
+    document.querySelector<HTMLElement>('.ctl-row button[aria-label="Subtitles"]') ??
+    document.querySelector<HTMLElement>(".ctl-row button")
+  );
+}
 
 function FindDialog({ target: title }: { target: TitleRef }) {
   const app = useApp();
@@ -232,29 +250,23 @@ function FindDialog({ target: title }: { target: TitleRef }) {
     else if ("result" in row) void download(row.result.fileId);
   };
 
-  // Escape is the dialog's while it is open, ahead of the window's own
-  // (useGlobalKeys), so one press closes this and nothing behind it.
-  useEffect(() => {
-    const onKey = (e: globalThis.KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      e.preventDefault();
-      e.stopPropagation();
-      closeFindSubtitles();
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, []);
+  // Escape and the mouse's back button close this as the top step of the
+  // app's one chain (logic/escape.ts, hooks/useGlobalKeys.ts).
 
-  // Focus comes in, and goes back to the player (the menu item that opened
-  // this is gone) when it closes.
+  // Focus comes in, stays in (Tab wraps), and goes back when it closes: to
+  // the control it was opened from, or (that gone, as a menu item is) to
+  // the player's controls. Never to nothing, where the keys would be lost.
   const boxRef = useRef<HTMLDivElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
+  const trap = useFocusTrap(boxRef);
+  const opener = useRef(findOpener());
   useEffect(() => {
-    const before = document.activeElement as HTMLElement | null;
     boxRef.current?.focus();
+    const back = opener.current;
     return () => {
-      if (before && before.isConnected && before !== document.body) before.focus();
-      else (document.activeElement as HTMLElement | null)?.blur?.();
+      const target =
+        back && back.isConnected && back !== document.body ? back : playerControl();
+      target?.focus();
     };
   }, []);
   const hasRows = rows.length > 0;
@@ -329,7 +341,8 @@ function FindDialog({ target: title }: { target: TitleRef }) {
     <div
       className="modal-backdrop"
       onMouseDown={(e) => {
-        if (e.target === e.currentTarget && !isSideButton(e)) closeFindSubtitles();
+        // The mouse's side buttons never get here: useGlobalKeys takes them.
+        if (e.target === e.currentTarget) closeFindSubtitles();
       }}
     >
       <div
@@ -337,10 +350,13 @@ function FindDialog({ target: title }: { target: TitleRef }) {
         className="find-subs"
         role="dialog"
         aria-label="Find subtitles"
+        aria-modal="true"
         tabIndex={-1}
         onKeyDown={(e) => {
+          trap(e);
           // The player's keys (Space, the arrows) are not this dialog's.
-          if (!e.ctrlKey && !e.metaKey) e.stopPropagation();
+          // Escape is the app's chain's, which closes this first.
+          if (e.key !== "Escape" && !e.ctrlKey && !e.metaKey) e.stopPropagation();
         }}
       >
         <h2 className="find-subs-heading" data-tip-overflow="">
@@ -363,6 +379,9 @@ function FindDialog({ target: title }: { target: TitleRef }) {
                 void download(fileId);
               }}
             />
+            <button className="ctl find-subs-back" onClick={() => setSignIn(null)}>
+              Back
+            </button>
           </div>
         ) : (
           <>
