@@ -3610,7 +3610,9 @@ pub(crate) mod tests {
             .await
             .unwrap();
         assert_eq!(r.status(), StatusCode::OK);
-        assert!(x_start(&r) < 12.0);
+        // On the keyframe at or before 12 s: the film has one each second, so it may be 12 s
+        // itself (FFmpeg 8.1 lands there; 8.0 on the one before).
+        assert!(x_start(&r) <= 12.0, "starts at {}", x_start(&r));
         assert!(is_ts(&read_all(r.into_body()).await));
         let cues = cues_once(1, "").await;
         assert_eq!(cues.len(), 1, "{cues:?}");
