@@ -55,7 +55,10 @@ keep-alive) has it kept until it closes it, unless told otherwise:
 
   tools/fake_stream.py --series 1 --keep-alive-timeout 5   # an idle one is closed after 5 s
 
-as many servers do with a connection nobody has used for a while.
+as many servers do with a connection nobody has used for a while. It is the
+connection's socket timeout, so it also cuts off a client that stops reading
+for that long in the middle of a file or a channel. /keepalive says the
+timeout and how many idle connections it has closed.
 
 Made-up series (also needs the movie fixtures):
 
@@ -112,6 +115,8 @@ class Handler(BaseHTTPRequestHandler):
     served = 0
     # Streams being sent right now, and the account's report of them.
     open_streams = 0
+    # Kept connections closed for waiting past --keep-alive-timeout.
+    idle_closed = 0
     max_connections = 1
     other_devices = 0
     lock = threading.Lock()
@@ -139,6 +144,14 @@ class Handler(BaseHTTPRequestHandler):
     live_fixture = "sample1080.ts"
     # Every live and catch-up request, for /requests.
     requests = []
+
+    def log_error(self, fmt, *a):
+        # BaseHTTPRequestHandler's word for a kept connection that waited
+        # past --keep-alive-timeout for its next request, and was closed.
+        if fmt.startswith("Request timed out"):
+            with Handler.lock:
+                Handler.idle_closed += 1
+        super().log_error(fmt, *a)
 
     def log_message(self, fmt, *a):
         if not Handler.quiet:
@@ -171,6 +184,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if name == "requests":
             self._json(Handler.requests)
+            return
+        if name == "keepalive":
+            self._json({"timeout": Handler.timeout or 0, "idleClosed": Handler.idle_closed})
             return
         if name == "streaming/timeshift.php":
             self._timeshift()
@@ -927,7 +943,8 @@ def main():
                          "(default sample1080.ts, or the first there is)")
     ap.add_argument("--keep-alive-timeout", type=float, default=0.0, metavar="SECONDS",
                     help="close a connection kept alive for another request once it has been "
-                         "idle this long (default: never)")
+                         "idle this long (default: never). The connection's socket timeout: "
+                         "it also cuts off a client that stops reading this long mid-file")
     ap.add_argument("--verbose", action="store_true")
     a = ap.parse_args()
     if a.keep_alive_timeout > 0:
