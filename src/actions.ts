@@ -164,6 +164,7 @@ const HANDLERS: Record<ActionId, (ctx: ActionContext) => void> = {
   record: ({ dispatch, record }) => void recordFromPlayer(dispatch, record ?? null),
   recordings: ({ dispatch }) => dispatch({ type: "showRecordings" }),
   movies: ({ dispatch }) => dispatch({ type: "section", section: "movies" }),
+  shows: ({ dispatch }) => dispatch({ type: "section", section: "shows" }),
   liveTv: ({ dispatch }) => dispatch({ type: "section", section: "live" }),
   settings: ({ dispatch }) => dispatch({ type: "settings", open: true }),
   updates: ({ dispatch }) => {

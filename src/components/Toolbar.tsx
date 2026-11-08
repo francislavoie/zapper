@@ -48,6 +48,7 @@ import {
   type PaletteAction,
 } from "../logic/palette";
 import { moviesAvailable } from "../logic/movies";
+import { showsAvailable } from "../logic/shows";
 import { SECTION_LABEL, maximiseLabel, statusLine, titleTabs } from "../logic/toolbar";
 import { badgeLabel, badgeShort, showsBadge } from "../logic/updates";
 import { chordLabel, hintLabel } from "../logic/keys";
@@ -152,7 +153,10 @@ export function Toolbar() {
         </div>
 
         <nav className="tb-tabs" role="tablist" aria-label="Sections">
-          {titleTabs(capabilities, moviesAvailable(state.movies.summary)).map((s) => (
+          {titleTabs(capabilities, {
+            movies: moviesAvailable(state.movies.summary),
+            shows: showsAvailable(state.shows.summary),
+          }).map((s) => (
             <button
               key={s}
               className={`tb-tab ${state.section === s ? "on" : ""}`}
@@ -334,7 +338,7 @@ function Status({
 }
 
 function Menu({ onChoose }: { onChoose: (a: PaletteAction) => void }) {
-  const { player, previousChannel, movies } = useApp();
+  const { player, previousChannel, movies, shows } = useApp();
   const firstRef = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
@@ -349,6 +353,7 @@ function Menu({ onChoose }: { onChoose: (a: PaletteAction) => void }) {
     availableActions(player.state !== "stopped", {
       hasPrevious: previousChannel !== null,
       movies: moviesAvailable(movies.summary),
+      shows: showsAvailable(shows.summary),
       capabilities,
     }),
   );

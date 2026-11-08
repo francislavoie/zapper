@@ -1947,6 +1947,47 @@ select option {
   color: var(--good);
 }
 
+/* A show's row: the movie row's layout, with the seasons where the length
+   was. */
+.show-cols,
+.show-row {
+  --list-cols: 1.625rem minmax(0, 1fr) 3.5rem 4.5rem 4rem 2.75rem;
+}
+
+.show-cols > :nth-child(3),
+.show-cols > :nth-child(4),
+.show-cols > :nth-child(5),
+.show-row-year,
+.show-row-seasons,
+.show-row-rating {
+  text-align: right;
+}
+
+.show-row {
+  cursor: default;
+}
+
+.show-row-year,
+.show-row-seasons,
+.show-row-rating {
+  font-size: 0.75rem;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.show-row-marks {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.25rem;
+  font-size: 0.75rem;
+  color: var(--dimmer);
+}
+
+.show-row-mark.watched {
+  color: var(--good);
+}
+
 .movie-badge {
   font-size: 0.5625rem;
 }
@@ -2069,12 +2110,14 @@ select option {
 /* The list is one focus stop with the keys moving the selection inside it;
    the outline would ring the whole pane once a row is selected, and that row says
    where the keys are; until then the ring is all there is. */
-.movies-viewport.has-sel:focus-visible {
+.movies-viewport.has-sel:focus-visible,
+.shows-viewport.has-sel:focus-visible {
   outline: none;
 }
 
 /* Stacked under the picture, in the guide's place. */
-.stacked-guide > .movies-pane {
+.stacked-guide > .movies-pane,
+.stacked-guide > .shows-pane {
   position: absolute;
   inset: 0;
 }

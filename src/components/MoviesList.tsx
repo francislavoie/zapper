@@ -100,6 +100,7 @@ export function MoviesList({ besideRail = true }: { besideRail?: boolean }) {
     <OnDemandList<MovieDto>
       besideRail={besideRail}
       idPrefix="movie"
+      kindClass="movies"
       colsClass="movie-cols"
       unavailableLabel="Movies unavailable"
       listKey={listKey}

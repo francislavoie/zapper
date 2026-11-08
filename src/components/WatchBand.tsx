@@ -50,7 +50,7 @@ import { listedFor, railItemKind } from "../logic/railItems";
 import { categoryNames } from "../logic/searchGroups";
 import { RecordingBand } from "./RecordingBand";
 import { moviesAvailable, playingKind } from "../logic/movies";
-import { episodeLine } from "../logic/shows";
+import { episodeLine, showsAvailable } from "../logic/shows";
 import { run, useApp, useDispatch } from "../store";
 import { MovieBand, PlayingEnd } from "./MovieBand";
 import { Fullscreen, ResizeHandle, Stop } from "./icons";
@@ -95,6 +95,7 @@ export function WatchBand({ videoRef, picture }: WatchBandProps) {
   // beside it is whatever was already on.
   const inMovies = app.section === "movies" && moviesAvailable(app.movies.summary);
   const selectedMovie = inMovies ? app.movies.selected : null;
+  const inShows = app.section === "shows" && showsAvailable(app.shows.summary);
   const movieOpen = playingKind(player) === "movie";
   const openMovieId = player.onDemand?.kind === "movie" ? player.onDemand.id : null;
   const episodeOpen = playingKind(player) === "episode";
@@ -237,7 +238,7 @@ export function WatchBand({ videoRef, picture }: WatchBandProps) {
             onPlay={() => void playChannel(dispatch, nowChannel)}
           />
         ) : (
-          <Idle picture={picture} movies={inMovies} />
+          <Idle picture={picture} movies={inMovies} shows={inShows} />
         )}
       </div>
 
@@ -330,7 +331,15 @@ export function WatchBand({ videoRef, picture }: WatchBandProps) {
 
 /** Nothing playing. The band explains what it is for rather than leaving an
  *  empty frame and letting the user guess. */
-function Idle({ picture, movies = false }: { picture: boolean; movies?: boolean }) {
+function Idle({
+  picture,
+  movies = false,
+  shows = false,
+}: {
+  picture: boolean;
+  movies?: boolean;
+  shows?: boolean;
+}) {
   if (!picture) {
     return (
       <div className="watch-idle">
@@ -338,7 +347,9 @@ function Idle({ picture, movies = false }: { picture: boolean; movies?: boolean 
         <p>
           {movies
             ? "Choose a movie to see its details."
-            : "Choose a recording to see what can be done with it."}
+            : shows
+              ? "Choose a show to see its details."
+              : "Choose a recording to see what can be done with it."}
         </p>
       </div>
     );

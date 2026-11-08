@@ -22,11 +22,12 @@ import {
   loadCategories,
   loadMovieCategories,
   loadMoviesSummary,
+  loadShowCategories,
   loadShowsSummary,
   loadWatchLists,
 } from "./actions";
 import { moviesAvailable } from "./logic/movies";
-import { heldEpisode } from "./logic/shows";
+import { heldEpisode, showsAvailable } from "./logic/shows";
 import { errorMessage } from "./logic/async";
 import { useGlobalKeys } from "./hooks/useGlobalKeys";
 import { useMenuCommands } from "./hooks/useMenuCommands";
@@ -51,6 +52,8 @@ import { ProgrammeMenu } from "./components/ProgrammeMenu";
 import { MoviesList } from "./components/MoviesList";
 import { MovieSheet } from "./components/MovieSheet";
 import { MoviesRail } from "./components/MoviesRail";
+import { ShowsList } from "./components/ShowsList";
+import { ShowsRail } from "./components/ShowsRail";
 import { RecordingsView } from "./components/RecordingsView";
 import { RecordingsWatcher } from "./components/RecordingsWatcher";
 import { Rail } from "./components/Rail";
@@ -94,11 +97,14 @@ export function App() {
   // The Movies tab, where the account has movies. The tab itself goes when it
   // has none, and a section left selected falls back to Live TV (below).
   const moviesOn = state.section === "movies" && moviesAvailable(state.movies.summary);
+  // And the Shows tab the same way.
+  const showsOn = state.section === "shows" && showsAvailable(state.shows.summary);
+  const onDemandOn = moviesOn || showsOn;
   // Recordings has no grid, so it only ever shows in the list view.
-  const recordingsShown = railItemKind(state.categoryId) === "recordings" && !guiding && !moviesOn;
+  const recordingsShown = railItemKind(state.categoryId) === "recordings" && !guiding && !onDemandOn;
   // The band is the playing channel, and the selected recording where
   // Recordings shows: a browser has no picture but still has recordings.
-  const bandShown = capabilities.playback || recordingsShown || moviesOn;
+  const bandShown = capabilities.playback || recordingsShown || moviesOn || showsOn;
 
   // The stacked layout is a preference, not a mode: it applies while watching,
   // and only when the window has the room. Too small a window falls back to
@@ -464,6 +470,27 @@ export function App() {
     if (moviesKnownAbsent && state.section === "movies") dispatch({ type: "section", section: "live" });
   }, [moviesKnownAbsent, state.section, dispatch]);
 
+  // The Shows rail's categories, the same way: when the tab first shows, and
+  // again whenever the shows' lists are read again (a sync that changed them,
+  // another account's shows).
+  const showCategoriesStatus = state.shows.categories.status;
+  useEffect(() => {
+    if (showsOn && showCategoriesStatus === "idle") void loadShowCategories(dispatch);
+  }, [showsOn, showCategoriesStatus, dispatch]);
+  const showsRevision = state.shows.revision;
+  useEffect(() => {
+    if (showsRevision > 0 && showCategoriesStatus !== "idle") void loadShowCategories(dispatch, true);
+    // Only a new revision: the status changing is the load above, not news.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showsRevision, dispatch]);
+
+  // And an account with no shows has no tab for them either.
+  const showsKnownAbsent =
+    state.shows.summary.status === "ready" && !state.shows.summary.data.available;
+  useEffect(() => {
+    if (showsKnownAbsent && state.section === "shows") dispatch({ type: "section", section: "live" });
+  }, [showsKnownAbsent, state.section, dispatch]);
+
   // Only browse has a slot to dock into. The guide covers the stage with an
   // opaque grid, so the video goes back to filling the stage underneath it —
   // mpv draws below the webview, and covered is covered.
@@ -625,7 +652,7 @@ export function App() {
                 plays (a browser, for now) there is no picture to show, and
                 the list and the guide take its room. */}
             {bandShown ? <WatchBand videoRef={dockRef} picture={capabilities.playback} /> : null}
-            <Activity mode={state.railCollapsed || moviesOn ? "hidden" : "visible"}>
+            <Activity mode={state.railCollapsed || onDemandOn ? "hidden" : "visible"}>
               <Rail />
             </Activity>
             <Activity mode={state.railCollapsed || !moviesOn ? "hidden" : "visible"}>
@@ -633,11 +660,19 @@ export function App() {
                 <MoviesRail />
               </Rail>
             </Activity>
-            <Activity mode={guiding || recordingsShown || moviesOn ? "hidden" : "visible"}>
+            <Activity mode={state.railCollapsed || !showsOn ? "hidden" : "visible"}>
+              <Rail>
+                <ShowsRail />
+              </Rail>
+            </Activity>
+            <Activity mode={guiding || recordingsShown || onDemandOn ? "hidden" : "visible"}>
               <ChannelList />
             </Activity>
             <Activity mode={moviesOn ? "visible" : "hidden"}>
               <MoviesList />
+            </Activity>
+            <Activity mode={showsOn ? "visible" : "hidden"}>
+              <ShowsList />
             </Activity>
             <Activity mode={recordingsShown ? "visible" : "hidden"}>
               <RecordingsView />
@@ -679,7 +714,13 @@ export function App() {
               <PlayerChrome />
             </div>
             <div className="stacked-guide">
-              {moviesOn ? <MoviesList besideRail={false} /> : <GuideGrid />}
+              {moviesOn ? (
+                <MoviesList besideRail={false} />
+              ) : showsOn ? (
+                <ShowsList besideRail={false} />
+              ) : (
+                <GuideGrid />
+              )}
             </div>
           </div>
         ) : null}

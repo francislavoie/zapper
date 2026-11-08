@@ -46,6 +46,7 @@ export const SHORTCUT_GROUPS: readonly ShortcutGroup[] = [
       { keys: [["Ctrl", "Q"]], does: "Quit zapper", needs: "window" },
       { keys: [["/"]], does: "Search channels" },
       { keys: [["M"]], does: "Go to Movies", needs: "onDemand" },
+      { keys: [["N"]], does: "Go to Shows", needs: "onDemand" },
       { keys: [["G"]], does: "Switch between the list and the guide" },
       { keys: [["S"]], does: "Stats for nerds", needs: "mpv" },
       { keys: [["P"]], does: "Previous channel; again to come back", needs: "playback" },

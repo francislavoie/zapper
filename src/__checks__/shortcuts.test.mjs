@@ -65,6 +65,14 @@ test("every letter shortcut the app handles is listed", () => {
   for (const k of new Set(handled)) assert.ok(listed.has(k), `${k} is handled but not listed`);
 });
 
+test("N goes to Shows, where the app has on-demand", () => {
+  const n = SHORTCUT_GROUPS.flatMap((g) => g.items).find((it) => it.keys.some((c) => c.includes("N")));
+  assert.ok(n, "N is listed");
+  assert.match(n.does, /Shows/);
+  assert.equal(n.needs, "onDemand");
+  assert.ok(keysSource.includes('e.key === "n"'), "N is handled");
+});
+
 test("rows read cleanly: something to press and something it does", () => {
   for (const g of SHORTCUT_GROUPS) {
     assert.ok(g.items.length > 0, g.title);
