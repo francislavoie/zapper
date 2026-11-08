@@ -858,7 +858,8 @@ export interface MovieDto {
 }
 
 export type MovieSort = "added" | "az" | "year" | "rating";
-export type MovieListKind = "favourites" | "recent" | "watched" | "category";
+/** `all` is every title, whatever its category: what a search looks through. */
+export type MovieListKind = "all" | "favourites" | "recent" | "watched" | "category";
 
 export interface MovieQueryDto {
   list: MovieListKind;
@@ -867,6 +868,9 @@ export interface MovieQueryDto {
   sort: MovieSort;
   yearFrom: number | null;
   yearTo: number | null;
+  /** Only the titles whose name matches, in the list's own order (the rule
+   *  is in logic/titleMatch.ts); null is no search. */
+  search: string | null;
 }
 
 export interface MoviePageDto {
@@ -960,6 +964,8 @@ export interface SeriesQueryDto {
   sort: MovieSort;
   yearFrom: number | null;
   yearTo: number | null;
+  /** As a movie query's. */
+  search: string | null;
 }
 
 export interface SeriesPageDto {

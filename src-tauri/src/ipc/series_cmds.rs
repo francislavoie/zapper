@@ -8,7 +8,7 @@
 
 use crate::catalog::{series_details as details, series_reads};
 use crate::ipc::types::{
-    MarksDto, PlayingEpisodeDto, SeriesCategoryDto, SeriesDetailsDto, SeriesDto, SeriesPageDto,
+    MarksDto, PlayingEpisodeDto, SeriesCategoryDto, SeriesDetailsDto, SeriesPageDto,
     SeriesQueryDto, ShowsSummaryDto,
 };
 
@@ -44,12 +44,6 @@ pub async fn series(
     limit: u32,
 ) -> Result<SeriesPageDto, String> {
     blocking(move || series_reads::series(&query, offset, limit)).await
-}
-
-/// Fuzzy match over every show's name. Blank finds nothing.
-#[tauri::command]
-pub async fn search_series(query: String, limit: u32) -> Result<Vec<SeriesDto>, String> {
-    blocking(move || series_reads::search_series(&query, limit)).await
 }
 
 /// The show's sheet: details, seasons, episodes and what is next up. May

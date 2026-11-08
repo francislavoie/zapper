@@ -35,9 +35,28 @@ test("the rail's own movie items, counted in words", () => {
   assert.deepEqual(fixedMovieItems(null).map((x) => x.count), ["", "", ""]);
 });
 test("a selection becomes the query the backend reads", () => {
-  assert.deepEqual(movieQuery("c7", "az", { from: 1990, to: 1999 }), { list: "category", categoryId: "c7", sort: "az", yearFrom: 1990, yearTo: 1999 });
-  assert.deepEqual(movieQuery(MOVIE_RECENT, "added", null), { list: "recent", categoryId: null, sort: "added", yearFrom: null, yearTo: null });
+  assert.deepEqual(movieQuery("c7", "az", { from: 1990, to: 1999 }), { list: "category", categoryId: "c7", sort: "az", yearFrom: 1990, yearTo: 1999, search: null });
+  assert.deepEqual(movieQuery(MOVIE_RECENT, "added", null), { list: "recent", categoryId: null, sort: "added", yearFrom: null, yearTo: null, search: null });
   assert.equal(movieQuery(MOVIE_WATCHED, "az", null).list, "watched");
+});
+test("a search is every movie that matches, in the list's sort and years", () => {
+  assert.deepEqual(movieQuery(MOVIE_RECENT, "added", { from: 2020, to: 2029 }, "  EN - "), {
+    list: "all",
+    categoryId: null,
+    sort: "added",
+    yearFrom: 2020,
+    yearTo: 2029,
+    search: "EN -",
+  });
+  assert.equal(movieQuery("c7", "az", null, "   ").list, "category", "blank is no search");
+  // The query is the list's key: another search, or another sort of the
+  // same one, is another list (and starts at the top); the rail's choice
+  // under a search is not.
+  const key = (selection, sort, search) => JSON.stringify(movieQuery(selection, sort, null, search));
+  assert.notEqual(key("c7", "added", "EN -"), key("c7", "added", "FR -"));
+  assert.notEqual(key("c7", "added", "EN -"), key("c7", "year", "EN -"));
+  assert.notEqual(key("c7", "added", "EN -"), key("c7", "added", ""));
+  assert.equal(key("c7", "added", "EN -"), key(MOVIE_RECENT, "added", " EN - "));
 });
 test("what a selection is called and how many it holds", () => {
   const cats = [{ id: "c7", name: "Harbour Tales" }];

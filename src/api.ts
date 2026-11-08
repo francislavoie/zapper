@@ -178,8 +178,6 @@ export const api = {
   movieCategories: () => invoke<VodCategoryDto[]>("movie_categories"),
   movies: (query: MovieQueryDto, offset: number, limit: number) =>
     invoke<MoviePageDto>("movies", { query, offset, limit }),
-  searchMovies: (query: string, limit: number) =>
-    invoke<MovieDto[]>("search_movies", { query, limit }),
   /** Fetched from the provider the first time and kept for a week. */
   movieDetails: (movieId: number) => invoke<MovieDetailsDto>("movie_details", { movieId }),
   similarMovies: (movieId: number, limit: number) =>
@@ -196,8 +194,6 @@ export const api = {
   seriesCategories: () => invoke<SeriesCategoryDto[]>("series_categories"),
   series: (query: SeriesQueryDto, offset: number, limit: number) =>
     invoke<SeriesPageDto>("series", { query, offset, limit }),
-  searchSeries: (query: string, limit: number) =>
-    invoke<SeriesDto[]>("search_series", { query, limit }),
   /** The show's details and episodes: fetched from the provider the first
    *  time it is opened and kept for a week. */
   seriesDetails: (seriesId: number) =>

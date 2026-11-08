@@ -4,7 +4,7 @@
 
 import { useCallback, useMemo } from "react";
 import { backend } from "../backend";
-import { useShowSearch } from "../hooks/useShowSearch";
+import { useSettledSearch } from "../hooks/useSettledSearch";
 import type { MoviesView, YearRange } from "../logic/movies";
 import { PageBook } from "../logic/pagedRows";
 import {
@@ -43,16 +43,16 @@ export function ShowsList({ besideRail = true }: { besideRail?: boolean }) {
   const { shows } = useApp();
   const dispatch = useDispatch();
 
+  const searched = useSettledSearch(shows.query);
   const query = useMemo(
-    () => showQuery(shows.selection, shows.sort, shows.years),
-    [shows.selection, shows.sort, shows.years],
+    () => showQuery(shows.selection, shows.sort, shows.years, searched),
+    [shows.selection, shows.sort, shows.years, searched],
   );
   const listKey = JSON.stringify(query);
   const fetchPage = useCallback(
     (offset: number, limit: number) => backend.series(query, offset, limit),
     [query],
   );
-  const search = useShowSearch(shows.query);
 
   const searching = shows.query.trim() !== "";
   const categories = shows.categories.status === "ready" ? shows.categories.data : [];
@@ -106,7 +106,6 @@ export function ShowsList({ besideRail = true }: { besideRail?: boolean }) {
       listKey={listKey}
       fetchPage={fetchPage}
       pages={SHOW_PAGES}
-      search={search}
       state={state}
       marks={shows.seriesMarks}
       idOf={idOf}

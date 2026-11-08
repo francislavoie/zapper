@@ -922,14 +922,12 @@ The catalogue, for the web interface (the app or a device); channels come as the
 | `GET /api/sync` | `{phase, message, channelsTotal, lastSynced}`; `POST /api/sync` asks for a refresh (`202`) |
 | `GET /api/logo/{id}` | the channel's logo, fetched by the service |
 | `GET /api/vod/summary`, `GET /api/vod/categories` | `MoviesSummaryDto` (whether there are movies, and how many); the movie categories with their counts |
-| `GET /api/vod/movies?list=&category=&sort=&from=&to=&offset=&limit=` | a page of movies, `{total, items}`: `list` is `favourites`, `recent`, `watched` or `category` (which needs `category`, else `400`); `sort` is `added`, `az`, `year` or `rating`; `from`/`to` bound the year; `limit` at most 1000 |
-| `GET /api/vod/movies/search?q=&limit=` | movies by name, best match first |
+| `GET /api/vod/movies?list=&category=&sort=&from=&to=&q=&offset=&limit=` | a page of movies, `{total, items}`: `list` is `all`, `favourites`, `recent`, `watched` or `category` (which needs `category`, else `400`); `sort` is `added`, `az`, `year` or `rating`; `from`/`to` bound the year; `q` keeps only the movies whose name has it at the start of a word (case and accents aside, `a\|b` for either), in the list's sort (the app searches `list=all`); `limit` at most 1000 |
 | `GET /api/vod/movies/{id}`, `GET /api/vod/movies/{id}/similar?limit=` | a movie's details (asked of the provider the first time it is opened in a week, then kept); movies like it. `404` for one not in the catalogue |
 | `PUT /api/vod/movies/{id}/marks`, `PUT /api/vod/movies/{id}/progress` | `{favourite?, watched?}` and `{position, duration?}` (seconds); both answer the movie's marks. Past 92 % counts as watched |
 | `GET /api/poster/movie/{id}`, `GET /api/backdrop/movie/{id}/{n}` | the picture, fetched by the service like a logo (up to 4 MB); `posterUrl` and `backdropUrls` always point here, never at the provider |
 | `GET /api/vod/shows/summary`, `GET /api/vod/series/categories` | `ShowsSummaryDto` (whether there are shows, and how many); the show categories with their counts |
-| `GET /api/vod/series?list=&category=&sort=&from=&to=&offset=&limit=` | a page of shows, `{total, items}`, with the movies' words, lists and sorts (`list=category` without `category` is a `400`; `limit` at most 1000) |
-| `GET /api/vod/series/search?q=&limit=` | shows by name, best match first |
+| `GET /api/vod/series?list=&category=&sort=&from=&to=&q=&offset=&limit=` | a page of shows, `{total, items}`, with the movies' words, lists, sorts and search (`list=category` without `category` is a `400`; `limit` at most 1000) |
 | `GET /api/vod/series/{id}` | a show's details, seasons and episodes, and which one is next up (asked of the provider the first time it is opened in a week, then kept). `404` for one not in the catalogue; `502` when the provider could not be asked and nothing is kept, in the service's own words (why in full goes to its log) |
 | `PUT /api/vod/series/{id}/marks` | `{favourite?, watched?}`; answers the show's marks. Watched reaches every episode, specials aside (a show whose episodes are not here yet has them asked for first) |
 | `GET /api/vod/episodes/{id}` | the episode and its show, `{series, episode}`, for the player's title. `404` for one not in the catalogue |

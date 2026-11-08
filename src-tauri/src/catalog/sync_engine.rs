@@ -12,7 +12,9 @@ use std::time::Duration;
 
 use crate::catalog::credentials::Account;
 use crate::catalog::playlist::{self, PlaylistStats, PlaylistWriter};
-use crate::catalog::{db, index, origin, prune, series_sync, status, sync, vod_sync};
+use crate::catalog::{
+    db, index, origin, prune, series_store, series_sync, status, sync, vod_store, vod_sync,
+};
 use crate::ipc::types::{SyncPhase, SyncStatusDto};
 use crate::m3u::fetch;
 use crate::source::{M3uSource, Refused};
@@ -42,11 +44,6 @@ impl Mirror for AppMirror {
     }
 
     fn reindex(&self) -> Result<usize> {
-        // Movies and shows too: a tuner or Tvheadend write soft-deletes the
-        // movies and shows of the account it replaced, and their indexes
-        // must not keep them.
-        db::with_write_db(index::rebuild_movies)?;
-        db::with_write_db(index::rebuild_series)?;
         db::with_write_db(index::rebuild)
     }
 }
@@ -260,8 +257,8 @@ fn land_channels(
     Ok(stats)
 }
 
-/// The provider's movies: both list calls, landed in one write, and the
-/// movie index rebuilt.
+/// The provider's movies: both list calls, landed in one write, and how
+/// many there now are.
 ///
 /// The errors of those calls are `reqwest`'s, whose text includes the
 /// request URL and so the account's username and password. They leave this
@@ -296,15 +293,15 @@ async fn step_movies(client: &XtreamClient, from: &str) -> Result<String> {
     }
     let movies: Vec<_> = streams.iter().map(vod_sync::NewMovie::from).collect();
     let stats = db::with_write_db(|conn| vod_sync::land_movies(conn, &cats, &movies, now()))?;
-    let indexed = db::with_write_db(index::rebuild_movies)?;
+    let total = db::with_write_db(|c| Ok(vod_store::movie_counts(c, now())?.total))?;
     Ok(format!(
-        "{indexed} movies ({} new, {} gone)",
+        "{total} movies ({} new, {} gone)",
         stats.inserted, stats.deleted
     ))
 }
 
 /// The provider's shows, as [`step_movies`] lands its movies: both list
-/// calls, landed in one write, the series index rebuilt, errors scrubbed
+/// calls, landed in one write, how many there now are, errors scrubbed
 /// with their HTTP status kept, and nothing landed under an account whose
 /// channels have not been refreshed yet. Episodes are not listed here: a
 /// show's come with its details, when it is opened.
@@ -328,9 +325,9 @@ async fn step_shows(client: &XtreamClient, from: &str) -> Result<String> {
     }
     let shows: Vec<_> = series.iter().map(series_sync::NewSeries::from).collect();
     let stats = db::with_write_db(|conn| series_sync::land_series(conn, &cats, &shows, now()))?;
-    let indexed = db::with_write_db(index::rebuild_series)?;
+    let total = db::with_write_db(|c| Ok(series_store::series_counts(c, now())?.total))?;
     Ok(format!(
-        "{indexed} shows ({} new, {} gone)",
+        "{total} shows ({} new, {} gone)",
         stats.inserted, stats.deleted
     ))
 }
@@ -594,14 +591,14 @@ pub(crate) fn hand_off_movies(
     *landed.lock().unwrap_or_else(|e| e.into_inner()) = Some(handoff);
 }
 
-/// The movies phase of a playlist pass: what the write landed, and the movie
-/// index rebuilt over it, or the write's failure repeated.
+/// The movies phase of a playlist pass: what the write landed, and how many
+/// movies there now are, or the write's failure repeated.
 pub(crate) async fn step_landed_movies(landed: &Landed) -> Result<String> {
     let handoff = landed.lock().unwrap_or_else(|e| e.into_inner()).take();
     match handoff {
         Some(Ok((new, gone))) => {
-            let indexed = db::with_write_db(index::rebuild_movies)?;
-            Ok(format!("{indexed} movies ({new} new, {gone} gone)"))
+            let total = db::with_write_db(|c| Ok(vod_store::movie_counts(c, now())?.total))?;
+            Ok(format!("{total} movies ({new} new, {gone} gone)"))
         }
         Some(Err(why)) => Err(anyhow::anyhow!(why)),
         None => Err(anyhow::anyhow!("the playlist was not read")),
@@ -621,14 +618,14 @@ pub(crate) fn hand_off_shows(
     *landed.lock().unwrap_or_else(|e| e.into_inner()) = Some(handoff);
 }
 
-/// The shows phase of a playlist pass: what the write landed, and the
-/// series index rebuilt over it, or the write's failure repeated.
+/// The shows phase of a playlist pass: what the write landed, and how many
+/// shows there now are, or the write's failure repeated.
 pub(crate) async fn step_landed_shows(landed: &Landed) -> Result<String> {
     let handoff = landed.lock().unwrap_or_else(|e| e.into_inner()).take();
     match handoff {
         Some(Ok((new, gone))) => {
-            let indexed = db::with_write_db(index::rebuild_series)?;
-            Ok(format!("{indexed} shows ({new} new, {gone} gone)"))
+            let total = db::with_write_db(|c| Ok(series_store::series_counts(c, now())?.total))?;
+            Ok(format!("{total} shows ({new} new, {gone} gone)"))
         }
         Some(Err(why)) => Err(anyhow::anyhow!(why)),
         None => Err(anyhow::anyhow!("the playlist was not read")),
@@ -1767,8 +1764,6 @@ mod tests {
         .await;
         let landed = db::with_write_db(series_sync::series_landed_from).unwrap();
         let marks_key = db::with_write_db(crate::catalog::vod_store::origin).unwrap();
-        // The steps built the process-wide indexes over this test's rows.
-        index::forget_vod();
         db::with_write_db(|c| {
             match &before {
                 Some(b) => origin::record(c, b)?,

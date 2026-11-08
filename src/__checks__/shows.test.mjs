@@ -127,8 +127,10 @@ test("the episode list is windowed: a long season draws only what is in sight", 
   assert.equal(episodeWindow(84 * 400 - 840, 840, 400).end, 400);
 });
 test("a selection becomes the query the backend reads", () => {
-  assert.deepEqual(showQuery(SHOW_RECENT, "added", null), { list: "recent", categoryId: null, sort: "added", yearFrom: null, yearTo: null });
-  assert.deepEqual(showQuery("s4", "az", { from: 2010, to: 2019 }), { list: "category", categoryId: "s4", sort: "az", yearFrom: 2010, yearTo: 2019 });
+  assert.deepEqual(showQuery(SHOW_RECENT, "added", null), { list: "recent", categoryId: null, sort: "added", yearFrom: null, yearTo: null, search: null });
+  assert.deepEqual(showQuery("s4", "az", { from: 2010, to: 2019 }), { list: "category", categoryId: "s4", sort: "az", yearFrom: 2010, yearTo: 2019, search: null });
+  // A search is every show that matches, in the chosen sort and years.
+  assert.deepEqual(showQuery("s4", "rating", { from: 2010, to: 2019 }, " EN - "), { list: "all", categoryId: null, sort: "rating", yearFrom: 2010, yearTo: 2019, search: "EN -" });
   assert.equal(showRailKind(SHOW_FAVOURITES), "favourites");
   assert.equal(showRailKind(SHOW_WATCHED), "watched");
 });

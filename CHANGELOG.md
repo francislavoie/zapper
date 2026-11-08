@@ -41,6 +41,7 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
 - A playlist's episodes (`S01E02`, `1x02`, `Season 1 Episode 2`, ranges like `S01E01-E02`) are
   listed under Shows instead of Live TV.
 - Search boxes have dimmer hints, with `/` shown as a key.
+- Search in Movies and Shows keeps the list's sort, and matches the start of words (`EN -`).
 
 ### Fixed
 

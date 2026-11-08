@@ -305,12 +305,11 @@ export const webBackend: typeof api = {
         sort: query.sort,
         from: query.yearFrom,
         to: query.yearTo,
+        q: query.search,
         offset,
         limit,
       }),
     ),
-  searchMovies: (query, limit) =>
-    get<MovieDto[]>(apiUrl("/api/vod/movies/search", { q: query, limit })),
   movieDetails: (movieId) => get<MovieDetailsDto>(`/api/vod/movies/${movieId}`),
   similarMovies: (movieId, limit) =>
     get<MovieDto[]>(apiUrl(`/api/vod/movies/${movieId}/similar`, { limit })),
@@ -331,12 +330,11 @@ export const webBackend: typeof api = {
         sort: query.sort,
         from: query.yearFrom,
         to: query.yearTo,
+        q: query.search,
         offset,
         limit,
       }),
     ),
-  searchSeries: (query, limit) =>
-    get<SeriesDto[]>(apiUrl("/api/vod/series/search", { q: query, limit })),
   seriesDetails: (seriesId) => get<SeriesDetailsDto>(`/api/vod/series/${seriesId}`),
   setSeriesMarks: (seriesId, marks) =>
     put<MarksDto>(`/api/vod/series/${seriesId}/marks`, marks),

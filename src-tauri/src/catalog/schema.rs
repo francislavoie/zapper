@@ -181,10 +181,11 @@ CREATE INDEX IF NOT EXISTS epg_by_start ON epg(start);
 /// The indexes serve the page queries: newest first overall and within a
 /// category, alphabetical, and the year and rating sorts, so that none of
 /// them scans a ~160k-row table. The four sorts' indexes hold only the live
-/// titles, each in its sort's whole order, and each holds the cleaned name,
-/// so that a filter on the name can read it there, in the list's order,
-/// rather than from the table's much longer rows. They replaced
-/// `movies_by_added`, `_name`, `_year` and `_rating`, which held neither.
+/// titles, each in its sort's whole order, and each holds the cleaned name:
+/// a search (`catalog::title_search`) tests every title's name, and reads
+/// it there, in the list's order, rather than from the table's much longer
+/// rows. They replaced `movies_by_added`, `_name`, `_year` and `_rating`,
+/// which held neither.
 const VOD_TABLES: &str = r#"
 CREATE TABLE IF NOT EXISTS vod_categories (
     kind  TEXT NOT NULL,
@@ -266,7 +267,7 @@ CREATE TABLE IF NOT EXISTS vod_marks (
 /// seasons) when they land.
 ///
 /// The indexes serve the same page queries as the movies' (holding the
-/// names, as theirs do), and a show's episodes in order.
+/// names for a search, as theirs do), and a show's episodes in order.
 const SERIES_TABLES: &str = r#"
 CREATE TABLE IF NOT EXISTS series (
     series_id     INTEGER PRIMARY KEY,
@@ -369,10 +370,17 @@ fn tune(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// The functions the catalogue's reads call, which SQLite keeps per
+/// connection rather than in the file.
+fn functions(conn: &Connection) -> Result<()> {
+    crate::catalog::title_search::install(conn).context("adding title_match")
+}
+
 pub fn open_at(path: &Path) -> Result<Connection> {
     let conn = Connection::open(path).with_context(|| format!("opening {}", path.display()))?;
     tune(&conn)?;
     migrate(&conn)?;
+    functions(&conn)?;
     Ok(conn)
 }
 
@@ -381,6 +389,7 @@ pub fn open_at(path: &Path) -> Result<Connection> {
 pub fn open_in_memory() -> Result<Connection> {
     let conn = Connection::open_in_memory()?;
     migrate(&conn)?;
+    functions(&conn)?;
     Ok(conn)
 }
 

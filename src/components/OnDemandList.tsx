@@ -27,7 +27,6 @@ import {
 import { searchInputRegistration } from "../focus";
 import { useClock } from "../hooks/useClock";
 import { usePagedRows } from "../hooks/usePagedRows";
-import type { Async } from "../logic/async";
 import { movieCursorKey, scrollToShow } from "../logic/movieKeys";
 import {
   MOVIE_SORTS,
@@ -86,8 +85,6 @@ export interface OnDemandListProps<T> {
   fetchPage: (offset: number, limit: number) => Promise<{ total: number; items: T[] }>;
   /** Module-level, shared with the stacked copy. */
   pages: PageBook<T>;
-  /** From useVodSearch. */
-  search: Async<T[]>;
   state: {
     query: string;
     view: MoviesView;
@@ -128,7 +125,6 @@ export interface OnDemandListProps<T> {
 /** Grid rows drawn above and below the screen's. */
 const GRID_OVERSCAN = 1;
 const NO_ROWS = () => undefined;
-const NOOP = () => {};
 
 const sameRange = (a: YearRange | null, b: YearRange | null) =>
   (a?.from ?? null) === (b?.from ?? null) && (a?.to ?? null) === (b?.to ?? null);
@@ -154,21 +150,16 @@ export function OnDemandList<T extends object>(p: OnDemandListProps<T>) {
   const [scrollTop, setScrollTop] = useState(0);
   const [size, setSize] = useState({ width: 0, height: 0 });
 
-  const searching = state.query.trim() !== "";
   const posters = state.view === "posters";
   const now = useClock(60_000);
 
   // ------------------------------------------------------------- the rows
 
   const { listKey } = p;
+  // A search is part of the list's query (and so of its key): its matches
+  // are paged, sorted and windowed as any other list's.
   const paged = usePagedRows<T>(listKey, p.fetchPage, state.revision, p.pages);
-  const found = p.search;
-  const foundRows = found.status === "ready" ? found.data : null;
-
-  const total = searching ? (foundRows?.length ?? 0) : paged.total;
-  const loading = searching ? found.status === "loading" : paged.loading;
-  const error = searching ? (found.status === "error" ? found.message : null) : paged.error;
-  const retry = searching ? NOOP : paged.retry;
+  const { total, loading, error, retry, ensure } = paged;
 
   // What a mark has said since the page was fetched, over what the page
   // holds: the rows reload on a mark, but not before the answer is back.
@@ -178,7 +169,7 @@ export function OnDemandList<T extends object>(p: OnDemandListProps<T>) {
   const patched = useRef(new Map<number, { from: T; marks: Marks; row: T }>());
   const rowAt = useCallback(
     (i: number): T | undefined => {
-      const m = searching ? foundRows?.[i] : paged.rowAt(i);
+      const m = paged.rowAt(i);
       if (!m) return m;
       const id = idOf(m);
       const k = marks[id];
@@ -191,9 +182,8 @@ export function OnDemandList<T extends object>(p: OnDemandListProps<T>) {
       patched.current.set(id, { from: m, marks: { favourite: k.favourite, watched: k.watched }, row });
       return row;
     },
-    [searching, foundRows, paged.rowAt, marks, idOf, withMarks],
+    [paged.rowAt, marks, idOf, withMarks],
   );
-  const ensure = searching ? NOOP : paged.ensure;
 
   // ------------------------------------------------------------- geometry
 
@@ -221,21 +211,21 @@ export function OnDemandList<T extends object>(p: OnDemandListProps<T>) {
   // Only the pages the window touches, and only once each: `ensure` knows
   // which it already holds or has asked for, so a scroll tick is not a request.
   useEffect(() => {
-    if (!searching) ensure(first, last);
-  }, [searching, ensure, first, last]);
+    ensure(first, last);
+  }, [ensure, first, last]);
 
   // A new list starts at the top, and from no row: the old offset would land
-  // in the middle of an unrelated one.
-  const lists = `${listKey}\u0000${state.query.trim()}`;
-  const lastLists = useRef(lists);
+  // in the middle of an unrelated one. Another search, or another sort of
+  // the same one, is another list.
+  const lastKey = useRef(listKey);
   const cursor = useRef<number | null>(null);
   useEffect(() => {
-    if (lastLists.current === lists) return;
-    lastLists.current = lists;
+    if (lastKey.current === listKey) return;
+    lastKey.current = listKey;
     cursor.current = null;
     viewportRef.current?.scrollTo({ top: 0 });
     setScrollTop(0);
-  }, [lists]);
+  }, [listKey]);
 
   // ------------------------------------------------------------ selection
 
@@ -437,36 +427,30 @@ export function OnDemandList<T extends object>(p: OnDemandListProps<T>) {
           clearLabel="Clear search"
         />
         <span className="spring" />
-        {/* A search lists by how well each title matches, so neither the order
-            nor the years apply to it. */}
-        {searching ? null : (
-          <>
-            <button
-              className={`movies-menu-btn ${state.menu?.kind === "sort" ? "on" : ""}`}
-              ref={sortRef}
-              aria-haspopup="menu"
-              aria-expanded={state.menu?.kind === "sort"}
-              aria-label={`Sort: ${MOVIE_SORT_LABEL[state.sort]}`}
-              data-tip="Sort"
-              onClick={() => openMenu("sort", sortRef.current)}
-            >
-              {MOVIE_SORT_LABEL[state.sort]}
-              <ChevronDown className="movies-menu-i" />
-            </button>
-            <button
-              className={`movies-menu-btn ${state.menu?.kind === "years" ? "on" : ""}`}
-              ref={yearsRef}
-              aria-haspopup="menu"
-              aria-expanded={state.menu?.kind === "years"}
-              aria-label={`Years: ${yearLabel}`}
-              data-tip="Years"
-              onClick={() => openMenu("years", yearsRef.current)}
-            >
-              {yearLabel}
-              <ChevronDown className="movies-menu-i" />
-            </button>
-          </>
-        )}
+        <button
+          className={`movies-menu-btn ${state.menu?.kind === "sort" ? "on" : ""}`}
+          ref={sortRef}
+          aria-haspopup="menu"
+          aria-expanded={state.menu?.kind === "sort"}
+          aria-label={`Sort: ${MOVIE_SORT_LABEL[state.sort]}`}
+          data-tip="Sort"
+          onClick={() => openMenu("sort", sortRef.current)}
+        >
+          {MOVIE_SORT_LABEL[state.sort]}
+          <ChevronDown className="movies-menu-i" />
+        </button>
+        <button
+          className={`movies-menu-btn ${state.menu?.kind === "years" ? "on" : ""}`}
+          ref={yearsRef}
+          aria-haspopup="menu"
+          aria-expanded={state.menu?.kind === "years"}
+          aria-label={`Years: ${yearLabel}`}
+          data-tip="Years"
+          onClick={() => openMenu("years", yearsRef.current)}
+        >
+          {yearLabel}
+          <ChevronDown className="movies-menu-i" />
+        </button>
         <div className="view-switch" role="tablist" aria-label="View">
           {(
             [

@@ -8,7 +8,8 @@
 // episodes are a pure function of the show's id. Only the marks (favourite,
 // watched, where an episode was left) are state, kept in memory. Ids run
 // newest first: id 1 is the latest addition. Every name is made of invented
-// words; none is, or is meant to resemble, a real show.
+// words; none is, or is meant to resemble, a real show. One in four starts
+// with a language, as some providers' do ("EN - "), for the search.
 //
 // A few shows are fixed, for looking at particular cases:
 //   1  three seasons (3, 8 and 6 episodes); season 1 watched, S2 E1–E3
@@ -41,6 +42,7 @@ import type {
   SeriesQueryDto,
   ShowsSummaryDto,
 } from "./types";
+import { titleMatches, titleNeedles } from "./logic/titleMatch";
 
 export const SHOW_TOTAL = 12_000;
 const CATEGORY_TOTAL = 30;
@@ -121,7 +123,19 @@ function mix(i: number, salt: number): number {
 const unit = (i: number, salt: number) => mix(i, salt) / 4294967296;
 const choose = <T,>(xs: readonly T[], i: number, salt: number): T => xs[mix(i, salt) % xs.length];
 
+/** The language some providers put before a title: one show in four has
+ *  one, the fixed shows (1 to 4) aside. */
+const LANGUAGES = ["EN - ", "EN - ", "FR - ", "FR/EN - "];
+function languageOf(i: number): string {
+  const k = mix(i, 140) % 16;
+  return i > 4 && k < LANGUAGES.length ? LANGUAGES[k] : "";
+}
+
 function cleanNameOf(i: number): string {
+  return languageOf(i) + titleOf(i);
+}
+
+function titleOf(i: number): string {
   switch (mix(i, 110) % 4) {
     case 0:
       return `${choose(OPENERS, i, 111)} ${choose(CLOSERS, i, 112)}`;
@@ -299,7 +313,7 @@ function row(i: number): SeriesDto {
     cleanName: clean,
     year: yearOf(i),
     rating: ratingOf(i),
-    posterUrl: unit(i, 126) < 0.92 ? art(i, 200, 300, clean) : null,
+    posterUrl: unit(i, 126) < 0.92 ? art(i, 200, 300, titleOf(i)) : null,
     added: addedOf(i),
     categoryId: `s${categoryNo(i)}`,
     seasonCount: known ? seasons.length : null,
@@ -408,7 +422,7 @@ function details(i: number): SeriesDetailsDto {
     director: mix(i, 155) % 3 === 0 ? null : person(156),
     cast: [157, 158, 159, 160, 161].map(person),
     releaseDate: `${series.year}-0${1 + (mix(i, 162) % 9)}-1${mix(i, 163) % 9}`,
-    backdropUrls: [art(i, 640, 360, series.cleanName)],
+    backdropUrls: [art(i, 640, 360, titleOf(i))],
     tmdbId: 300_000 + i,
     firstYear: years.length ? Math.min(...years) : series.year,
     lastYear: years.length ? Math.max(...years) : null,
@@ -458,9 +472,12 @@ function listed(q: SeriesQueryDto): number[] {
   const from = q.yearFrom ?? -Infinity;
   const to = q.yearTo ?? Infinity;
   const ids: number[] = [];
+  const needles = titleNeedles(q.search ?? "");
+  const n = needles.length > 0 ? nameTable() : null;
   for (const id of orderFor(q.sort)) {
     const y = yearOf(id);
     if (y < from || y > to) continue;
+    if (n && !titleMatches(needles, n[id])) continue;
     if (q.list === "recent" && id > RECENT_TOTAL) continue;
     if (q.list === "favourites" && !favourites.has(id)) continue;
     if (q.list === "watched" && !isWatched(id)) continue;
@@ -696,22 +713,6 @@ export function createMockShows(host: MoviePlayerHost) {
       if (NONE) return { total: 0, items: [] };
       const ids = listed(query);
       return { total: ids.length, items: ids.slice(offset, offset + limit).map(row) };
-    },
-
-    searchSeries: async (query: string, limit: number): Promise<SeriesDto[]> => {
-      await delay(60);
-      const terms = query
-        .toLowerCase()
-        .split("|")
-        .map((t) => t.trim())
-        .filter((t) => t !== "");
-      if (NONE || terms.length === 0) return [];
-      const n = nameTable();
-      const out: SeriesDto[] = [];
-      for (let i = 1; i <= SHOW_TOTAL && out.length < limit; i++) {
-        if (terms.some((t) => n[i].includes(t))) out.push(row(i));
-      }
-      return out;
     },
 
     seriesDetails: async (seriesId: number): Promise<SeriesDetailsDto> => {

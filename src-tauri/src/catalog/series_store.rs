@@ -21,6 +21,7 @@ use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Row};
 use std::collections::BTreeMap;
 
 use crate::catalog::origin::current_origin_sql;
+use crate::catalog::title_search::searched_name_sql;
 use crate::catalog::vod_progress::is_started;
 use crate::catalog::vod_store::{
     self, ItemKind, Marks, MovieList, MovieQuery, MovieSort, RECENT_DAYS,
@@ -211,6 +212,7 @@ fn scope(q: &MovieQuery, now: i64) -> (&'static str, Vec<String>, Vec<Value>) {
     let mut conds = vec!["s.deleted_at IS NULL".to_string()];
     let mut args = Vec::new();
     let from = match &q.list {
+        MovieList::All => MARKED,
         MovieList::Favourites => {
             conds.push("k.favourite_at IS NOT NULL".into());
             MARKS_FIRST
@@ -238,6 +240,10 @@ fn scope(q: &MovieQuery, now: i64) -> (&'static str, Vec<String>, Vec<Value>) {
         conds.push("s.year <= ?".into());
         args.push(Value::Integer(y.into()));
     }
+    if let Some(text) = &q.search {
+        conds.push(concat!("title_match(", searched_name_sql!("s"), ", ?)").into());
+        args.push(Value::Text(text.clone()));
+    }
     (from, conds, args)
 }
 
@@ -245,8 +251,8 @@ fn order_by(sort: MovieSort) -> &'static str {
     match sort {
         MovieSort::Added => "s.added DESC, s.series_id DESC",
         MovieSort::Az => "s.clean_name COLLATE NOCASE, s.series_id",
-        MovieSort::Year => "s.year DESC NULLS LAST, s.clean_name",
-        MovieSort::Rating => "s.rating DESC NULLS LAST, s.clean_name",
+        MovieSort::Year => "s.year DESC NULLS LAST, s.clean_name, s.series_id",
+        MovieSort::Rating => "s.rating DESC NULLS LAST, s.clean_name, s.series_id",
     }
 }
 
@@ -262,6 +268,22 @@ fn page_sql(q: &MovieQuery, offset: u32, limit: u32, now: i64) -> (String, Vec<V
     (sql, args)
 }
 
+/// As the movies': only a list of marks needs the marks to count, and a
+/// search of every show reads the names from their index.
+fn count_sql(q: &MovieQuery, now: i64) -> (String, Vec<Value>) {
+    let (from, conds, args) = scope(q, now);
+    let count_from = match (&q.list, &q.search) {
+        (MovieList::Favourites | MovieList::Watched, _) => from,
+        (MovieList::All, Some(_)) => "series s INDEXED BY series_live_by_name",
+        _ => "series s",
+    };
+    let sql = format!(
+        "SELECT COUNT(*) FROM {count_from} WHERE {}",
+        conds.join(" AND ")
+    );
+    (sql, args)
+}
+
 /// One page of shows and how many there are in all, with the movies' lists
 /// and sorts.
 pub fn series_page(
@@ -271,20 +293,12 @@ pub fn series_page(
     limit: u32,
     now: i64,
 ) -> Result<(u32, Vec<SeriesRow>)> {
-    let (from, conds, args) = scope(q, now);
-    // As the movies': only a list of marks needs the marks to count.
-    let count_from = match q.list {
-        MovieList::Favourites | MovieList::Watched => from,
-        _ => "series s",
-    };
-    let total: u32 = conn.query_row(
-        &format!(
-            "SELECT COUNT(*) FROM {count_from} WHERE {}",
-            conds.join(" AND ")
-        ),
-        params_from_iter(args),
-        |r| r.get(0),
-    )?;
+    let (sql, args) = count_sql(q, now);
+    let total: u32 = conn.query_row(&sql, params_from_iter(args), |r| r.get(0))?;
+    // As the movies': past the end there is nothing to read.
+    if offset >= total {
+        return Ok((total, Vec::new()));
+    }
     let (sql, args) = page_sql(q, offset, limit, now);
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt
@@ -791,6 +805,14 @@ mod tests {
             sort,
             year_from: None,
             year_to: None,
+            search: None,
+        }
+    }
+
+    fn search(list: MovieList, sort: MovieSort, text: &str) -> MovieQuery {
+        MovieQuery {
+            search: Some(text.into()),
+            ..q(list, sort)
         }
     }
 
@@ -852,6 +874,82 @@ mod tests {
     }
 
     #[test]
+    fn a_show_search_is_a_filter_on_the_list() {
+        let c = open_in_memory().unwrap();
+        add(
+            &c,
+            1,
+            "a",
+            "EN - Harbour Lights",
+            Some(2001),
+            Some(6.0),
+            NOW - 5 * DAY,
+        );
+        add(
+            &c,
+            2,
+            "b",
+            "Garden - Lantern",
+            Some(2003),
+            Some(9.0),
+            NOW - DAY,
+        );
+        add(
+            &c,
+            3,
+            "c",
+            "EN - Amber Tide",
+            Some(1995),
+            Some(8.0),
+            NOW - 2 * DAY,
+        );
+        add(
+            &c,
+            4,
+            "a",
+            "FR/EN - Copper Bridge",
+            Some(2010),
+            None,
+            NOW - 3 * DAY,
+        );
+        add(
+            &c,
+            5,
+            "b",
+            "L'Été à Brackenfold",
+            Some(2005),
+            Some(7.0),
+            NOW,
+        );
+        let en = |sort| ids(&c, &search(MovieList::All, sort, "EN -"));
+        assert_eq!(en(MovieSort::Added), [3, 4, 1]);
+        assert_eq!(en(MovieSort::Az), [3, 1, 4]);
+        assert_eq!(en(MovieSort::Year), [4, 1, 3]);
+        assert_eq!(en(MovieSort::Rating), [3, 1, 4]);
+        assert_eq!(
+            ids(&c, &search(MovieList::All, MovieSort::Added, "ete a")),
+            [5]
+        );
+        let mut years = search(MovieList::All, MovieSort::Added, "EN -");
+        years.year_from = Some(2000);
+        assert_eq!(ids(&c, &years), [4, 1]);
+        assert_eq!(ids(&c, &search(cat("a"), MovieSort::Added, "EN -")), [4, 1]);
+        let (total, items) = series_page(
+            &c,
+            &search(MovieList::All, MovieSort::Added, "EN -"),
+            1,
+            1,
+            NOW,
+        )
+        .unwrap();
+        assert_eq!((total, items[0].series_id), (3, 4));
+        assert_eq!(
+            ids(&c, &q(MovieList::All, MovieSort::Added)),
+            [5, 2, 3, 4, 1]
+        );
+    }
+
+    #[test]
     fn the_show_page_queries_use_an_index() {
         let c = open_in_memory().unwrap();
         let page = |q: &MovieQuery| -> String {
@@ -868,6 +966,21 @@ mod tests {
         assert!(!p.contains("TEMP B-TREE"), "{p}");
         let p = page(&q(MovieList::Favourites, MovieSort::Az));
         assert!(!p.contains("SCAN s"), "{p}");
+        // As the movies': a search reads the names from the index that gives
+        // the list's order, and its count from the names' own.
+        for (sort, index) in [
+            (MovieSort::Added, "series_live_by_added"),
+            (MovieSort::Az, "series_live_by_name"),
+            (MovieSort::Year, "series_live_by_year"),
+            (MovieSort::Rating, "series_live_by_rating"),
+        ] {
+            let p = page(&search(MovieList::All, sort, "x"));
+            assert!(p.contains(index), "{p}");
+            assert!(!p.contains("TEMP B-TREE"), "{p}");
+        }
+        let (sql, args) = count_sql(&search(MovieList::All, MovieSort::Az, "x"), NOW);
+        let p = plan(&c, &sql, args);
+        assert!(p.contains("series_live_by_name"), "{p}");
     }
 
     #[test]

@@ -20,6 +20,7 @@ import {
   recallDetails,
   rememberDetails,
   runtime,
+  vodQuery,
   type MovieRailKind,
   type PosterCard,
   type YearRange,
@@ -78,19 +79,15 @@ export const SHOW_SEARCH_PLACEHOLDER = "Search shows  ·  a|b for either";
 
 export const SHOWS_VIEW_STORAGE_KEY = "zapper.showsView";
 
+/** The list to ask for, as movieQuery: a search is every show whose name
+ *  matches, in the chosen sort and years. */
 export function showQuery(
   selection: string,
   sort: MovieSort,
   years: YearRange | null,
+  search = "",
 ): SeriesQueryDto {
-  const kind = showRailKind(selection);
-  return {
-    list: kind,
-    categoryId: kind === "category" ? selection : null,
-    sort,
-    yearFrom: years?.from ?? null,
-    yearTo: years?.to ?? null,
-  };
+  return vodQuery(showRailKind(selection), selection, sort, years, search);
 }
 
 export function showTitle(

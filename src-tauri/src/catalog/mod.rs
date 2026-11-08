@@ -30,6 +30,7 @@ pub mod sync;
 pub mod sync_devices;
 pub mod sync_engine;
 pub mod sync_lease;
+pub mod title_search;
 pub mod vod_details;
 pub mod vod_progress;
 pub mod vod_store;
