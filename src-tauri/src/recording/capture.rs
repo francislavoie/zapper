@@ -1111,7 +1111,8 @@ mod tests {
                 until: t + 3900,
             },
         );
-        s.vod.add_for_test("device:a", 9, -1);
+        s.vod
+            .add_for_test("device:a", crate::catalog::vod_store::VodItem::movie(9), -1);
         assert_eq!(s.own_conns().len(), 2);
 
         let me = Rider {

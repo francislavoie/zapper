@@ -478,6 +478,7 @@ pub(crate) mod tests {
 
     use super::*;
     use crate::catalog::db::movie_catalogue;
+    use crate::catalog::vod_store::VodItem;
     use crate::recording::budget::{Budget, Slots};
     use crate::recording::config::{self, ServerConfig};
     use crate::recording::api::RecordingState;
@@ -3253,8 +3254,8 @@ pub(crate) mod tests {
         let (junk, junk_counts) = fake::serve().await;
         let film_url = format!("{base}/movie/secret-user/secret-pass/1.mp4");
         let junk_url = format!("{junk}/movie/secret-user/secret-pass/2.mkv");
-        s.vod.set_playables(Arc::new(move |id| {
-            let url = if id == 9_120_002 { &junk_url } else { &film_url };
+        s.vod.set_playables(Arc::new(move |item: VodItem| {
+            let url = if item == VodItem::movie(9_120_002) { &junk_url } else { &film_url };
             Ok(crate::source::Playable::plain(url.clone()))
         }));
         let size = film.len();
@@ -3621,8 +3622,9 @@ pub(crate) mod tests {
     ) -> (String, Arc<crate::recording::upstream::fake::Counts>) {
         let (base, counts) = crate::recording::upstream::fake::serve_file(Arc::clone(film)).await;
         let url = format!("{base}{path}/movie/secret-user/secret-pass/2.mkv");
-        s.vod
-            .set_playables(Arc::new(move |_| Ok(crate::source::Playable::plain(url.clone()))));
+        s.vod.set_playables(Arc::new(move |_: VodItem| {
+            Ok(crate::source::Playable::plain(url.clone()))
+        }));
         (base, counts)
     }
 
@@ -3955,7 +3957,7 @@ pub(crate) mod tests {
             "signed in only"
         );
         // Subtitles that are pictures are listed, and never served.
-        let pictures = s.vod.add_for_test("app", 9_120_061, -61);
+        let pictures = s.vod.add_for_test("app", VodItem::movie(9_120_061), -61);
         s.vod.set_subtitles_for_test(
             &pictures,
             vec![crate::recording::vodmux::SubtitleStream {
@@ -3978,6 +3980,206 @@ pub(crate) mod tests {
             .insert("sec-fetch-site", HeaderValue::from_static("cross-site"));
         assert_eq!(call(&s, r).await.0, StatusCode::FORBIDDEN);
         assert_eq!(counts.most_open.load(Ordering::SeqCst), 1);
+    }
+
+    // ------------------------------------------------------ watching episodes
+
+    /// Episode `id` of the made-up "A Show" (9_130_000), season 2 episode
+    /// `number`, in the catalogue as `container`, its listed length 45
+    /// minutes (which a watch does not go by: the file says). The caller
+    /// holds [`movie_catalogue`].
+    fn seed_episode(id: i64, number: i32, container: &str) {
+        use crate::catalog::db;
+        db::install_test_db();
+        db::with_db(|c| {
+            c.execute(
+                "INSERT INTO series (series_id, name, clean_name, added)
+                 VALUES (9130000, 'A Show', 'A Show', 1)
+                 ON CONFLICT(series_id) DO UPDATE SET deleted_at = NULL",
+                [],
+            )?;
+            c.execute(
+                "INSERT INTO episodes
+                   (episode_id, series_id, season, episode, title, duration_secs, container)
+                 VALUES (?1, 9130000, 2, ?2, 'Night Shift', 2700, ?3)
+                 ON CONFLICT(episode_id) DO UPDATE SET deleted_at = NULL,
+                   container = excluded.container",
+                rusqlite::params![id, number, container],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    fn episode_body(id: i64) -> Option<serde_json::Value> {
+        Some(serde_json::json!({"episodeId": id}))
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn a_browser_watches_an_episode_direct_and_remuxed() {
+        use crate::recording::upstream::fake;
+        use crate::recording::vodwatch::vod_feed;
+        use std::sync::atomic::Ordering;
+        let (Some(plain), Some(film)) = (mp4(false), film()) else {
+            eprintln!("skipped: no ffmpeg command to make a fixture with");
+            return;
+        };
+        let _catalogue = movie_catalogue();
+        let s = server("vod-episode");
+        enable(&s, true).await;
+        let (mp4_base, mp4_counts) = fake::serve_file(Arc::clone(&plain)).await;
+        // Slow enough that the first remux still reads when the seek comes.
+        let (mkv_base, mkv_counts) = fake::serve_file(Arc::clone(&film)).await;
+        let mp4_url = format!("{mp4_base}/series/secret-user/secret-pass/9130004.mp4");
+        let mkv_url = format!("{mkv_base}/slow/series/secret-user/secret-pass/9130005.mkv");
+        // Episode 9_130_004 and movie 9_130_004 share an id; only the
+        // episode has a file here.
+        s.vod.set_playables(Arc::new(move |item: VodItem| {
+            let url = if item == VodItem::episode(9_130_004) {
+                mp4_url.clone()
+            } else if item == VodItem::episode(9_130_005) {
+                mkv_url.clone()
+            } else if item == VodItem::episode(9_130_006) {
+                "http://127.0.0.1:1/series/secret-user/secret-pass/9130006.mp4".into()
+            } else {
+                anyhow::bail!("that episode is not in the catalogue any more: {item:?}");
+            };
+            Ok(crate::source::Playable::plain(url))
+        }));
+        let cookie = browser_login(&s).await;
+        let post = |body| from_page("POST", "/api/vod/watch", Some(&cookie), body);
+        seed_episode(9_130_004, 4, "mp4");
+        seed_episode(9_130_005, 5, "mkv");
+        seed_episode(9_130_006, 6, "mp4");
+
+        // An MP4 a browser plays: as it is, by ranges passed on.
+        let (st, body) = call(&s, post(episode_body(9_130_004))).await;
+        assert_eq!(st, StatusCode::OK, "{body}");
+        assert_eq!(body["mode"], "direct");
+        assert_eq!(body["duration"], 10, "the file's length, not the listing's");
+        assert_eq!(body["audio"][0]["codec"], "aac");
+        for leak in ["127.0.0.1", "secret-user", "secret-pass", "/series/", mp4_base.as_str()] {
+            assert!(!body.to_string().contains(leak), "{leak} reached the browser: {body}");
+        }
+        let own = s.own_conns();
+        assert_eq!(own.len(), 1, "the viewer holds a connection");
+        assert_eq!(own[0].feed, vod_feed(VodItem::episode(9_130_004)));
+        let stream = body["stream"].as_str().unwrap().to_string();
+        let size = plain.len();
+        let half = size / 2;
+        let r = router(s.clone())
+            .oneshot(with_range(
+                from_page("GET", &stream, Some(&cookie), None),
+                &format!("bytes={half}-"),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(
+            r.headers()[header::CONTENT_RANGE],
+            format!("bytes {half}-{}/{size}", size - 1).as_str()
+        );
+        assert_eq!(read_all(r.into_body()).await[..], plain[half..]);
+        assert!(mp4_counts.most_open.load(Ordering::SeqCst) <= 1);
+
+        // A Matroska file goes through the remuxer, its text subtitles
+        // listed; it replaces the first viewer.
+        let replace = Some(serde_json::json!({"episodeId": 9_130_005, "replaces": viewer_id(&body)}));
+        let (st, body) = call(&s, post(replace)).await;
+        assert_eq!(st, StatusCode::OK, "{body}");
+        assert_eq!(body["mode"], "remux");
+        let duration = body["duration"].as_i64().unwrap();
+        assert!((19..=21).contains(&duration), "{duration}");
+        assert_eq!(body["subtitles"][0]["text"], true, "{body}");
+        let own = s.own_conns();
+        assert_eq!(own.len(), 1, "the first viewer let its connection go");
+        assert_eq!(own[0].feed, vod_feed(VodItem::episode(9_130_005)));
+        until("the first file let go", || mp4_counts.open.load(Ordering::SeqCst) == 0).await;
+        let viewer = viewer_id(&body);
+        let stream = body["stream"].as_str().unwrap().to_string();
+        let get = |q: &str| from_page("GET", &format!("{stream}{q}"), Some(&cookie), None);
+        let first = router(s.clone()).oneshot(get("?from=0")).await.unwrap();
+        assert_eq!(first.status(), StatusCode::OK);
+        assert_eq!(first.headers()[header::CONTENT_TYPE], "video/mp2t");
+        let mut first = first.into_body().into_data_stream();
+        assert_eq!(next_piece(&mut first).await.unwrap()[0], 0x47, "MPEG-TS");
+        let asked = mkv_counts.firsts.lock().unwrap().len();
+        // A seek past the middle reopens the file there.
+        let second = router(s.clone()).oneshot(get("?from=12")).await.unwrap();
+        assert_eq!(second.status(), StatusCode::OK);
+        let at = x_start(&second);
+        assert!(at <= 12.0 && at > 10.9, "starts at {at}");
+        while next_piece(&mut first).await.is_some() {}
+        assert!(is_ts(&read_all(second.into_body()).await));
+        let firsts = mkv_counts.firsts.lock().unwrap().clone();
+        assert!(
+            firsts[asked..].iter().any(|&f| f > film.len() / 2),
+            "the second remux reads from the middle: {firsts:?} of {}",
+            film.len()
+        );
+        assert_eq!(mkv_counts.most_open.load(Ordering::SeqCst), 1);
+        // Its subtitles, as WebVTT in the episode's time.
+        let mut cues = Vec::new();
+        for _ in 0..50 {
+            let uri = format!("/api/vod/subtitles/{viewer}/0");
+            let (st, _, doc) = call_raw(&s, from_page("GET", &uri, Some(&cookie), None)).await;
+            assert_eq!(st, StatusCode::OK);
+            cues = vtt_cues(&String::from_utf8(doc).unwrap());
+            if !cues.is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(cues.iter().any(|c| (c.0 - 12.0).abs() < 0.1), "{cues:?}");
+        let (st, status) =
+            call(&s, from_page("GET", &format!("/api/vod/watch/{viewer}"), Some(&cookie), None)).await;
+        assert_eq!(st, StatusCode::OK, "{status}");
+        assert_eq!(status["ended"], serde_json::Value::Null);
+        let (st, _) =
+            call(&s, from_page("DELETE", &format!("/api/vod/watch/{viewer}"), Some(&cookie), None)).await;
+        assert_eq!(st, StatusCode::NO_CONTENT);
+        assert!(s.own_conns().is_empty());
+
+        // Refusals name the episode, in words of their own.
+        let (st, body) = call(&s, post(episode_body(9_130_006))).await;
+        assert_eq!(st, StatusCode::BAD_GATEWAY, "{body}");
+        let said = body["error"].as_str().unwrap();
+        assert!(said.starts_with("The episode didn't start: "), "{said}");
+        let (st, body) = call(&s, post(episode_body(9_139_999))).await;
+        assert_eq!(st, StatusCode::NOT_FOUND, "{body}");
+        assert_eq!(body["error"], "That episode is not in the catalogue any more.");
+        // A movie with an episode's id is no episode.
+        let (st, body) = call(&s, post(movie_body(9_130_004))).await;
+        assert_eq!(st, StatusCode::NOT_FOUND, "{body}");
+        assert_eq!(body["error"], "That movie is not in the catalogue any more.");
+        // The account's own words reach the page, never what follows them.
+        seed_episode(9_130_007, 7, "mp4");
+        let (st, body) = call(&s, post(episode_body(9_130_007))).await;
+        assert_eq!(st, StatusCode::NOT_FOUND, "{body}");
+        assert_eq!(
+            body["error"],
+            "Can't play this episode: that episode is not in the catalogue any more"
+        );
+        assert!(s.own_conns().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_watch_names_one_title() {
+        let s = server("vod-one-title");
+        enable(&s, true).await;
+        let cookie = browser_login(&s).await;
+        for body in [
+            serde_json::json!({"movieId": 9_130_001, "episodeId": 9_130_004}),
+            serde_json::json!({}),
+            serde_json::json!({"episodeId": "four"}),
+        ] {
+            let (st, said) =
+                call(&s, from_page("POST", "/api/vod/watch", Some(&cookie), Some(body.clone()))).await;
+            assert_eq!(st, StatusCode::BAD_REQUEST, "{body}: {said}");
+            assert_eq!(said["error"], "Not a request to watch a movie or an episode.", "{body}");
+        }
+        assert!(s.own_conns().is_empty());
     }
 
     // ------------------------------------------------- the app's own player
