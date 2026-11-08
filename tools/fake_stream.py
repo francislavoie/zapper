@@ -413,7 +413,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _series_row(self, i):
         rating = _movie_rating(i)
-        return {
+        row = {
             "num": i,
             "name": f"Show {i:04d}",
             "series_id": i,
@@ -429,6 +429,9 @@ class Handler(BaseHTTPRequestHandler):
             "backdrop_path": [],
             "category_id": str(_series_category(i)),
         }
+        if i % 2 == 1:
+            row["tmdb"] = 800000 + i
+        return row
 
     def _series_info(self, i):
         row = self._series_row(i)
@@ -446,6 +449,8 @@ class Handler(BaseHTTPRequestHandler):
             info = {k: row[k] for k in ("name", "cover", "plot", "cast", "director", "genre",
                                          "releaseDate", "last_modified", "rating",
                                          "rating_5based", "backdrop_path", "category_id")}
+            if "tmdb" in row:
+                info["tmdb"] = row["tmdb"]
             season_rows = [{"season_number": s, "name": f"Season {s}" if s else "Specials",
                             "episode_count": count, "air_date": f"{_series_year(i) + s}-01-01",
                             "cover": row["cover"]} for s, count in seasons]
@@ -699,7 +704,7 @@ def _movie_added(i):
 
 
 def _movie_row(i):
-    return {
+    row = {
         "num": i,
         "name": f"Film {i:04d} ({_movie_year(i)})",
         "stream_type": "movie",
@@ -713,12 +718,15 @@ def _movie_row(i):
         "custom_sid": "",
         "direct_source": "",
     }
+    if i % 2 == 1:
+        row["tmdb_id"] = 900000 + i
+    return row
 
 
 def _movie_info(i):
     row = _movie_row(i)
     audio = "ac3" if _movie_ext(i) == "mkv" else "aac"
-    return {
+    out = {
         "info": {
             "movie_image": "",
             "plot": f"A made-up story for test film {i}, about nothing in particular.",
@@ -738,6 +746,9 @@ def _movie_info(i):
             "container_extension": row["container_extension"],
         },
     }
+    if i % 2 == 1:
+        out["info"]["tmdb_id"] = 900000 + i
+    return out
 
 
 SERIES_CATEGORIES = ["Mystery", "Sitcom", "Animation"]
