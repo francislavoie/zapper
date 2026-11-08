@@ -121,3 +121,9 @@ test("the movies phase writes to the mirror, so leaving it is a refresh", () => 
   assert.equal(syncChangedCatalogue(status("epg", 120, at), status("movies", 120, at)), true);
   assert.equal(syncChangedCatalogue(status("idle", 120, at), status("idle", 120, at)), false);
 });
+
+test("the shows phase writes to the mirror, so leaving it is a refresh", () => {
+  const at = 1_700_000_000;
+  assert.equal(syncChangedCatalogue(status("shows", 120, at), status("idle", 120, at)), true);
+  assert.equal(syncChangedCatalogue(status("movies", 120, at), status("shows", 120, at)), true);
+});

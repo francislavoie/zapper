@@ -14,10 +14,11 @@ use std::collections::{HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::catalog::epg_match::Matcher;
+use crate::catalog::series_sync::{NewEpisode, NewSeries, SeriesWriter};
 use crate::catalog::sync::{clean_name, SyncStats};
 use crate::catalog::vod_sync::{self, MovieWriter, NewMovie};
 use crate::catalog::origin;
-use crate::m3u::kind::{classify, EntryKind};
+use crate::m3u::kind::{classify, episode_name, EntryKind};
 use crate::m3u::{catchup, ids, Entry, Header};
 
 fn now() -> i64 {
@@ -37,6 +38,11 @@ pub struct PlaylistStats {
     /// The on-demand entries, which are movies and not channels.
     pub movies: SyncStats,
     pub movie_categories: usize,
+    /// The shows the episode entries were gathered into.
+    pub series: SyncStats,
+    pub series_categories: usize,
+    /// The episode entries, which belong to shows and are not channels.
+    pub episodes: usize,
 }
 
 /// Where the playlist's own `x-tvg-url` is remembered between phases and
@@ -52,6 +58,9 @@ pub struct PlaylistWriter<'c> {
     /// The movies of the same playlist, written inside the same transaction
     /// so that a download that fails halfway undoes them too.
     movies: MovieWriter<'c>,
+    /// Its shows and their episodes, likewise. A playlist lists every
+    /// episode, so this write owns them.
+    series: SeriesWriter<'c>,
     /// The catalogue this write is filling, when the caller knows it. See
     /// [`set_origin`](Self::set_origin).
     origin: Option<String>,
@@ -81,9 +90,14 @@ impl<'c> PlaylistWriter<'c> {
         // dropped them; the guard against a bad minute is the empty
         // playlist's, in `finish`.
         movies.accept_empty();
+        // Shows likewise, and the episodes it pushes are all there are.
+        let mut series = SeriesWriter::begin_on(conn)?;
+        series.accept_empty();
+        series.own_episodes();
         Ok(Self {
             tx,
             movies,
+            series,
             origin: None,
             existing,
             seen: HashSet::new(),
@@ -110,7 +124,8 @@ impl<'c> PlaylistWriter<'c> {
         let identity = ids::identity(&e);
         match classify(&e) {
             EntryKind::Movie => self.push_movie(e, &identity),
-            EntryKind::Channel | EntryKind::Episode => self.push_identified(e, &identity),
+            EntryKind::Episode => self.push_episode(e, &identity),
+            EntryKind::Channel => self.push_identified(e, &identity),
         }
     }
 
@@ -141,6 +156,57 @@ impl<'c> PlaylistWriter<'c> {
             ..NewMovie::default()
         };
         self.movies.push(&movie, e.group.as_deref())
+    }
+
+    /// An episode, under the show its group and name gather it into: the
+    /// name before its number, or the group's own name when there is none
+    /// before it. One with neither is a movie, having no show to be in.
+    fn push_episode(&mut self, e: Entry, identity: &str) -> Result<()> {
+        let Some(parts) = episode_name(&e.name) else {
+            return self.push_movie(e, identity);
+        };
+        let group = e.group.as_deref().map(str::trim).unwrap_or_default();
+        let show = if parts.show.is_empty() {
+            group.to_owned()
+        } else {
+            parts.show
+        };
+        if show.is_empty() || vod_sync::is_separator(&show) {
+            return self.push_movie(e, identity);
+        }
+        // Spelled the same, case and spacing aside, in the same group: one
+        // show. The same name in two groups is two, as a person sorting
+        // them would have it.
+        let loose = show
+            .to_lowercase()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let series_id = ids::stream_id(&format!("series\u{0}{group}\u{0}{loose}"), 0);
+        self.series.push_series(
+            &NewSeries {
+                series_id,
+                year: vod_sync::year_from_name(&show),
+                poster_url: e.logo.clone(),
+                name: show,
+                ..NewSeries::default()
+            },
+            e.group.as_deref(),
+        )?;
+        let identity = format!("episode\u{0}{identity}");
+        let occurrence = self.occurrence(&identity);
+        self.series.push_episode(&NewEpisode {
+            episode_id: ids::stream_id(&identity, occurrence),
+            series_id,
+            season: parts.season,
+            episode: parts.episode,
+            episode_end: parts.episode_end,
+            title: parts.title,
+            stream_url: Some(e.url),
+            user_agent: e.user_agent,
+            referrer: e.referrer,
+            ..NewEpisode::default()
+        })
     }
 
     /// [`push`](Self::push), for an entry whose source knows better than a
@@ -248,12 +314,12 @@ impl<'c> PlaylistWriter<'c> {
         self.groups.sort_by_key(rank);
     }
 
-    /// Commits the write. Refuses a playlist with neither channels nor
-    /// movies in it outright: an empty answer is far more likely to be a
+    /// Commits the write. Refuses a playlist with no channels, movies or
+    /// episodes in it outright: an empty answer is far more likely to be a
     /// provider having a bad minute than a subscription with nothing, and
     /// accepting it would soft-delete the whole catalogue.
     pub fn finish(mut self, header: &Header) -> Result<PlaylistStats> {
-        if self.seen.is_empty() && self.movies.seen() == 0 {
+        if self.seen.is_empty() && self.movies.seen() == 0 && self.series.seen() == 0 {
             return Err(anyhow!(
                 "the playlist had no channels in it; keeping the ones already here"
             ));
@@ -286,6 +352,10 @@ impl<'c> PlaylistWriter<'c> {
         let (movies, categories) = self.movies.finish(at)?;
         self.stats.movies = movies;
         self.stats.movie_categories = categories;
+        let shows = self.series.finish(at)?;
+        self.stats.series = shows.stats;
+        self.stats.series_categories = shows.categories;
+        self.stats.episodes = shows.episodes;
 
         self.tx.execute(
             "INSERT INTO meta (key, value) VALUES (?1, ?2)
@@ -672,8 +742,8 @@ mod tests {
     fn movies_in_a_playlist_go_to_movies_not_channels() {
         let c = open_in_memory().unwrap();
         let s = write(&c, WITH_MOVIES).unwrap();
-        // The episode stays a channel: shows are not browsed.
-        assert_eq!(s.channels.inserted, 3);
+        // The episode is a show's, not a channel.
+        assert_eq!(s.channels.inserted, 2);
         assert_eq!(s.movies.inserted, 2);
         assert_eq!(s.movie_categories, 1);
         assert_eq!(
@@ -681,7 +751,7 @@ mod tests {
             ["Films"]
         );
         let cats = names(&c, "SELECT name FROM categories ORDER BY sort");
-        assert_eq!(cats, ["News", "Shows"]);
+        assert_eq!(cats, ["News"]);
         let (year, poster, url): (Option<i32>, Option<String>, Option<String>) = c
             .query_row(
                 "SELECT year, poster_url, stream_url FROM movies WHERE name = 'A Film (2021)'",
@@ -737,6 +807,172 @@ mod tests {
         assert_eq!(s.movies.deleted, 2);
         assert_eq!(
             count(&c, "SELECT COUNT(*) FROM movies WHERE deleted_at IS NULL"),
+            0
+        );
+    }
+
+    fn episode_rows(c: &Connection) -> Vec<(String, i32, i32, Option<i32>, Option<String>)> {
+        c.prepare(
+            "SELECT s.name, e.season, e.episode, e.episode_end, e.title
+               FROM episodes e JOIN series s USING (series_id)
+              WHERE e.deleted_at IS NULL
+              ORDER BY s.name, e.season, e.episode",
+        )
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect()
+    }
+
+    #[test]
+    fn episodes_in_a_playlist_go_to_shows_not_channels() {
+        let c = open_in_memory().unwrap();
+        let s = write(&c, WITH_MOVIES).unwrap();
+        assert_eq!(s.channels.inserted, 2);
+        assert_eq!(s.movies.inserted, 2);
+        assert_eq!(s.series.inserted, 1);
+        assert_eq!((s.series_categories, s.episodes), (1, 1));
+        assert_eq!(
+            names(&c, "SELECT name FROM vod_categories WHERE kind = 'series'"),
+            ["Shows"]
+        );
+        assert_eq!(episode_rows(&c), [("A Show".into(), 1, 1, None, None)]);
+        let (url, episode_count): (Option<String>, Option<i64>) = c
+            .query_row(
+                "SELECT e.stream_url, s.episode_count FROM episodes e JOIN series s USING (series_id)",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(url.as_deref(), Some("http://p.example/series/u/p/3.mkv"));
+        assert_eq!(episode_count, Some(1));
+        assert_eq!(
+            count(&c, "SELECT COUNT(*) FROM channels WHERE name LIKE 'A Show%'"),
+            0
+        );
+    }
+
+    #[test]
+    fn the_same_show_in_two_groups_is_two_shows() {
+        let c = open_in_memory().unwrap();
+        let s = write(
+            &c,
+            "#EXTM3U\n\
+             #EXTINF:-1 group-title=\"Drama\",A Show S01E01\nhttp://h/series/u/p/1.mkv\n\
+             #EXTINF:-1 group-title=\"Drama\",a  show S01E02 Night Shift\nhttp://h/series/u/p/2.mkv\n\
+             #EXTINF:-1 group-title=\"Kids\",A Show S01E01\nhttp://h/series/u/p/3.mkv\n",
+        )
+        .unwrap();
+        assert_eq!((s.series.inserted, s.episodes), (2, 3));
+        let shows: Vec<(String, String, i64)> = c
+            .prepare(
+                "SELECT s.name, v.name, s.episode_count FROM series s
+                   JOIN vod_categories v ON v.kind = 'series' AND v.id = s.category_id
+                  ORDER BY v.sort",
+            )
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        // The first spelling names the show; case and spacing aside, the
+        // second is the same one.
+        assert_eq!(
+            shows,
+            [
+                ("A Show".to_string(), "Drama".to_string(), 2),
+                ("A Show".to_string(), "Kids".to_string(), 1),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_show_named_only_by_its_code_takes_its_groups_name() {
+        let c = open_in_memory().unwrap();
+        let s = write(
+            &c,
+            "#EXTM3U\n\
+             #EXTINF:-1 group-title=\"Lantern Quay\",S01E01 Pilot\nhttp://h/vod/1.mkv\n\
+             #EXTINF:-1 group-title=\"Lantern Quay\",S01E02\nhttp://h/vod/2.mkv\n\
+             #EXTINF:-1,S01E03 No Group\nhttp://h/vod/3.mkv\n",
+        )
+        .unwrap();
+        assert_eq!((s.series.inserted, s.episodes), (1, 2));
+        assert_eq!(
+            episode_rows(&c),
+            [
+                ("Lantern Quay".into(), 1, 1, None, Some("Pilot".into())),
+                ("Lantern Quay".into(), 1, 2, None, None),
+            ]
+        );
+        // With no group either, there is no show to put it in: a film.
+        assert_eq!(s.movies.inserted, 1);
+    }
+
+    #[test]
+    fn a_multi_episode_entry_is_one_episode_with_its_range() {
+        let c = open_in_memory().unwrap();
+        let s = write(
+            &c,
+            "#EXTM3U\n#EXTINF:-1 group-title=\"Shows\",A Show S01E01-E02\nhttp://h/series/u/p/1.mkv\n",
+        )
+        .unwrap();
+        assert_eq!(s.episodes, 1);
+        assert_eq!(episode_rows(&c), [("A Show".into(), 1, 1, Some(2), None)]);
+    }
+
+    #[test]
+    fn a_playlist_of_only_episodes_is_not_refused() {
+        let c = open_in_memory().unwrap();
+        let s = write(
+            &c,
+            "#EXTM3U\n#EXTINF:-1 group-title=\"Shows\",A Show S01E01\nhttp://h/series/u/p/1.mkv\n\
+             #EXTINF:-1 group-title=\"Shows\",A Show S01E02\nhttp://h/series/u/p/2.mkv\n",
+        )
+        .unwrap();
+        assert_eq!((s.series.inserted, s.episodes), (1, 2));
+        assert_eq!((s.channels.inserted, s.movies.inserted), (0, 0));
+    }
+
+    #[test]
+    fn ids_of_playlist_episodes_survive_a_reparse() {
+        let c = open_in_memory().unwrap();
+        write(&c, WITH_MOVIES).unwrap();
+        let ids = |c: &Connection| -> Vec<(i64, i64)> {
+            c.prepare("SELECT series_id, episode_id FROM episodes ORDER BY episode_id")
+                .unwrap()
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect()
+        };
+        let before = ids(&c);
+        // A new download's token does not make new shows or episodes.
+        let s = write(&c, &WITH_MOVIES.replace("/u/p/", "/u2/p2/")).unwrap();
+        assert_eq!(ids(&c), before);
+        assert_eq!(
+            (s.series.inserted, s.series.updated, s.series.deleted),
+            (0, 1, 0)
+        );
+        let url: String = c
+            .query_row("SELECT stream_url FROM episodes", [], |r| r.get(0))
+            .unwrap();
+        assert!(url.contains("/u2/p2/"), "{url}");
+    }
+
+    #[test]
+    fn a_playlist_that_drops_its_episodes_drops_them() {
+        let c = open_in_memory().unwrap();
+        write(&c, WITH_MOVIES).unwrap();
+        let s = write(&c, FIXTURE).unwrap();
+        assert_eq!(s.series.deleted, 1);
+        assert_eq!(
+            count(&c, "SELECT COUNT(*) FROM series WHERE deleted_at IS NULL"),
+            0
+        );
+        assert_eq!(
+            count(&c, "SELECT COUNT(*) FROM episodes WHERE deleted_at IS NULL"),
             0
         );
     }

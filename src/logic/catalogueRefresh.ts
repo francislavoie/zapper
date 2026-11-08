@@ -14,7 +14,7 @@ import type { SyncPhase, SyncStatusDto } from "../types";
 
 /** The phases during which a pass is writing to the mirror. Each one lands
  *  its part of the catalogue as it ends. */
-const WRITING: ReadonlySet<SyncPhase> = new Set(["categories", "channels", "epg", "movies"]);
+const WRITING: ReadonlySet<SyncPhase> = new Set(["categories", "channels", "epg", "movies", "shows"]);
 
 /** Whether the mirror may have changed between two sync statuses.
  *

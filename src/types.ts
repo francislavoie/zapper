@@ -74,7 +74,7 @@ export interface ChannelDto {
   nowPlaying: ProgrammeDto | null;
 }
 
-export type SyncPhase = "idle" | "categories" | "channels" | "epg" | "movies" | "failed";
+export type SyncPhase = "idle" | "categories" | "channels" | "epg" | "movies" | "shows" | "failed";
 
 export interface SyncStatusDto {
   phase: SyncPhase;

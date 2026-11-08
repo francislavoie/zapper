@@ -115,6 +115,7 @@ pub enum SyncPhase {
     Channels,
     Epg,
     Movies,
+    Shows,
     Failed,
 }
 
