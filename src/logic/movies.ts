@@ -13,11 +13,14 @@ import type {
 } from "../types";
 import type { Async } from "./async.ts";
 import type { FixedRailItem } from "./railItems.ts";
+import { progressOf } from "./resume.ts";
 import { isTitleSearch } from "./titleMatch.ts";
 
 export const MOVIE_FAVOURITES = "*favourites*";
 export const MOVIE_RECENT = "*added*";
 export const MOVIE_WATCHED = "*watched*";
+/** Continue watching's id on both tabs (continueWatching.ts's `CONTINUE`). */
+const CONTINUE_ID = "*continue*";
 
 export type MovieRailKind = "favourites" | "recent" | "watched" | "category";
 
@@ -53,9 +56,18 @@ export function moviesAvailable(summary: Async<MoviesSummaryDto>): boolean {
 const countText = (n: number | null | undefined) => (n ? n.toLocaleString() : "");
 
 /** The rail's own items, in order. A count is blank until there is something
- *  to count. */
-export function fixedMovieItems(s: MoviesSummaryDto | null): FixedRailItem[] {
+ *  to count. Continue watching comes first when `continueCount` is given
+ *  (blank while it is 0). */
+export function fixedMovieItems(
+  s: MoviesSummaryDto | null,
+  continueCount?: number | null,
+): FixedRailItem[] {
+  const first: FixedRailItem[] =
+    continueCount === undefined || continueCount === null
+      ? []
+      : [{ id: CONTINUE_ID, name: "Continue watching", count: countText(continueCount) }];
   return [
+    ...first,
     { id: MOVIE_FAVOURITES, name: "Favourites", count: countText(s?.favourites) },
     { id: MOVIE_RECENT, name: "Recently added", count: countText(s?.recent) },
     { id: MOVIE_WATCHED, name: "Watched", count: countText(s?.watched) },
@@ -191,7 +203,8 @@ export function movieBadges(
 /** What a poster card draws, whatever kind of title it is: the clean name
  *  on the art, the full one for its tip, and one line of facts under it. */
 export interface PosterCard {
-  id: number;
+  /** A title's id; a Continue watching entry's key. */
+  id: number | string;
   /** The clean name, drawn. */
   title: string;
   /** The full name, for data-tip-overflow. */
@@ -201,6 +214,8 @@ export interface PosterCard {
   meta: string;
   watched: boolean;
   favourite: boolean;
+  /** How far along, 0-1, while in progress. */
+  progress: number | null;
 }
 
 /** A movie as a poster card: "2025 · 1h 49m · ★ 7.6" under it. */
@@ -214,6 +229,12 @@ export function movieCard(m: MovieDto, now: number): PosterCard {
     meta: movieFacts(m),
     watched: m.watched,
     favourite: m.favourite,
+    progress: progressOf({
+      watched: m.watched,
+      position: m.position ?? null,
+      duration: m.duration ?? null,
+      durationSecs: m.durationSecs,
+    }),
   };
 }
 
