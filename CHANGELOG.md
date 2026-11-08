@@ -60,6 +60,9 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
   hours earlier, and clicks near the start of the archive asked for something already gone. The
   provider's time zone is now read from its clock at every refresh of the channel list, so it
   also follows its summer time. Playlists are unchanged.
+- Rewinding right after an update no longer plays the wrong hour. Until the first refresh of the
+  channel list, zapper did not know the provider's time zone and used this computer's. It now
+  asks the provider when you rewind, and uses this computer's only if the provider does not answer.
 - Live leaves a programme replayed from the archive: it opens the channel again, live, as picking
   it does, instead of skipping to the end of what had arrived. A replayed programme is no longer
   "caught up" toward the end of its buffer after it opens or after a stall either, and it never

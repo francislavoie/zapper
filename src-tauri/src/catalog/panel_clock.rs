@@ -90,15 +90,51 @@ pub fn offset_for(creds: &Credentials, start: i64) -> i64 {
     choose(stored, || crate::localtime::utc_offset(start))
 }
 
+/// How long a catch-up waits for the server's clock when none is on record.
+const ASK_FOR: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Like [`offset_for`], but when nothing is on record asks the server's
+/// clock right now (the account call, which is not a stream and takes no
+/// connection), keeps what it says, and uses it. Only if that fails does
+/// it fall back to this machine's offset.
+pub async fn offset_now(client: &XtreamClient, start: i64) -> i64 {
+    let from = origin::of_xtream(client.credentials());
+    let stored = db::with_db(|conn| recorded(conn, &from)).ok().flatten();
+    if stored.is_none() {
+        match tokio::time::timeout(ASK_FOR, client.account()).await {
+            Ok(Ok(a)) => match a.server_info.utc_offset() {
+                Some(o) => {
+                    match db::with_write_db(|conn| record(conn, &from, o)) {
+                        Ok(()) => tracing::info!("the server's clock is {}", describe(o)),
+                        Err(e) => tracing::warn!("could not keep the server's time zone: {e:#}"),
+                    }
+                    return o;
+                }
+                None => tracing::info!("the server did not say what its clock reads"),
+            },
+            Ok(Err(e)) => tracing::info!(
+                "could not ask the server for its clock: {}",
+                crate::catalog::sync_engine::scrub(&format!("{e:#}"))
+            ),
+            Err(_) => tracing::info!("the server did not give its clock in time"),
+        }
+    }
+    choose(stored, || crate::localtime::utc_offset(start))
+}
+
 static FELL_BACK: AtomicBool = AtomicBool::new(false);
 
 /// The server's offset when known; otherwise `local`, said once.
 fn choose(stored: Option<i64>, local: impl FnOnce() -> i64) -> i64 {
+    choose_noting(&FELL_BACK, stored, local)
+}
+
+fn choose_noting(said: &AtomicBool, stored: Option<i64>, local: impl FnOnce() -> i64) -> i64 {
     match stored {
         Some(o) => o,
         None => {
             let o = local();
-            if !FELL_BACK.swap(true, Ordering::Relaxed) {
+            if !said.swap(true, Ordering::Relaxed) {
                 tracing::info!(
                     "the server's time zone is not known yet; asking for catch-up in this computer's ({})",
                     describe(o)
@@ -153,6 +189,77 @@ mod tests {
             offset_for(&unknown, 1_794_082_337),
             crate::localtime::utc_offset(1_794_082_337)
         );
+    }
+
+    fn panel(offset_hours: i64, user: &str) -> (crate::test_http::Server, XtreamClient) {
+        let now = 1_794_082_637_i64;
+        // The server's wall clock, written as `time_now` is.
+        let t = chrono_like(now + offset_hours * 3600);
+        let body = format!(
+            r#"{{"user_info":{{"auth":1}},"server_info":{{"time_now":"{t}","timestamp_now":{now}}}}}"#
+        );
+        let s = crate::test_http::serve(move |_, _| crate::test_http::Reply::ok(body.clone()));
+        let c = XtreamClient::new(Credentials {
+            host: s.base.clone(),
+            username: user.into(),
+            password: "secret-pw".into(),
+        })
+        .unwrap();
+        (s, c)
+    }
+
+    /// `YYYY-MM-DD HH:MM:SS` for Unix seconds read as UTC.
+    fn chrono_like(secs: i64) -> String {
+        let days = secs.div_euclid(86_400);
+        let r = secs.rem_euclid(86_400);
+        // Civil-from-days.
+        let z = days + 719_468;
+        let era = z.div_euclid(146_097);
+        let doe = z.rem_euclid(146_097);
+        let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        let mp = (5 * doy + 2) / 153;
+        let d = doy - (153 * mp + 2) / 5 + 1;
+        let m = if mp < 10 { mp + 3 } else { mp - 9 };
+        let y = yoe + era * 400 + i64::from(m <= 2);
+        format!("{y:04}-{m:02}-{d:02} {:02}:{:02}:{:02}", r / 3600, (r % 3600) / 60, r % 60)
+    }
+
+    #[tokio::test]
+    async fn an_unknown_clock_is_asked_for_when_a_catch_up_needs_it_and_kept() {
+        db::install_test_db();
+        let (s, c) = panel(2, "asked-on-demand");
+        let from = origin::of_xtream(c.credentials());
+        assert_eq!(db::with_db(|k| recorded(k, &from)).unwrap(), None);
+        assert_eq!(offset_now(&c, 1_794_082_337).await, 7200);
+        assert_eq!(db::with_db(|k| recorded(k, &from)).unwrap(), Some(7200));
+        // Known now: no second call.
+        assert_eq!(offset_now(&c, 1_794_082_337).await, 7200);
+        let seen = s.requests();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].query("action"), None, "the account call, not a stream");
+        assert!(seen[0].route().starts_with("/player_api.php"));
+    }
+
+    #[tokio::test]
+    async fn a_clock_that_cannot_be_asked_falls_back_to_local_and_says_so_once() {
+        db::install_test_db();
+        let s = crate::test_http::serve(|_, _| crate::test_http::Reply::new(500, "nope"));
+        let c = XtreamClient::new(Credentials {
+            host: s.base.clone(),
+            username: "unreachable-clock".into(),
+            password: "secret-pw".into(),
+        })
+        .unwrap();
+        let start = 1_794_082_337;
+        assert_eq!(offset_now(&c, start).await, crate::localtime::utc_offset(start));
+        let from = origin::of_xtream(c.credentials());
+        assert_eq!(db::with_db(|k| recorded(k, &from)).unwrap(), None);
+        // The notice is said once, however many catch-ups fall back.
+        let said = AtomicBool::new(false);
+        assert_eq!(choose_noting(&said, None, || 5), 5);
+        assert!(said.load(Ordering::Relaxed));
+        assert_eq!(choose_noting(&said, None, || 6), 6);
     }
 
     #[test]
