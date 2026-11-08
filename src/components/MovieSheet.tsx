@@ -103,7 +103,7 @@ export function MovieSheet({ id }: { id: number }) {
             {movie.cleanName}
           </h2>
           <MovieFacts movie={movie} details={details} className="sheet-facts" />
-          <MoviePlace movie={movie} />
+          {playing ? null : <MoviePlace movie={movie} />}
           {details.status === "loading" ? <p className="watch-none">Loading details…</p> : null}
           {details.status === "error" ? <p className="watch-none">Details unavailable</p> : null}
           {languages ? <p className="sheet-people">{languages}</p> : null}
