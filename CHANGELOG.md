@@ -46,7 +46,8 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
   listed under Shows instead of Live TV.
 - Search boxes have dimmer hints, with `/` shown as a key.
 - Search in Movies and Shows keeps the list's sort, and matches the start of words (`EN -`).
-- The top band shows what you selected and what's playing side by side.
+- The top band shows what you selected and what's playing side by side, one under the other when
+  the picture is large and there's height to spare. A channel's text runs under its logo.
 - Selecting a show opens its episodes in a pane beside the list.
 
 ### Fixed
