@@ -41,8 +41,10 @@ const COOKIE_MAX_AGE: u64 = 365 * 24 * 3600;
 /// `<base>` elsewhere, forms only to here, and no framing. Media also from
 /// `blob:`: the page's player hands the video element a Media Source by a
 /// `blob:` address it makes itself, filled from this origin's streams.
+/// Images too: a title's seek-bar previews are small JPEGs the page makes
+/// itself from the picture it played, shown by their `blob:` addresses.
 pub const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; \
-    img-src 'self'; connect-src 'self'; font-src 'self'; media-src 'self' blob:; \
+    img-src 'self' blob:; connect-src 'self'; font-src 'self'; media-src 'self' blob:; \
     object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
 
 /// A channel logo, fetched from the provider and served from here: drawn as
