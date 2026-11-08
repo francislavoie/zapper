@@ -496,6 +496,14 @@ export interface ThumbnailDto {
   behindLive: number;
 }
 
+/** A preview of a moment of a movie or an episode, for its seek bar: the
+ *  frame of the slot asked about (one every ten seconds of the title), so
+ *  `at`, the moment it shows, is near the moment asked for, not exactly it. */
+export interface TitleThumbnailDto {
+  dataUrl: string;
+  at: number;
+}
+
 /** One reading for the diagnostics panel — "stats for nerds".
  *
  *  Polled rather than pushed: it is far more than the state feed needs and

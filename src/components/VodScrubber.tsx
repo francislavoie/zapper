@@ -6,15 +6,30 @@
 // A click or a drag seeks, once, on release — a seek is a request to the
 // provider's stream, and a drag that sent one per pixel would be a hundred.
 // While dragging, the knob follows the pointer and the hint says where the
-// release will land. The hint is the time alone: a preview picture belongs to
-// a later phase.
+// release will land.
+//
+// The hint carries a preview of that moment where there is one: a frame
+// drawn while the title played, or (in the app) one decoded from what has
+// been buffered ahead or skipped over. Past what has been played or
+// buffered there is none, and the hint is the time alone. Same card as a
+// channel's scrubber, above the bar, or below it inside a small docked
+// picture.
 //
 // On the focused bar ←/→ move by VOD_SKIP_SECONDS, the same as the global
 // keys do; the event stops here so the one press is not two seeks.
 
-import { useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import {
+  useLayoutEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type PointerEvent,
+  type RefObject,
+} from "react";
 import { seekBy, seekTo } from "../actions";
+import { useTitleThumbnail } from "../hooks/useTitleThumbnail";
 import { clock } from "../logic/format";
+import { hintFitsAbove, hintPixel } from "../logic/scrubber";
 import {
   VOD_SKIP_SECONDS,
   bufferedFraction,
@@ -31,15 +46,23 @@ export interface VodScrubberProps {
   compact?: boolean;
   /** The bar fades on idle. A pointer over the bar holds it open. */
   onPin: (pinned: boolean) => void;
+  /** A box the hover preview must not rise out of, as for Scrubber. */
+  hintWithin?: RefObject<HTMLElement | null>;
 }
 
-export function VodScrubber({ onDemand, compact = false, onPin }: VodScrubberProps) {
+export function VodScrubber({ onDemand, compact = false, onPin, hintWithin }: VodScrubberProps) {
   const dispatch = useDispatch();
   const trackRef = useRef<HTMLDivElement | null>(null);
+  const hintRef = useRef<HTMLDivElement | null>(null);
   // Where the pointer is over the bar, as a fraction; null away from it.
   const [hover, setHover] = useState<number | null>(null);
   // The fraction being dragged to; null when not dragging.
   const [drag, setDrag] = useState<number | null>(null);
+  // The hint's and the bar's widths, in layout pixels, to keep the card
+  // inside the bar; and whether it has to open below the bar.
+  const [hintWidth, setHintWidth] = useState(0);
+  const [barWidth, setBarWidth] = useState(0);
+  const [hintBelow, setHintBelow] = useState(false);
 
   const { duration, position } = onDemand;
   const known = duration !== null && duration > 0;
@@ -81,7 +104,30 @@ export function VodScrubber({ onDemand, compact = false, onPin }: VodScrubberPro
 
   const shown = drag ?? hover;
   const played = drag ?? playedFraction(onDemand);
-  const hint = shown === null ? null : vodTimes(seekTarget(shown, duration) ?? 0, null).elapsed;
+  const target = shown === null || !known ? null : seekTarget(shown, duration);
+  const hint = target === null ? null : vodTimes(target, null).elapsed;
+  const preview = useTitleThumbnail(target, duration);
+
+  // Measured before paint, as Scrubber does: the card is a picture wide
+  // with one and a time wide without, and is never seen unclamped first.
+  useLayoutEffect(() => {
+    const el = hintRef.current;
+    const bar = el?.parentElement;
+    setHintWidth(el ? el.offsetWidth : 0);
+    setBarWidth(bar ? bar.offsetWidth : 0);
+    const bound = hintWithin?.current;
+    if (!el || !bar || !bound) {
+      setHintBelow(false);
+      return;
+    }
+    setHintBelow(
+      !hintFitsAbove(
+        bar.getBoundingClientRect().top,
+        el.getBoundingClientRect().height,
+        bound.getBoundingClientRect().top,
+      ),
+    );
+  }, [shown, preview, hintWithin]);
 
   return (
     <div className="scrub">
@@ -118,14 +164,20 @@ export function VodScrubber({ onDemand, compact = false, onPin }: VodScrubberPro
           <div className="vod-played" style={{ width: `${played * 100}%` }} />
         </div>
         <div className="vod-knob" style={{ left: `${played * 100}%` }} />
-        {hint !== null && shown !== null && known ? (
-          // Kept inside the bar at both ends: the text is centred on the
-          // pointer and is about 3rem wide.
+        {hint !== null && shown !== null ? (
+          // Centred on the pointer and kept inside the bar at both ends.
           <div
-            className="scrub-hint"
-            style={{ left: `clamp(1.75rem, ${shown * 100}%, calc(100% - 1.75rem))` }}
+            className={hintBelow ? "scrub-hint below" : "scrub-hint"}
+            ref={hintRef}
+            style={{ left: hintPixel(shown * barWidth, hintWidth, barWidth) }}
           >
-            {hint}
+            {/* The frame of the ten seconds or so around the pointer, not
+                exactly the moment under it; the time is the pointer's own,
+                which is where a release goes. */}
+            {preview ? (
+              <img className="scrub-thumb" src={preview.dataUrl} alt="" draggable={false} />
+            ) : null}
+            <span>{hint}</span>
           </div>
         ) : null}
       </div>

@@ -13,6 +13,8 @@ import { rankAlternatives } from "./logic/alternatives";
 import { patternFor, place, validatePattern } from "./logic/naming";
 import { parsePort, passwordProblem } from "./logic/network";
 import { afterChoosing, openChoice, type SubtitlePreference } from "./logic/subtitles";
+import { clock } from "./logic/format";
+import { slotOf, titleSpacing } from "./logic/trickplay";
 import { createMockContinue } from "./mockContinue";
 import { createMockMovies } from "./mockMovies";
 import { createMockOnline } from "./mockOnline";
@@ -2021,6 +2023,35 @@ export const mockApi = {
     g.textAlign = "center";
     g.fillText(`-${snapped}s`, 80, 40);
     return { dataUrl: c.toDataURL("image/png"), behindLive: snapped };
+  },
+
+  // A title's preview, drawn the same way: only for a slot that has been
+  // played or is buffered, as the app's are, so the bar's time-only hint
+  // past what is buffered can be seen too.
+  thumbnailForTitle: async (at: number) => {
+    const od = playerEmitter.last.onDemand;
+    if (!od || !Number.isFinite(at) || at < 0) return null;
+    const spacing = titleSpacing(od.duration);
+    const shows = slotOf(at, spacing) * spacing;
+    if (shows > (od.bufferedTo ?? od.position)) return null;
+    const c = document.createElement("canvas");
+    c.width = 160;
+    c.height = 90;
+    const g = c.getContext("2d");
+    if (!g) return null;
+    const hue = (shows * 3) % 360;
+    g.fillStyle = `hsl(${hue} 45% 24%)`;
+    g.fillRect(0, 0, 160, 90);
+    g.fillStyle = `hsl(${(hue + 60) % 360} 50% 42%)`;
+    g.beginPath();
+    g.arc(118, 30, 16, 0, Math.PI * 2);
+    g.fill();
+    g.fillRect(0, 62, 160, 28);
+    g.fillStyle = "#fff";
+    g.font = "bold 18px system-ui, sans-serif";
+    g.textAlign = "center";
+    g.fillText(clock(shows), 64, 44);
+    return { dataUrl: c.toDataURL("image/jpeg", 0.8), at: shows };
   },
 
   account: async () => {

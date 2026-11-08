@@ -158,7 +158,7 @@ export function TransportBar({
   return (
     <>
       {movie ? (
-        <VodScrubber onDemand={movie} onPin={onPin} compact={compact} />
+        <VodScrubber onDemand={movie} onPin={onPin} compact={compact} hintWithin={hintWithin} />
       ) : (
         <Scrubber
           player={player}
