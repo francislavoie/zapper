@@ -188,6 +188,48 @@ export function seasonMeta(s: SeasonDto): string {
   return s.watchedCount > 0 ? `${count} · ${s.watchedCount} watched` : count;
 }
 
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+/** The seasons proper (the specials apart) and their episode counts. */
+function seasonTotals(d: Pick<SeriesDetailsDto, "seasons">) {
+  let seasons = 0;
+  let episodes = 0;
+  let watched = 0;
+  let specials = 0;
+  for (const s of d.seasons) {
+    if (s.number === 0) {
+      specials += s.episodeCount;
+      continue;
+    }
+    seasons++;
+    episodes += s.episodeCount;
+    watched += s.watchedCount;
+  }
+  return { seasons, episodes, watched, specials };
+}
+
+/** "2 seasons · 14 episodes · 2 watched", the specials counted apart at the
+ *  end; nothing for a show without episodes. The Show sheet's summary, now
+ *  that the episodes are in the pane. */
+export function seasonsSummary(d: Pick<SeriesDetailsDto, "seasons">): string {
+  const t = seasonTotals(d);
+  const parts: string[] = [];
+  if (t.seasons > 0) {
+    parts.push(plural(t.seasons, "season", "seasons"), plural(t.episodes, "episode", "episodes"));
+    if (t.watched > 0) parts.push(`${t.watched} watched`);
+  }
+  if (t.specials > 0) parts.push(plural(t.specials, "special", "specials"));
+  return parts.join(" · ");
+}
+
+/** "2 of 14 episodes watched", the specials aside; nothing without episodes. */
+export function watchedSummary(d: Pick<SeriesDetailsDto, "seasons">): string {
+  const t = seasonTotals(d);
+  if (t.episodes === 0) return "";
+  if (t.watched === 0) return `${plural(t.episodes, "episode", "episodes")}, none watched yet`;
+  return `${t.watched} of ${plural(t.episodes, "episode", "episodes")} watched`;
+}
+
 /** A show's main action: which episode it plays, and what it says. */
 export type ShowAction = { label: string; episodeId: number } | null;
 
@@ -222,9 +264,9 @@ export function episodeProgress(
   return f >= 0.01 && f < 0.92 ? f : null;
 }
 
-/** An episode row's height in the Show sheet, in pixels: a 63-pixel still
- *  and its padding. */
-export const EPISODE_ROW_HEIGHT = 84;
+/** An episode row's height in the episode pane, in pixels: a 40-pixel
+ *  still and its padding. */
+export const EPISODE_ROW_HEIGHT = 56;
 
 /** Which of a season's episodes are drawn: those in sight and a few either
  *  side, so a season of hundreds stays a few dozen rows in the page. */

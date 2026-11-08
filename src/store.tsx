@@ -63,6 +63,7 @@ import {
   type ShowsState,
 } from "./showsState";
 import { SHOWS_VIEW_STORAGE_KEY } from "./logic/shows";
+import { nextBandLead, type BandLead } from "./logic/band";
 
 import { ALL_CATEGORIES, RECORDINGS, modeSelection } from "./logic/railItems";
 import { keepSelected } from "./logic/recordings";
@@ -285,6 +286,10 @@ export interface State {
    *  being cleared. Remembered per machine, like zoom, for the same reason:
    *  a portrait monitor and a laptop want different answers. */
   stacked: boolean;
+  /** Which leads in the band while it tells of both a selection and what
+   *  plays: the selection, until ↩ Show swaps them; the next selection
+   *  puts it back in front (logic/band.ts). */
+  bandLead: BandLead;
   toasts: readonly Toast[];
   /** The recording service's recordings, as last fetched; `null` while it
    *  has not answered (not installed, not running). See RecordingsWatcher. */
@@ -413,6 +418,7 @@ export const initialState: State = {
   videoRoomRem: Infinity,
   railWidthRem: loadRailWidth(),
   stacked: loadStacked(),
+  bandLead: "selection",
   toasts: [],
   recordings: null,
   recordingsError: null,
@@ -429,6 +435,8 @@ export const initialState: State = {
 export type Action =
   | MoviesAction
   | ShowsAction
+  /** ↩ Show in the band: what plays and the selection change places. */
+  | { type: "bandSwap" }
   /** A fetch of the recordings: the list, or why there is none. */
   | { type: "recordings"; list: RecordingDto[] | null; error?: string | null }
   /** Something was asked of the recording service (record, stop, …). */
@@ -523,9 +531,17 @@ export type Action =
 let toastSeq = 0;
 
 export function reducer(state: State, action: Action): State {
-  if (isMoviesAction(action)) return { ...state, movies: moviesReducer(state.movies, action) };
-  if (isShowsAction(action)) return { ...state, shows: showsReducer(state.shows, action) };
+  if (isMoviesAction(action) || isShowsAction(action)) {
+    // A selection in a list puts it back in front of the band.
+    const selects = action.type === "movies/selectMovie" || action.type === "shows/selectShow";
+    const bandLead = selects ? nextBandLead(state.bandLead, "select") : state.bandLead;
+    return isMoviesAction(action)
+      ? { ...state, bandLead, movies: moviesReducer(state.movies, action) }
+      : { ...state, bandLead, shows: showsReducer(state.shows, action as ShowsAction) };
+  }
   switch (action.type) {
+    case "bandSwap":
+      return { ...state, bandLead: nextBandLead(state.bandLead, "swap") };
     case "categories":
       return { ...state, categories: action.value };
     case "selectCategory":

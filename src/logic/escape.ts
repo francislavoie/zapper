@@ -24,6 +24,10 @@ export interface EscapeContext {
   movieSheet: boolean;
   /** A show's sheet, the same way. */
   showSheet: boolean;
+  /** The episode pane beside the Shows list, showing. Escape from its
+   *  episodes goes back to the list first (ShowPane answers that itself);
+   *  from anywhere else it closes the pane, the selection staying. */
+  showPane: boolean;
   /** The Up next card over the player. */
   upNextCard: boolean;
   fullscreen: boolean;
@@ -49,6 +53,7 @@ export type EscapeStep =
   | "palette"
   | "movieSheet"
   | "showSheet"
+  | "showPane"
   | "upNextCard"
   | "fullscreen"
   | "query"
@@ -87,6 +92,7 @@ export function escapeStep(c: EscapeContext, via: "key" | "mouse"): EscapeStep {
   if (c.paletteOpen) return "palette";
   if (c.movieSheet) return "movieSheet";
   if (c.showSheet) return "showSheet";
+  if (c.showPane) return "showPane";
   if (c.upNextCard && via === "key") return "upNextCard";
   if (c.fullscreen) return "fullscreen";
   if (c.query && via === "key") return "query";

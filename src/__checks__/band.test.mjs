@@ -5,7 +5,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { FULL, fitAspect, normalisedRect, rectEquals } from "../logic/rect.ts";
-import { splitNowNext } from "../logic/guide.ts";
+import { laterOn, splitNowNext } from "../logic/guide.ts";
 import { playerBadge } from "../logic/format.ts";
 
 const near = (a, b, eps = 1e-9) => assert.ok(Math.abs(a - b) < eps, `${a} !≈ ${b}`);
@@ -136,4 +136,11 @@ test("the band's badge reports measured height, not the channel's claim", () => 
 
 test("nothing measured means no badge, not a wrong one", () => {
   assert.equal(playerBadge(player({})), null);
+});
+
+test("laterOn lists what starts after now, in order, as many as asked", () => {
+  const p = (start, title) => ({ start, stop: start + 30, title });
+  const list = [p(300, "c"), p(100, "on now"), p(200, "b"), p(150, "a"), p(400, "d")];
+  assert.deepEqual(laterOn(list, 120, 3).map((x) => x.title), ["a", "b", "c"]);
+  assert.deepEqual(laterOn(list, 500, 3), []);
 });

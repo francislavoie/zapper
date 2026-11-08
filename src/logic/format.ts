@@ -161,6 +161,17 @@ function trimFps(fps: number): string {
   return Number.isInteger(r) ? String(r) : r.toFixed(2).replace(/0+$/, "");
 }
 
+/** How far into a title the player is, 0–1; 0 while its length is not
+ *  known. */
+export function playedFraction(at: { position: number; duration: number | null }): number {
+  return at.duration && at.duration > 0 ? Math.min(1, Math.max(0, at.position / at.duration)) : 0;
+}
+
+/** "23:10 / 52:00", or the position alone while the length is not known. */
+export function positionLabel(at: { position: number; duration: number | null }): string {
+  return at.duration ? `${clock(at.position)} / ${clock(at.duration)}` : clock(at.position);
+}
+
 /** mm:ss, or h:mm:ss past an hour. Negative clamps to zero — behindLive can
  *  arrive fractionally negative from the demuxer. */
 export function clock(seconds: number): string {

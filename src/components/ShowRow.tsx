@@ -16,6 +16,7 @@ export const ShowRow = memo(function ShowRow({
   index,
   idPrefix,
   selected,
+  playing = false,
   now,
   onSelect,
   onOpen,
@@ -48,6 +49,11 @@ export const ShowRow = memo(function ShowRow({
       <span className="show-row-seasons">{seasonsText(show.seasonCount)}</span>
       <span className="show-row-rating">{show.rating !== null ? `★ ${show.rating.toFixed(1)}` : ""}</span>
       <span className="show-row-marks">
+        {playing ? (
+          <span className="show-row-mark playing" data-tip="Playing" aria-label="Playing">
+            ▶
+          </span>
+        ) : null}
         {show.watched ? (
           <span className="show-row-mark watched" data-tip="Watched" aria-label="Watched">
             ✓

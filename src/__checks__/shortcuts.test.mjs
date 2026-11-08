@@ -15,7 +15,9 @@ const keysSource =
   readFileSync(new URL("../hooks/useNumberZap.ts", import.meta.url), "utf8") +
   // The Movies list's own keys: what each does is in logic/movieKeys.ts.
   readFileSync(new URL("../logic/movieKeys.ts", import.meta.url), "utf8") +
-  readFileSync(new URL("../components/MoviesList.tsx", import.meta.url), "utf8");
+  readFileSync(new URL("../components/MoviesList.tsx", import.meta.url), "utf8") +
+  // The Shows list's pane: its keys are in logic/showPane.ts.
+  readFileSync(new URL("../logic/showPane.ts", import.meta.url), "utf8");
 const zoomSource = readFileSync(new URL("../logic/zoom.ts", import.meta.url), "utf8");
 
 /** How a listed key appears in the handler's source. */

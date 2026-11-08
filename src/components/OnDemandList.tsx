@@ -11,8 +11,9 @@
 // several to a row of the grid, windowed by grid rows.
 //
 // Choosing a title selects it (the band's details follow); double-click or
-// Enter opens its sheet. Neither plays anything: browsing never touches the
-// picture that is on.
+// Enter opens its sheet, or, where the model has one, what is beside the list
+// (the Shows tab's episode pane). Neither plays anything: browsing never
+// touches the picture that is on.
 
 import {
   useCallback,
@@ -56,6 +57,8 @@ export interface VodRowProps<T> {
   /** Unique to the list showing it, so two lists on one page share no ids. */
   idPrefix: string;
   selected: boolean;
+  /** The player has this title open (or one of its episodes). */
+  playing?: boolean;
   /** Unix seconds, for the NEW badge; moves on slowly, so rows keep their
    *  memoised render between its ticks. */
   now: number;
@@ -93,6 +96,8 @@ export interface OnDemandListProps<T> {
     menu: MoviesMenu | null;
     revision: number;
     selectedId: number | null;
+    /** The title the player has open, marked in its row. */
+    playingId?: number | null;
   };
   /** The latest marks the service reported, by id, over what a page holds. */
   marks: Readonly<Record<number, Marks>>;
@@ -110,9 +115,16 @@ export interface OnDemandListProps<T> {
   card: (t: T, now: number) => PosterCard;
   on: {
     select(t: T): void;
+    /** A click on a title, where it does more than the keys' selection
+     *  (the Shows tab opens its pane); `select` where absent. */
+    pick?(t: T): void;
     open(t: T): void;
-    /** Enter: open the selected title's sheet, wherever it was selected
-     *  from (a sheet's shelf picks titles this list may not hold). */
+    /** → in the list view: into what is beside the list, when there is
+     *  something; whether it went. */
+    into?(): boolean;
+    /** Enter: open the selected title (a movie's sheet, a show's episode pane),
+     *  wherever it was selected from (a sheet's shelf picks titles this list
+     *  may not hold). */
     openSelected(): void;
     query(text: string): void;
     menu(m: MoviesMenu | null): void;
@@ -236,7 +248,8 @@ export function OnDemandList<T extends object>(p: OnDemandListProps<T>) {
   onRef.current = on;
   const onSelect = useCallback((t: T, index: number) => {
     cursor.current = index;
-    onRef.current.select(t);
+    const on = onRef.current;
+    (on.pick ?? on.select)(t);
   }, []);
   const onOpen = useCallback((t: T, index: number) => {
     cursor.current = index;
@@ -281,6 +294,11 @@ export function OnDemandList<T extends object>(p: OnDemandListProps<T>) {
         e.preventDefault();
         on.openSelected();
       }
+      return;
+    }
+    if (e.key === "ArrowRight" && !posters && on.into?.()) {
+      e.preventDefault();
+      e.stopPropagation();
       return;
     }
     const el = viewportRef.current;
@@ -398,6 +416,7 @@ export function OnDemandList<T extends object>(p: OnDemandListProps<T>) {
           index={i}
           idPrefix={idPrefix}
           selected={id === selectedId}
+          playing={id === state.playingId}
           now={now}
           onSelect={onSelect}
           onOpen={onOpen}
