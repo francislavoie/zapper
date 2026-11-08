@@ -399,7 +399,8 @@ export function useGlobalKeys(
       const onKey = (e: KeyboardEvent) => {
         if (shortcutModifier(e, IS_MAC) && (e.key === "p" || e.key === "P")) {
           e.preventDefault();
-          dispatch({ type: "palette", open: !state.paletteOpen });
+          // Not under the subtitle finder: the palette would open beneath it.
+          if (!findOpen) dispatch({ type: "palette", open: !state.paletteOpen });
           return;
         }
 
@@ -419,6 +420,11 @@ export function useGlobalKeys(
           e.preventDefault();
           return;
         }
+
+        // The subtitle finder keeps its keys; only those with Ctrl (or ⌘)
+        // get past it, for quitting and zoom, and none of the shortcuts
+        // below may act or open anything beneath it.
+        if (findOpen) return;
 
         if (typingInto(e.target)) return;
         if (blocksPlainKey(e, IS_MAC)) return;
