@@ -26,6 +26,7 @@ import {
   showAction,
   showCard,
   showCount,
+  detailsShown,
   showDetailsCache,
   showFacts,
   showQuery,
@@ -202,4 +203,82 @@ test("a show's details: the oldest is forgotten past the limit", () => {
   assert.equal(c.size(), 2);
   assert.equal(c.peek(2), undefined);
   assert.equal(c.peek(1).details, "a");
+});
+test("a show's details: two views asking at once share one question", async () => {
+  const c = showDetailsCache(2);
+  let starts = 0;
+  let answer;
+  const start = () => {
+    starts++;
+    return new Promise((r) => (answer = r));
+  };
+  const a = c.join(1, 0, start);
+  const b = c.join(1, 0, start);
+  assert.equal(starts, 1);
+  assert.equal(a, b);
+  // Another revision is another question.
+  c.join(1, 1, () => Promise.resolve("r1"));
+  answer("r0");
+  assert.equal(await a, "r0");
+  // Settled: the next asks again.
+  const again = c.join(1, 0, start);
+  assert.equal(starts, 2);
+  answer("again");
+  assert.equal(await again, "again");
+});
+test("a show's details: a failed question is asked again", async () => {
+  const c = showDetailsCache(2);
+  let starts = 0;
+  const start = () => {
+    starts++;
+    return Promise.reject(new Error("down"));
+  };
+  await assert.rejects(c.join(1, 0, start));
+  await assert.rejects(c.join(1, 0, start));
+  assert.equal(starts, 2);
+});
+test("a show's details: a question from before a clear is not shared after it", async () => {
+  const c = showDetailsCache(2);
+  let oldAnswer;
+  const asked = c.generation();
+  const old = c.join(1, 0, () => new Promise((r) => (oldAnswer = r)));
+  c.clear(); // another account's shows
+  let starts = 0;
+  const fresh = c.join(1, 0, () => {
+    starts++;
+    return Promise.resolve("new account");
+  });
+  assert.equal(starts, 1, "asked anew");
+  assert.notEqual(fresh, old);
+  oldAnswer("old account");
+  assert.equal(await old, "old account");
+  // The old answer is not kept, and did not end the new question early.
+  assert.equal(c.remember(1, 0, "old account", asked), false);
+  assert.equal(await fresh, "new account");
+  assert.equal(c.peek(1), undefined);
+});
+test("a show's details: what a view shows", () => {
+  const kept = { revision: 1, details: "r1" };
+  const mine = (revision, value, generation = 0) => ({ id: 7, revision, generation, value });
+  const ready = (data) => ({ status: "ready", data });
+  // Nothing selected.
+  assert.deepEqual(detailsShown(null, 1, 0, undefined, null), { status: "idle" });
+  // Kept at this revision: that.
+  assert.deepEqual(detailsShown(7, 1, 0, kept, null), ready("r1"));
+  // A newer revision loading: the older copy stays.
+  assert.deepEqual(detailsShown(7, 2, 0, kept, mine(2, { status: "loading" })), ready("r1"));
+  // ... and when it fails.
+  assert.deepEqual(detailsShown(7, 2, 0, kept, mine(2, { status: "error", message: "down" })), ready("r1"));
+  // This view's answer to the newer revision, before the cache has it.
+  assert.deepEqual(detailsShown(7, 2, 0, kept, mine(2, ready("r2"))), ready("r2"));
+  // Nothing kept: this view's loading or failure.
+  assert.deepEqual(detailsShown(7, 2, 0, undefined, mine(2, { status: "loading" })), { status: "loading" });
+  assert.deepEqual(
+    detailsShown(7, 2, 0, undefined, mine(2, { status: "error", message: "down" })),
+    { status: "error", message: "down" },
+  );
+  // Another show's, revision's or account's answer is not this one's.
+  assert.deepEqual(detailsShown(7, 2, 0, undefined, { ...mine(2, ready("x")), id: 8 }), { status: "loading" });
+  assert.deepEqual(detailsShown(7, 2, 0, undefined, mine(1, ready("x"))), { status: "loading" });
+  assert.deepEqual(detailsShown(7, 2, 1, undefined, mine(2, ready("x"), 0)), { status: "loading" });
 });

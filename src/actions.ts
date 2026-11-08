@@ -493,9 +493,9 @@ const advanceGuard = createAdvanceGuard();
 /** Up next: moves on from the episode playing, or the one that has just
  *  played to its end (`from`), to `next`, from its start, `from` marked
  *  watched by the backend. Once per playing of `from`, however many ask.
- *  Where the picture is (docked or full) stays as it is. A paused episode
- *  moved on from leaves the player paused (mpv's pause outlives the file),
- *  so it is resumed: the next one plays. A refusal is shown as Play's is. */
+ *  Where the picture is (docked or full) stays as it is. The next one
+ *  opens playing, even from a paused episode: the backend sees to it. A
+ *  refusal is shown as Play's is. */
 export async function playNextEpisode(
   dispatch: Dispatch<Action>,
   from: PlayingEpisodeDto,
@@ -504,11 +504,6 @@ export async function playNextEpisode(
   if (!advanceGuard.claim(from.episode.episodeId)) return;
   advanceGuard.reset(next.episodeId);
   dispatch({ type: "shows/playing", playing: { series: from.series, episode: next } });
-  // Asked before moving on, which makes the player's state "opening".
-  const wasPaused = await backend
-    .playerState()
-    .then((p) => p.state === "paused")
-    .catch(() => false);
   const ok = await run(
     dispatch,
     `play ${from.series.cleanName} ${episodeCode(next.season, next.episode, next.episodeEnd)}`,
@@ -527,7 +522,6 @@ export async function playNextEpisode(
     return;
   }
   dispatch({ type: "shows/played", seriesId: from.series.seriesId });
-  if (wasPaused) await resumeOnceOpen(dispatch, next.episodeId);
 }
 
 /** Whether the player has episode `id` open, playing or paused. */
@@ -535,28 +529,6 @@ const isOpenEpisode = (p: PlayerStateDto, id: number) =>
   (p.state === "playing" || p.state === "paused") &&
   p.onDemand?.kind === "episode" &&
   p.onDemand.id === id;
-
-/** How long a paused move on waits for the next episode to open before it
- *  leaves it as it is. */
-const RESUME_WAIT_MS = 15_000;
-
-/** Plays episode `id` once it has opened, if it opened paused (the player
- *  has no resume of its own, only a toggle). Asked again just before the
- *  toggle, so a pause or a play pressed meanwhile, or another title, is
- *  left alone. */
-async function resumeOnceOpen(dispatch: Dispatch<Action>, id: number): Promise<void> {
-  const until = Date.now() + RESUME_WAIT_MS;
-  for (;;) {
-    const p = await backend.playerState().catch(() => null);
-    if (!p || p.onDemand?.kind !== "episode" || p.onDemand.id !== id) return;
-    if (p.state !== "opening") {
-      if (p.state === "paused") await run(dispatch, "resume", backend.togglePause());
-      return;
-    }
-    if (Date.now() > until) return;
-    await new Promise((r) => setTimeout(r, 200));
-  }
-}
 
 /** Sets one of a show's marks and reports it, then re-reads the counts the
  *  rail shows. Watched reaches every episode, so the show's details are read

@@ -14,12 +14,13 @@
 // When the shows become another account's, everything kept is forgotten,
 // and an answer still on its way from before is dropped when it lands
 // (logic/shows.ts `showDetailsCache`): a show with the same id is another
-// show now.
+// show now. Two views asking for the same show at once (the band and the
+// sheet) share one question.
 
 import { useEffect, useState } from "react";
 import { backend } from "../backend";
-import { errorMessage, failed, idle, loading, ready, type Async } from "../logic/async";
-import { showDetailsCache } from "../logic/shows";
+import { errorMessage, failed, loading, ready, type Async } from "../logic/async";
+import { detailsShown, showDetailsCache, type DetailsAnswer } from "../logic/shows";
 import type { SeriesDetailsDto, SeriesDto } from "../types";
 
 const cache = showDetailsCache<SeriesDetailsDto>(100);
@@ -35,12 +36,7 @@ export function useShowDetails(
   revision: number,
 ): Async<SeriesDetailsDto> {
   const id = show?.seriesId ?? null;
-  const [result, setResult] = useState<{
-    id: number;
-    revision: number;
-    generation: number;
-    value: Async<SeriesDetailsDto>;
-  } | null>(null);
+  const [result, setResult] = useState<DetailsAnswer<SeriesDetailsDto> | null>(null);
 
   useEffect(() => {
     if (id === null) return;
@@ -61,8 +57,8 @@ export function useShowDetails(
         return;
       }
       setResult({ id, revision, generation, value: loading() });
-      backend
-        .seriesDetails(id)
+      cache
+        .join(id, revision, () => backend.seriesDetails(id))
         .then((d) => {
           // Asked before the shows became another account's: not an answer.
           if (generation !== cache.generation()) return;
@@ -80,15 +76,5 @@ export function useShowDetails(
     };
   }, [id, delayMs, revision]);
 
-  if (id === null) return idle();
-  const known = cache.peek(id);
-  if (known?.revision === revision) return ready(known.details);
-  const mine =
-    result?.id === id && result.revision === revision && result.generation === cache.generation()
-      ? result.value
-      : null;
-  if (mine?.status === "ready") return mine;
-  // On its way again, or failed to come again: what was there still stands.
-  if (known) return ready(known.details);
-  return mine ?? loading();
+  return detailsShown(id, revision, cache.generation(), id === null ? undefined : cache.peek(id), result);
 }

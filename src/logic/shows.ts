@@ -14,7 +14,7 @@ import type {
   SeriesQueryDto,
   ShowsSummaryDto,
 } from "../types";
-import type { Async } from "./async.ts";
+import { idle, loading, ready, type Async } from "./async.ts";
 import {
   movieBadges,
   recallDetails,
@@ -259,13 +259,30 @@ export interface KeptDetails<T> {
 /** The shows' details, kept per show (the `max` most recent) with the
  *  revision each was read at, and a generation that `clear` moves on: an
  *  answer to a question asked before the clear (another account's shows)
- *  is not kept, nor one older than what is already kept. */
+ *  is not kept, nor one older than what is already kept. A question on its
+ *  way is shared: the band and the sheet asking for the same show at once
+ *  ask the backend once. */
 export function showDetailsCache<T>(max: number) {
   const kept = new Map<number, KeptDetails<T>>();
+  const asking = new Map<string, Promise<T>>();
   let generation = 0;
   return {
     /** Taken when a question is asked, handed back with its answer. */
     generation: () => generation,
+    /** The question for `id` at `revision` in this generation: the one on
+     *  its way if there is one, else `start`'s, until it settles. */
+    join(id: number, revision: number, start: () => Promise<T>): Promise<T> {
+      const key = `${id}:${revision}:${generation}`;
+      const out = asking.get(key);
+      if (out) return out;
+      const p = start();
+      const settled = () => {
+        if (asking.get(key) === p) asking.delete(key);
+      };
+      p.then(settled, settled);
+      asking.set(key, p);
+      return p;
+    },
     /** What is kept for `id`, without making it the newest. */
     peek: (id: number): KeptDetails<T> | undefined => kept.get(id),
     /** What is kept for `id`; asking makes it the newest. */
@@ -281,8 +298,39 @@ export function showDetailsCache<T>(max: number) {
     },
     clear(): void {
       kept.clear();
+      asking.clear();
       generation++;
     },
     size: () => kept.size,
   };
+}
+
+/** One view's own answer about a show: which show, at which revision, in
+ *  which generation it was asked. */
+export interface DetailsAnswer<T> {
+  id: number;
+  revision: number;
+  generation: number;
+  value: Async<T>;
+}
+
+/** What a view shows of show `id`'s details at `revision`, in the cache's
+ *  `generation`: the copy kept at this revision; else this view's own
+ *  answer, once it has one; else, while a newer revision loads or when it
+ *  failed, the older copy kept, so the sheet does not blank on every mark;
+ *  else this view's loading or failure. */
+export function detailsShown<T>(
+  id: number | null,
+  revision: number,
+  generation: number,
+  known: KeptDetails<T> | undefined,
+  mine: DetailsAnswer<T> | null,
+): Async<T> {
+  if (id === null) return idle();
+  if (known?.revision === revision) return ready(known.details);
+  const own =
+    mine?.id === id && mine.revision === revision && mine.generation === generation ? mine.value : null;
+  if (own?.status === "ready") return own;
+  if (known) return ready(known.details);
+  return own ?? loading();
 }

@@ -53,6 +53,7 @@ import {
   progressDue,
   progressPath,
   releaseDue,
+  reopenDue,
   seekPlan,
   stallDue,
   stuckAfterPlay,
@@ -613,8 +614,9 @@ async function broke(s: Session, reading: number) {
     return;
   }
   const now = Date.now();
-  s.reopens = s.reopens.filter((t) => now - t < 60_000);
-  if (st === null || s.reopens.length >= 3) {
+  const due = reopenDue(s.reopens, now);
+  s.reopens = due.keep;
+  if (st === null || due.fail) {
     fail(s.item, s.position, s.duration, endedBy("network"),
       `The ${noun(s.item)} from the recording service broke off.`);
     return;
@@ -704,9 +706,9 @@ export async function stop(): Promise<void> {
 /** Up next: moves on from episode `from`, playing or just played to its
  *  end, to episode `next` from its start, in the languages `from` was in.
  *  `from` is marked watched first. The next one's viewer replaces the old
- *  one's, so one connection serves both. It opens paused when `from` was
- *  paused, as the app's player does; the action that asked resumes it.
- *  Refused unless `from` is still what is open or what finished. */
+ *  one's, so one connection serves both. It opens playing, even when `from`
+ *  was paused, as the app's player does. Refused unless `from` is still what
+ *  is open or what finished. */
 export async function playNextEpisode(from: number, next: number): Promise<void> {
   if (from === next) throw new Error("That is the episode playing.");
   const s = session;
@@ -719,7 +721,6 @@ export async function playNextEpisode(from: number, next: number): Promise<void>
   const refused = new Error("That episode is no longer the one playing.");
   if (!upNextAllowed(subject(), from)) throw refused;
   const carry = s ? languagesOf(s) : (finishedLanguages ?? { audio: null, subtitle: null });
-  const paused = s !== null && playerFeed.last.state === "paused";
   try {
     const r = await fetch(`/api/vod/episodes/${from}/marks`, requestInit("PUT", { watched: true }));
     if (r.status === 401) signedOutNow();
@@ -737,7 +738,7 @@ export async function playNextEpisode(from: number, next: number): Promise<void>
     audio: null,
     subtitle: null,
     duration: null,
-    wantPlay: !paused,
+    wantPlay: true,
     carry,
   });
 }

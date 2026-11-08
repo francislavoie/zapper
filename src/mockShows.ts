@@ -77,7 +77,7 @@ const CLOSERS = [
 ];
 const SINGLES = [
   "Undertow", "Outliers", "The Wardens", "Small Hours", "Second Shift", "The Tallies",
-  "Driftwood", "The Keepers", "Low Tide", "Foxglove", "The Lamplighters", "Wayfinders",
+  "Driftwood", "The Lockwardens", "Low Tide", "Foxglove", "The Lamplighters", "Wayfinders",
   "Paper Kingdoms", "Lodestar", "The Understudies", "Quiet Waters",
 ];
 const EPISODE_WORDS_A = [
@@ -580,9 +580,9 @@ export function createMockShows(host: MoviePlayerHost) {
     host.patch({ onDemand: onDemand(m.id, position, true) });
   }
 
-  const playing = (id: number, position: number, paused = false) =>
+  const playing = (id: number, position: number) =>
     host.patch({
-      state: paused ? "paused" : "playing",
+      state: "playing",
       streamId: null,
       width: 1920,
       height: 1080,
@@ -605,9 +605,8 @@ export function createMockShows(host: MoviePlayerHost) {
     startClock();
   }
 
-  /** Opens an episode from `from`, paused when `paused` (mpv's pause
-   *  outlives the file it was set on). */
-  const open = async (episodeId: number, seriesId: number, from: number, paused: boolean) => {
+  /** Opens an episode from `from`, playing. */
+  const open = async (episodeId: number, seriesId: number, from: number) => {
     const mine = host.open();
     playedAt.set(episodeId, ++tick);
     touched.add(seriesId);
@@ -626,7 +625,7 @@ export function createMockShows(host: MoviePlayerHost) {
     });
     await delay(700);
     if (host.current() !== mine) return;
-    playing(episodeId, from, paused);
+    playing(episodeId, from);
     startClock();
   };
 
@@ -650,14 +649,14 @@ export function createMockShows(host: MoviePlayerHost) {
     if (!from || !at) throw new Error("no such episode");
     watch(fromId, from.seriesId);
     marksVersion++;
-    await open(nextId, at.seriesId, 0, p.state === "paused");
+    await open(nextId, at.seriesId, 0);
   };
 
   const playEpisode = async (episodeId: number, start: number | null): Promise<void> => {
     const at = slotOf(episodeId);
     if (!at) throw new Error("no such episode");
     const from = Math.max(0, Math.min(lengthOf(at.seriesId, episodeId), start ?? 0));
-    await open(episodeId, at.seriesId, from, false);
+    await open(episodeId, at.seriesId, from);
   };
 
   return {

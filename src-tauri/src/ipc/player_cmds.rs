@@ -57,6 +57,10 @@ const MEASURE_AFTER: Duration = Duration::from_secs(5);
 /// the channel; see [`Machine::ledger`].
 const FAILURE_SETTLE: Duration = Duration::from_secs(3);
 
+/// How long Up next waits for the episode moved on from to be marked
+/// watched before it answers ([`play_next_episode`]).
+const MARK_WAIT: Duration = Duration::from_secs(5);
+
 // ---------------------------------------------------------------------------
 // Main-thread access
 // ---------------------------------------------------------------------------
@@ -837,8 +841,13 @@ impl Machine {
     }
 
     /// A title was sought to `at` seconds (already clamped to its length):
-    /// its position says so from now, until mpv's clock catches up.
+    /// its position says so from now, until mpv's clock catches up. Only
+    /// while it plays or is paused: a seek that lands as another title is
+    /// opening was meant for the one before it.
     fn sought(&mut self, at: f64) {
+        if !matches!(self.dto.state, PlaybackState::Playing | PlaybackState::Paused) {
+            return;
+        }
         if let Some(od) = self.dto.on_demand.as_mut() {
             od.position = at.max(0.0).round();
             self.seek_target = Some((od.position, Instant::now()));
@@ -2203,9 +2212,11 @@ pub async fn play_episode(app: AppHandle, episode_id: i64, start: Option<f64>) -
 /// once anything else was opened. Claimed under the state lock
 /// ([`Machine::advance`]), so a second call (a double press, the countdown
 /// and a press together) is refused rather than opening it twice. The
-/// episode moved on from is marked watched, off the main thread. mpv
-/// replaces its one stream, as for any open; the audio and subtitle
-/// languages are kept.
+/// episode moved on from is marked watched, off the main thread, before
+/// this answers (waited for [`MARK_WAIT`] at most). mpv replaces its one
+/// stream, as for any open; the audio and subtitle languages are kept. It
+/// opens playing, even when the episode moved on from was paused
+/// ([`pause_on_open`]).
 #[tauri::command]
 pub async fn play_next_episode(app: AppHandle, from_episode_id: i64, next_episode_id: i64) -> Result<(), String> {
     let target = episode_target(next_episode_id)?;
@@ -2220,7 +2231,9 @@ pub async fn play_next_episode(app: AppHandle, from_episode_id: i64, next_episod
         }
     });
     let languages = claimed?;
-    tauri::async_runtime::spawn_blocking(move || {
+    // Written beside the open, and waited for before answering: whoever
+    // asked re-reads the show's marks next, and finds this one there.
+    let marked = tauri::async_runtime::spawn_blocking(move || {
         let r = crate::catalog::db::with_db(|c| {
             mark_moved_on(c, place, from_episode_id, activity::now_secs()).map(|_| ())
         });
@@ -2229,7 +2242,21 @@ pub async fn play_next_episode(app: AppHandle, from_episode_id: i64, next_episod
         }
     });
     let tracks = languages.map_or(TrackChoice::Fresh, TrackChoice::Carry);
-    open_as(&app, Opened::Episode(next_episode_id), target, OpenKind::OnDemand, None, Via::Direct, tracks, None).await
+    let opened =
+        open_as(&app, Opened::Episode(next_episode_id), target, OpenKind::OnDemand, None, Via::Direct, tracks, None)
+            .await;
+    // Not a reason to fail the move on: the next episode is open either way.
+    // Waited for a few seconds at most: a catalogue refresh holding the
+    // database must not hold up the answer; the mark still lands after.
+    match tokio::time::timeout(MARK_WAIT, marked).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => tracing::warn!("marking the episode moved on from did not finish: {e}"),
+        Err(_) => tracing::warn!(
+            "marking the episode moved on from took over {}s; answering without it",
+            MARK_WAIT.as_secs()
+        ),
+    }
+    opened
 }
 
 /// The player's current place on the recording service's connection, if
@@ -2534,6 +2561,25 @@ enum TrackChoice {
     Carry(Languages),
 }
 
+/// What mpv's `pause` is set to before an open, or `None` to leave it.
+///
+/// `pause` is global in mpv and outlives the file, so it is set before the
+/// open. Starting at live (`join`): paused, the stream opens, decodes its
+/// first frame and shows it, and the demuxer keeps reading behind it. Put
+/// back for an open that does not hold, if the hold on the last channel was
+/// cut short by this one (`was_holding`): that pause was ours. The next
+/// episode of a show ([`TrackChoice::Carry`]) opens playing, even when the
+/// last one was paused when its viewer moved on.
+fn pause_on_open(tracks: &TrackChoice, join: bool, was_holding: bool) -> Option<bool> {
+    if join || was_holding {
+        Some(join)
+    } else if matches!(tracks, TrackChoice::Carry(_)) {
+        Some(false)
+    } else {
+        None
+    }
+}
+
 /// [`open`], as automatic reconnect number `reconnect` when it is one,
 /// from where `via` says, on the audio and subtitle tracks `tracks` says.
 ///
@@ -2624,14 +2670,9 @@ async fn open_as(
             TrackChoice::Carry(_) => {}
             TrackChoice::Fresh => reset_track_choice(p),
         }
-        // `pause` is global in mpv and outlives the file, so it is set
-        // before the open: paused, the stream opens, decodes its first frame
-        // and shows it, and the demuxer keeps reading behind it. And put
-        // back for an open that does not hold, if the hold on the last
-        // channel was cut short by this one: that pause was ours.
-        if join || was_holding {
-            if let Err(e) = p.set_flag("pause", join) {
-                tracing::warn!("could not set up the start at live: {e}");
+        if let Some(paused) = pause_on_open(&tracks, join, was_holding) {
+            if let Err(e) = p.set_flag("pause", paused) {
+                tracing::warn!("could not set the pause the open starts with: {e}");
             }
         }
         // `replace` closes the current demuxer before opening the next, which
@@ -3807,6 +3848,24 @@ mod tests {
         }
 
         #[test]
+        fn a_seek_while_opening_leaves_the_place_alone() {
+            // The next episode is opening: a seek meant for the one before
+            // it must not move this one's place.
+            let mut m = finished_episode(7);
+            m.advance(7, 8).unwrap();
+            assert_eq!(m.dto.state, PlaybackState::Opening);
+            m.sought(100.0);
+            assert_eq!(title(m.dto.on_demand), Some((OnDemandKind::Episode, 8, 0.0)));
+            assert!(m.seek_target.is_none());
+            // Paused, it is followed as when playing.
+            let mut m = a_playing_episode(7);
+            m.set_paused(true);
+            m.sought(42.0);
+            assert_eq!(title(m.dto.on_demand), Some((OnDemandKind::Episode, 7, 42.0)));
+            assert!(m.seek_target.is_some());
+        }
+
+        #[test]
         fn a_claimed_advance_is_not_claimed_twice() {
             let mut m = finished_episode(7);
             assert!(m.advance(7, 8).is_ok());
@@ -3927,6 +3986,19 @@ mod tests {
             // Nothing new to write down: marked all the same.
             let marks = mark_moved_on(&c, None, 9, 1_000).unwrap();
             assert!(marks.watched);
+        }
+
+        #[test]
+        fn the_next_episode_opens_playing() {
+            let carry = TrackChoice::Carry(Languages::default());
+            assert_eq!(pause_on_open(&carry, false, false), Some(false), "even after a pause");
+            assert_eq!(pause_on_open(&carry, false, true), Some(false));
+            // Every other open as before: the hold's pause, or mpv's left.
+            assert_eq!(pause_on_open(&TrackChoice::Fresh, false, false), None);
+            assert_eq!(pause_on_open(&TrackChoice::Fresh, true, false), Some(true));
+            assert_eq!(pause_on_open(&TrackChoice::Fresh, false, true), Some(false));
+            let keep = TrackChoice::Keep("1".into(), "no".into());
+            assert_eq!(pause_on_open(&keep, false, false), None);
         }
     }
 
