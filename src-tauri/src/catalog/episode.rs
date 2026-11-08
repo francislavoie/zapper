@@ -17,6 +17,20 @@
 //!
 //! An episode without a season is kept (naming writes `E05`); a season
 //! without an episode is not, since it names nothing on its own.
+//!
+//! A playlist entry's name carries its number among other words (`A Show
+//! S01E02 - Title`), and [`find_in_name`] finds it there, with the same
+//! numbers and limits. It reads more than a guide's whole field may say, as
+//! media servers do: `S01E02` with `[ ._x-]` between the two, `1x02` (only
+//! after a show's name and with the episode zero-padded, so `4x4` and `Film
+//! 16x9` stay films; the guide's whole-field `3x5` is read as before),
+//! `Season 1 Episode 2`,
+//! and ranges straight after the episode (`-E02`, `-02`, `E02`, `-02-03`,
+//! `-S01E02`, `x02`; a spaced ` - ` only into a whole code, so `S01E02 -
+//! Title 3` is no range). The first from the left wins; it must not start
+//! in the middle of a word or number, nor end running into one. Dates,
+//! `Part 2`, absolute numbers (`- 123`) and resolutions (`1920x1080`) are
+//! not numbers here: too easily a channel's name or a year.
 
 /// A programme's place in its series. Both one-based, as people count.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,6 +44,14 @@ const MAX_SEASON: u32 = 1000;
 /// Nothing runs to ten thousand episodes; a number that size is something
 /// else (a production code, a date).
 const MAX_EPISODE: u32 = 9999;
+
+fn season_ok(season: u32) -> bool {
+    season < MAX_SEASON
+}
+
+fn episode_ok(episode: u32) -> bool {
+    (1..=MAX_EPISODE).contains(&episode)
+}
 
 /// One `<episode-num>`, by its `system` attribute (XMLTV's default when it
 /// is absent is `onscreen`). Systems that are identifiers rather than
@@ -148,7 +170,6 @@ pub fn from_onscreen(text: &str) -> Option<Episode> {
             .map_or(b.len(), |p| from + p);
         (end, number(&compact[from..end]))
     };
-    let episode_only = |e: u32| (1..=MAX_EPISODE).contains(&e);
     match b.first()? {
         b'S' => {
             let (end, season) = digits(1);
@@ -158,7 +179,7 @@ pub fn from_onscreen(text: &str) -> Option<Episode> {
             }
             let (end, episode) = digits(end + 1);
             let episode = episode?;
-            (end == b.len() && season < MAX_SEASON && episode_only(episode)).then_some(Episode {
+            (end == b.len() && season_ok(season) && episode_ok(episode)).then_some(Episode {
                 season: Some(season),
                 episode,
             })
@@ -166,7 +187,7 @@ pub fn from_onscreen(text: &str) -> Option<Episode> {
         b'E' => {
             let (end, episode) = digits(1);
             let episode = episode?;
-            (end == b.len() && episode_only(episode)).then_some(Episode {
+            (end == b.len() && episode_ok(episode)).then_some(Episode {
                 season: None,
                 episode,
             })
@@ -179,13 +200,163 @@ pub fn from_onscreen(text: &str) -> Option<Episode> {
             }
             let (end, episode) = digits(end + 1);
             let episode = episode?;
-            (end == b.len() && season < MAX_SEASON && episode_only(episode)).then_some(Episode {
+            (end == b.len() && season_ok(season) && episode_ok(episode)).then_some(Episode {
                 season: Some(season),
                 episode,
             })
         }
         _ => None,
     }
+}
+
+/// Where an episode number sits in a name, and what it says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NameMatch {
+    /// The byte span the number takes, a range's text included.
+    pub start: usize,
+    pub end: usize,
+    pub season: u32,
+    pub first: u32,
+    /// A range's last number: in the same season and above `first`. How
+    /// long a range is believed is the caller's to say.
+    pub last: Option<u32>,
+}
+
+/// The digits from `from` in `s`: where they end, and their value when it is
+/// a number ([`number`]'s rules).
+fn digits_at(s: &str, from: usize) -> (usize, Option<u32>) {
+    let b = s.as_bytes();
+    let end = b[from..]
+        .iter()
+        .position(|c| !c.is_ascii_digit())
+        .map_or(b.len(), |p| from + p);
+    (end, number(&s[from..end]))
+}
+
+fn skip(b: &[u8], mut i: usize, set: &[u8]) -> usize {
+    while b.get(i).is_some_and(|c| set.contains(&c.to_ascii_lowercase())) {
+        i += 1;
+    }
+    i
+}
+
+fn word_at(b: &[u8], i: usize, word: &[u8]) -> Option<usize> {
+    let end = i + word.len();
+    (b.len() >= end && b[i..end].eq_ignore_ascii_case(word)).then_some(end)
+}
+
+/// One episode code starting at `i`: `S01E02` (with `[ ._x-]` between),
+/// `Season 1 Episode 2`, or `1x02`. Returns `(season, episode, end)`; `end`
+/// is just past the episode's digits, which may still run into something.
+fn code_at(s: &str, i: usize) -> Option<(u32, u32, usize)> {
+    let b = s.as_bytes();
+    let ok = |season: u32, episode: u32| season_ok(season) && episode_ok(episode);
+    match b[i].to_ascii_lowercase() {
+        b's' => {
+            if let Some(after) = word_at(b, i, b"season") {
+                let (end, season) = digits_at(s, skip(b, after, b" ._-"));
+                let after = word_at(b, skip(b, end, b" ._-"), b"episode")?;
+                let (end, episode) = digits_at(s, skip(b, after, b" ._-"));
+                let (season, episode) = (season?, episode?);
+                return ok(season, episode).then_some((season, episode, end));
+            }
+            let (end, season) = digits_at(s, i + 1);
+            let season = season?;
+            let e = skip(b, end, b" ._x-");
+            if !b.get(e).is_some_and(|c| c.eq_ignore_ascii_case(&b'e')) {
+                return None;
+            }
+            let (end, episode) = digits_at(s, e + 1);
+            let episode = episode?;
+            ok(season, episode).then_some((season, episode, end))
+        }
+        c if c.is_ascii_digit() => {
+            let (x, season) = digits_at(s, i);
+            if x - i > 2 || !b.get(x).is_some_and(|c| c.eq_ignore_ascii_case(&b'x')) {
+                return None;
+            }
+            // The episode zero-padded, as such codes are written: `1x02`,
+            // where `4x4` and `16x9` are names.
+            let (end, episode) = digits_at(s, x + 1);
+            if !(2..=3).contains(&(end - (x + 1))) {
+                return None;
+            }
+            let (season, episode) = (season?, episode?);
+            ok(season, episode).then_some((season, episode, end))
+        }
+        _ => None,
+    }
+}
+
+/// What continues a code at `i` into a range: a dash (spaced or not) into a
+/// whole code (`-S01E02`, ` - 1x02`), or straight on, `[-_ex]+` and a
+/// number (`-E02`, `-02`, `E02`, `x02`). Returns `(season, episode, end)`,
+/// the season `None` when only an episode was given.
+fn more_at(s: &str, i: usize) -> Option<(Option<u32>, u32, usize)> {
+    let b = s.as_bytes();
+    let dash = skip(b, i, b" ");
+    if b.get(dash) == Some(&b'-') {
+        let j = skip(b, dash + 1, b" ");
+        if b.get(j).is_some_and(u8::is_ascii_alphanumeric) {
+            if let Some((season, episode, end)) = code_at(s, j) {
+                return Some((Some(season), episode, end));
+            }
+        }
+    }
+    let j = skip(b, i, b"-_ex");
+    if j == i {
+        return None;
+    }
+    let (end, episode) = digits_at(s, j);
+    let episode = episode.filter(|&e| episode_ok(e))?;
+    Some((None, episode, end))
+}
+
+/// The first episode number in a playlist entry's name, from the left; see
+/// the playlist rules in the module's notes.
+pub fn find_in_name(name: &str) -> Option<NameMatch> {
+    let b = name.as_bytes();
+    let runs_on = |at: usize| name[at..].chars().next().is_some_and(char::is_alphanumeric);
+    (0..b.len()).find_map(|start| {
+        // An ASCII byte is always a character's start.
+        if !b[start].is_ascii_alphanumeric()
+            || name[..start].chars().next_back().is_some_and(char::is_alphanumeric)
+        {
+            return None;
+        }
+        // `4x4` is a film: the short form needs a show's name before it.
+        if b[start].is_ascii_digit() && !name[..start].contains(char::is_alphanumeric) {
+            return None;
+        }
+        let (season, first, end) = code_at(name, start)?;
+        let mut more = Vec::new();
+        let mut at = end;
+        while let Some(m) = more_at(name, at) {
+            at = m.2;
+            more.push(m);
+        }
+        // A continuation that runs into a word (`-720p`) is not one.
+        while more.last().is_some_and(|m| runs_on(m.2)) {
+            more.pop();
+        }
+        let end = more.last().map_or(end, |m| m.2);
+        if runs_on(end) {
+            return None;
+        }
+        let mut prev = first;
+        let range = more.iter().all(|&(s, e, _)| {
+            let ascending = s.unwrap_or(season) == season && e > prev;
+            prev = e;
+            ascending
+        });
+        Some(NameMatch {
+            start,
+            end,
+            season,
+            first,
+            last: more.last().filter(|_| range).map(|m| m.1),
+        })
+    })
 }
 
 #[cfg(test)]
@@ -263,6 +434,28 @@ mod tests {
         for (text, want) in cases {
             assert_eq!(from_onscreen(text), *want, "{text:?}");
         }
+    }
+
+    #[test]
+    fn a_number_in_a_name_is_found_with_its_span() {
+        fn m(name: &str) -> Option<(&str, u32, u32, Option<u32>)> {
+            find_in_name(name).map(|m| (&name[m.start..m.end], m.season, m.first, m.last))
+        }
+        assert_eq!(m("A Show S01E01-E02 Title"), Some(("S01E01-E02", 1, 1, Some(2))));
+        assert_eq!(m("A Show 1x01 - 1x02"), Some(("1x01 - 1x02", 1, 1, Some(2))));
+        assert_eq!(m("A Show S01E03-E02"), Some(("S01E03-E02", 1, 3, None)));
+        assert_eq!(m("A Show S01E02-720p"), Some(("S01E02", 1, 2, None)));
+        // Inside a word, or running into one: not a number.
+        assert_eq!(m("A ShowS01E02"), None);
+        assert_eq!(m("A Show S01E02x"), None);
+        assert_eq!(m("A Show S01E02nd"), None);
+        // The first from the left wins.
+        assert_eq!(m("A Show S01E02 S03E04"), Some(("S01E02", 1, 2, None)));
+        // A playlist's `NxM` has its episode zero-padded; a guide's field
+        // is read as it always was.
+        assert_eq!(m("A Show 10x103"), Some(("10x103", 10, 103, None)));
+        assert_eq!(m("Desert 4x4"), None);
+        assert_eq!(from_onscreen("3x5"), se(Some(3), 5));
     }
 
     #[test]

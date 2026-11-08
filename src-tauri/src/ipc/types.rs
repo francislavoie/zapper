@@ -115,6 +115,7 @@ pub enum SyncPhase {
     Channels,
     Epg,
     Movies,
+    Shows,
     Failed,
 }
 
@@ -1046,6 +1047,7 @@ pub struct MarksDto {
 #[serde(rename_all = "camelCase")]
 pub enum OnDemandKind {
     Movie,
+    Episode,
 }
 
 /// What is open when it is a title rather than a channel; see
@@ -1081,5 +1083,172 @@ mod movie_tests {
         assert_eq!(q.list, MovieListKind::Category);
         assert_eq!(q.sort, MovieSort::Az);
         assert_eq!(q.year_to, Some(2000));
+    }
+}
+
+// ------------------------------------------------------------------- shows
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SeriesCategoryDto {
+    pub id: String,
+    pub name: String,
+    /// Excludes deleted shows.
+    pub series_count: i64,
+}
+
+/// A show as a list draws it. `poster_url` is the provider's address, as a
+/// movie's is: only the desktop app may hand it to its interface.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SeriesDto {
+    pub series_id: i64,
+    pub name: String,
+    pub clean_name: String,
+    pub year: Option<i32>,
+    /// Out of ten.
+    pub rating: Option<f64>,
+    pub poster_url: Option<String>,
+    /// Unix seconds the provider last changed it.
+    pub added: Option<i64>,
+    pub category_id: Option<String>,
+    /// `None` until the show's episodes have been seen once (an Xtream
+    /// server's arrive when the show is first opened).
+    pub season_count: Option<u32>,
+    pub episode_count: Option<u32>,
+    pub favourite: bool,
+    /// Every episode, specials aside, is watched.
+    pub watched: bool,
+}
+
+/// A page of shows asked for: the movies' lists and sorts, reused as they
+/// are ([`MovieListKind`], [`MovieSort`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SeriesQueryDto {
+    pub list: MovieListKind,
+    /// Which category, for `list: category`.
+    pub category_id: Option<String>,
+    pub sort: MovieSort,
+    pub year_from: Option<i32>,
+    pub year_to: Option<i32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SeriesPageDto {
+    /// In the whole list, not just this page.
+    pub total: u32,
+    pub items: Vec<SeriesDto>,
+}
+
+/// A season that has episodes; season 0 is the specials, listed last.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SeasonDto {
+    pub number: i32,
+    pub name: String,
+    pub episode_count: u32,
+    pub watched_count: u32,
+}
+
+/// An episode as the show's sheet lists it. `still_url` is the provider's
+/// address, as a poster's is.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EpisodeDto {
+    pub episode_id: i64,
+    pub series_id: i64,
+    /// 0 for specials.
+    pub season: i32,
+    pub episode: i32,
+    /// A multi-episode entry's last number (`S01E01-E02`).
+    pub episode_end: Option<i32>,
+    pub title: Option<String>,
+    pub plot: Option<String>,
+    /// The provider's length.
+    pub duration_secs: Option<i64>,
+    pub still_url: Option<String>,
+    pub air_date: Option<String>,
+    pub watched: bool,
+    /// Where it was left, seconds from the start.
+    pub position: Option<f64>,
+    /// The length the player measured.
+    pub duration: Option<f64>,
+}
+
+/// What opening a show shows. Its episodes come with its details, fetched
+/// from an Xtream server the first time it is opened and kept for a week;
+/// see `catalog::series_details`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SeriesDetailsDto {
+    pub series: SeriesDto,
+    pub plot: Option<String>,
+    pub genres: Vec<String>,
+    pub director: Option<String>,
+    pub cast: Vec<String>,
+    pub release_date: Option<String>,
+    pub backdrop_urls: Vec<String>,
+    pub tmdb_id: Option<i64>,
+    /// From the episodes' air dates, else the show's year (first only).
+    pub first_year: Option<i32>,
+    pub last_year: Option<i32>,
+    pub seasons: Vec<SeasonDto>,
+    /// By season, specials last, then by number.
+    pub episodes: Vec<EpisodeDto>,
+    /// The episode the show's main action plays; `None` when every one is
+    /// watched or there are none.
+    pub next_up: Option<i64>,
+    /// When the details were fetched, Unix seconds; `None` when there are
+    /// none (a playlist's show, or the provider could not be asked).
+    pub fetched_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShowsSummaryDto {
+    /// The account has shows; the interface shows the Shows tab only then.
+    pub available: bool,
+    /// Why not, in words, when it does not.
+    pub note: Option<String>,
+    pub total: u32,
+    pub favourites: u32,
+    pub recent: u32,
+    pub watched: u32,
+    /// Which catalogue the shows are from, as a short hash, as
+    /// [`MoviesSummaryDto::origin`] is for movies.
+    pub origin: String,
+}
+
+/// The episode playing, with its show, for the player's title.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlayingEpisodeDto {
+    pub series: SeriesDto,
+    pub episode: EpisodeDto,
+}
+
+#[cfg(test)]
+mod show_tests {
+    use super::*;
+
+    #[test]
+    fn on_demand_kind_episode_reads_as_episode() {
+        assert_eq!(
+            serde_json::to_value(OnDemandKind::Episode).unwrap(),
+            serde_json::json!("episode")
+        );
+    }
+
+    #[test]
+    fn a_series_query_uses_the_movies_wire_names() {
+        let q: SeriesQueryDto = serde_json::from_str(
+            r#"{"list":"watched","categoryId":null,"sort":"added","yearFrom":1990,"yearTo":null}"#,
+        )
+        .unwrap();
+        assert_eq!(q.list, MovieListKind::Watched);
+        assert_eq!(q.sort, MovieSort::Added);
+        assert_eq!(q.year_from, Some(1990));
     }
 }

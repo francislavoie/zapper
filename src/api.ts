@@ -24,6 +24,13 @@ import {
   type MoviePageDto,
   type MovieQueryDto,
   type MoviesSummaryDto,
+  type PlayingEpisodeDto,
+  type SeriesCategoryDto,
+  type SeriesDetailsDto,
+  type SeriesDto,
+  type SeriesPageDto,
+  type SeriesQueryDto,
+  type ShowsSummaryDto,
   type VodCategoryDto,
   type DeinterlaceMode,
   type ProgrammeDto,
@@ -98,6 +105,9 @@ export const api = {
   /** Plays a movie, from `start` seconds or, with `null`, from the start. */
   playMovie: (movieId: number, start: number | null) =>
     invoke<void>("play_movie", { movieId, start }),
+  /** Plays an episode, from `start` seconds or, with `null`, from the start. */
+  playEpisode: (episodeId: number, start: number | null) =>
+    invoke<void>("play_episode", { episodeId, start }),
   /** To an absolute position in a movie, in seconds. */
   seekTo: (seconds: number) => invoke<void>("seek_to", { seconds }),
   setVolume: (volume: number) => invoke<void>("set_volume", { volume }),
@@ -176,6 +186,28 @@ export const api = {
       favourite: marks.favourite ?? null,
       watched: marks.watched ?? null,
     }),
+
+  showsSummary: () => invoke<ShowsSummaryDto>("shows_summary"),
+  seriesCategories: () => invoke<SeriesCategoryDto[]>("series_categories"),
+  series: (query: SeriesQueryDto, offset: number, limit: number) =>
+    invoke<SeriesPageDto>("series", { query, offset, limit }),
+  searchSeries: (query: string, limit: number) =>
+    invoke<SeriesDto[]>("search_series", { query, limit }),
+  /** The show's details and episodes: fetched from the provider the first
+   *  time it is opened and kept for a week. */
+  seriesDetails: (seriesId: number) =>
+    invoke<SeriesDetailsDto>("series_details", { seriesId }),
+  /** An absent mark is left as it is. Watched reaches every episode. */
+  setSeriesMarks: (seriesId: number, marks: { favourite?: boolean; watched?: boolean }) =>
+    invoke<MarksDto>("set_series_marks", {
+      seriesId,
+      favourite: marks.favourite ?? null,
+      watched: marks.watched ?? null,
+    }),
+  setEpisodeMarks: (episodeId: number, watched: boolean) =>
+    invoke<MarksDto>("set_episode_marks", { episodeId, watched }),
+  playingEpisode: (episodeId: number) =>
+    invoke<PlayingEpisodeDto>("playing_episode", { episodeId }),
 
   // Backups (Settings › Data). The backend opens the file dialogs itself, so
   // no path crosses this boundary, and it adds and removes the account, so

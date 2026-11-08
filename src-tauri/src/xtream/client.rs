@@ -8,7 +8,9 @@ use anyhow::{Context, Result};
 use std::fmt;
 
 use crate::xtream::models::Rows;
-use crate::xtream::{Category, Channel, ServerInfo, UserInfo, VodInfo, VodStream};
+use crate::xtream::{
+    Category, Channel, SeriesInfo, SeriesStream, ServerInfo, UserInfo, VodInfo, VodStream,
+};
 
 /// Some servers reject default agents; VLC's is widely accepted.
 const USER_AGENT: &str = "VLC/3.0.20 LibVLC/3.0.20";
@@ -107,6 +109,17 @@ impl XtreamClient {
         format!(
             "{}/movie/{}/{}/{}.{}",
             self.creds.host, self.creds.username, self.creds.password, stream_id, ext
+        )
+    }
+
+    /// Where an episode plays. Carries the credentials like [`live_url`]
+    /// does, so it is never logged.
+    ///
+    /// [`live_url`]: XtreamClient::live_url
+    pub fn series_url(&self, episode_id: i64, ext: &str) -> String {
+        format!(
+            "{}/series/{}/{}/{}.{}",
+            self.creds.host, self.creds.username, self.creds.password, episode_id, ext
         )
     }
 
@@ -249,6 +262,65 @@ impl XtreamClient {
             .await
             .context("parsing movie details")
     }
+
+    /// The show categories; a row that does not read is left out.
+    pub async fn series_categories(&self) -> Result<Vec<Category>> {
+        let rows: Rows<Category> = self
+            .http
+            .get(self.api_url(Some("get_series_categories")))
+            .timeout(API_TOTAL)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await
+            .context("parsing show categories")?;
+        Ok(readable(rows, "show categories"))
+    }
+
+    /// Every show, in one call (no episodes: those come per show through
+    /// [`series_info`](Self::series_info)). A row that does not read is
+    /// left out, never failing the rest.
+    pub async fn series(&self) -> Result<Vec<SeriesStream>> {
+        let rows: Rows<SeriesStream> = self
+            .http
+            .get(self.api_url(Some("get_series")))
+            .timeout(API_TOTAL)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await
+            .context("parsing shows")?;
+        Ok(readable(rows, "shows"))
+    }
+
+    /// One show's details, seasons and every episode, asked only for the
+    /// show someone opened (never in bulk). Episodes that do not read are
+    /// left out and counted in the log, never failing the rest.
+    pub async fn series_info(&self, series_id: i64) -> Result<SeriesInfo> {
+        let info: SeriesInfo = self
+            .http
+            .get(format!(
+                "{}&series_id={series_id}",
+                self.api_url(Some("get_series_info"))
+            ))
+            // One show's seasons and episodes, asked while someone waits.
+            .timeout(std::time::Duration::from_secs(20))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await
+            .context("parsing show details")?;
+        if info.skipped > 0 {
+            tracing::warn!(
+                "{} of a show's episodes could not be read and were left out",
+                info.skipped
+            );
+        }
+        Ok(info)
+    }
 }
 
 /// The rows of a list that read, those that did not counted in the log
@@ -353,6 +425,34 @@ mod tests {
             c.movie_url(77, "mkv"),
             "http://example.com/movie/u/p/77.mkv"
         );
+    }
+
+    #[test]
+    fn series_url_names_the_container() {
+        let c = XtreamClient::new(creds()).unwrap();
+        assert_eq!(
+            c.series_url(77, "mkv"),
+            "http://example.com/series/u/p/77.mkv"
+        );
+    }
+
+    #[tokio::test]
+    async fn series_calls_ask_the_right_actions() {
+        let s = crate::test_http::serve(|_, _| crate::test_http::Reply::ok("[]"));
+        let mut cr = creds();
+        cr.host = s.base.clone();
+        let c = XtreamClient::new(cr).unwrap();
+        assert!(c.series_categories().await.unwrap().is_empty());
+        assert!(c.series().await.unwrap().is_empty());
+        // `[]` is a server's "nothing" for a show: no episodes, no details.
+        assert!(c.series_info(5).await.unwrap().episodes.is_empty());
+        let seen = s.requests();
+        let actions: Vec<_> = seen.iter().map(|r| r.query("action").unwrap()).collect();
+        assert_eq!(
+            actions,
+            ["get_series_categories", "get_series", "get_series_info"]
+        );
+        assert_eq!(seen[2].query("series_id"), Some("5"));
     }
 
     #[tokio::test]

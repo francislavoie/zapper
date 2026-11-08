@@ -28,6 +28,8 @@ pub mod player_cmds;
 #[cfg(feature = "gui")]
 pub mod recording_cmds;
 #[cfg(feature = "gui")]
+pub mod series_cmds;
+#[cfg(feature = "gui")]
 pub mod tracks;
 pub mod types;
 #[cfg(feature = "gui")]

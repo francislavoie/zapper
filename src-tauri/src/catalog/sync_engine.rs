@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use crate::catalog::credentials::Account;
 use crate::catalog::playlist::{self, PlaylistStats, PlaylistWriter};
-use crate::catalog::{db, index, origin, prune, status, sync, vod_sync};
+use crate::catalog::{db, index, origin, prune, series_sync, status, sync, vod_sync};
 use crate::ipc::types::{SyncPhase, SyncStatusDto};
 use crate::m3u::fetch;
 use crate::source::{M3uSource, Refused};
@@ -42,9 +42,11 @@ impl Mirror for AppMirror {
     }
 
     fn reindex(&self) -> Result<usize> {
-        // Movies too: a tuner or Tvheadend write soft-deletes the movies of
-        // the account it replaced, and the movie index must not keep them.
+        // Movies and shows too: a tuner or Tvheadend write soft-deletes the
+        // movies and shows of the account it replaced, and their indexes
+        // must not keep them.
         db::with_write_db(index::rebuild_movies)?;
+        db::with_write_db(index::rebuild_series)?;
         db::with_write_db(index::rebuild)
     }
 }
@@ -301,6 +303,38 @@ async fn step_movies(client: &XtreamClient, from: &str) -> Result<String> {
     ))
 }
 
+/// The provider's shows, as [`step_movies`] lands its movies: both list
+/// calls, landed in one write, the series index rebuilt, errors scrubbed
+/// with their HTTP status kept, and nothing landed under an account whose
+/// channels have not been refreshed yet. Episodes are not listed here: a
+/// show's come with its details, when it is opened.
+async fn step_shows(client: &XtreamClient, from: &str) -> Result<String> {
+    let fetched = async {
+        let cats = client.series_categories().await?;
+        let series = client.series().await?;
+        Ok::<_, anyhow::Error>((cats, series))
+    }
+    .await
+    .map_err(|e| {
+        let why = format!("fetching shows: {}", scrub(&format!("{e:#}")));
+        match http_status(&e) {
+            Some(code) => anyhow::Error::new(HttpRefusal(code)).context(why),
+            None => anyhow::anyhow!(why),
+        }
+    })?;
+    let (cats, series) = fetched;
+    if db::with_write_db(|conn| origin::changed(conn, from))? {
+        anyhow::bail!("the channels have not been refreshed for this account yet; shows wait for them");
+    }
+    let shows: Vec<_> = series.iter().map(series_sync::NewSeries::from).collect();
+    let stats = db::with_write_db(|conn| series_sync::land_series(conn, &cats, &shows, now()))?;
+    let indexed = db::with_write_db(index::rebuild_series)?;
+    Ok(format!(
+        "{indexed} shows ({} new, {} gone)",
+        stats.inserted, stats.deleted
+    ))
+}
+
 async fn step_channels(client: &XtreamClient, origin: &str) -> Result<String> {
     let chans = client.channels().await.context("fetching channels")?;
     let stats = db::with_write_db(|conn| land_channels(conn, &chans, origin))?;
@@ -409,13 +443,16 @@ impl Drop for RunningGuard {
     }
 }
 
-/// Categories, then channels (and the index), then the guide, then movies.
+/// Categories, then channels (and the index), then the guide, then movies,
+/// then shows.
 ///
-/// Movies come last because live TV is what the app is for and the movie
-/// list is the biggest download after the guide: a server that is slow or
-/// refuses it should cost nothing that came before. They also land after the
-/// channels have recorded which catalogue this is, which the movie list
-/// compares with its own record to notice a change of account.
+/// Movies and shows come last because live TV is what the app is for and
+/// their lists are the biggest downloads after the guide: a server that is
+/// slow or refuses them should cost nothing that came before. Shows follow
+/// movies, the older and more used of the two, so a server that chokes on
+/// its series list still delivers the films. Both land after the channels
+/// have recorded which catalogue this is, which each list compares with its
+/// own record to notice a change of account.
 ///
 /// `None` when a pass was already running, so this one did not start: in
 /// this process, or in another one sharing the mirror (the app and the
@@ -470,6 +507,7 @@ pub async fn run_once<S: StatusSink>(app: &S) -> Result<Option<PassOutcome>> {
             (SyncPhase::Channels, Box::pin(step_channels(&client, &from))),
             (SyncPhase::Epg, Box::pin(step_epg(&client))),
             (SyncPhase::Movies, Box::pin(step_movies(&client, &from))),
+            (SyncPhase::Shows, Box::pin(step_shows(&client, &from))),
         ],
     )
     .await;
@@ -487,21 +525,23 @@ pub async fn run_once<S: StatusSink>(app: &S) -> Result<Option<PassOutcome>> {
 /// reports what landed and rebuilds the search index. If the download failed,
 /// the channels phase fails with the same reason rather than claiming
 /// success — a pass where nothing new arrived must not count as a refresh,
-/// or the backoff would never apply. The movies phase does the same with the
-/// movies the one document carried.
+/// or the backoff would never apply. The movies and shows phases do the same
+/// with the movies and episodes the one document carried.
 async fn run_m3u_pass<S: StatusSink>(sink: &S, src: &M3uSource) -> PassOutcome {
     let landed: Landed = std::sync::Mutex::new(None);
     let landed_movies: Landed = std::sync::Mutex::new(None);
+    let landed_shows: Landed = std::sync::Mutex::new(None);
     run_steps(
         sink,
         vec![
             (
                 SyncPhase::Categories,
-                Box::pin(step_m3u_playlist(src, &landed, &landed_movies)),
+                Box::pin(step_m3u_playlist(src, &landed, &landed_movies, &landed_shows)),
             ),
             (SyncPhase::Channels, Box::pin(step_m3u_channels(&landed))),
             (SyncPhase::Epg, Box::pin(step_m3u_epg(src))),
             (SyncPhase::Movies, Box::pin(step_landed_movies(&landed_movies))),
+            (SyncPhase::Shows, Box::pin(step_landed_shows(&landed_shows))),
         ],
     )
     .await
@@ -525,14 +565,16 @@ async fn step_m3u_playlist(
     src: &M3uSource,
     landed: &Landed,
     landed_movies: &Landed,
+    landed_shows: &Landed,
 ) -> Result<String> {
     // A playlist's write replaces categories and soft-deletes unseen channels
     // whatever came before, so it needs no `switched`; it only has to say
     // that it is now the origin, for the server that may come after it. The
-    // writer records that itself, before it lands the movies.
+    // writer records that itself, before it lands the movies and shows.
     let r = load_playlist(src).await;
     hand_off(landed, r.as_ref());
     hand_off_movies(landed_movies, r.as_ref());
+    hand_off_shows(landed_shows, r.as_ref());
     let s = r?;
     Ok(format!("{} categories", s.categories))
 }
@@ -558,6 +600,33 @@ pub(crate) async fn step_landed_movies(landed: &Landed) -> Result<String> {
         Some(Ok((new, gone))) => {
             let indexed = db::with_write_db(index::rebuild_movies)?;
             Ok(format!("{indexed} movies ({new} new, {gone} gone)"))
+        }
+        Some(Err(why)) => Err(anyhow::anyhow!(why)),
+        None => Err(anyhow::anyhow!("the playlist was not read")),
+    }
+}
+
+/// Records what a playlist-shaped write did to the shows, for the shows
+/// phase that follows it.
+pub(crate) fn hand_off_shows(
+    landed: &Landed,
+    r: std::result::Result<&PlaylistStats, &anyhow::Error>,
+) {
+    let handoff = match r {
+        Ok(s) => Ok((s.series.inserted, s.series.deleted)),
+        Err(e) => Err(failure_message(e)),
+    };
+    *landed.lock().unwrap_or_else(|e| e.into_inner()) = Some(handoff);
+}
+
+/// The shows phase of a playlist pass: what the write landed, and the
+/// series index rebuilt over it, or the write's failure repeated.
+pub(crate) async fn step_landed_shows(landed: &Landed) -> Result<String> {
+    let handoff = landed.lock().unwrap_or_else(|e| e.into_inner()).take();
+    match handoff {
+        Some(Ok((new, gone))) => {
+            let indexed = db::with_write_db(index::rebuild_series)?;
+            Ok(format!("{indexed} shows ({new} new, {gone} gone)"))
         }
         Some(Err(why)) => Err(anyhow::anyhow!(why)),
         None => Err(anyhow::anyhow!("the playlist was not read")),
@@ -1411,6 +1480,7 @@ mod tests {
             SyncPhase::Channels,
             SyncPhase::Epg,
             SyncPhase::Movies,
+            SyncPhase::Shows,
             SyncPhase::Failed,
         ] {
             let s = dto(phase, "working", 60_000, Some(1_757_000_000));
@@ -1518,6 +1588,87 @@ mod tests {
 
     #[allow(clippy::await_holding_lock)]
     #[tokio::test]
+    async fn a_failing_shows_phase_leaves_the_other_phases_landed() {
+        let _guard = status::test_lock();
+        db::install_test_db();
+        let ok = || async { Ok("fine".to_string()) };
+        let rec = Recorder::default();
+        let outcome = run_steps(
+            &rec,
+            vec![
+                (SyncPhase::Categories, Box::pin(ok())),
+                (SyncPhase::Channels, Box::pin(ok())),
+                (SyncPhase::Epg, Box::pin(ok())),
+                (SyncPhase::Movies, Box::pin(ok())),
+                (
+                    SyncPhase::Shows,
+                    Box::pin(async { Err(anyhow::anyhow!("the series list was empty")) }),
+                ),
+            ],
+        )
+        .await;
+        assert_eq!(outcome, PassOutcome::Refreshed);
+        assert_eq!(
+            rec.phases(),
+            [
+                SyncPhase::Categories,
+                SyncPhase::Categories,
+                SyncPhase::Channels,
+                SyncPhase::Channels,
+                SyncPhase::Epg,
+                SyncPhase::Epg,
+                SyncPhase::Movies,
+                SyncPhase::Movies,
+                SyncPhase::Shows,
+                SyncPhase::Failed,
+                SyncPhase::Idle,
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn the_shows_phase_repeats_a_failed_download_rather_than_succeeding() {
+        let landed: Landed =
+            std::sync::Mutex::new(Some(Err("the server refused the playlist".into())));
+        let err = step_landed_shows(&landed).await.unwrap_err().to_string();
+        assert!(err.contains("refused the playlist"), "{err}");
+        let none: Landed = std::sync::Mutex::new(None);
+        assert!(step_landed_shows(&none).await.is_err());
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn a_shows_phase_the_server_fails_or_forbids_never_shows_the_password() {
+        let _guard = status::test_lock();
+        db::install_test_db();
+        for (code, outcome, said) in [
+            (503, PassOutcome::Failed, "503"),
+            (403, PassOutcome::Refused, "refused this account"),
+        ] {
+            let server =
+                crate::test_http::serve(move |_, _| crate::test_http::Reply::new(code, "no"));
+            let client = XtreamClient::new(crate::xtream::Credentials {
+                host: server.base.clone(),
+                username: "viewer-name".into(),
+                password: "hunter2-secret".into(),
+            })
+            .unwrap();
+            let rec = Recorder::default();
+            let got = run_steps(
+                &rec,
+                vec![(SyncPhase::Shows, Box::pin(step_shows(&client, "xtream:0000000000000001")))],
+            )
+            .await;
+            assert_eq!(got, outcome, "{code}");
+            let shown = rec.messages().join("\n");
+            assert!(shown.contains(said), "{shown}");
+            assert!(!shown.contains("hunter2-secret"), "{shown}");
+            assert!(!shown.contains("viewer-name"), "{shown}");
+        }
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
     async fn a_movies_phase_the_server_refuses_never_shows_the_password() {
         let _guard = status::test_lock();
         db::install_test_db();
@@ -1585,6 +1736,28 @@ mod tests {
         }
         let err = err.unwrap_err().to_string();
         assert!(err.contains("movies wait"), "{err}");
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn shows_wait_for_the_channels_of_an_account_just_switched_to() {
+        let _guard = status::test_lock();
+        db::install_test_db();
+        let server = crate::test_http::serve(|_, _| crate::test_http::Reply::ok("[]"));
+        let client = XtreamClient::new(crate::xtream::Credentials {
+            host: server.base.clone(),
+            username: "u".into(),
+            password: "p".into(),
+        })
+        .unwrap();
+        let before = db::with_write_db(|c| origin::recorded(c)).unwrap();
+        db::with_write_db(|c| origin::record(c, "xtream:00000000000000aa")).unwrap();
+        let err = step_shows(&client, "xtream:00000000000000bb").await;
+        if let Some(b) = before {
+            db::with_write_db(|c| origin::record(c, &b)).unwrap();
+        }
+        let err = err.unwrap_err().to_string();
+        assert!(err.contains("shows wait"), "{err}");
     }
 
     #[test]

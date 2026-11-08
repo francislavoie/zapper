@@ -53,6 +53,7 @@ const BUSY_TEXT: Partial<Record<SyncPhase, string>> = {
   channels: "Refreshing channels…",
   epg: "Loading guide…",
   movies: "Refreshing movies…",
+  shows: "Refreshing shows…",
 };
 
 export const isBusy = (phase: SyncPhase): boolean => phase in BUSY_TEXT;

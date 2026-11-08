@@ -306,6 +306,18 @@ export const webBackend: typeof api = {
   setMovieMarks: (movieId, marks) =>
     put<MarksDto>(`/api/vod/movies/${movieId}/marks`, marks),
 
+  // Shows: the service's routes and the browser's player for episodes are
+  // still to come; until then the calls say they are not available.
+  playEpisode: notHere,
+  showsSummary: notHere,
+  seriesCategories: notHere,
+  series: notHere,
+  searchSeries: notHere,
+  seriesDetails: notHere,
+  setSeriesMarks: notHere,
+  setEpisodeMarks: notHere,
+  playingEpisode: notHere,
+
   activityRows: notHere,
   importActivity: notHere,
   exportBackup: notHere,

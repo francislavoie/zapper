@@ -50,6 +50,21 @@ answers player_api.php's get_vod_categories, get_vod_streams (optionally
 even mp4) as a file: Accept-Ranges, and 206 with Content-Range for a Range
 header. A movie being sent counts in active_cons like a live stream.
 
+Made-up series (also needs the movie fixtures):
+
+  tools/fake_stream.py --series 30    # 30 shows, "Show 0001"..., over 3 categories
+
+answers get_series_categories, get_series (optionally &category_id=) and
+get_series_info&series_id=, and serves /series/<user>/<pass>/<id>.<ext> from
+movie.mp4 / movie.mkv like a movie. Show i has 1 + i % 3 seasons of 4 episodes,
+episode id 100000 + i*100 + season*10 + n (odd n mkv, even mp4). Show 2 answers
+its episodes as an array of arrays, show 3 adds two season-0 specials, show 4
+answers an empty "info" and "seasons". A cover is /placeholder.png here.
+
+--vod-cut-at FRACTION cuts every movie and series file short: the response
+still announces its full length, then the connection closes once FRACTION of
+the file has been sent (a range starting past that closes at once).
+
 And its channels and archive: /live/<user>/<pass>/<id>.ts plays --live-fixture,
 and /streaming/timeshift.php reads `start` in the server's time zone, which
 player_api.php's server_info reports (time_now, timestamp_now). Each request's
@@ -98,6 +113,10 @@ class Handler(BaseHTTPRequestHandler):
     reason = ""
     # How many made-up movies the API lists; 0 means none.
     movies = 0
+    # ...and made-up series.
+    series = 0
+    # Close a movie or episode file's connection after this fraction of it (0: off).
+    vod_cut_at = 0.0
     # Answer every live stream with placeholder.ts, all at once, then close.
     placeholder = False
     # ...only while this file exists: deleting it puts the channel on the air.
@@ -129,11 +148,19 @@ class Handler(BaseHTTPRequestHandler):
             action = query.get("action", [""])[0]
             if action in ("get_vod_categories", "get_vod_streams", "get_vod_info"):
                 self._vod_api(action, query)
+            elif action in ("get_series_categories", "get_series", "get_series_info"):
+                self._series_api(action, query)
             else:
                 self._user_info()
             return
         if name.startswith("movie/"):
             self._movie(name)
+            return
+        if name.startswith("series/"):
+            self._episode(name)
+            return
+        if name == "placeholder.png":
+            self._cover()
             return
         if name == "requests":
             self._json(Handler.requests)
@@ -264,10 +291,29 @@ class Handler(BaseHTTPRequestHandler):
         """/movie/<user>/<pass>/<id>.<ext>: a fixture as a file, with ranges."""
         parts = name.split("/")
         stem, _, ext = parts[-1].partition(".")
-        path = FIXTURES / f"movie.{ext}"
         if (len(parts) != 4 or not stem.isdigit() or not 1 <= int(stem) <= Handler.movies
-                or ext != _movie_ext(int(stem)) or not path.is_file()):
+                or ext != _movie_ext(int(stem))):
             self.send_error(404, "no such movie")
+            return
+        self._vod_file(ext)
+
+    def _episode(self, name):
+        """/series/<user>/<pass>/<id>.<ext>: an episode, served like a movie."""
+        parts = name.split("/")
+        stem, _, ext = parts[-1].partition(".")
+        if (len(parts) != 4 or not stem.isdigit() or _episode_parts(int(stem)) is None
+                or ext != _episode_ext(int(stem))):
+            self.send_error(404, "no such episode")
+            return
+        self._vod_file(ext)
+
+    def _vod_file(self, ext):
+        """A movie or episode fixture (movie.<ext>) as a file, with ranges. With
+        --vod-cut-at the connection closes once that fraction has been sent,
+        whatever length was announced."""
+        path = FIXTURES / f"movie.{ext}"
+        if not path.is_file():
+            self.send_error(404, "no such fixture")
             return
         refusal = Handler.refuse
         if refusal is not None:
@@ -287,19 +333,28 @@ class Handler(BaseHTTPRequestHandler):
                 return
             start, end = span
             status = 206
+        # The first byte this server won't send.
+        stop = end + 1
+        cut = Handler.vod_cut_at > 0
+        if cut:
+            stop = min(stop, int(Handler.vod_cut_at * size))
         self.send_response(status)
         self.send_header("Content-Type", "video/mp4" if ext == "mp4" else "video/x-matroska")
         self.send_header("Accept-Ranges", "bytes")
         self.send_header("Content-Length", str(end - start + 1))
         if status == 206:
             self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        if cut:
+            self.send_header("Connection", "close")
         self.end_headers()
+        if cut:
+            self.close_connection = True
         with Handler.lock:
             Handler.open_streams += 1
         try:
             with path.open("rb") as f:
                 f.seek(start)
-                left = end - start + 1
+                left = stop - start
                 while left > 0:
                     part = f.read(min(64 * 1024, left))
                     if not part:
@@ -311,6 +366,92 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             with Handler.lock:
                 Handler.open_streams -= 1
+
+    def _series_api(self, action, query):
+        if action == "get_series_categories":
+            self._json([{"category_id": str(i + 1), "category_name": name, "parent_id": 0}
+                        for i, name in enumerate(SERIES_CATEGORIES)] if Handler.series else [])
+        elif action == "get_series":
+            category = query.get("category_id", [""])[0]
+            self._json([self._series_row(i) for i in range(1, Handler.series + 1)
+                        if not category or category == str(_series_category(i))])
+        else:
+            try:
+                sid = int(query.get("series_id", [""])[0])
+            except ValueError:
+                sid = 0
+            if not 1 <= sid <= Handler.series:
+                self._json({"seasons": [], "info": [], "episodes": []})
+            else:
+                self._json(self._series_info(sid))
+
+    def _cover_url(self):
+        return f"http://{self.headers.get('Host') or '127.0.0.1'}/placeholder.png"
+
+    def _series_row(self, i):
+        rating = _movie_rating(i)
+        return {
+            "num": i,
+            "name": f"Show {i:04d}",
+            "series_id": i,
+            "cover": self._cover_url(),
+            "plot": f"A made-up story for test show {i}, about nothing in particular.",
+            "cast": "Made Up, Someone Else",
+            "director": "Nobody",
+            "genre": SERIES_CATEGORIES[_series_category(i) - 1],
+            "releaseDate": f"{_series_year(i)}-01-01",
+            "last_modified": str(_series_modified(i)),
+            "rating": rating,
+            "rating_5based": round(float(rating) / 2, 1),
+            "backdrop_path": [],
+            "category_id": str(_series_category(i)),
+        }
+
+    def _series_info(self, i):
+        row = self._series_row(i)
+        seasons = _series_seasons(i)
+        by_season = {s: [self._episode_row(i, s, n) for n in range(1, count + 1)]
+                     for s, count in seasons}
+        ordered = sorted(by_season)
+        if i == 2:
+            episodes = [by_season[s] for s in ordered]
+        else:
+            episodes = {str(s): by_season[s] for s in ordered}
+        if i == 4:
+            info, season_rows = [], []
+        else:
+            info = {k: row[k] for k in ("name", "cover", "plot", "cast", "director", "genre",
+                                         "releaseDate", "last_modified", "rating",
+                                         "rating_5based", "backdrop_path", "category_id")}
+            season_rows = [{"season_number": s, "name": f"Season {s}" if s else "Specials",
+                            "episode_count": count, "air_date": f"{_series_year(i) + s}-01-01",
+                            "cover": row["cover"]} for s, count in seasons]
+        return {"seasons": season_rows, "info": info, "episodes": episodes}
+
+    def _episode_row(self, i, season, n):
+        eid = _episode_id(i, season, n)
+        ext = _episode_ext(eid)
+        return {
+            "id": str(eid),
+            "episode_num": n,
+            "title": f"Episode title {n}",
+            "container_extension": ext,
+            "info": {
+                "duration_secs": 120,
+                "duration": "00:02:00",
+                "video": {"codec_name": "h264", "width": 640, "height": 360},
+                "audio": {"codec_name": "ac3" if ext == "mkv" else "aac", "channels": 2},
+            },
+            "added": str(_series_modified(i)),
+            "season": season,
+        }
+
+    def _cover(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "image/png")
+        self.send_header("Content-Length", str(len(PLACEHOLDER_PNG)))
+        self.end_headers()
+        self.wfile.write(PLACEHOLDER_PNG)
 
     def _timeshift(self):
         """A catch-up request, as an Xtream server reads it: `start` is
@@ -576,6 +717,65 @@ def _movie_info(i):
     }
 
 
+SERIES_CATEGORIES = ["Mystery", "Sitcom", "Animation"]
+
+
+def _series_category(i):
+    return (i - 1) % len(SERIES_CATEGORIES) + 1
+
+
+def _series_year(i):
+    return 2000 + i * 7 % 26
+
+
+def _series_modified(i):
+    # Spread over 60 days, every tenth show within the last day.
+    if i % 10 == 0:
+        return _started - i * 997 % 80000
+    return _started - 86400 - (i * 60 * 86400 // max(Handler.series, 1)) % (59 * 86400)
+
+
+def _series_seasons(i):
+    """[(season number, episode count)]: 1 + i % 3 seasons of 4, and for show 3
+    a season 0 of two specials."""
+    seasons = [(s, 4) for s in range(1, 2 + i % 3)]
+    return ([(0, 2)] + seasons) if i == 3 else seasons
+
+
+def _episode_id(i, season, n):
+    return 100000 + i * 100 + season * 10 + n
+
+
+def _episode_ext(eid):
+    return "mkv" if eid % 2 else "mp4"
+
+
+def _episode_parts(eid):
+    """(show, season, n) of an episode id this server lists, else None."""
+    show, rest = divmod(eid - 100000, 100)
+    season, n = divmod(rest, 10)
+    if 1 <= show <= Handler.series and 1 <= n <= dict(_series_seasons(show)).get(season, 0):
+        return show, season, n
+    return None
+
+
+def _make_png(width=32, height=48, rgb=(70, 80, 100)):
+    import struct
+    import zlib
+
+    def chunk(kind, data):
+        body = kind + data
+        return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body))
+
+    raw = b"".join(b"\x00" + bytes(rgb) * width for _ in range(height))
+    return (b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+
+
+PLACEHOLDER_PNG = _make_png()
+
+
 def _parse_range(header, size):
     """The (first, last) byte a `Range: bytes=...` asks for, or None when it
     can't be satisfied. Only a single range is honoured."""
@@ -698,6 +898,12 @@ def main():
     ap.add_argument("--movies", type=int, default=0, metavar="N",
                     help="list N made-up movies in the VOD API and serve them from "
                          "movie.mp4 / movie.mkv, with Range support")
+    ap.add_argument("--series", type=int, default=0, metavar="N",
+                    help="list N made-up shows in the series API and serve their episodes "
+                         "from movie.mp4 / movie.mkv, with Range support")
+    ap.add_argument("--vod-cut-at", type=float, default=0.0, metavar="FRACTION",
+                    help="close a movie or episode file's connection after this fraction "
+                         "of it, though its full length was announced (0 < f < 1)")
     ap.add_argument("--placeholder", action="store_true",
                     help="answer every live stream with placeholder.ts (a 600 s black clip) "
                          "all at once, then close: a provider's reply for a channel off the air")
@@ -725,6 +931,10 @@ def main():
     Handler.max_connections = a.max_connections
     Handler.other_devices = a.other_devices
     Handler.movies = a.movies
+    Handler.series = a.series
+    if a.vod_cut_at and not 0 < a.vod_cut_at < 1:
+        ap.error("--vod-cut-at is a fraction between 0 and 1")
+    Handler.vod_cut_at = a.vod_cut_at
     Handler.placeholder = a.placeholder
     if a.placeholder_while:
         Handler.placeholder_while = pathlib.Path(a.placeholder_while)
@@ -758,7 +968,7 @@ def main():
         print(f"no placeholder.ts in {FIXTURES}; run tools/make_fixtures.sh", file=sys.stderr)
         return 1
 
-    if a.movies:
+    if a.movies or a.series:
         missing = [n for n in ("movie.mp4", "movie.mkv") if not (FIXTURES / n).is_file()]
         if missing:
             print(f"missing {', '.join(missing)} in {FIXTURES}; run tools/make_fixtures.sh",

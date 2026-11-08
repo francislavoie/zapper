@@ -21,7 +21,7 @@
 use anyhow::{anyhow, Context, Result};
 
 use crate::catalog::credentials::{self, Account, Kind};
-use crate::catalog::{db, playlist, vod_store};
+use crate::catalog::{db, playlist, series_store, vod_store};
 use crate::hdhomerun::HdhrSource;
 use crate::m3u::{catchup, fetch, M3uAccount};
 use crate::tvheadend::TvhSource;
@@ -105,6 +105,23 @@ impl Source {
             Source::M3u(m) => m.movie(movie_id),
             Source::HdHomeRun(_) | Source::Tvheadend(_) => {
                 Err(anyhow!("this account has no movies"))
+            }
+        }
+    }
+
+    /// The file for an episode, as [`Source::movie`] is for a movie: the
+    /// address carries the account for an Xtream server.
+    pub fn episode(&self, episode_id: i64) -> Result<Playable> {
+        match self {
+            Source::Xtream(c) => {
+                let found = db::with_db(|conn| series_store::episode_source(conn, episode_id))?
+                    .ok_or_else(|| anyhow!("that episode is not in the catalogue any more"))?;
+                let ext = found.container.as_deref().unwrap_or("mp4");
+                Ok(Playable::plain(c.series_url(episode_id, ext)))
+            }
+            Source::M3u(m) => m.episode(episode_id),
+            Source::HdHomeRun(_) | Source::Tvheadend(_) => {
+                Err(anyhow!("this account has no shows"))
             }
         }
     }
@@ -198,6 +215,21 @@ impl M3uSource {
         let url = found
             .stream_url
             .ok_or_else(|| anyhow!("this movie has no address in the playlist"))?;
+        Ok(Playable {
+            url,
+            user_agent: found.user_agent.or_else(|| self.account.user_agent.clone()),
+            referrer: found.referrer,
+        })
+    }
+
+    /// An episode from the playlist: the address it was listed with, and
+    /// the headers that came with it.
+    pub fn episode(&self, episode_id: i64) -> Result<Playable> {
+        let found = db::with_db(|conn| series_store::episode_source(conn, episode_id))?
+            .ok_or_else(|| anyhow!("that episode is not in the catalogue any more"))?;
+        let url = found
+            .stream_url
+            .ok_or_else(|| anyhow!("this episode has no address in the playlist"))?;
         Ok(Playable {
             url,
             user_agent: found.user_agent.or_else(|| self.account.user_agent.clone()),
@@ -490,6 +522,80 @@ mod tests {
         );
         let e = src.movie(1).unwrap_err().to_string();
         assert_eq!(e, "this account has no movies");
+    }
+
+    #[test]
+    fn a_playlist_episode_plays_from_its_stored_address() {
+        let _catalogue = db::movie_catalogue();
+        db::install_test_db();
+        db::with_db(|c| {
+            c.execute(
+                "INSERT OR REPLACE INTO episodes
+                   (episode_id, series_id, season, episode, stream_url, http_referrer)
+                 VALUES (97901, 979, 1, 2, 'http://example.test/a/s01e02.mkv', 'http://ref.test/')",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        let src = Source::M3u(
+            M3uSource::new(M3uAccount {
+                user_agent: Some("account-agent".into()),
+                ..M3uAccount::default()
+            })
+            .unwrap(),
+        );
+        let p = src.episode(97901).unwrap();
+        assert_eq!(p.url, "http://example.test/a/s01e02.mkv");
+        // No agent of its own: the account's.
+        assert_eq!(p.user_agent.as_deref(), Some("account-agent"));
+        assert_eq!(p.referrer.as_deref(), Some("http://ref.test/"));
+        let gone = src.episode(-5).unwrap_err().to_string();
+        assert_eq!(gone, "that episode is not in the catalogue any more");
+    }
+
+    #[test]
+    fn an_xtream_episode_plays_from_the_servers_series_address() {
+        let _catalogue = db::movie_catalogue();
+        db::install_test_db();
+        db::with_db(|c| {
+            c.execute(
+                "INSERT OR REPLACE INTO episodes (episode_id, series_id, season, episode, container)
+                 VALUES (97902, 979, 1, 3, 'mkv'), (97903, 979, 1, 4, NULL)",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        let src = Source::Xtream(
+            XtreamClient::new(crate::xtream::Credentials {
+                host: "http://example.test".into(),
+                username: "u".into(),
+                password: "p".into(),
+            })
+            .unwrap(),
+        );
+        assert_eq!(
+            src.episode(97902).unwrap().url,
+            "http://example.test/series/u/p/97902.mkv"
+        );
+        assert_eq!(
+            src.episode(97903).unwrap().url,
+            "http://example.test/series/u/p/97903.mp4"
+        );
+    }
+
+    #[test]
+    fn a_tuner_has_no_shows() {
+        let src = Source::HdHomeRun(
+            HdhrSource::new(crate::hdhomerun::HdhrAccount {
+                device: "192.0.2.1".into(),
+                ..Default::default()
+            })
+            .unwrap(),
+        );
+        let e = src.episode(1).unwrap_err().to_string();
+        assert_eq!(e, "this account has no shows");
     }
 
     #[tokio::test]

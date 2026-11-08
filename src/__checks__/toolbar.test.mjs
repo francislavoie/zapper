@@ -42,10 +42,11 @@ test("each working phase gets its own sentence, in this app's words", () => {
   // "epg" is the wire word. The user-facing word is "guide", everywhere.
   assert.equal(statusLine(sync({ phase: "epg" }), 0).text, "Loading guide…");
   assert.equal(statusLine(sync({ phase: "movies" }), 0).text, "Refreshing movies…");
+  assert.equal(statusLine(sync({ phase: "shows" }), 0).text, "Refreshing shows…");
 });
 
 test("the spinner turns for exactly the phases that are work", () => {
-  for (const phase of ["categories", "channels", "epg", "movies"]) {
+  for (const phase of ["categories", "channels", "epg", "movies", "shows"]) {
     assert.ok(isBusy(phase), phase);
     assert.equal(statusLine(sync({ phase }), 0).spinning, true);
     assert.equal(statusLine(sync({ phase }), 0).tone, "busy");

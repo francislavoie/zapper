@@ -16,8 +16,8 @@
 #   mpeg2sd.ts      mpeg2 720x576@25,  mp2   video no browser plays
 #   movie.mp4       h264 640x360@25,   aac   a 120 s "film": faststart, a keyframe every 2 s,
 #                                            one mov_text subtitle track (English)
-#   movie.mkv       h264 640x360@25,   ac3   the same in Matroska, with a subrip and an ass
-#                                            subtitle track (English); all the text is made up
+#   movie.mkv       h264 640x360@25,   ac3   the same in Matroska, with a subrip (English) and an
+#                                            ass (French) subtitle track; all the text is made up
 #   placeholder.ts  h264 1920x1080@30, aac   600 s of black and silence at a low bitrate: what
 #                                            some providers send instead of a channel that is
 #                                            off the air (fake_stream.py --placeholder)
@@ -80,11 +80,13 @@ movie() {
     printf '%d\n00:%02d:%02d,000 --> 00:%02d:%02d,000\nMade-up line %d of the test film.\n\n' \
       $((i + 1)) $(((i * 10 + 1) / 60)) $(((i * 10 + 1) % 60)) $(((i * 10 + 5) / 60)) $(((i * 10 + 5) % 60)) $((i + 1))
   done >"$srt"
+  # The first track is English, the second French (made-up text in both).
+  local langs=(eng fra)
   local inputs=() maps=(-map 0:v -map 1:a) opts=() n=0 codec
   for codec in "$@"; do
     inputs+=(-i "$srt")
     maps+=(-map "$((n + 2)):s")
-    opts+=("-c:s:$n" "$codec" "-metadata:s:s:$n" language=eng)
+    opts+=("-c:s:$n" "$codec" "-metadata:s:s:$n" language=${langs[$n]})
     n=$((n + 1))
   done
   ffmpeg -hide_banner -loglevel error -y \

@@ -232,6 +232,77 @@ CREATE TABLE IF NOT EXISTS vod_marks (
 );
 "#;
 
+/// Migration step `series`: the provider's shows and their episodes.
+///
+/// `series` mirrors the series list as `movies` mirrors the movie list:
+/// keyed on the provider's id, only ever soft-deleted by a sync, its marks
+/// in `vod_marks` under kind `series` and its categories in `vod_categories`
+/// under the same kind. `added` follows the provider's `last_modified`,
+/// which moves when a show gains an episode, so "newest first" puts the
+/// shows with something new on top; a show from a playlist, which dates
+/// nothing, is as new as the newest episode first seen in it.
+///
+/// `episodes` is two things by source. For an Xtream server it is a cache of
+/// the details, landed with `series_details` when a show is opened and never
+/// for the whole list, so a show not yet opened has none and NULL counts.
+/// For a playlist, which lists every episode, it is a mirror like the shows,
+/// written with them on every sync. Either way an episode is soft-deleted
+/// when its source stops listing it, so its marks (kind `episode`) are still
+/// there if it returns. `episode_end` is a playlist entry's last number when
+/// it holds several episodes (`S01E01-E02`). `season_count` and
+/// `episode_count` are counted from the live episodes (specials aside, for
+/// seasons) when they land.
+///
+/// The indexes serve the same page queries as the movies', and a show's
+/// episodes in order.
+const SERIES_TABLES: &str = r#"
+CREATE TABLE IF NOT EXISTS series (
+    series_id     INTEGER PRIMARY KEY,
+    category_id   TEXT,
+    name          TEXT NOT NULL,
+    clean_name    TEXT NOT NULL,
+    year          INTEGER,
+    rating        REAL,
+    poster_url    TEXT,
+    added         INTEGER NOT NULL,
+    tmdb_id       INTEGER,
+    season_count  INTEGER,
+    episode_count INTEGER,
+    deleted_at    INTEGER
+);
+CREATE INDEX IF NOT EXISTS series_by_added ON series(added);
+CREATE INDEX IF NOT EXISTS series_by_category ON series(category_id, added);
+CREATE INDEX IF NOT EXISTS series_by_name ON series(clean_name COLLATE NOCASE);
+CREATE INDEX IF NOT EXISTS series_by_year ON series(year);
+CREATE INDEX IF NOT EXISTS series_by_rating ON series(rating);
+CREATE INDEX IF NOT EXISTS series_live_by_category ON series(category_id)
+    WHERE deleted_at IS NULL;
+CREATE TABLE IF NOT EXISTS series_details (
+    series_id  INTEGER PRIMARY KEY,
+    fetched_at INTEGER NOT NULL,
+    info       TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS episodes (
+    episode_id      INTEGER PRIMARY KEY,
+    series_id       INTEGER NOT NULL,
+    season          INTEGER NOT NULL,
+    episode         INTEGER NOT NULL,
+    episode_end     INTEGER,
+    title           TEXT,
+    plot            TEXT,
+    duration_secs   INTEGER,
+    still_url       TEXT,
+    air_date        TEXT,
+    container       TEXT,
+    added           INTEGER,
+    stream_url      TEXT,
+    http_user_agent TEXT,
+    http_referrer   TEXT,
+    deleted_at      INTEGER
+);
+CREATE INDEX IF NOT EXISTS episodes_by_series ON episodes(series_id, season, episode);
+"#;
+
 fn add_missing_columns(conn: &Connection, columns: &[(&str, &str, &str)]) -> Result<()> {
     for (table, column, decl) in columns {
         let present: bool = conn
@@ -259,6 +330,8 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     conn.execute_batch(BACKUP_INDEXES)
         .context("migrating backup_lookup")?;
     conn.execute_batch(VOD_TABLES).context("migrating vod")?;
+    conn.execute_batch(SERIES_TABLES)
+        .context("migrating series")?;
     crate::catalog::guide_search::install(conn)
 }
 
@@ -318,6 +391,9 @@ mod tests {
             "vod_categories",
             "movie_details",
             "vod_marks",
+            "series",
+            "series_details",
+            "episodes",
         ] {
             assert!(
                 tables.contains(&t.to_string()),
