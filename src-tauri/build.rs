@@ -190,8 +190,13 @@ fn without_bundle(what: &str) {
 /// from an excerpt of mpv's buffer), compiled against the FFmpeg that libmpv already loads:
 /// the bundle's libavformat, libavcodec, libswscale and libavutil, its headers in `include/`,
 /// or with none fetched whatever pkg-config finds. Nothing is added to what ships.
+///
+/// With none fetched and pkg-config unable to find them (a Mac without FFmpeg's development
+/// files, say), the app is built without that file, with a warning: `zapper_no_thumbframe`
+/// set, a title's seek bar previews only the frames drawn while it played.
 #[cfg(feature = "gui")]
 fn libmpv(bundle: Option<&Path>) {
+    println!("cargo:rustc-check-cfg=cfg(zapper_no_thumbframe)");
     let src = "src/surface/thumbframe.c";
     println!("cargo:rerun-if-changed={src}");
     let mut build = cc::Build::new();
@@ -209,11 +214,20 @@ fn libmpv(bundle: Option<&Path>) {
             without_bundle("zapper's libmpv");
             println!("cargo:rerun-if-env-changed=PKG_CONFIG_PATH");
             for lib in libs {
-                let found = pkg_config::Config::new()
-                    .probe(&format!("lib{lib}"))
-                    .unwrap_or_else(|e| panic!("zapper needs lib{lib}'s development files: {e}"));
-                for dir in found.include_paths {
-                    build.include(dir);
+                match pkg_config::Config::new().probe(&format!("lib{lib}")) {
+                    Ok(found) => {
+                        for dir in found.include_paths {
+                            build.include(dir);
+                        }
+                    }
+                    Err(e) => {
+                        println!(
+                            "cargo:warning=lib{lib}'s development files aren't found ({e}); \
+                             the seek bar of a movie or an episode will preview only what has played"
+                        );
+                        println!("cargo:rustc-cfg=zapper_no_thumbframe");
+                        return;
+                    }
                 }
             }
             build.compile("zapper_thumbframe");

@@ -166,7 +166,10 @@ sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev \
 libmpv isn't one of them: zapper builds against, and its packages carry, its own LGPL build of
 libmpv and FFmpeg, which `just fetch-libmpv` downloads into `src-tauri/lib/`
 ([docs/licensing.md](docs/licensing.md#mpv-and-ffmpeg)). Without it a development build falls
-back to the system's (`libmpv-dev`).
+back to the system's (`libmpv-dev`), and builds the seek bar's previews of what a movie has
+buffered against the system's FFmpeg (`libavformat-dev`, `libavcodec-dev`, `libswscale-dev`,
+`libavutil-dev`); without those, a warning, and the bar previews only what has played. The same
+goes for macOS, where pkg-config and Homebrew's `ffmpeg` provide them.
 
 Packaging and the release-script checks also want `jq`, `dpkg-dev`, `zstd` (the Arch package)
 and `desktop-file-utils`;

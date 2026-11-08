@@ -103,7 +103,8 @@ Every package ships libmpv and FFmpeg's libraries, built by zapper's own
 `scripts/build-libmpv.sh` with nothing under the GPL: mpv `-Dgpl=false`, FFmpeg without
 `--enable-gpl`, `--enable-version3` or `--enable-nonfree`. They are therefore LGPL-2.1-or-later.
 The app plays through libmpv, which uses FFmpeg, and decodes a title's seek-bar previews through
-FFmpeg's libavcodec directly (`src-tauri/src/surface/thumbframe.c`); the recording service,
+FFmpeg's libavformat, libavcodec, libswscale and libavutil directly
+(`src-tauri/src/surface/thumbframe.c`); the recording service,
 zapper-server, remuxes through FFmpeg's libavformat directly (docs/recording.md). They are shared libraries, separate
 from both programs, and the user can replace them with their own builds
 (`packaging/licenses/MPV-FFMPEG-NOTICE.txt` says so, and where):

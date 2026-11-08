@@ -1952,33 +1952,43 @@ async fn run_trickplay_vod(app: &tauri::AppHandle) -> Result<String, String> {
     let mut notes = Vec::new();
 
     // ----- coverage, with a buffer of about half a minute
-    mpv.set_property("demuxer-max-bytes", 6i64 * 1024 * 1024)
+    // (`ZAPPER_TRICKPLAY_CACHE_MB`, 6 for the 120 s film; more for a film of
+    // a higher bitrate), and `ZAPPER_TRICKPLAY_FILL_SECS` (4) for the worker
+    // to fill it, longer where excerpts are big and the worker paces itself.
+    let env_num = |k: &str, d: u64| std::env::var(k).ok().and_then(|s| s.parse().ok()).unwrap_or(d);
+    let fill_secs = env_num("ZAPPER_TRICKPLAY_FILL_SECS", 4);
+    mpv.set_property("demuxer-max-bytes", env_num("ZAPPER_TRICKPLAY_CACHE_MB", 6) as i64 * 1024 * 1024)
         .map_err(|e| format!("demuxer-max-bytes: {e}"))?;
     cmds::play_movie(app.clone(), 1, None, None).await?;
     let opened = await_state(Duration::from_secs(25), |s| s.state == PlaybackState::Playing).await;
     if opened.state != PlaybackState::Playing {
         return Err(format!("play_movie() ended in {:?}", opened.state));
     }
+    let length = opened.on_demand.and_then(|o| o.duration).unwrap_or(120.0);
     tokio::time::sleep(Duration::from_secs(10)).await;
     // Paused, so the buffer and the playhead hold still while they are read.
     cmds::set_paused(app.clone(), true).await?;
-    tokio::time::sleep(Duration::from_secs(4)).await;
+    tokio::time::sleep(Duration::from_secs(fill_secs)).await;
     let (head, rs, times) = (pos(), ranges(), trickplay::title_times());
     let end = rs
         .iter()
         .find(|r| r.0 <= head && head <= r.1)
         .map(|r| r.1)
         .ok_or_else(|| format!("no buffered range holds the playhead {head:.1}: {rs:?}"))?;
-    println!("[trickplay] playhead {head:.1}s, buffered {rs:?}, frames at {times:?}");
-    if end > 100.0 {
-        return Err(format!("the buffer was meant to be short, but it reaches {end:.1}s"));
+    let stride = title_thumbs::stats().stride.max(1);
+    println!("[trickplay] playhead {head:.1}s, buffered {rs:?}, every {stride} slot(s), frames at {times:?}");
+    if end > length - 15.0 {
+        return Err(format!("the buffer was meant to be short, but it reaches {end:.1}s of {length:.0}"));
     }
     let first = (head / spacing).ceil() as i64;
     let last = ((end - trickplay::DUMP_SPAN_S) / spacing).floor() as i64;
     if last < first + 1 {
         return Err(format!("too little buffered ahead to check: {head:.1}..{end:.1}"));
     }
-    if let Some(k) = (first..=last).find(|k| trickplay::title_frame(at(*k)).is_none()) {
+    // Every slot the worker tries (all of them, unless big excerpts made
+    // it try every second or fourth) has a frame.
+    let tried = |k: &i64| k % stride == 0;
+    if let Some(k) = (first..=last).filter(tried).find(|k| trickplay::title_frame(at(*k)).is_none()) {
         return Err(format!("slot {k} ({}s) is buffered and has no frame; frames at {times:?}", at(k)));
     }
     let past_end = |t: f64| at(trickplay::slot_of(t, spacing)) > end + 0.01;
@@ -1999,8 +2009,9 @@ async fn run_trickplay_vod(app: &tauri::AppHandle) -> Result<String, String> {
         let path = std::path::Path::new(&dir).join(format!("slot-{first}.jpg"));
         std::fs::write(&path, decode_base64(b64)).map_err(|e| format!("{}: {e}", path.display()))?;
     }
-    if cmds::thumbnail_for_title(110.0).await?.is_some() {
-        return Err("thumbnail_for_title answered for 110s, which was never buffered".into());
+    let never = length - 10.0;
+    if cmds::thumbnail_for_title(never).await?.is_some() {
+        return Err(format!("thumbnail_for_title answered for {never:.0}s, which was never buffered"));
     }
     notes.push(format!(
         "slots {first}..={last} filled up to the buffered end {end:.1}s, none past it"
@@ -2011,14 +2022,16 @@ async fn run_trickplay_vod(app: &tauri::AppHandle) -> Result<String, String> {
     cmds::set_paused(app.clone(), false).await?;
     tokio::time::sleep(Duration::from_secs(5)).await;
     cmds::set_paused(app.clone(), true).await?;
-    tokio::time::sleep(Duration::from_secs(4)).await;
+    tokio::time::sleep(Duration::from_secs(fill_secs)).await;
     let (head2, rs2) = (pos(), ranges());
+    let stride = title_thumbs::stats().stride.max(1);
     let end2 = rs2
         .iter()
         .find(|r| r.0 <= head2 && head2 <= r.1)
         .map_or(head2, |r| r.1);
     let ahead: Vec<i64> = ((head2 / spacing).ceil() as i64
         ..=((end2 - trickplay::DUMP_SPAN_S) / spacing).floor() as i64)
+        .filter(|k| k % stride == 0)
         .collect();
     if let Some(k) = ahead.iter().find(|k| trickplay::title_frame(at(**k)).is_none()) {
         return Err(format!(
@@ -2063,7 +2076,7 @@ async fn run_trickplay_vod(app: &tauri::AppHandle) -> Result<String, String> {
         cmds::seek_to(app.clone(), 2.0).await?;
         tokio::time::sleep(Duration::from_secs(2)).await;
         let (vo0, dec0) = (count("frame-drop-count"), count("decoder-frame-drop-count"));
-        let (done0, failed0, busy0, _) = title_thumbs::stats();
+        let s0 = title_thumbs::stats();
         let began = Instant::now();
         let mut samples: Vec<(f64, f64)> = Vec::new();
         let mut stressed = Instant::now();
@@ -2078,7 +2091,9 @@ async fn run_trickplay_vod(app: &tauri::AppHandle) -> Result<String, String> {
         }
         let vo = count("frame-drop-count") - vo0;
         let dec = count("decoder-frame-drop-count") - dec0;
-        let (done, failed, busy, longest) = title_thumbs::stats();
+        let s1 = title_thumbs::stats();
+        let slots = (s1.filed + s1.failed + s1.repeats) - (s0.filed + s0.failed + s0.repeats);
+        let per = |v: u64| if slots == 0 { 0.0 } else { v as f64 / slots as f64 };
         let (mut still, mut worst, mut moved) = (0.0f64, 0.0f64, samples[0]);
         for w in samples.windows(2) {
             let (dw, dp) = (w[1].0 - w[0].0, w[1].1 - w[0].1);
@@ -2100,29 +2115,37 @@ async fn run_trickplay_vod(app: &tauri::AppHandle) -> Result<String, String> {
         let line = format!(
             "phase {} worker {} ({decoder} decoding): {secs}s, dropped vo={vo} decoder={dec}, \
              time-pos drift {drift:+.3}s, longest still {:.0}ms, worst 50ms sample off by {:.0}ms, \
-             slots decoded {} (no picture {}), worker busy {:.0}ms (longest slot {:.1}ms)",
+             slots {slots} (filed {}, no picture {}, repeat keyframe {}), {:.1}MB written \
+             ({:.2}MB a slot, largest {:.1}MB), {:.1}ms a slot (longest {:.1}ms), \
+             worker CPU {:.0}ms = {:.1}% of a core",
             i + 1,
             if on { "on" } else { "off" },
             still * 1000.0,
             worst * 1000.0,
-            done - done0,
-            failed - failed0,
-            (busy - busy0) as f64 / 1000.0,
-            longest as f64 / 1000.0,
+            s1.filed - s0.filed,
+            s1.failed - s0.failed,
+            s1.repeats - s0.repeats,
+            (s1.bytes - s0.bytes) as f64 / 1048576.0,
+            per(s1.bytes - s0.bytes) / 1048576.0,
+            s1.largest as f64 / 1048576.0,
+            per(s1.busy_us - s0.busy_us) / 1000.0,
+            s1.longest_us as f64 / 1000.0,
+            (s1.cpu_us - s0.cpu_us) as f64 / 1000.0,
+            (s1.cpu_us - s0.cpu_us) as f64 / 1000.0 / secs as f64 / 10.0,
         );
         println!("[trickplay] {line}");
         lines.push(line);
-        idle_worker |= on && done == done0;
+        idle_worker |= on && slots == 0;
     }
     title_thumbs::set_enabled(true);
     cmds::stop(app.clone()).await?;
     tokio::time::sleep(Duration::from_millis(600)).await;
-    let mine = format!("zapper-preview-{}-", std::process::id());
-    let leftovers: Vec<String> = std::fs::read_dir(std::env::temp_dir())
+    // The excerpts' folder, in this run's scratch cache.
+    let excerpts = zapper_lib::paths::cache_dir().join("previews");
+    let leftovers: Vec<String> = std::fs::read_dir(&excerpts)
         .map(|d| {
             d.flatten()
                 .map(|e| e.file_name().to_string_lossy().into_owned())
-                .filter(|n| n.starts_with(&mine))
                 .collect()
         })
         .unwrap_or_default();
