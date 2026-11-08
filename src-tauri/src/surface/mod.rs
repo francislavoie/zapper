@@ -11,7 +11,9 @@
 //!   heartbeat runs on.
 //! - [`request_capture`] is the development self-capture (`ZAPPER_CAPTURE`).
 //! - [`mpv`] is the player itself and [`trickplay`] the scrollback
-//!   thumbnails; both are portable, and neither names a toolkit.
+//!   thumbnails; both are portable, and neither names a toolkit. Neither
+//!   does [`title_thumbs`], which fills a title's thumbnails from what mpv
+//!   has buffered.
 //!
 //! Behind it, one module per platform, chosen at compile time:
 //!
@@ -30,6 +32,7 @@
 
 pub mod mpv;
 pub mod png;
+pub mod title_thumbs;
 pub mod trickplay;
 
 #[cfg(target_os = "linux")]

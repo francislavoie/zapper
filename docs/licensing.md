@@ -102,8 +102,9 @@ on crates.io: `THIRD-PARTY-NOTICES-rust.txt` ends with both addresses.
 Every package ships libmpv and FFmpeg's libraries, built by zapper's own
 `scripts/build-libmpv.sh` with nothing under the GPL: mpv `-Dgpl=false`, FFmpeg without
 `--enable-gpl`, `--enable-version3` or `--enable-nonfree`. They are therefore LGPL-2.1-or-later.
-The app plays through libmpv, which uses FFmpeg; the recording service, zapper-server, remuxes
-through FFmpeg's libavformat directly (docs/recording.md). They are shared libraries, separate
+The app plays through libmpv, which uses FFmpeg, and decodes a title's seek-bar previews through
+FFmpeg's libavcodec directly (`src-tauri/src/surface/thumbframe.c`); the recording service,
+zapper-server, remuxes through FFmpeg's libavformat directly (docs/recording.md). They are shared libraries, separate
 from both programs, and the user can replace them with their own builds
 (`packaging/licenses/MPV-FFMPEG-NOTICE.txt` says so, and where):
 
@@ -203,8 +204,8 @@ which also makes the import libraries MSVC links with, `mpv.lib`, `avformat.lib`
 from the archive's export lists) downloads this platform's, checks it and unpacks it into
 `src-tauri/lib/<platform>/`: `runtime/` (the libraries that ship), `link/` (what a link needs),
 `include/` (mpv's and FFmpeg's headers). `src-tauri/build.rs` then puts `link/` first on the
-link path and sets the RUNPATH, so libmpv2-sys's `-lmpv` and the remuxer's `-lavformat` resolve
-to the bundle, compiles the remuxer against `include/`, and copies `runtime/` beside cargo's
+link path and sets the RUNPATH, so libmpv2-sys's `-lmpv` and the remuxer's and previews' `-lavformat` resolve
+to the bundle, compiles the remuxer and the previews against `include/`, and copies `runtime/` beside cargo's
 output; the package configs take the libraries and their notices from there. The package
 recipes and the release workflow fetch it first. A debug build with nothing fetched links the
 system's libmpv and FFmpeg instead, with a warning; a release build refuses

@@ -25,6 +25,20 @@
 //! with ranges at `movie/<user>/<pass>/2.mp4`) and checks its clock,
 //! `seek_to`, a relative seek past what was buffered, pause and stop.
 //!
+//! `--trickplay-vod` (with `fake_stream.py --movies 2` and
+//! `ZAPPER_FIXTURE_MOVIE=movie/u/p/2.mp4`, the 120 s 1080p film) checks the
+//! previews on a title's seek bar. With mpv's buffer cut to a few megabytes,
+//! so it holds about half a minute ahead: every slot from the playhead to
+//! the buffered end has a frame and nothing past that end has one;
+//! `thumbnail_for_title` answers a JPEG for a filled slot and nothing for an
+//! empty one; a seek ahead past the buffer fills the new stretch; the same
+//! film opened again keeps them; no excerpt is left in the temporary
+//! directory. Then, the whole film buffered, it plays for
+//! `ZAPPER_TRICKPLAY_MEASURE_SECS` (default 20) three times, with the
+//! worker paused, running flat out (its store emptied every two seconds)
+//! and paused again, and prints mpv's dropped frames and how evenly
+//! `time-pos` moved in each.
+//!
 //! `--held` (with `fake_stream.py --movies 2`) opens a movie held at 30 s,
 //! as Resume / Start over asks: paused there and staying put; Resume
 //! (`set_paused(false)`, sent twice) plays it on from there; held again
@@ -200,6 +214,8 @@ fn main() {
                     run_keeps_playing(&handle, secs, args.iter().any(|a| a == "--after-movie")).await
                 } else if args.iter().any(|a| a == "--movie") {
                     run_movie(&handle).await
+                } else if args.iter().any(|a| a == "--trickplay-vod") {
+                    run_trickplay_vod(&handle).await
                 } else if args.iter().any(|a| a == "--held") {
                     run_held(&handle).await
                 } else if args.iter().any(|a| a == "--pause-then-play") {
@@ -1882,4 +1898,239 @@ async fn resolve_stream_id() -> Result<i64, String> {
         .or_else(|| playable().next())
         .map(|c| c.stream_id)
         .ok_or_else(|| "the server listed no playable channels".into())
+}
+
+/// Standard base64 back to bytes (padding and anything else ignored).
+#[cfg(target_os = "linux")]
+fn decode_base64(s: &str) -> Vec<u8> {
+    let val = |c: u8| match c {
+        b'A'..=b'Z' => Some(c - b'A'),
+        b'a'..=b'z' => Some(c - b'a' + 26),
+        b'0'..=b'9' => Some(c - b'0' + 52),
+        b'+' => Some(62),
+        b'/' => Some(63),
+        _ => None,
+    };
+    let (mut out, mut acc, mut bits) = (Vec::new(), 0u32, 0);
+    for v in s.bytes().filter_map(val) {
+        acc = (acc << 6) | u32::from(v);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+        }
+    }
+    out
+}
+
+/// `--trickplay-vod`; see the module's comment.
+#[cfg(target_os = "linux")]
+async fn run_trickplay_vod(app: &tauri::AppHandle) -> Result<String, String> {
+    use std::time::{Duration, Instant};
+    use zapper_lib::ipc::player_cmds as cmds;
+    use zapper_lib::ipc::types::PlaybackState;
+    use zapper_lib::surface::{mpv as zmpv, title_thumbs, trickplay};
+
+    let mpv = zmpv::handle().ok_or("no mpv")?;
+    let ranges = || -> Vec<(f64, f64)> {
+        let raw = mpv
+            .get_property::<String>("demuxer-cache-state")
+            .unwrap_or_default();
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap_or_default();
+        v.get("seekable-ranges")
+            .and_then(|r| r.as_array())
+            .map(|rs| {
+                rs.iter()
+                    .filter_map(|r| Some((r.get("start")?.as_f64()?, r.get("end")?.as_f64()?)))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let pos = || mpv.get_property::<f64>("time-pos").unwrap_or(-1.0);
+    let spacing = trickplay::TITLE_SPACING_S;
+    let at = |k: i64| k as f64 * spacing;
+    let mut notes = Vec::new();
+
+    // ----- coverage, with a buffer of about half a minute
+    mpv.set_property("demuxer-max-bytes", 6i64 * 1024 * 1024)
+        .map_err(|e| format!("demuxer-max-bytes: {e}"))?;
+    cmds::play_movie(app.clone(), 1, None, None).await?;
+    let opened = await_state(Duration::from_secs(25), |s| s.state == PlaybackState::Playing).await;
+    if opened.state != PlaybackState::Playing {
+        return Err(format!("play_movie() ended in {:?}", opened.state));
+    }
+    tokio::time::sleep(Duration::from_secs(10)).await;
+    // Paused, so the buffer and the playhead hold still while they are read.
+    cmds::set_paused(app.clone(), true).await?;
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    let (head, rs, times) = (pos(), ranges(), trickplay::title_times());
+    let end = rs
+        .iter()
+        .find(|r| r.0 <= head && head <= r.1)
+        .map(|r| r.1)
+        .ok_or_else(|| format!("no buffered range holds the playhead {head:.1}: {rs:?}"))?;
+    println!("[trickplay] playhead {head:.1}s, buffered {rs:?}, frames at {times:?}");
+    if end > 100.0 {
+        return Err(format!("the buffer was meant to be short, but it reaches {end:.1}s"));
+    }
+    let first = (head / spacing).ceil() as i64;
+    let last = ((end - trickplay::DUMP_SPAN_S) / spacing).floor() as i64;
+    if last < first + 1 {
+        return Err(format!("too little buffered ahead to check: {head:.1}..{end:.1}"));
+    }
+    if let Some(k) = (first..=last).find(|k| trickplay::title_frame(at(*k)).is_none()) {
+        return Err(format!("slot {k} ({}s) is buffered and has no frame; frames at {times:?}", at(k)));
+    }
+    let past_end = |t: f64| at(trickplay::slot_of(t, spacing)) > end + 0.01;
+    if let Some(past) = times.iter().find(|t| past_end(**t)) {
+        return Err(format!("a frame at {past:.1}s, past the buffered end {end:.1}s"));
+    }
+    let answer = cmds::thumbnail_for_title(at(first)).await?;
+    if !answer
+        .as_ref()
+        .is_some_and(|t| t.data_url.starts_with("data:image/jpeg;base64,/9j/"))
+    {
+        let head: Option<String> = answer.map(|t| t.data_url.chars().take(30).collect());
+        return Err(format!("thumbnail_for_title gave {head:?}"));
+    }
+    if let (Ok(dir), Some(t)) = (std::env::var("ZAPPER_TRICKPLAY_SAVE"), &answer) {
+        // The preview as the seek bar receives it, to look at.
+        let b64 = t.data_url.split_once(',').map_or("", |(_, b)| b);
+        let path = std::path::Path::new(&dir).join(format!("slot-{first}.jpg"));
+        std::fs::write(&path, decode_base64(b64)).map_err(|e| format!("{}: {e}", path.display()))?;
+    }
+    if cmds::thumbnail_for_title(110.0).await?.is_some() {
+        return Err("thumbnail_for_title answered for 110s, which was never buffered".into());
+    }
+    notes.push(format!(
+        "slots {first}..={last} filled up to the buffered end {end:.1}s, none past it"
+    ));
+
+    // A seek ahead, past the buffer: the new stretch fills too.
+    cmds::seek_to(app.clone(), 80.0).await?;
+    cmds::set_paused(app.clone(), false).await?;
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    cmds::set_paused(app.clone(), true).await?;
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    let (head2, rs2) = (pos(), ranges());
+    let end2 = rs2
+        .iter()
+        .find(|r| r.0 <= head2 && head2 <= r.1)
+        .map_or(head2, |r| r.1);
+    let ahead: Vec<i64> = ((head2 / spacing).ceil() as i64
+        ..=((end2 - trickplay::DUMP_SPAN_S) / spacing).floor() as i64)
+        .collect();
+    if let Some(k) = ahead.iter().find(|k| trickplay::title_frame(at(**k)).is_none()) {
+        return Err(format!(
+            "after a seek to 80s, slot {k} is buffered ({head2:.1}..{end2:.1}) and has no frame: {:?}",
+            trickplay::title_times()
+        ));
+    }
+    notes.push(format!("after a seek to 80s, slots {ahead:?} filled"));
+
+    // The same title opened again keeps them.
+    let before = trickplay::title_times().len();
+    cmds::play_movie(app.clone(), 1, None, None).await?;
+    let kept = trickplay::title_times().len();
+    if kept < before {
+        return Err(format!("opening the same film again dropped its frames: {before} -> {kept}"));
+    }
+    notes.push(format!("{kept} frames kept across a reopen"));
+
+    // ----- playback with and without the worker, the whole film buffered
+    mpv.set_property("demuxer-max-bytes", zmpv::DEMUXER_MAX_BYTES)
+        .map_err(|e| format!("demuxer-max-bytes: {e}"))?;
+    // `ZAPPER_TRICKPLAY_HWDEC=no` decodes the film on the processor too, the
+    // harder case for a worker that decodes beside it.
+    if let Ok(hwdec) = std::env::var("ZAPPER_TRICKPLAY_HWDEC") {
+        mpv.set_property("hwdec", hwdec.as_str())
+            .map_err(|e| format!("hwdec: {e}"))?;
+    }
+    cmds::play_movie(app.clone(), 1, Some(0.0), None).await?;
+    await_state(Duration::from_secs(25), |s| s.state == PlaybackState::Playing).await;
+    cmds::set_paused(app.clone(), false).await?;
+    tokio::time::sleep(Duration::from_secs(6)).await;
+    let secs: u64 = std::env::var("ZAPPER_TRICKPLAY_MEASURE_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(20);
+    let count = |k: &str| mpv.get_property::<i64>(k).unwrap_or(-1);
+    let mut lines = Vec::new();
+    let mut idle_worker = false;
+    for (i, on) in [false, true, false].into_iter().enumerate() {
+        title_thumbs::set_enabled(on);
+        // From near the start each time, so every phase plays the same pictures.
+        cmds::seek_to(app.clone(), 2.0).await?;
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        let (vo0, dec0) = (count("frame-drop-count"), count("decoder-frame-drop-count"));
+        let (done0, failed0, busy0, _) = title_thumbs::stats();
+        let began = Instant::now();
+        let mut samples: Vec<(f64, f64)> = Vec::new();
+        let mut stressed = Instant::now();
+        while began.elapsed() < Duration::from_secs(secs) {
+            if on && stressed.elapsed() >= Duration::from_secs(2) {
+                // A new, empty store: every buffered slot is to fill again.
+                trickplay::open_title(&format!("stress-{}", began.elapsed().as_millis()));
+                stressed = Instant::now();
+            }
+            samples.push((began.elapsed().as_secs_f64(), pos()));
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let vo = count("frame-drop-count") - vo0;
+        let dec = count("decoder-frame-drop-count") - dec0;
+        let (done, failed, busy, longest) = title_thumbs::stats();
+        let (mut still, mut worst, mut moved) = (0.0f64, 0.0f64, samples[0]);
+        for w in samples.windows(2) {
+            let (dw, dp) = (w[1].0 - w[0].0, w[1].1 - w[0].1);
+            worst = worst.max((dp - dw).abs());
+            if dp > 0.0 {
+                moved = w[1];
+            } else {
+                still = still.max(w[1].0 - moved.0);
+            }
+        }
+        let (t0, p0) = samples[0];
+        let (t1, p1) = samples[samples.len() - 1];
+        let drift = (p1 - p0) - (t1 - t0);
+        let decoder = mpv
+            .get_property::<String>("hwdec-current")
+            .ok()
+            .filter(|s| !s.is_empty() && s != "no")
+            .unwrap_or_else(|| "software".into());
+        let line = format!(
+            "phase {} worker {} ({decoder} decoding): {secs}s, dropped vo={vo} decoder={dec}, \
+             time-pos drift {drift:+.3}s, longest still {:.0}ms, worst 50ms sample off by {:.0}ms, \
+             slots decoded {} (no picture {}), worker busy {:.0}ms (longest slot {:.1}ms)",
+            i + 1,
+            if on { "on" } else { "off" },
+            still * 1000.0,
+            worst * 1000.0,
+            done - done0,
+            failed - failed0,
+            (busy - busy0) as f64 / 1000.0,
+            longest as f64 / 1000.0,
+        );
+        println!("[trickplay] {line}");
+        lines.push(line);
+        idle_worker |= on && done == done0;
+    }
+    title_thumbs::set_enabled(true);
+    cmds::stop(app.clone()).await?;
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    let mine = format!("zapper-preview-{}-", std::process::id());
+    let leftovers: Vec<String> = std::fs::read_dir(std::env::temp_dir())
+        .map(|d| {
+            d.flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|n| n.starts_with(&mine))
+                .collect()
+        })
+        .unwrap_or_default();
+    if !leftovers.is_empty() {
+        return Err(format!("excerpts left behind: {leftovers:?}"));
+    }
+    if idle_worker {
+        return Err(format!("the worker decoded nothing while it was on: {}", lines.join("; ")));
+    }
+    Ok(format!("{}; {}", notes.join("; "), lines.join("; ")))
 }
