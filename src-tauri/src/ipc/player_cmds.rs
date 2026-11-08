@@ -837,8 +837,13 @@ impl Machine {
     }
 
     /// A title was sought to `at` seconds (already clamped to its length):
-    /// its position says so from now, until mpv's clock catches up.
+    /// its position says so from now, until mpv's clock catches up. Only
+    /// while it plays or is paused: a seek that lands as another title is
+    /// opening was meant for the one before it.
     fn sought(&mut self, at: f64) {
+        if !matches!(self.dto.state, PlaybackState::Playing | PlaybackState::Paused) {
+            return;
+        }
         if let Some(od) = self.dto.on_demand.as_mut() {
             od.position = at.max(0.0).round();
             self.seek_target = Some((od.position, Instant::now()));
@@ -3819,6 +3824,24 @@ mod tests {
             m.seek_target = m.seek_target.map(|(t, _)| (t, Instant::now() - SEEK_SETTLE));
             at(&mut m, 113.0);
             assert_eq!(title(m.dto.on_demand).map(|t| t.2), Some(113.0));
+        }
+
+        #[test]
+        fn a_seek_while_opening_leaves_the_place_alone() {
+            // The next episode is opening: a seek meant for the one before
+            // it must not move this one's place.
+            let mut m = finished_episode(7);
+            m.advance(7, 8).unwrap();
+            assert_eq!(m.dto.state, PlaybackState::Opening);
+            m.sought(100.0);
+            assert_eq!(title(m.dto.on_demand), Some((OnDemandKind::Episode, 8, 0.0)));
+            assert!(m.seek_target.is_none());
+            // Paused, it is followed as when playing.
+            let mut m = a_playing_episode(7);
+            m.set_paused(true);
+            m.sought(42.0);
+            assert_eq!(title(m.dto.on_demand), Some((OnDemandKind::Episode, 7, 42.0)));
+            assert!(m.seek_target.is_some());
         }
 
         #[test]
