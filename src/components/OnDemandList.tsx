@@ -436,6 +436,7 @@ export function OnDemandList<T extends object>(p: OnDemandListProps<T>) {
           className="list-search"
           inputRef={searchRef}
           placeholder={p.placeholder}
+          keyHint="/"
           value={state.query}
           onChange={(text) => on.query(text)}
           clearLabel="Clear search"
