@@ -83,26 +83,31 @@ export function ShowPane({ show, stacked, listName, wantsFocus, settled, toList 
   // are here: the cursor is on what is next.
   const listed = d !== null && season !== null;
   const failed = details.status === "error";
+  // Stacked, the pane takes the place of the list that had focus, and is
+  // always asked for its episodes (ShowsList); until they are here, and if
+  // they fail to load, focus waits on the way back rather than falling to
+  // the page.
+  const toBack = () => {
+    if (stacked) root.current?.querySelector<HTMLElement>(".sp-back")?.focus();
+  };
   useEffect(() => {
     if (!wantsFocus) return;
-    if (failed) settled();
-    else if (listed) {
+    if (failed) {
+      settled();
+      toBack();
+    } else if (listed) {
       settled();
       focusEpisodes();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wantsFocus, listed, failed]);
-
-  // Stacked, the pane takes the place of the list that had focus: focus
-  // comes to its way back rather than falling to the page (or to the
-  // episodes, above, when Enter or → opened it).
   useEffect(() => {
-    if (stacked && !wantsFocus) root.current?.querySelector<HTMLElement>(".sp-back")?.focus();
+    if (!listed) toBack();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Closed with focus inside it (✕, Escape from its season tabs): back to
-  // the list rather than to nowhere.
+  // Closed with focus inside it (its ✕, its Details › once the sheet is
+  // gone): back to the list rather than to nowhere.
   const toListRef = useRef(toList);
   toListRef.current = toList;
   useEffect(
@@ -156,7 +161,9 @@ export function ShowPane({ show, stacked, listName, wantsFocus, settled, toList 
   const ids = useId();
   const tabId = (n: number) => `${ids}-season-${n}`;
   const panelId = `${ids}-episodes`;
-  const main = <PaneMainAction show={show} details={details} playingEpisode={playingEpisode} />;
+  const main = (
+    <PaneMainAction show={show} details={details} playingEpisode={playingEpisode} stacked={stacked} />
+  );
 
   return (
     <section
@@ -193,7 +200,7 @@ export function ShowPane({ show, stacked, listName, wantsFocus, settled, toList 
                 ) : null}
               </div>
               <div className="watch-actions">
-                <ShowActions show={show} details={details} playing={false} main={main} />
+                <ShowActions show={show} details={details} playing={playingEpisode !== null} main={main} />
               </div>
             </div>
           </div>
@@ -285,27 +292,37 @@ export function ShowPane({ show, stacked, listName, wantsFocus, settled, toList 
 
 /** The pane's main action, beside the list and stacked alike: Play (what is
  *  next, with where it was left), or for the show playing, back to it full
- *  screen. The one place it is built. */
+ *  screen. Stacked, the picture is already up there: how far in is all it
+ *  says, and the row's Full screen and Stop (ShowActions) do the rest. The
+ *  one place it is built. */
 function PaneMainAction({
   show,
   details,
   playingEpisode,
+  stacked,
 }: {
   show: SeriesDto;
   details: Async<SeriesDetailsDto>;
   playingEpisode: EpisodeDto | null;
+  stacked: boolean;
 }) {
   const d = details.status === "ready" ? details.data : null;
   const { player } = useApp();
   const dispatch = useDispatch();
   if (playingEpisode) {
     const at = player.onDemand?.kind === "episode" ? player.onDemand : null;
+    const hint = at ? (
+      <span className="sp-hint">
+        {stacked ? `${codeOf(playingEpisode)} playing` : "playing"} · {positionLabel(at).replace(" / ", " of ")}
+      </span>
+    ) : null;
+    if (stacked) return hint;
     return (
       <>
         <button className="ctl movie-play" onClick={() => dispatch({ type: "mode", mode: "watch" })}>
           <Fullscreen className="i" /> Back to {codeOf(playingEpisode)}
         </button>
-        {at ? <span className="sp-hint">playing · {positionLabel(at).replace(" / ", " of ")}</span> : null}
+        {hint}
       </>
     );
   }

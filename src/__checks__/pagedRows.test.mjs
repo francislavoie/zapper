@@ -3,7 +3,7 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { PageBook } from "../logic/pagedRows.ts";
+import { PageBook, selectionGone } from "../logic/pagedRows.ts";
 import { PAGE_SIZE } from "../logic/virtual.ts";
 
 const rows = (from, n) => Array.from({ length: n }, (_, i) => from + i);
@@ -128,4 +128,43 @@ test("after a refresh, what was read since is told apart from what was kept", ()
   b.accept(b.ticket, 0, 2, ["a", "c"]);
   assert.equal(b.fresh(1), true);
   assert.deepEqual(b.freshRows(), ["a", "c"]);
+});
+
+test("a selection that crosses a page edge after a refresh is not taken for gone", () => {
+  const b = new PageBook();
+  const id = (x) => x;
+  const page = (p, shift) => rows(p * PAGE_SIZE + shift, PAGE_SIZE);
+  b.sync("k", 0);
+  b.begin(b.ticket, 0);
+  b.accept(b.ticket, 0, 3 * PAGE_SIZE, page(0, 0));
+  b.begin(b.ticket, 1);
+  b.accept(b.ticket, 1, 3 * PAGE_SIZE, page(1, 0));
+  // Selected: the last row of page 0. A refresh adds a row above it, which
+  // pushes it onto page 1.
+  const selected = PAGE_SIZE - 1;
+  const check = { at: PAGE_SIZE - 1, id: selected, key: "k" };
+  b.sync("k", 1);
+  const now = (o = {}) => ({
+    selectedId: selected,
+    key: "k",
+    loading: b.loading,
+    error: b.error,
+    total: b.total,
+    fresh: (i) => b.fresh(i),
+    freshRows: () => b.freshRows(),
+    ...o,
+  });
+  b.begin(b.ticket, 0);
+  assert.equal(selectionGone(check, now(), id), "wait", "still loading");
+  b.accept(b.ticket, 0, 3 * PAGE_SIZE + 1, page(0, -1));
+  assert.equal(selectionGone(check, now(), id), "wait", "page 0 is back, but not the one after it");
+  b.begin(b.ticket, 1);
+  b.accept(b.ticket, 1, 3 * PAGE_SIZE + 1, page(1, -1));
+  assert.equal(selectionGone(check, now(), id), "present");
+  // A selection or a list changed meanwhile drops the question.
+  assert.equal(selectionGone(check, now({ selectedId: 3 }), id), "drop");
+  assert.equal(selectionGone(check, now({ key: "other" }), id), "drop");
+  // Really gone: not in any page read again around where it was.
+  const gone = { at: 5, id: -999, key: "k" };
+  assert.equal(selectionGone(gone, now({ selectedId: -999 }), id), "gone");
 });

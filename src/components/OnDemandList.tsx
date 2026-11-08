@@ -39,7 +39,7 @@ import {
   type PosterCard,
   type YearRange,
 } from "../logic/movies";
-import type { PageBook } from "../logic/pagedRows";
+import { neighbourRows, selectionGone, type GoneCheck, type PageBook } from "../logic/pagedRows";
 import { LIST_ROW_HEIGHT, OVERSCAN, computeWindow } from "../logic/virtual";
 import type { MoviesMenu } from "../moviesState";
 import type { MovieSort } from "../types";
@@ -281,26 +281,32 @@ export function OnDemandList<T extends object>(p: OnDemandListProps<T>) {
   // The selected title gone from the list once it is read again: a mark
   // that takes it out (unfavourited under Favourites), a sync that dropped
   // it. Where it was is taken when the refresh starts, from the rows still
-  // shown; it is looked for once the page it was on has been read again.
-  const goneCheck = useRef<number | null>(null);
+  // shown; the pages around it are read again, and the answer waits for
+  // them (logic/pagedRows.ts `selectionGone`).
+  const goneCheck = useRef<GoneCheck | null>(null);
   const seenRevision = useRef(state.revision);
   useEffect(() => {
     if (seenRevision.current === state.revision) return;
     seenRevision.current = state.revision;
-    const at = selectedId === null ? -1 : currentIndex();
-    goneCheck.current = at >= 0 ? at : null;
+    const at = selectedId === null || !on.gone ? -1 : currentIndex();
+    goneCheck.current = at >= 0 && selectedId !== null ? { at, id: selectedId, key: listKey } : null;
+    if (goneCheck.current) {
+      const around = neighbourRows(at);
+      paged.ensure(around[0], around[around.length - 1] + 1);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.revision]);
   useEffect(() => {
-    const at = goneCheck.current;
-    if (at === null) return;
-    if (selectedId === null || !on.gone) {
-      goneCheck.current = null;
-      return;
-    }
-    if (paged.error || !paged.fresh(0) || (at < total && !paged.fresh(at))) return;
+    const g = goneCheck.current;
+    if (!g) return;
+    const verdict = selectionGone(
+      g,
+      { selectedId, key: listKey, loading: paged.loading, error: paged.error, total, fresh: paged.fresh, freshRows: paged.freshRows },
+      idOf,
+    );
+    if (verdict === "wait") return;
     goneCheck.current = null;
-    if (!paged.freshRows().some((t) => idOf(t) === selectedId)) on.gone();
+    if (verdict === "gone") on.gone?.();
   });
 
   // A key may land on a row whose page is still coming; the selection waits
@@ -462,7 +468,7 @@ export function OnDemandList<T extends object>(p: OnDemandListProps<T>) {
         <span className="list-title" data-tip-overflow="">
           {heading}
         </span>
-        <span className="list-count">{p.countLabel(total)}</span>
+        <span className="list-count list-total">{p.countLabel(total)}</span>
         {loading ? <span className="list-count">loading…</span> : null}
         <SearchField
           className="list-search"
