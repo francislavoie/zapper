@@ -103,6 +103,12 @@ interface have their own page: [recording.md](recording.md).
   the list without forgetting the place.
 - Typing in the search box searches the whole tab, as from any other list; clearing it comes back
   to Continue watching.
+- Movies you are partway through show a progress bar and the time left in the Movies list's
+  Progress column and along the foot of their poster card. In Posters view, every other category
+  on either tab has a Continue watching strip above the grid: one row of wide cards, scrolling
+  sideways, that play on a click or `Enter` and open the same menu. It is left out of the list
+  view, of Continue watching itself, of a search, and of a window too short to leave the posters
+  room.
 
 ## Playback
 

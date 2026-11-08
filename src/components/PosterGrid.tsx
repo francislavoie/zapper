@@ -156,6 +156,11 @@ const Card = memo(function Card({
             ✓
           </span>
         ) : null}
+        {c.progress !== null ? (
+          <span className="poster-progress" aria-hidden>
+            <span style={{ width: `${Math.round(c.progress * 100)}%` }} />
+          </span>
+        ) : null}
         <span className="poster-title" data-tip-overflow={c.name}>
           {c.title}
         </span>

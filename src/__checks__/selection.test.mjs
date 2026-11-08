@@ -141,6 +141,9 @@ test("ordinary chrome is not on the allowlist, by class or by ancestor", () => {
     "cw-row-code",
     "cw-row-left",
     "cw-row-when",
+    "cw-strip-left",
+    "cw-strip-when",
+    "movie-progress-left",
   ];
   for (const cls of chrome) {
     const hit = selectableSelectors.find((s) =>
