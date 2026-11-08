@@ -116,7 +116,7 @@ TZ=America/New_York cargo run --features harness --bin catchup_check
 | Fixture | Format | Why |
 |---|---|---|
 | `movie.mp4` | h264, aac, `-movflags +faststart`, one `mov_text` subtitle track | The common MP4 |
-| `movie.mkv` | h264, **ac3**, a `subrip` and an `ass` subtitle track | Matroska, AC-3 audio, text subtitles to extract |
+| `movie.mkv` | h264, **ac3**, a `subrip` (`eng`) and an `ass` (`fra`) subtitle track | Matroska, AC-3 audio, text subtitles to extract |
 
 `tools/fake_stream.py --movies 500` lists 500 made-up movies (ids 1..500, over
 three categories; odd ids are `mkv`, even `mp4`) through `player_api.php`:
@@ -125,6 +125,23 @@ three categories; odd ids are `mkv`, even `mp4`) through `player_api.php`:
 fixture as a file, with `Accept-Ranges: bytes` and `206` plus `Content-Range`
 for a `Range` header. A movie being sent counts in `active_cons` like a live
 stream, and `--refuse` applies to it too.
+
+`--series N` lists N made-up shows ("Show 0001"...) over three categories:
+`get_series_categories`, `get_series` (`&category_id=` filters; `last_modified`
+spread over 60 days, every tenth show within the last day) and
+`get_series_info&series_id=`. Show `i` has `1 + i % 3` seasons of 4 episodes,
+episode id `100000 + i*100 + season*10 + n` (odd `n` `mkv`, even `mp4`). Show 2
+answers its episodes as an array of arrays, show 3 adds two season-0 specials,
+show 4 answers an empty `info` and `seasons`. `/series/<user>/<pass>/<id>.<ext>`
+serves an episode from `movie.mp4` / `movie.mkv` exactly like a movie, and covers
+point at `/placeholder.png`. `--vod-cut-at 0.8` makes every movie and episode
+file announce its full length and then close the connection once 80 % of it has
+been sent (a range starting past that closes at once), so a reader meets an
+early end whatever its speed.
+
+`tools/make_playlist.py --base URL [--channels N] [--movie ID]...
+[--episode "NAME=ID"]... [--group G]` prints an M3U pointing at those channels,
+movies and episodes of the fake server.
 
 `cargo run --features harness --bin live_start_bench [fixture]` plays the
 server under several kinds of connect burst, starting each channel both ways
