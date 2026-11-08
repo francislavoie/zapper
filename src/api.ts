@@ -60,6 +60,11 @@ import {
   type RecordingStatusDto,
   type ScheduleRequest,
   type ServiceStatusDto,
+  type OnDemandKind,
+  type OnlineServicesDto,
+  type SubtitleSearchDto,
+  type SubtitleDownloadDto,
+  type KeptSubtitleDto,
 } from "./types";
 
 export const api = {
@@ -226,6 +231,29 @@ export const api = {
   episodeMarks: (episodeId: number) => invoke<MarksDto>("episode_marks", { episodeId }),
   playingEpisode: (episodeId: number) =>
     invoke<PlayingEpisodeDto>("playing_episode", { episodeId }),
+
+  // Online services (Settings › Online services) and subtitles found on
+  // OpenSubtitles. The password goes in and never comes back out; the token
+  // and the download links stay in the backend.
+  onlineServices: () => invoke<OnlineServicesDto>("online_services"),
+  /** An absent field is left as it is. */
+  setOpenSubtitles: (patch: { enabled?: boolean; languages?: string[] }) =>
+    invoke<OnlineServicesDto>("set_opensubtitles", {
+      enabled: patch.enabled ?? null,
+      languages: patch.languages ?? null,
+    }),
+  signInOpenSubtitles: (username: string, password: string) =>
+    invoke<OnlineServicesDto>("opensubtitles_sign_in", { username, password }),
+  signOutOpenSubtitles: () => invoke<OnlineServicesDto>("opensubtitles_sign_out"),
+  findSubtitles: (kind: OnDemandKind, id: number, languages: string[]) =>
+    invoke<SubtitleSearchDto>("find_subtitles", { kind, id, languages }),
+  downloadSubtitle: (kind: OnDemandKind, id: number, fileId: number) =>
+    invoke<SubtitleDownloadDto>("download_subtitle", { kind, id, fileId }),
+  keptSubtitles: (kind: OnDemandKind, id: number) =>
+    invoke<KeptSubtitleDto[]>("kept_subtitles", { kind, id }),
+  /** Adds a kept subtitle to what is playing, and selects it. */
+  addSubtitleFile: (kind: OnDemandKind, id: number, fileId: number, title: string, lang: string) =>
+    invoke<PlayerOptionsDto>("add_subtitle_file", { kind, id, fileId, title, lang }),
 
   // Backups (Settings › Data). The backend opens the file dialogs itself, so
   // no path crosses this boundary, and it adds and removes the account, so
