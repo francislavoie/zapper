@@ -190,6 +190,40 @@ export function placeReportDue(r: {
   return !(r.final && r.last?.position === r.position);
 }
 
+/** Up next standing aside for a title opened held: `by` is the question
+ *  that held it, `seen` once the player has reported the title, `on` until
+ *  it has played. */
+export interface Hold {
+  by: ResumePrompt;
+  seen: boolean;
+  on: boolean;
+}
+
+/** The hold for the player's state. Escape or a seek closes the question,
+ *  not the hold: a title paused near its end behind it neither shows Up
+ *  next's card nor moves on until it has played. It is over once the player
+ *  reports the title playing, or anything else once it has reported it at
+ *  all; a question gone before the title was ever reported (a failed open)
+ *  leaves none. Another question holds anew, even for the same title. */
+export function holdStep(
+  hold: Hold | null,
+  prompt: ResumePrompt | null,
+  p: { state: string; onDemand: { kind: string; id: number } | null },
+): Hold | null {
+  let h = hold;
+  if (prompt !== null && h?.by !== prompt) h = { by: prompt, seen: false, on: true };
+  if (h === null || !h.on) return h;
+  const item = h.by.item;
+  const open = p.onDemand?.kind === item.kind && p.onDemand.id === item.id;
+  if (open && (p.state === "opening" || p.state === "paused")) return h.seen ? h : { ...h, seen: true };
+  // Until the title has been reported opening or paused, whatever the player
+  // says is from before the open (the same title playing, opened again).
+  if (h.seen || prompt === null) return { ...h, on: false };
+  return h;
+}
+
+export const holding = (h: Hold | null): boolean => h?.on === true;
+
 /** How a show's ▶ Play opens its episode: Resume when its details say it is
  *  in progress; else asking, so a place another device gave it since they
  *  were read is read as it opens and asked about rather than played over
