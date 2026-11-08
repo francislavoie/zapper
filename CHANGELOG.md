@@ -43,6 +43,7 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
 
 ### Fixed
 
+- Play starts playing even after something was paused.
 - Closed captions on wide video keep their place instead of drifting to the left.
 - Choosing another subtitle track during a movie or episode no longer ends it.
 - Rewinding into a provider's archive plays the moment you picked, in the provider's time zone,

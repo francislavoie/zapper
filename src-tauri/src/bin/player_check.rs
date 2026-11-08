@@ -25,6 +25,11 @@
 //! with ranges at `movie/<user>/<pass>/2.mp4`) and checks its clock,
 //! `seek_to`, a relative seek past what was buffered, pause and stop.
 //!
+//! `--pause-then-play` (with `fake_stream.py --movies 2`) checks that Play
+//! plays even when something was paused: a movie paused and stopped, then
+//! another movie; that one paused, then a channel. Each must reach Playing
+//! with its clock advancing.
+//!
 //! `--episode` plays an episode through `play_episode`
 //! (`ZAPPER_FIXTURE_EPISODE` on the fixture server, default `movie.mkv`;
 //! `fake_stream.py --series 1` serves one at
@@ -177,6 +182,8 @@ fn main() {
                     run_keeps_playing(&handle, secs, args.iter().any(|a| a == "--after-movie")).await
                 } else if args.iter().any(|a| a == "--movie") {
                     run_movie(&handle).await
+                } else if args.iter().any(|a| a == "--pause-then-play") {
+                    run_pause_then_play(&handle).await
                 } else if args.iter().any(|a| a == "--up-next") {
                     let has = |flag: &str| args.iter().any(|a| a == flag);
                     run_up_next(&handle, has("--drop"), has("--past-end")).await
@@ -493,6 +500,58 @@ async fn run_keeps_playing(app: &tauri::AppHandle, secs: u64, after_movie: bool)
         "{before}stream {stream_id} played from {:.1}s and was still playing {secs}s after the open",
         at.as_secs_f64()
     ))
+}
+
+/// The `--pause-then-play` run: mpv's pause outlives a file, and a Play the
+/// viewer presses must play regardless.
+#[cfg(target_os = "linux")]
+async fn run_pause_then_play(app: &tauri::AppHandle) -> Result<String, String> {
+    use std::time::Duration;
+    use zapper_lib::ipc::player_cmds as cmds;
+    use zapper_lib::ipc::types::{PlaybackState, PlayerStateDto};
+
+    // A title's own clock; a channel's is the picture kept behind the playhead.
+    fn clock(s: &PlayerStateDto) -> f64 {
+        s.on_demand.map_or(s.buffered_back, |o| o.position)
+    }
+    async fn plays(what: &str) -> Result<(), String> {
+        let s = await_state(Duration::from_secs(25), |s| {
+            s.state == PlaybackState::Playing || s.state == PlaybackState::Failed
+        })
+        .await;
+        if s.state != PlaybackState::Playing {
+            return Err(format!("{what} ended in {:?}: {}", s.state, s.error.as_deref().unwrap_or("no reason given")));
+        }
+        let first = clock(&s);
+        tokio::time::sleep(Duration::from_millis(2500)).await;
+        let s = cmds::player_state().await?;
+        let later = clock(&s);
+        if s.state != PlaybackState::Playing || later < first + 1.0 {
+            return Err(format!("{what} was {:?} with its clock at {first:.1}s then {later:.1}s", s.state));
+        }
+        println!("[pause-then-play] {what} plays: {first:.1}s -> {later:.1}s");
+        Ok(())
+    }
+    async fn pause(app: &tauri::AppHandle, what: &str) -> Result<(), String> {
+        cmds::toggle_pause(app.clone()).await?;
+        let s = await_state(Duration::from_secs(5), |s| s.state == PlaybackState::Paused).await;
+        if s.state != PlaybackState::Paused {
+            return Err(format!("{what} would not pause: {:?}", s.state));
+        }
+        Ok(())
+    }
+
+    cmds::play_movie(app.clone(), 1, None).await?;
+    plays("the first movie").await?;
+    pause(app, "the first movie").await?;
+    cmds::stop(app.clone()).await?;
+    cmds::play_movie(app.clone(), 2, None).await?;
+    plays("a movie after a pause and a stop").await?;
+    pause(app, "the second movie").await?;
+    let stream_id = resolve_stream_id().await?;
+    cmds::play(app.clone(), stream_id).await?;
+    plays("a channel after a paused movie").await?;
+    Ok("a movie played after a paused one was stopped, and a channel after a paused movie".into())
 }
 
 /// The `--ending <kind>` run: a channel that stops by itself, and how.

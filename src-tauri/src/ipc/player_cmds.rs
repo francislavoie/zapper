@@ -2746,11 +2746,13 @@ enum TrackChoice {
 /// back for an open that does not hold, if the hold on the last channel was
 /// cut short by this one (`was_holding`): that pause was ours. The next
 /// episode of a show ([`TrackChoice::Carry`]) opens playing, even when the
-/// last one was paused when its viewer moved on.
-fn pause_on_open(tracks: &TrackChoice, join: bool, was_holding: bool) -> Option<bool> {
+/// last one was paused when its viewer moved on, and so does any other open
+/// a viewer asked for (`asked`: not an automatic reconnect), unless it is the
+/// same channel handed over ([`TrackChoice::Keep`]).
+fn pause_on_open(tracks: &TrackChoice, join: bool, was_holding: bool, asked: bool) -> Option<bool> {
     if join || was_holding {
         Some(join)
-    } else if matches!(tracks, TrackChoice::Carry(_)) {
+    } else if matches!(tracks, TrackChoice::Carry(_)) || (asked && !matches!(tracks, TrackChoice::Keep(..))) {
         Some(false)
     } else {
         None
@@ -2864,7 +2866,7 @@ async fn open_as(
                 open_subtitles(p, &subtitles);
             }
         }
-        if let Some(paused) = pause_on_open(&tracks, join, was_holding) {
+        if let Some(paused) = pause_on_open(&tracks, join, was_holding, reconnect.is_none()) {
             if let Err(e) = p.set_flag("pause", paused) {
                 tracing::warn!("could not set the pause the open starts with: {e}");
             }
@@ -4626,14 +4628,19 @@ mod tests {
         #[test]
         fn the_next_episode_opens_playing() {
             let carry = TrackChoice::Carry(Languages::default());
-            assert_eq!(pause_on_open(&carry, false, false), Some(false), "even after a pause");
-            assert_eq!(pause_on_open(&carry, false, true), Some(false));
-            // Every other open as before: the hold's pause, or mpv's left.
-            assert_eq!(pause_on_open(&TrackChoice::Fresh, false, false), None);
-            assert_eq!(pause_on_open(&TrackChoice::Fresh, true, false), Some(true));
-            assert_eq!(pause_on_open(&TrackChoice::Fresh, false, true), Some(false));
+            assert_eq!(pause_on_open(&carry, false, false, false), Some(false), "even after a pause");
+            assert_eq!(pause_on_open(&carry, false, true, false), Some(false));
+            // The hold's pause is put back, and the live join holds.
+            assert_eq!(pause_on_open(&TrackChoice::Fresh, true, false, true), Some(true));
+            assert_eq!(pause_on_open(&TrackChoice::Fresh, false, true, true), Some(false));
+            // Anything a viewer asks for plays, even after a pause.
+            assert_eq!(pause_on_open(&TrackChoice::Fresh, false, false, true), Some(false));
+            // A reconnect keeps the pause.
+            assert_eq!(pause_on_open(&TrackChoice::Fresh, false, false, false), None);
+            // So does a same-channel handover.
             let keep = TrackChoice::Keep("1".into(), "no".into());
-            assert_eq!(pause_on_open(&keep, false, false), None);
+            assert_eq!(pause_on_open(&keep, false, false, true), None);
+            assert_eq!(pause_on_open(&keep, false, false, false), None);
         }
     }
 
