@@ -13,7 +13,7 @@ use anyhow::Result;
 use rusqlite::{Connection, OptionalExtension};
 
 use crate::catalog::credentials::Kind;
-use crate::catalog::{activity, db, guide_search, index, status, store, vod_store};
+use crate::catalog::{activity, db, guide_search, index, status, store, title_search, vod_store};
 use crate::ipc::types::{
     CategoryDto, ChannelDto, FavouriteDto, GuideRowDto, MarksDto, MovieDto, MovieListKind,
     MoviePageDto, MovieQueryDto, MovieSort, MoviesSummaryDto, ProgrammeDto, ProgrammeHitDto,
@@ -287,8 +287,10 @@ pub(crate) fn store_query(
     sort: MovieSort,
     year_from: Option<i32>,
     year_to: Option<i32>,
+    search: Option<&str>,
 ) -> Result<vod_store::MovieQuery> {
     let list = match list {
+        MovieListKind::All => vod_store::MovieList::All,
         MovieListKind::Favourites => vod_store::MovieList::Favourites,
         MovieListKind::Recent => vod_store::MovieList::Recent,
         MovieListKind::Watched => vod_store::MovieList::Watched,
@@ -309,6 +311,11 @@ pub(crate) fn store_query(
         },
         year_from,
         year_to,
+        // Blank, or only pipes, is no search rather than one that finds
+        // everything the slow way.
+        search: search
+            .filter(|t| title_search::Needle::parse(t).is_some())
+            .map(|t| t.trim().to_owned()),
     })
 }
 
@@ -320,6 +327,7 @@ pub fn movies(q: &MovieQueryDto, offset: u32, limit: u32) -> Result<MoviePageDto
         q.sort,
         q.year_from,
         q.year_to,
+        q.search.as_deref(),
     )?;
     let (total, rows) = db::with_db(|c| vod_store::movies_page(c, &query, offset, limit, now()))?;
     Ok(MoviePageDto {
@@ -332,30 +340,6 @@ pub fn movies(q: &MovieQueryDto, offset: u32, limit: u32) -> Result<MoviePageDto
 pub fn movies_by_ids(ids: &[i64]) -> Result<Vec<MovieDto>> {
     db::with_db(|c| {
         Ok(vod_store::movies_by_ids(c, ids)?
-            .into_iter()
-            .map(movie_dto)
-            .collect())
-    })
-}
-
-/// [`INDEXED_FOR`], for the movie index.
-static MOVIES_INDEXED_FOR: Mutex<Option<Option<i64>>> = Mutex::new(None);
-
-/// Fuzzy match over every movie's name, best first. Blank finds nothing.
-pub fn search_movies(query: &str, limit: u32) -> Result<Vec<MovieDto>> {
-    if query.trim().is_empty() {
-        return Ok(Vec::new());
-    }
-    let synced = status::last_synced();
-    db::with_db(|conn| {
-        let mut stamp = MOVIES_INDEXED_FOR.lock().unwrap_or_else(|e| e.into_inner());
-        if !index::movies_built() || stamp.is_some_and(|s| s != synced) {
-            index::rebuild_movies(conn)?;
-        }
-        *stamp = Some(synced);
-        drop(stamp);
-        let ids = index::query_movies(query, limit as usize);
-        Ok(vod_store::movies_by_ids(conn, &ids)?
             .into_iter()
             .map(movie_dto)
             .collect())

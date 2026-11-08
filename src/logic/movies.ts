@@ -13,6 +13,7 @@ import type {
 } from "../types";
 import type { Async } from "./async.ts";
 import type { FixedRailItem } from "./railItems.ts";
+import { isTitleSearch } from "./titleMatch.ts";
 
 export const MOVIE_FAVOURITES = "*favourites*";
 export const MOVIE_RECENT = "*added*";
@@ -94,18 +95,41 @@ export function yearRanges(nowYear: number): { label: string; range: YearRange |
   return out;
 }
 
+/** The list to ask for. `search` is the text in the search box once the
+ *  typing has paused: while there is any, the list is every movie whose
+ *  name matches, in the chosen sort and years, whatever is chosen in the
+ *  rail. The search is part of the query, so the query is also what tells
+ *  one list from another (a new search starts at the top, as a new category
+ *  does). */
 export function movieQuery(
   selection: string,
   sort: MovieSort,
   years: YearRange | null,
+  search = "",
 ): MovieQueryDto {
-  const kind = movieRailKind(selection);
+  return vodQuery(movieRailKind(selection), selection, sort, years, search);
+}
+
+/** movieQuery, for either tab: the rail's kind of list and its id. */
+export function vodQuery(
+  kind: MovieRailKind,
+  selection: string,
+  sort: MovieSort,
+  years: YearRange | null,
+  search: string,
+): MovieQueryDto {
+  const yearFrom = years?.from ?? null;
+  const yearTo = years?.to ?? null;
+  if (isTitleSearch(search)) {
+    return { list: "all", categoryId: null, sort, yearFrom, yearTo, search: search.trim() };
+  }
   return {
     list: kind,
     categoryId: kind === "category" ? selection : null,
     sort,
-    yearFrom: years?.from ?? null,
-    yearTo: years?.to ?? null,
+    yearFrom,
+    yearTo,
+    search: null,
   };
 }
 

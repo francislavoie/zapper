@@ -4,7 +4,7 @@
 
 import { useCallback, useMemo } from "react";
 import { backend } from "../backend";
-import { useMovieSearch } from "../hooks/useMovieSearch";
+import { useSettledSearch } from "../hooks/useSettledSearch";
 import {
   MOVIE_SEARCH_PLACEHOLDER,
   movieCard,
@@ -16,6 +16,7 @@ import {
   type YearRange,
 } from "../logic/movies";
 import { PageBook } from "../logic/pagedRows";
+import { isTitleSearch } from "../logic/titleMatch";
 import type { MoviesMenu } from "../moviesState";
 import { saveMoviesView } from "../moviesView";
 import { useApp, useDispatch } from "../store";
@@ -42,18 +43,20 @@ export function MoviesList({ besideRail = true }: { besideRail?: boolean }) {
   const { movies } = useApp();
   const dispatch = useDispatch();
 
+  const searched = useSettledSearch(movies.query);
   const query = useMemo(
-    () => movieQuery(movies.selection, movies.sort, movies.years),
-    [movies.selection, movies.sort, movies.years],
+    () => movieQuery(movies.selection, movies.sort, movies.years, searched),
+    [movies.selection, movies.sort, movies.years, searched],
   );
   const listKey = JSON.stringify(query);
   const fetchPage = useCallback(
     (offset: number, limit: number) => backend.movies(query, offset, limit),
     [query],
   );
-  const search = useMovieSearch(movies.query);
 
-  const searching = movies.query.trim() !== "";
+  // What the list shows, not what is being typed: the two differ for
+  // the moment of the pause.
+  const searching = isTitleSearch(searched);
   const categories = movies.categories.status === "ready" ? movies.categories.data : [];
   const heading = searching ? "Search results" : movieTitle(movies.selection, categories);
 
@@ -106,7 +109,6 @@ export function MoviesList({ besideRail = true }: { besideRail?: boolean }) {
       listKey={listKey}
       fetchPage={fetchPage}
       pages={MOVIE_PAGES}
-      search={search}
       state={state}
       marks={movies.marks}
       idOf={idOf}
@@ -114,7 +116,7 @@ export function MoviesList({ besideRail = true }: { besideRail?: boolean }) {
       heading={heading}
       countLabel={movieCount}
       placeholder={MOVIE_SEARCH_PLACEHOLDER}
-      emptyNote={emptyNote(movies.selection, searching, movies.query, movies.years)}
+      emptyNote={emptyNote(movies.selection, searching, searched, movies.years)}
       columns={MOVIE_COLUMNS}
       Row={MovieRow}
       card={movieCard}

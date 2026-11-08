@@ -52,11 +52,6 @@ fn local_episode(e: &mut EpisodeDto) {
     }
 }
 
-fn local_list(mut list: Vec<SeriesDto>) -> Vec<SeriesDto> {
-    list.iter_mut().for_each(local_series);
-    list
-}
-
 /// Swaps every picture of an opened show for this service's addresses.
 fn local_series_details(d: &mut SeriesDetailsDto) {
     local_series(&mut d.series);
@@ -145,13 +140,6 @@ fn marks_failed(id: i64, watched: Option<bool>, e: anyhow::Error) -> Failed {
 }
 
 #[derive(Deserialize)]
-struct SearchParams {
-    #[serde(default)]
-    q: String,
-    limit: u32,
-}
-
-#[derive(Deserialize)]
 struct MarksBody {
     favourite: Option<bool>,
     watched: Option<bool>,
@@ -177,6 +165,7 @@ fn series_query(p: &ListParams) -> Result<SeriesQueryDto, Failed> {
         sort: q.sort,
         year_from: q.year_from,
         year_to: q.year_to,
+        search: q.search,
     })
 }
 
@@ -223,12 +212,6 @@ async fn series(Query(p): Query<ListParams>) -> Result<Response, Failed> {
     let mut page = read(move || series_reads::series(&q, p.offset, limit)).await?;
     page.items.iter_mut().for_each(local_series);
     Ok(Json(page).into_response())
-}
-
-async fn search(Query(p): Query<SearchParams>) -> Result<Response, Failed> {
-    let limit = p.limit.min(PAGE_MAX);
-    let hits = read(move || series_reads::search_series(&p.q, limit)).await?;
-    Ok(Json(local_list(hits)).into_response())
 }
 
 async fn details(Path(id): Path<i64>) -> Result<Response, Failed> {
@@ -326,7 +309,6 @@ pub fn routes<S: Clone + Send + Sync + 'static>() -> Router<S> {
         .route("/api/vod/shows/summary", get(summary))
         .route("/api/vod/series/categories", get(categories))
         .route("/api/vod/series", get(series))
-        .route("/api/vod/series/search", get(search))
         .route("/api/vod/series/{id}", get(details))
         .route("/api/vod/series/{id}/marks", put(set_marks))
         .route("/api/vod/episodes/{id}", get(episode))
@@ -374,6 +356,7 @@ mod tests {
                 sort: MovieSort::Az,
                 year_from: Some(2001),
                 year_to: Some(2009),
+                search: None,
             }
         );
         assert_eq!((p.offset, p.limit), (40, 20));
@@ -383,6 +366,13 @@ mod tests {
                 .unwrap()
                 .sort,
             MovieSort::Added
+        );
+        let found = series_query(&params("list=all&sort=year&q=EN%20-&limit=5"))
+            .ok()
+            .unwrap();
+        assert_eq!(
+            (found.list, found.sort, found.search.as_deref()),
+            (MovieListKind::All, MovieSort::Year, Some("EN -"))
         );
     }
 

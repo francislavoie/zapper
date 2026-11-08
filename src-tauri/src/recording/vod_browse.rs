@@ -65,16 +65,11 @@ pub(super) struct ListParams {
     sort: Option<MovieSort>,
     from: Option<i32>,
     to: Option<i32>,
+    /// A search within the list: only the titles whose name matches.
+    q: Option<String>,
     #[serde(default)]
     pub(super) offset: u32,
     pub(super) limit: u32,
-}
-
-#[derive(Deserialize)]
-struct SearchParams {
-    #[serde(default)]
-    q: String,
-    limit: u32,
 }
 
 #[derive(Deserialize)]
@@ -106,6 +101,7 @@ pub(super) fn movie_query(p: &ListParams) -> Result<MovieQueryDto, Failed> {
         sort: p.sort.unwrap_or(MovieSort::Added),
         year_from: p.from,
         year_to: p.to,
+        search: p.q.clone(),
     })
 }
 
@@ -134,12 +130,6 @@ async fn movies(Query(p): Query<ListParams>) -> Result<Response, Failed> {
     let mut page = read(move || reads::movies(&q, p.offset, limit)).await?;
     page.items.iter_mut().for_each(local_movie);
     Ok(Json(page).into_response())
-}
-
-async fn search(Query(p): Query<SearchParams>) -> Result<Response, Failed> {
-    let limit = p.limit.min(PAGE_MAX);
-    let hits = read(move || reads::search_movies(&p.q, limit)).await?;
-    Ok(Json(local_movies(hits)).into_response())
 }
 
 async fn details(Path(id): Path<i64>) -> Result<Response, Failed> {
@@ -209,7 +199,6 @@ pub fn routes<S: Clone + Send + Sync + 'static>() -> Router<S> {
         .route("/api/vod/summary", get(summary))
         .route("/api/vod/categories", get(categories))
         .route("/api/vod/movies", get(movies))
-        .route("/api/vod/movies/search", get(search))
         .route("/api/vod/movies/{id}", get(details))
         .route("/api/vod/movies/{id}/similar", get(similar))
         .route("/api/vod/movies/{id}/marks", put(set_marks))
@@ -249,6 +238,19 @@ mod tests {
                 sort: MovieSort::Rating,
                 year_from: Some(1990),
                 year_to: Some(1999),
+                search: None,
+            }
+        );
+        let p = params("list=all&sort=added&q=EN%20-&limit=50");
+        assert_eq!(
+            movie_query(&p).ok().unwrap(),
+            MovieQueryDto {
+                list: MovieListKind::All,
+                category_id: None,
+                sort: MovieSort::Added,
+                year_from: None,
+                year_to: None,
+                search: Some("EN -".into()),
             }
         );
     }

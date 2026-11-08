@@ -8,7 +8,8 @@
 //
 // The ids run newest first: id 1 is the latest addition, so "recently added"
 // is id order and needs no sort. The titles are made of invented words; none
-// is, or is meant to resemble, a real film.
+// is, or is meant to resemble, a real film. One in four starts with a
+// language, as some providers' do ("EN - "), for the search to narrow to.
 //
 // Flags in the URL: `?movies=none` is an account with no movies (a tuner),
 // `?movies=empty` an Xtream server before its first movies phase, and
@@ -26,6 +27,7 @@ import type {
   PlayerStateDto,
   VodCategoryDto,
 } from "./types";
+import { titleMatches, titleNeedles } from "./logic/titleMatch";
 
 export const MOVIE_TOTAL = 159_000;
 const CATEGORY_TOTAL = 40;
@@ -98,7 +100,18 @@ function mix(i: number, salt: number): number {
 const unit = (i: number, salt: number) => mix(i, salt) / 4294967296;
 const choose = <T,>(xs: readonly T[], i: number, salt: number): T => xs[mix(i, salt) % xs.length];
 
+/** The language some providers put before a title: one in four has one. */
+const LANGUAGES = ["EN - ", "EN - ", "FR - ", "FR/EN - "];
+function languageOf(i: number): string {
+  const k = mix(i, 40) % 16;
+  return k < LANGUAGES.length ? LANGUAGES[k] : "";
+}
+
 function cleanNameOf(i: number): string {
+  return languageOf(i) + titleOf(i);
+}
+
+function titleOf(i: number): string {
   const adj = choose(ADJECTIVES, i, 10);
   const noun = choose(NOUNS, i, 11);
   const place = choose(PLACES, i, 12);
@@ -176,7 +189,7 @@ function row(i: number): MovieDto {
     cleanName: clean,
     year: yearOf(i),
     rating: ratingOf(i),
-    posterUrl: unit(i, 23) < 0.92 ? art(i, 200, 300, clean) : null,
+    posterUrl: unit(i, 23) < 0.92 ? art(i, 200, 300, titleOf(i)) : null,
     added: addedOf(i),
     durationSecs: durationOf(i),
     categoryId: `m${categoryNo(i)}`,
@@ -245,8 +258,11 @@ function listed(q: MovieQueryDto): number[] {
   const from = q.yearFrom ?? -Infinity;
   const to = q.yearTo ?? Infinity;
   const ids: number[] = [];
+  const needles = titleNeedles(q.search ?? "");
+  const n = needles.length > 0 ? nameTable() : null;
   for (const id of orderFor(q.sort)) {
     if (y[id] < from || y[id] > to) continue;
+    if (n && !titleMatches(needles, n[id])) continue;
     if (q.list === "recent" && id > RECENT_TOTAL) continue;
     if (q.list === "favourites" && !favourites.has(id)) continue;
     if (q.list === "watched" && !watched.has(id)) continue;
@@ -292,7 +308,7 @@ function details(i: number): MovieDetailsDto {
     director: person(40),
     cast: [41, 42, 43, 44, 45, 46].map(person),
     releaseDate: date,
-    backdropUrls: [art(i, 640, 360, movie.cleanName)],
+    backdropUrls: [art(i, 640, 360, titleOf(i))],
     tmdbId: 100_000 + i,
     audioLanguages: langs,
     subtitleLanguages: ["en", "fr", "de"].slice(0, 1 + (mix(i, 39) % 3)),
@@ -402,18 +418,6 @@ export function createMockMovies(host: MoviePlayerHost) {
       if (HIDDEN) return { total: 0, items: [] };
       const ids = listed(query);
       return { total: ids.length, items: ids.slice(offset, offset + limit).map(row) };
-    },
-
-    searchMovies: async (query: string, limit: number): Promise<MovieDto[]> => {
-      await delay(60);
-      const needle = query.trim().toLowerCase();
-      if (HIDDEN || needle === "") return [];
-      const n = nameTable();
-      const out: MovieDto[] = [];
-      for (let i = 1; i <= MOVIE_TOTAL && out.length < limit; i++) {
-        if (n[i].includes(needle)) out.push(row(i));
-      }
-      return out;
     },
 
     movieDetails: async (movieId: number): Promise<MovieDetailsDto> => {

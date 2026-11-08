@@ -2,8 +2,8 @@
 //!
 //! Every list is a page: the catalogue is ~160k titles and nothing here
 //! returns them all. The page queries are shaped to be served by the
-//! `movies_by_*` indexes (see the `vod` migration), and a test holds them to
-//! it.
+//! `movies_live_by_*` and `movies_by_category` indexes (see the `vod`
+//! migration), and a test holds them to it.
 
 use anyhow::Result;
 use rusqlite::types::Value;
@@ -11,6 +11,7 @@ use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Row};
 
 use crate::catalog::origin::current_origin_sql;
 use crate::catalog::series_store;
+use crate::catalog::title_search::searched_name_sql;
 use crate::catalog::vod_progress::is_finished;
 
 /// "Recently added" is this many days back.
@@ -67,6 +68,8 @@ pub struct VodCategoryRow {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MovieList {
+    /// Every title: what a search looks through.
+    All,
     Favourites,
     Recent,
     Watched,
@@ -87,6 +90,10 @@ pub struct MovieQuery {
     pub sort: MovieSort,
     pub year_from: Option<i32>,
     pub year_to: Option<i32>,
+    /// Only the titles whose name matches, as
+    /// [`crate::catalog::title_search`] reads it: one more condition on the
+    /// list, which keeps its sort and its paging.
+    pub search: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -185,6 +192,7 @@ fn scope(q: &MovieQuery, now: i64) -> (&'static str, Vec<String>, Vec<Value>) {
     let mut conds = vec!["m.deleted_at IS NULL".to_string()];
     let mut args = Vec::new();
     let from = match &q.list {
+        MovieList::All => MARKED,
         MovieList::Favourites => {
             conds.push("k.favourite_at IS NOT NULL".into());
             MARKS_FIRST
@@ -212,6 +220,10 @@ fn scope(q: &MovieQuery, now: i64) -> (&'static str, Vec<String>, Vec<Value>) {
         conds.push("m.year <= ?".into());
         args.push(Value::Integer(y.into()));
     }
+    if let Some(text) = &q.search {
+        conds.push(concat!("title_match(", searched_name_sql!("m"), ", ?)").into());
+        args.push(Value::Text(text.clone()));
+    }
     (from, conds, args)
 }
 
@@ -219,8 +231,11 @@ fn order_by(sort: MovieSort) -> &'static str {
     match sort {
         MovieSort::Added => "m.added DESC, m.movie_id DESC",
         MovieSort::Az => "m.clean_name COLLATE NOCASE, m.movie_id",
-        MovieSort::Year => "m.year DESC NULLS LAST, m.clean_name",
-        MovieSort::Rating => "m.rating DESC NULLS LAST, m.clean_name",
+        // The id last: titles alike in year and name keep one order from
+        // page to page. The live_by_year and _rating indexes end in it, so
+        // it costs no sort.
+        MovieSort::Year => "m.year DESC NULLS LAST, m.clean_name, m.movie_id",
+        MovieSort::Rating => "m.rating DESC NULLS LAST, m.clean_name, m.movie_id",
     }
 }
 
@@ -236,6 +251,27 @@ fn page_sql(q: &MovieQuery, offset: u32, limit: u32, now: i64) -> (String, Vec<V
     (sql, args)
 }
 
+fn count_sql(q: &MovieQuery, now: i64) -> (String, Vec<Value>) {
+    let (from, conds, args) = scope(q, now);
+    let count_from = match (&q.list, &q.search) {
+        // Only a list of marks needs the marks to count; joining them for
+        // the others costs several times as much on a large catalogue.
+        (MovieList::Favourites | MovieList::Watched, _) => from,
+        // A search of every title reads every name, and reads them from an
+        // index that holds them: the year's, which also serves a range of
+        // years. Left to choose, SQLite takes the smallest index instead and
+        // looks each name up in the table, several times slower on a large
+        // catalogue; the name's would look each year up.
+        (MovieList::All, Some(_)) => "movies m INDEXED BY movies_live_by_year",
+        _ => "movies m",
+    };
+    let sql = format!(
+        "SELECT COUNT(*) FROM {count_from} WHERE {}",
+        conds.join(" AND ")
+    );
+    (sql, args)
+}
+
 /// One page and how many there are in all.
 pub fn movies_page(
     conn: &Connection,
@@ -244,21 +280,13 @@ pub fn movies_page(
     limit: u32,
     now: i64,
 ) -> Result<(u32, Vec<MovieRow>)> {
-    let (from, conds, args) = scope(q, now);
-    // Only a list of marks needs the marks to count; joining them for the
-    // others costs several times as much on a large catalogue.
-    let count_from = match q.list {
-        MovieList::Favourites | MovieList::Watched => from,
-        _ => "movies m",
-    };
-    let total: u32 = conn.query_row(
-        &format!(
-            "SELECT COUNT(*) FROM {count_from} WHERE {}",
-            conds.join(" AND ")
-        ),
-        params_from_iter(args),
-        |r| r.get(0),
-    )?;
+    let (sql, args) = count_sql(q, now);
+    let total: u32 = conn.query_row(&sql, params_from_iter(args), |r| r.get(0))?;
+    // Nothing to list: a search that matched nothing would otherwise read
+    // every title a second time to find so.
+    if offset >= total {
+        return Ok((total, Vec::new()));
+    }
     let (sql, args) = page_sql(q, offset, limit, now);
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt
@@ -333,16 +361,6 @@ pub fn movie_counts(conn: &Connection, now: i64) -> Result<MovieCounts> {
         recent,
         watched: marked("watched_at")?,
     })
-}
-
-/// What the search index is built from.
-pub fn movie_names(conn: &Connection) -> Result<Vec<(i64, String)>> {
-    let mut stmt = conn.prepare(
-        "SELECT movie_id, CASE WHEN clean_name <> '' THEN clean_name ELSE name END
-         FROM movies WHERE deleted_at IS NULL",
-    )?;
-    let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
-    Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
 /// What playing a movie needs, or None for one that is unknown or deleted.
@@ -548,6 +566,14 @@ mod tests {
             sort,
             year_from: None,
             year_to: None,
+            search: None,
+        }
+    }
+
+    fn search(list: MovieList, sort: MovieSort, text: &str) -> MovieQuery {
+        MovieQuery {
+            search: Some(text.into()),
+            ..q(list, sort)
         }
     }
 
@@ -585,6 +611,131 @@ mod tests {
         assert_eq!(ids(&c, &q(cat("c"), MovieSort::Az)), [2, 1, 3]);
         assert_eq!(ids(&c, &q(cat("c"), MovieSort::Year)), [3, 1, 2]);
         assert_eq!(ids(&c, &q(cat("c"), MovieSort::Rating)), [3, 1, 2]);
+    }
+
+    /// Two with the prefix, one whose prefix names two languages, and two
+    /// that a fuzzy match on "EN -" would also have found.
+    fn languages(c: &Connection) {
+        add(
+            c,
+            1,
+            "a",
+            "EN - Harbour Lights",
+            Some(2001),
+            Some(6.0),
+            NOW - 5 * DAY,
+        );
+        add(
+            c,
+            2,
+            "b",
+            "Garden - Lantern",
+            Some(2003),
+            Some(9.0),
+            NOW - DAY,
+        );
+        add(
+            c,
+            3,
+            "c",
+            "EN - Amber Tide",
+            Some(1995),
+            Some(8.0),
+            NOW - 2 * DAY,
+        );
+        add(
+            c,
+            4,
+            "a",
+            "FR/EN - Copper Bridge",
+            Some(2010),
+            None,
+            NOW - 3 * DAY,
+        );
+        add(c, 5, "b", "Seven - Kestrel", Some(2005), Some(7.0), NOW);
+    }
+
+    #[test]
+    fn a_search_lists_its_matches_in_the_lists_sort() {
+        let c = open_in_memory().unwrap();
+        languages(&c);
+        let en = |sort| ids(&c, &search(MovieList::All, sort, "EN -"));
+        assert_eq!(en(MovieSort::Added), [3, 4, 1]);
+        assert_eq!(en(MovieSort::Az), [3, 1, 4]);
+        assert_eq!(en(MovieSort::Year), [4, 1, 3]);
+        assert_eq!(en(MovieSort::Rating), [3, 1, 4]);
+        assert_eq!(
+            ids(
+                &c,
+                &search(MovieList::All, MovieSort::Added, "amber|kestrel")
+            ),
+            [5, 3]
+        );
+    }
+
+    #[test]
+    fn a_search_keeps_the_year_range() {
+        let c = open_in_memory().unwrap();
+        languages(&c);
+        let mut query = search(MovieList::All, MovieSort::Added, "EN -");
+        query.year_from = Some(2000);
+        assert_eq!(ids(&c, &query), [4, 1]);
+        query.year_to = Some(2005);
+        assert_eq!(ids(&c, &query), [1]);
+    }
+
+    #[test]
+    fn a_search_pages_and_counts_only_its_matches() {
+        let c = open_in_memory().unwrap();
+        for i in 0..30 {
+            let name = if i % 2 == 0 {
+                "EN - Title"
+            } else {
+                "Garden - Title"
+            };
+            add(&c, i, "c", &format!("{name} {i:02}"), None, None, i);
+        }
+        let query = search(MovieList::All, MovieSort::Added, "en -");
+        let (total, items) = movies_page(&c, &query, 10, 10, NOW).unwrap();
+        let got: Vec<i64> = items.iter().map(|m| m.movie_id).collect();
+        assert_eq!((total, got), (15, vec![8, 6, 4, 2, 0]));
+        let (total, items) = movies_page(&c, &query, 0, 10, NOW).unwrap();
+        assert_eq!((total, items.len()), (15, 10));
+        assert_eq!(items[0].movie_id, 28);
+    }
+
+    #[test]
+    fn a_search_narrows_the_list_it_is_given_and_skips_the_deleted() {
+        let c = open_in_memory().unwrap();
+        languages(&c);
+        assert_eq!(ids(&c, &search(cat("a"), MovieSort::Added, "EN -")), [4, 1]);
+        c.execute("UPDATE movies SET deleted_at = 9 WHERE movie_id = 4", [])
+            .unwrap();
+        assert_eq!(
+            ids(&c, &search(MovieList::All, MovieSort::Added, "EN -")),
+            [3, 1]
+        );
+        assert_eq!(ids(&c, &q(MovieList::All, MovieSort::Added)), [5, 2, 3, 1]);
+    }
+
+    #[test]
+    fn a_search_reads_the_cleaned_name_else_the_name() {
+        let c = open_in_memory().unwrap();
+        c.execute(
+            "INSERT INTO movies (movie_id, name, clean_name, added) VALUES
+             (1, '|EN| Tagged', 'Harbour Lights', 1), (2, 'EN - Untidy', '', 2)",
+            [],
+        )
+        .unwrap();
+        assert_eq!(
+            ids(&c, &search(MovieList::All, MovieSort::Added, "harbour")),
+            [1]
+        );
+        assert!(ids(&c, &search(MovieList::All, MovieSort::Added, "tagged")).is_empty());
+        assert_eq!(
+            ids(&c, &search(MovieList::All, MovieSort::Added, "EN -")),
+            [2]
+        );
     }
 
     #[test]
@@ -650,7 +801,6 @@ mod tests {
         assert!(ids(&c, &q(MovieList::Favourites, MovieSort::Added)).is_empty());
         assert_eq!(movies_by_ids(&c, &[2, 1]).unwrap().len(), 1);
         assert_eq!(movie_counts(&c, NOW).unwrap().total, 1);
-        assert_eq!(movie_names(&c).unwrap().len(), 1);
         assert!(movie_source(&c, 2).unwrap().is_none());
         assert_eq!(movie_categories(&c).unwrap().len(), 0);
     }
@@ -717,11 +867,43 @@ mod tests {
         assert!(!p.contains("SCAN m"), "{p}");
         assert!(!p.contains("TEMP B-TREE"), "{p}");
         let p = plan(&q(MovieList::Recent, MovieSort::Added));
-        assert!(p.contains("movies_by_added"), "{p}");
+        assert!(p.contains("movies_live_by_added"), "{p}");
         assert!(!p.contains("SCAN m"), "{p}");
         assert!(!p.contains("TEMP B-TREE"), "{p}");
         let p = plan(&q(MovieList::Favourites, MovieSort::Az));
         assert!(!p.contains("SCAN m"), "{p}");
+        // A search reads every name, in the list's order and from the
+        // index that gives that order, which holds the name: a page stops
+        // as soon as it is full, nothing is sorted, and the table is read
+        // only for the titles listed.
+        for (sort, index) in [
+            (MovieSort::Added, "movies_live_by_added"),
+            (MovieSort::Az, "movies_live_by_name"),
+            (MovieSort::Year, "movies_live_by_year"),
+            (MovieSort::Rating, "movies_live_by_rating"),
+        ] {
+            let p = plan(&search(MovieList::All, sort, "x"));
+            assert!(p.contains(index), "{p}");
+            assert!(!p.contains("TEMP B-TREE"), "{p}");
+        }
+        // A search's count reads the names from the year's index, which
+        // narrows to a range of years too: every page asks for it.
+        let count_plan = |q: &MovieQuery| -> String {
+            let (sql, args) = count_sql(q, NOW);
+            c.query_row(
+                &format!("EXPLAIN QUERY PLAN {sql}"),
+                params_from_iter(args),
+                |r| r.get(3),
+            )
+            .unwrap()
+        };
+        let p = count_plan(&search(MovieList::All, MovieSort::Az, "x"));
+        assert!(p.contains("movies_live_by_year"), "{p}");
+        let mut years = search(MovieList::All, MovieSort::Added, "x");
+        years.year_from = Some(2000);
+        years.year_to = Some(2009);
+        let p = count_plan(&years);
+        assert!(p.contains("SEARCH m USING INDEX movies_live_by_year (year>? AND year<?)"), "{p}");
     }
 
     #[test]

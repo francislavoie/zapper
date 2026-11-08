@@ -42,12 +42,6 @@ pub async fn movies(query: MovieQueryDto, offset: u32, limit: u32) -> Result<Mov
     blocking(move || reads::movies(&query, offset, limit)).await
 }
 
-/// Fuzzy match over every movie's name. Blank finds nothing.
-#[tauri::command]
-pub async fn search_movies(query: String, limit: u32) -> Result<Vec<MovieDto>, String> {
-    blocking(move || reads::search_movies(&query, limit)).await
-}
-
 /// The details pane's content. The one command here that may ask the
 /// provider, and only the first time a title is opened in a week.
 #[tauri::command]

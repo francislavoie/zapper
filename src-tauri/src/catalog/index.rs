@@ -9,7 +9,7 @@ use anyhow::Result;
 use rusqlite::Connection;
 use std::sync::Mutex;
 
-use crate::catalog::{store, vod_store, SearchIndex};
+use crate::catalog::{store, SearchIndex};
 
 /// A `Mutex` and not the `RwLock` a read-mostly index would suggest:
 /// `SearchIndex` holds its matcher in a `RefCell` and scoring mutates it, so
@@ -46,13 +46,6 @@ impl Slot {
         }
     }
 
-    /// Back to not built, for a test that rebuilt a process-wide index over
-    /// a catalogue other tests do not share.
-    #[cfg(test)]
-    pub fn forget(&self) {
-        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = None;
-    }
-
     pub fn is_built(&self) -> bool {
         let guard = self.0.lock().unwrap_or_else(|e| e.into_inner());
         guard.is_some()
@@ -66,9 +59,6 @@ impl Default for Slot {
 }
 
 static INDEX: Slot = Slot::new();
-/// Movies get an index of their own: a hundred thousand titles must not slow
-/// the channel filter and the palette, which search the same way.
-static MOVIES: Slot = Slot::new();
 
 pub fn rebuild(conn: &Connection) -> Result<usize> {
     INDEX.rebuild(conn)
@@ -80,51 +70,6 @@ pub fn query(needle: &str, limit: usize) -> Vec<i64> {
 
 pub fn is_built() -> bool {
     INDEX.is_built()
-}
-
-pub fn rebuild_movies(conn: &Connection) -> Result<usize> {
-    Ok(MOVIES.rebuild_from(vod_store::movie_names(conn)?))
-}
-
-pub fn query_movies(needle: &str, limit: usize) -> Vec<i64> {
-    MOVIES.query(needle, limit)
-}
-
-pub fn movies_built() -> bool {
-    MOVIES.is_built()
-}
-
-/// Shows get theirs, for the same reason as movies.
-static SERIES: Slot = Slot::new();
-
-/// The live shows' names, as the series index holds them.
-fn series_names(conn: &Connection) -> Result<Vec<(i64, String)>> {
-    let mut stmt =
-        conn.prepare("SELECT series_id, clean_name FROM series WHERE deleted_at IS NULL")?;
-    let names = stmt
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
-        .collect::<rusqlite::Result<_>>()?;
-    Ok(names)
-}
-
-pub fn rebuild_series(conn: &Connection) -> Result<usize> {
-    Ok(SERIES.rebuild_from(series_names(conn)?))
-}
-
-pub fn query_series(needle: &str, limit: usize) -> Vec<i64> {
-    SERIES.query(needle, limit)
-}
-
-/// Test-only: leaves the movie and show indexes unbuilt, so the next search
-/// builds them over what that test seeded.
-#[cfg(test)]
-pub fn forget_vod() {
-    MOVIES.forget();
-    SERIES.forget();
-}
-
-pub fn series_built() -> bool {
-    SERIES.is_built()
 }
 
 #[cfg(test)]
@@ -173,58 +118,6 @@ mod tests {
             .unwrap();
         assert_eq!(slot.rebuild(&c).unwrap(), 1);
         assert!(slot.query("northwindone", 10).is_empty());
-    }
-
-    #[test]
-    fn movie_search_is_its_own_index() {
-        let channels = Slot::new();
-        channels.rebuild(&db()).unwrap();
-        let slot = Slot::new();
-        let n = slot.rebuild_from(vec![(10, "First Film".into()), (11, "Second Film".into())]);
-        assert_eq!(n, 2);
-        let mut found = slot.query("film", 10);
-        found.sort();
-        assert_eq!(found, vec![10, 11]);
-        assert_eq!(channels.query("northwindone", 10), vec![1]);
-        assert!(channels.query("film", 10).is_empty());
-    }
-
-    #[test]
-    fn series_search_is_its_own_index() {
-        use crate::catalog::series_sync::{land_series, NewSeries};
-        let c = db();
-        c.execute(
-            "INSERT INTO movies (movie_id, name, clean_name, added) VALUES (20, 'Quillmoor Film', 'Quillmoor Film', 1)",
-            [],
-        )
-        .unwrap();
-        let shows = [
-            NewSeries {
-                series_id: 30,
-                name: "Quillmoor Harbour".into(),
-                ..NewSeries::default()
-            },
-            NewSeries {
-                series_id: 31,
-                name: "Brackenfold".into(),
-                ..NewSeries::default()
-            },
-        ];
-        land_series(&c, &[], &shows, 1).unwrap();
-        // Local slots, built as the process-wide ones are: those are shared
-        // with every other test that searches.
-        let series = Slot::new();
-        assert_eq!(series.rebuild_from(series_names(&c).unwrap()), 2);
-        let movies = Slot::new();
-        movies.rebuild_from(vod_store::movie_names(&c).unwrap());
-        let channels = Slot::new();
-        channels.rebuild(&c).unwrap();
-        // Each finds its own kind under the same word, and only it.
-        assert_eq!(series.query("quillmoor", 10), vec![30]);
-        assert_eq!(movies.query("quillmoor", 10), vec![20]);
-        assert!(channels.query("quillmoor", 10).is_empty());
-        assert!(series.query("northwindone", 10).is_empty());
-        assert_eq!(channels.query("northwindone", 10), vec![1]);
     }
 
     // The free functions over `INDEX` are covered end-to-end by the `search`

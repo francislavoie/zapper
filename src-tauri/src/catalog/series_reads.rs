@@ -9,8 +9,6 @@
 //! when its episodes are, so they are fetched first (once, and kept; see
 //! [`series_details`]).
 
-use std::sync::Mutex;
-
 use anyhow::{anyhow, Result};
 use rusqlite::OptionalExtension;
 
@@ -19,7 +17,7 @@ use crate::catalog::reads::{marks_dto, store_query};
 use crate::catalog::series_details::{self, SeriesInfoKept};
 use crate::catalog::series_store::{self, EpisodeRow, SeriesRow};
 use crate::catalog::vod_store::{self, ItemKind};
-use crate::catalog::{db, index, series_sync, status};
+use crate::catalog::{db, series_sync};
 use crate::ipc::types::{
     EpisodeDto, MarksDto, PlayingEpisodeDto, SeriesCategoryDto, SeriesDto, SeriesPageDto,
     SeriesQueryDto, ShowsSummaryDto,
@@ -135,6 +133,7 @@ pub fn series(q: &SeriesQueryDto, offset: u32, limit: u32) -> Result<SeriesPageD
         q.sort,
         q.year_from,
         q.year_to,
+        q.search.as_deref(),
     )?;
     let (total, rows) =
         db::with_db(|c| series_store::series_page(c, &query, offset, limit, now()))?;
@@ -148,31 +147,6 @@ pub fn series(q: &SeriesQueryDto, offset: u32, limit: u32) -> Result<SeriesPageD
 pub fn series_by_ids(ids: &[i64]) -> Result<Vec<SeriesDto>> {
     db::with_db(|c| {
         Ok(series_store::series_by_ids(c, ids)?
-            .into_iter()
-            .map(series_dto)
-            .collect())
-    })
-}
-
-/// The catalogue's last full pass when the shows' index was last built
-/// here, as the channels' and the movies' are (see `reads`).
-static SERIES_INDEXED_FOR: Mutex<Option<Option<i64>>> = Mutex::new(None);
-
-/// Fuzzy match over every show's name, best first. Blank finds nothing.
-pub fn search_series(query: &str, limit: u32) -> Result<Vec<SeriesDto>> {
-    if query.trim().is_empty() {
-        return Ok(Vec::new());
-    }
-    let synced = status::last_synced();
-    db::with_db(|conn| {
-        let mut stamp = SERIES_INDEXED_FOR.lock().unwrap_or_else(|e| e.into_inner());
-        if !index::series_built() || stamp.is_some_and(|s| s != synced) {
-            index::rebuild_series(conn)?;
-        }
-        *stamp = Some(synced);
-        drop(stamp);
-        let ids = index::query_series(query, limit as usize);
-        Ok(series_store::series_by_ids(conn, &ids)?
             .into_iter()
             .map(series_dto)
             .collect())

@@ -180,7 +180,12 @@ CREATE INDEX IF NOT EXISTS epg_by_start ON epg(start);
 ///
 /// The indexes serve the page queries: newest first overall and within a
 /// category, alphabetical, and the year and rating sorts, so that none of
-/// them scans a ~160k-row table.
+/// them scans a ~160k-row table. The four sorts' indexes hold only the live
+/// titles, each in its sort's whole order, and each holds the cleaned name:
+/// a search (`catalog::title_search`) tests every title's name, and reads
+/// it there, in the list's order, rather than from the table's much longer
+/// rows. They replaced `movies_by_added`, `_name`, `_year` and `_rating`,
+/// which held neither.
 const VOD_TABLES: &str = r#"
 CREATE TABLE IF NOT EXISTS vod_categories (
     kind  TEXT NOT NULL,
@@ -206,11 +211,19 @@ CREATE TABLE IF NOT EXISTS movies (
     http_referrer   TEXT,
     deleted_at      INTEGER
 );
-CREATE INDEX IF NOT EXISTS movies_by_added ON movies(added);
 CREATE INDEX IF NOT EXISTS movies_by_category ON movies(category_id, added);
-CREATE INDEX IF NOT EXISTS movies_by_name ON movies(clean_name COLLATE NOCASE);
-CREATE INDEX IF NOT EXISTS movies_by_year ON movies(year);
-CREATE INDEX IF NOT EXISTS movies_by_rating ON movies(rating);
+DROP INDEX IF EXISTS movies_by_added;
+DROP INDEX IF EXISTS movies_by_name;
+DROP INDEX IF EXISTS movies_by_year;
+DROP INDEX IF EXISTS movies_by_rating;
+CREATE INDEX IF NOT EXISTS movies_live_by_added ON movies(added, movie_id, clean_name)
+    WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS movies_live_by_name ON movies(clean_name COLLATE NOCASE, movie_id)
+    WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS movies_live_by_year ON movies(year DESC, clean_name, movie_id)
+    WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS movies_live_by_rating ON movies(rating DESC, clean_name, movie_id)
+    WHERE deleted_at IS NULL;
 -- Counting a category's live titles reads this alone, with no table lookups.
 CREATE INDEX IF NOT EXISTS movies_live_by_category ON movies(category_id)
     WHERE deleted_at IS NULL;
@@ -253,8 +266,8 @@ CREATE TABLE IF NOT EXISTS vod_marks (
 /// `episode_count` are counted from the live episodes (specials aside, for
 /// seasons) when they land.
 ///
-/// The indexes serve the same page queries as the movies', and a show's
-/// episodes in order.
+/// The indexes serve the same page queries as the movies' (holding the
+/// names for a search, as theirs do), and a show's episodes in order.
 const SERIES_TABLES: &str = r#"
 CREATE TABLE IF NOT EXISTS series (
     series_id     INTEGER PRIMARY KEY,
@@ -270,11 +283,19 @@ CREATE TABLE IF NOT EXISTS series (
     episode_count INTEGER,
     deleted_at    INTEGER
 );
-CREATE INDEX IF NOT EXISTS series_by_added ON series(added);
 CREATE INDEX IF NOT EXISTS series_by_category ON series(category_id, added);
-CREATE INDEX IF NOT EXISTS series_by_name ON series(clean_name COLLATE NOCASE);
-CREATE INDEX IF NOT EXISTS series_by_year ON series(year);
-CREATE INDEX IF NOT EXISTS series_by_rating ON series(rating);
+DROP INDEX IF EXISTS series_by_added;
+DROP INDEX IF EXISTS series_by_name;
+DROP INDEX IF EXISTS series_by_year;
+DROP INDEX IF EXISTS series_by_rating;
+CREATE INDEX IF NOT EXISTS series_live_by_added ON series(added, series_id, clean_name)
+    WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS series_live_by_name ON series(clean_name COLLATE NOCASE, series_id)
+    WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS series_live_by_year ON series(year DESC, clean_name, series_id)
+    WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS series_live_by_rating ON series(rating DESC, clean_name, series_id)
+    WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS series_live_by_category ON series(category_id)
     WHERE deleted_at IS NULL;
 CREATE TABLE IF NOT EXISTS series_details (
@@ -349,10 +370,17 @@ fn tune(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// The functions the catalogue's reads call, which SQLite keeps per
+/// connection rather than in the file.
+fn functions(conn: &Connection) -> Result<()> {
+    crate::catalog::title_search::install(conn).context("adding title_match")
+}
+
 pub fn open_at(path: &Path) -> Result<Connection> {
     let conn = Connection::open(path).with_context(|| format!("opening {}", path.display()))?;
     tune(&conn)?;
     migrate(&conn)?;
+    functions(&conn)?;
     Ok(conn)
 }
 
@@ -361,6 +389,7 @@ pub fn open_at(path: &Path) -> Result<Connection> {
 pub fn open_in_memory() -> Result<Connection> {
     let conn = Connection::open_in_memory()?;
     migrate(&conn)?;
+    functions(&conn)?;
     Ok(conn)
 }
 
