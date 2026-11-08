@@ -313,6 +313,9 @@ mod quit {
             tracing::error!("quitting took longer than {WATCHDOG:?}; exiting now");
             exit_now(code);
         });
+        // Before playback is stopped: where a movie got to, as the stop
+        // command would have written it.
+        crate::ipc::player_cmds::save_progress_now();
         let app = app.clone();
         crate::surface::shut_down(move || {
             STATE.store(STOPPED, Ordering::Release);
