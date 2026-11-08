@@ -73,6 +73,8 @@ export const SHORTCUT_GROUPS: readonly ShortcutGroup[] = [
       { keys: [["R"]], does: "Record the programme on now (not in a movie or episode)" },
       { keys: [["Enter"]], does: "Play the next episode now (Up next)" },
       { keys: [["Esc"]], does: "Cancel Up next" },
+      { keys: [["Enter"]], does: "Resume where you stopped (when asked)" },
+      { keys: [["Esc"]], does: "Close the Resume question" },
     ],
   },
   {

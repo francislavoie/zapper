@@ -16,7 +16,7 @@ import { nextEpisode, upNextState, type UpNext } from "../logic/upNext";
 import { useApp, useDispatch } from "../store";
 import { useShowDetails } from "./useShowDetails";
 
-export function useUpNext(): UpNext {
+export function useUpNext(held = false): UpNext {
   const { player, shows, sleep } = useApp();
   const dispatch = useDispatch();
   const playing = shows.playing;
@@ -35,7 +35,7 @@ export function useUpNext(): UpNext {
   // A timer that has ended playback, or is fading it out, ends the evening:
   // nothing more plays by itself.
   const sleeping = sleep !== null && sleepStep(sleep, Date.now()).phase !== "waiting";
-  const upNext = upNextState(player, playing?.episode ?? null, next, shows.upNextCancelled, sleeping);
+  const upNext = upNextState(player, playing?.episode ?? null, next, shows.upNextCancelled, sleeping, held);
 
   const dueNext = upNext.kind === "due" ? upNext.next : null;
   useEffect(() => {

@@ -56,8 +56,10 @@ export function upNextState(
   next: EpisodeDto | null,
   cancelledFor: number | null,
   sleeping: boolean,
+  /** The Resume question is up: no card behind it. */
+  held = false,
 ): UpNext {
-  if (current === null || next === null || sleeping) return NONE;
+  if (current === null || next === null || sleeping || held) return NONE;
   if (current.season === 0 || next.episodeId === current.episodeId) return NONE;
   if (cancelledFor === current.episodeId) return NONE;
   if (p.state === "stopped") {

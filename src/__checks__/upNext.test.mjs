@@ -91,3 +91,8 @@ test("the advance is claimed once per episode moved on from", () => {
   assert.equal(g.claim(101), true);
   assert.equal(g.claim(101), false);
 });
+
+test("no card while the Resume question is held", () => {
+  assert.equal(upNextState(playing(105, "paused"), cur, nxt, null, false, true).kind, "none");
+  assert.equal(upNextState(playing(105, "paused"), cur, nxt, null, false, false).kind, "counting");
+});
