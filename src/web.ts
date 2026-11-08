@@ -312,9 +312,9 @@ export const webBackend: typeof api = {
   setMovieMarks: (movieId, marks) =>
     put<MarksDto>(`/api/vod/movies/${movieId}/marks`, marks),
 
-  // Shows, as the movies are: pictures come as this service's addresses.
-  // The browser's player for episodes is still to come.
-  playEpisode: notHere,
+  // Shows, as the movies are: pictures come as this service's addresses, and
+  // an episode plays in the page as a movie does.
+  playEpisode: (episodeId, start) => vod.playEpisode(episodeId, start),
   playNextEpisode: notHere,
   showsSummary: () => get<ShowsSummaryDto>("/api/vod/shows/summary"),
   seriesCategories: () => get<SeriesCategoryDto[]>("/api/vod/series/categories"),

@@ -1,4 +1,5 @@
-// The pure half of watching a movie in a browser (src/webVod.ts): where a
+// The pure half of watching a movie or an episode in a browser
+// (src/webVod.ts): what a watch names and where its place goes, where a
 // stream is asked for, how a seek is made, where in the film the picture
 // is, when its place is reported, when a pause lets the connection go, and
 // the subtitles' times.
@@ -13,6 +14,26 @@
 // Checked in src/__checks__/webVod.test.mjs.
 
 export type VodMode = "direct" | "remux";
+
+/** The title watched: a movie or an episode, by its id. */
+export type VodItemRef = { kind: "movie" | "episode"; id: number };
+
+/** The body of a watch (`POST /api/vod/watch`): the title, as `movieId` or
+ *  `episodeId` (never both), and the rest as given. */
+export function watchBody(
+  item: VodItemRef,
+  rest: { anyway: boolean; replaces: string | null; audio: number | null; can: unknown },
+): object {
+  const title = item.kind === "episode" ? { episodeId: item.id } : { movieId: item.id };
+  return { ...title, ...rest };
+}
+
+/** Where the title's place is reported. */
+export function progressPath(item: VodItemRef): string {
+  return item.kind === "episode"
+    ? `/api/vod/episodes/${item.id}/progress`
+    : `/api/vod/movies/${item.id}/progress`;
+}
 
 /** A remux's address: from `from` seconds into the film (whole seconds; the
  *  remux starts on the keyframe at or before it), with sound `audio` (its
