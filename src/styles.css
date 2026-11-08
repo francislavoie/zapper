@@ -1931,7 +1931,7 @@ select option {
    share the columns. */
 .movie-cols,
 .movie-row {
-  --list-cols: 1.625rem minmax(0, 1fr) 3.5rem 4.5rem 4rem 2.75rem;
+  --list-cols: 1.625rem minmax(0, 1fr) 3.5rem 4.5rem 4rem 8rem 2.75rem;
 }
 
 .movie-cols > :nth-child(3),
@@ -8210,11 +8210,6 @@ html[data-backend="web"] {
 
 /* The movie row's Progress cell: a bar and what is left, blank when the
    movie is not in progress. */
-.movie-cols,
-.movie-row {
-  --list-cols: 1.625rem minmax(0, 1fr) 3.5rem 4.5rem 4rem 8rem 2.75rem;
-}
-
 .movie-progress {
   display: flex;
   align-items: center;
