@@ -70,7 +70,9 @@ fn now() -> i64 {
         .unwrap_or(0)
 }
 
-fn split(text: Option<&str>, separators: &[char]) -> Vec<String> {
+/// A provider's list in one string (`"Drama, Crime"`), as a list; a show's
+/// details split theirs the same way.
+pub(crate) fn split(text: Option<&str>, separators: &[char]) -> Vec<String> {
     text.map(|t| {
         t.split(separators)
             .map(str::trim)

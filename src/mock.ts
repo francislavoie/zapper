@@ -1540,6 +1540,11 @@ const mockMovies = createMockMovies({
   current: () => openSeq,
 });
 
+/** The shows' calls until the mock has shows: refused, as a backend without
+ *  them would. */
+const showsNotYet = (..._args: unknown[]): Promise<never> =>
+  Promise.reject(new Error("not yet"));
+
 export const mockApi = {
   categories: async () => {
     await delay(120);
@@ -2106,6 +2111,17 @@ export const mockApi = {
   setMovieMarks: mockMovies.setMovieMarks,
   playMovie: mockMovies.playMovie,
   seekTo: mockMovies.seekTo,
+
+  // Shows: the mock's catalogue of them is still to come.
+  showsSummary: showsNotYet,
+  seriesCategories: showsNotYet,
+  series: showsNotYet,
+  searchSeries: showsNotYet,
+  seriesDetails: showsNotYet,
+  setSeriesMarks: showsNotYet,
+  setEpisodeMarks: showsNotYet,
+  playingEpisode: showsNotYet,
+  playEpisode: showsNotYet,
 
   forgetActivity: async (streamId: number) => {
     await delay(20);

@@ -84,6 +84,18 @@ pub fn series_origin(conn: &Connection) -> Result<String> {
     vod_sync::landed_hash(conn, SERIES_ORIGIN)
 }
 
+/// The catalogue the mirror's shows were last landed from, as recorded (a
+/// [`crate::catalog::origin`] value, not hashed); None before any landed.
+pub fn series_landed_from(conn: &Connection) -> Result<Option<String>> {
+    Ok(conn
+        .query_row(
+            "SELECT value FROM meta WHERE key = ?1",
+            [SERIES_ORIGIN],
+            |r| r.get(0),
+        )
+        .optional()?)
+}
+
 fn is_title_separator(c: char) -> bool {
     c.is_whitespace() || matches!(c, '-' | '–' | '—' | ':' | '|' | '.' | '_' | ',')
 }
@@ -572,6 +584,20 @@ pub fn land_series_details(
     episodes: &[NewEpisode],
 ) -> Result<()> {
     let tx = conn.unchecked_transaction()?;
+    land_series_details_in_tx(&tx, series_id, at, info_json, episodes)?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// [`land_series_details`] inside the caller's transaction, for a caller
+/// that checks something in the same transaction first.
+pub fn land_series_details_in_tx(
+    tx: &Connection,
+    series_id: i64,
+    at: i64,
+    info_json: &str,
+    episodes: &[NewEpisode],
+) -> Result<()> {
     if episodes.is_empty() {
         let live: i64 = tx.query_row(
             "SELECT COUNT(*) FROM episodes WHERE series_id = ?1 AND deleted_at IS NULL",
@@ -592,7 +618,7 @@ pub fn land_series_details(
     )?;
     let mut listed = HashSet::new();
     for e in episodes {
-        upsert_episode(&tx, series_id, e)?;
+        upsert_episode(tx, series_id, e)?;
         listed.insert(e.episode_id);
     }
     tx.execute(
@@ -615,9 +641,7 @@ pub fn land_series_details(
         [series_id],
     )?;
     // A watched show that gained an episode is not watched any more.
-    series_store::refresh_series_watched_in_tx(&tx, series_id, at)?;
-    tx.commit()?;
-    Ok(())
+    series_store::refresh_series_watched_in_tx(tx, series_id, at)
 }
 
 #[cfg(test)]

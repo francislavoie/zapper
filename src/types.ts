@@ -896,7 +896,7 @@ export interface MarksDto {
   duration: number | null;
 }
 
-export type OnDemandKind = "movie";
+export type OnDemandKind = "movie" | "episode";
 
 export interface OnDemandDto {
   kind: OnDemandKind;
@@ -906,4 +906,119 @@ export interface OnDemandDto {
   duration: number | null;
   /** How far the data has been read ahead, seconds from the start. */
   bufferedTo: number | null;
+}
+
+// ------------------------------------------------------------------- shows
+
+export interface SeriesCategoryDto {
+  id: string;
+  name: string;
+  /** Excludes deleted shows. */
+  seriesCount: number;
+}
+
+/** A show as a list draws it. */
+export interface SeriesDto {
+  seriesId: number;
+  name: string;
+  cleanName: string;
+  year: number | null;
+  /** Out of ten. */
+  rating: number | null;
+  posterUrl: string | null;
+  /** Unix seconds the provider last changed it. */
+  added: number | null;
+  categoryId: string | null;
+  /** `null` until the show's episodes have been seen once. */
+  seasonCount: number | null;
+  episodeCount: number | null;
+  favourite: boolean;
+  /** Every episode, specials aside, is watched. */
+  watched: boolean;
+}
+
+/** The movies' lists and sorts, reused as they are. */
+export interface SeriesQueryDto {
+  list: MovieListKind;
+  /** For `list: "category"`. */
+  categoryId: string | null;
+  sort: MovieSort;
+  yearFrom: number | null;
+  yearTo: number | null;
+}
+
+export interface SeriesPageDto {
+  /** In the whole list, not just this page. */
+  total: number;
+  items: SeriesDto[];
+}
+
+/** A season that has episodes; season 0 is the specials, listed last. */
+export interface SeasonDto {
+  number: number;
+  name: string;
+  episodeCount: number;
+  watchedCount: number;
+}
+
+export interface EpisodeDto {
+  episodeId: number;
+  seriesId: number;
+  /** 0 for specials. */
+  season: number;
+  episode: number;
+  /** A multi-episode entry's last number. */
+  episodeEnd: number | null;
+  title: string | null;
+  plot: string | null;
+  /** The provider's length. */
+  durationSecs: number | null;
+  stillUrl: string | null;
+  airDate: string | null;
+  watched: boolean;
+  /** Where it was left, seconds from the start. */
+  position: number | null;
+  /** The length the player measured. */
+  duration: number | null;
+}
+
+/** Fetched from the provider the first time a show is opened and kept for a
+ *  week; a playlist's show answers from its episodes. */
+export interface SeriesDetailsDto {
+  series: SeriesDto;
+  plot: string | null;
+  genres: string[];
+  director: string | null;
+  cast: string[];
+  releaseDate: string | null;
+  backdropUrls: string[];
+  tmdbId: number | null;
+  /** From the episodes' air dates, else the show's year (first only). */
+  firstYear: number | null;
+  lastYear: number | null;
+  seasons: SeasonDto[];
+  /** By season, specials last, then by number. */
+  episodes: EpisodeDto[];
+  /** The episode the main action plays; `null` when all are watched. */
+  nextUp: number | null;
+  /** Unix seconds; `null` when there are no details to show. */
+  fetchedAt: number | null;
+}
+
+export interface ShowsSummaryDto {
+  /** The tab is shown only when the account has shows. */
+  available: boolean;
+  note: string | null;
+  total: number;
+  favourites: number;
+  recent: number;
+  watched: number;
+  /** Which catalogue the shows are from, as a short hash; empty before any. */
+  origin: string;
+}
+
+/** The episode playing, with its show. */
+export interface PlayingEpisodeDto {
+  series: SeriesDto;
+  episode: EpisodeDto;
 }

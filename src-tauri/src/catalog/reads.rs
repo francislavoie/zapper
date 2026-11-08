@@ -212,7 +212,7 @@ fn movie_dto(r: vod_store::MovieRow) -> MovieDto {
     }
 }
 
-fn marks_dto(id: i64, m: vod_store::Marks) -> MarksDto {
+pub(crate) fn marks_dto(id: i64, m: vod_store::Marks) -> MarksDto {
     MarksDto {
         id,
         favourite: m.favourite,
@@ -278,30 +278,49 @@ pub fn movie_categories() -> Result<Vec<VodCategoryDto>> {
     })
 }
 
-/// One page of a list, and how many titles the list has in all.
-pub fn movies(q: &MovieQueryDto, offset: u32, limit: u32) -> Result<MoviePageDto> {
-    let list = match q.list {
+/// A list as the store asks for it, from the interface's words. The shows'
+/// lists are the movies', so [`crate::catalog::series_reads`] asks the same
+/// way.
+pub(crate) fn store_query(
+    list: MovieListKind,
+    category_id: Option<&str>,
+    sort: MovieSort,
+    year_from: Option<i32>,
+    year_to: Option<i32>,
+) -> Result<vod_store::MovieQuery> {
+    let list = match list {
         MovieListKind::Favourites => vod_store::MovieList::Favourites,
         MovieListKind::Recent => vod_store::MovieList::Recent,
         MovieListKind::Watched => vod_store::MovieList::Watched,
         MovieListKind::Category => {
-            let Some(id) = q.category_id.clone() else {
+            let Some(id) = category_id else {
                 return Err(anyhow::anyhow!("a category list needs a category"));
             };
-            vod_store::MovieList::Category(id)
+            vod_store::MovieList::Category(id.to_owned())
         }
     };
-    let query = vod_store::MovieQuery {
+    Ok(vod_store::MovieQuery {
         list,
-        sort: match q.sort {
+        sort: match sort {
             MovieSort::Added => vod_store::MovieSort::Added,
             MovieSort::Az => vod_store::MovieSort::Az,
             MovieSort::Year => vod_store::MovieSort::Year,
             MovieSort::Rating => vod_store::MovieSort::Rating,
         },
-        year_from: q.year_from,
-        year_to: q.year_to,
-    };
+        year_from,
+        year_to,
+    })
+}
+
+/// One page of a list, and how many titles the list has in all.
+pub fn movies(q: &MovieQueryDto, offset: u32, limit: u32) -> Result<MoviePageDto> {
+    let query = store_query(
+        q.list,
+        q.category_id.as_deref(),
+        q.sort,
+        q.year_from,
+        q.year_to,
+    )?;
     let (total, rows) = db::with_db(|c| vod_store::movies_page(c, &query, offset, limit, now()))?;
     Ok(MoviePageDto {
         total,
