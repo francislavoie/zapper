@@ -959,7 +959,8 @@ pub struct VodCategoryDto {
 
 /// A movie as a list draws it. `poster_url` is the provider's address, which
 /// only the desktop app may hand to its interface; the recording service
-/// replaces it with one of its own.
+/// replaces it with one of its own. The place (`position`, `duration`,
+/// `played_at`) is the current catalogue's, from the same join as the marks.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MovieDto {
@@ -976,6 +977,12 @@ pub struct MovieDto {
     pub category_id: Option<String>,
     pub favourite: bool,
     pub watched: bool,
+    /// Where it was left, seconds from the start.
+    pub position: Option<f64>,
+    /// The length the player measured.
+    pub duration: Option<f64>,
+    /// When it last played, Unix seconds.
+    pub played_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1068,6 +1075,8 @@ pub struct MarksDto {
     pub watched: bool,
     pub position: Option<f64>,
     pub duration: Option<f64>,
+    /// When it last played, Unix seconds.
+    pub played_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1258,6 +1267,120 @@ pub struct ShowsSummaryDto {
 pub struct PlayingEpisodeDto {
     pub series: SeriesDto,
     pub episode: EpisodeDto,
+}
+
+// -------------------------------------------------------- continue watching
+
+/// One Continue watching entry: a movie left partway, or a show's next
+/// episode (`up_next` when it starts from the beginning rather than resumes).
+/// `last_watched` is when it was last played or marked, Unix seconds; the
+/// list is newest first.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum ContinueItemDto {
+    Movie {
+        movie: MovieDto,
+        last_watched: i64,
+    },
+    Episode {
+        series: SeriesDto,
+        episode: EpisodeDto,
+        up_next: bool,
+        last_watched: i64,
+    },
+}
+
+/// What a removal from Continue watching names: a movie, or a show (never
+/// one of its episodes).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ContinueKind {
+    Movie,
+    Series,
+}
+
+#[cfg(test)]
+mod continue_tests {
+    use super::*;
+
+    fn a_movie() -> MovieDto {
+        MovieDto {
+            movie_id: 1,
+            name: "A Film".into(),
+            clean_name: "A Film".into(),
+            year: None,
+            rating: None,
+            poster_url: None,
+            added: None,
+            duration_secs: None,
+            category_id: None,
+            favourite: false,
+            watched: false,
+            position: Some(30.0),
+            duration: Some(100.0),
+            played_at: Some(10),
+        }
+    }
+
+    #[test]
+    fn a_continue_item_is_tagged_by_kind() {
+        let episode = ContinueItemDto::Episode {
+            series: SeriesDto {
+                series_id: 2,
+                name: "A Show".into(),
+                clean_name: "A Show".into(),
+                year: None,
+                rating: None,
+                poster_url: None,
+                added: None,
+                category_id: None,
+                season_count: None,
+                episode_count: None,
+                favourite: false,
+                watched: false,
+            },
+            episode: EpisodeDto {
+                episode_id: 3,
+                series_id: 2,
+                season: 1,
+                episode: 2,
+                episode_end: None,
+                title: None,
+                plot: None,
+                duration_secs: None,
+                still_url: None,
+                air_date: None,
+                watched: false,
+                position: None,
+                duration: None,
+            },
+            up_next: true,
+            last_watched: 20,
+        };
+        let v = serde_json::to_value(&episode).unwrap();
+        assert_eq!(v["kind"], "episode");
+        assert_eq!(v["upNext"], true);
+        assert_eq!(v["lastWatched"], 20);
+        assert_eq!(v["series"]["seriesId"], 2);
+        assert_eq!(v["episode"]["episodeId"], 3);
+        let movie = ContinueItemDto::Movie {
+            movie: a_movie(),
+            last_watched: 10,
+        };
+        let v = serde_json::to_value(&movie).unwrap();
+        assert_eq!(v["kind"], "movie");
+        assert_eq!(v["lastWatched"], 10);
+        assert_eq!(v["movie"]["position"], 30.0);
+        assert_eq!(v["movie"]["playedAt"], 10);
+    }
+
+    #[test]
+    fn continue_kind_reads_as_series() {
+        let k: ContinueKind = serde_json::from_str(r#""series""#).unwrap();
+        assert_eq!(k, ContinueKind::Series);
+        let k: ContinueKind = serde_json::from_str(r#""movie""#).unwrap();
+        assert_eq!(k, ContinueKind::Movie);
+    }
 }
 
 #[cfg(test)]

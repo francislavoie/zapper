@@ -20,7 +20,9 @@ use crate::ipc::types::{
     VodCategoryDto,
 };
 
-fn now() -> i64 {
+/// The app's (or the service's) clock, Unix seconds: every time a mark
+/// records comes from it, never from the interface.
+pub(crate) fn now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
@@ -196,7 +198,7 @@ pub fn logo_url(stream_id: i64) -> Result<Option<String>> {
 
 // ------------------------------------------------------------------ movies
 
-fn movie_dto(r: vod_store::MovieRow) -> MovieDto {
+pub(crate) fn movie_dto(r: vod_store::MovieRow) -> MovieDto {
     MovieDto {
         movie_id: r.movie_id,
         name: r.name,
@@ -209,6 +211,9 @@ fn movie_dto(r: vod_store::MovieRow) -> MovieDto {
         category_id: r.category_id,
         favourite: r.favourite,
         watched: r.watched,
+        position: r.position,
+        duration: r.duration,
+        played_at: r.played_at,
     }
 }
 
@@ -219,6 +224,7 @@ pub(crate) fn marks_dto(id: i64, m: vod_store::Marks) -> MarksDto {
         watched: m.watched,
         position: m.position,
         duration: m.duration,
+        played_at: m.played_at,
     }
 }
 
