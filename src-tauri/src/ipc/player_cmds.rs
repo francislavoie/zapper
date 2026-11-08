@@ -881,7 +881,9 @@ impl Machine {
             self.subtitles_due = false;
         }
         self.languages = Some(Languages::of(audio));
-        carried_choice(carry.as_ref(), pref, audio, subtitles)
+        // A channel, live: not a programme from its archive.
+        let live = self.live && self.catch_up.is_none();
+        carried_choice(carry.as_ref(), pref, audio, subtitles, live)
     }
 
     /// A title was sought to `at` seconds (already clamped to its length):
@@ -1294,6 +1296,31 @@ impl SubtitlePref {
     }
 }
 
+/// The viewer's choice of subtitle track `id`, or Off with `None`, as the
+/// tracks listed now (`subtitles`) take it.
+#[derive(Debug, Clone, PartialEq)]
+enum SubtitleAsk {
+    /// Hide them, or show this track: what to set, and the track.
+    Choose(Vec<(&'static str, String)>, Option<TrackDto>),
+    /// A track no longer listed: another stream opened since the choice was
+    /// made (a zap got there first). Subtitles were asked for, so they stay
+    /// on, in the language there was; nothing is set, and the new stream's
+    /// own choice is still to come.
+    Gone,
+}
+
+fn subtitle_ask(subtitles: &[TrackDto], id: Option<i64>) -> SubtitleAsk {
+    let selected = subtitles.iter().find(|t| t.selected).map(|t| t.id);
+    let track = match id {
+        None => None,
+        Some(id) => match subtitles.iter().find(|t| t.id == id) {
+            Some(t) => Some(t.clone()),
+            None => return SubtitleAsk::Gone,
+        },
+    };
+    SubtitleAsk::Choose(subtitle_command(selected, id), track)
+}
+
 /// The standing subtitle choice, as the settings last said
 /// (`apply_saved_settings`, `apply_playback_settings`) or the viewer last
 /// chose (`set_subtitle_track`, at once: the saved settings follow).
@@ -1334,12 +1361,20 @@ fn preferred_subtitle(language: Option<&str>, tracks: &[TrackDto]) -> Option<i64
 }
 
 /// The `sid` that chooses an open's subtitle track as `pref` says, or `None`
-/// when it is chosen already or there are none: [`preferred_subtitle`],
-/// whether subtitles are on or off (off hides it: `sub-visibility`). A
+/// when it is chosen already or there are none: [`preferred_subtitle`]. A
 /// track mpv picked itself in the language wanted (or any, when that
 /// language is not there) is left: switching costs a trip back through the
 /// file ([`subtitle_open_properties`]).
-fn subtitle_choice(pref: &SubtitlePref, subtitles: &[TrackDto]) -> Option<String> {
+///
+/// With subtitles off, a track is chosen (hidden) after the load only on a
+/// `live` channel, where nothing is a trip back through the file. A title's
+/// captions are always listed late (mpv makes their track when it meets
+/// them in the picture), and choosing one then would be that trip, for a
+/// track nobody sees; the toggle's first press makes the one switch.
+fn subtitle_choice(pref: &SubtitlePref, subtitles: &[TrackDto], live: bool) -> Option<String> {
+    if !pref.on && !live {
+        return None;
+    }
     let selected = subtitles.iter().find(|t| t.selected);
     let id = preferred_subtitle(pref.language.as_deref(), subtitles)?;
     let in_language = |t: &TrackDto| match pref.language.as_deref() {
@@ -1364,6 +1399,7 @@ fn carried_choice(
     pref: Option<&SubtitlePref>,
     audio: &[TrackDto],
     subtitles: &[TrackDto],
+    live: bool,
 ) -> Vec<(&'static str, String)> {
     let mut out = Vec::new();
     if let Some(l) = carry {
@@ -1373,7 +1409,7 @@ fn carried_choice(
             id => out.push(("aid", id.map_or_else(|| "auto".to_owned(), |id| id.to_string()))),
         }
     }
-    if let Some(sid) = pref.and_then(|p| subtitle_choice(p, subtitles)) {
+    if let Some(sid) = pref.and_then(|p| subtitle_choice(p, subtitles, live)) {
         out.push(("sid", sid));
     }
     out
@@ -3350,6 +3386,10 @@ fn subtitle_open_properties(pref: &SubtitlePref) -> Vec<(&'static str, String)> 
     vec![
         ("slang", pref.language.clone().unwrap_or_default()),
         ("subs-fallback", "yes".to_owned()),
+        // The pick is `slang`'s alone: also when the sound is in that
+        // language, and never the computer's language instead.
+        ("subs-with-matching-audio", "yes".to_owned()),
+        ("subs-match-os-language", "no".to_owned()),
         ("sid", "auto".to_owned()),
         ("sub-visibility", if pref.on { "yes" } else { "no" }.to_owned()),
     ]
@@ -3448,13 +3488,14 @@ pub async fn set_subtitle_track(
     app: AppHandle,
     id: Option<i64>,
 ) -> Result<PlayerOptionsDto, String> {
-    let (selected, chosen) = OPTIONS.lock().map_or((None, None), |o| {
-        (
-            o.subtitles.iter().find(|t| t.selected).map(|t| t.id),
-            id.and_then(|id| o.subtitles.iter().find(|t| t.id == id).cloned()),
-        )
-    });
-    let props = subtitle_command(selected, id);
+    let listed = OPTIONS.lock().map(|o| o.subtitles.clone()).unwrap_or_default();
+    let (props, chosen) = match subtitle_ask(&listed, id) {
+        SubtitleAsk::Choose(props, chosen) => (props, chosen),
+        SubtitleAsk::Gone => {
+            set_subtitle_pref(|p| p.on = true);
+            return player_options().await;
+        }
+    };
     on_player(&app, move |p| apply_properties(p, &props)).await?;
     commit(&app, Machine::chose_subtitles);
     set_subtitle_pref(|p| p.chose(chosen.as_ref()));
@@ -4200,18 +4241,18 @@ mod tests {
         #[test]
         fn subtitles_on_show_the_language_last_chosen() {
             let subtitles = [track(1, "eng"), track(2, "fra")];
-            assert_eq!(subtitle_choice(&on(Some("fra")), &subtitles).as_deref(), Some("2"));
-            assert_eq!(subtitle_choice(&on(Some("FRA")), &subtitles).as_deref(), Some("2"));
+            assert_eq!(subtitle_choice(&on(Some("fra")), &subtitles, true).as_deref(), Some("2"));
+            assert_eq!(subtitle_choice(&on(Some("FRA")), &subtitles, true).as_deref(), Some("2"));
             // Already showing: nothing to do.
             let showing = [track(1, "eng"), selected(track(2, "fra"))];
-            assert_eq!(subtitle_choice(&on(Some("fra")), &showing), None);
+            assert_eq!(subtitle_choice(&on(Some("fra")), &showing, true), None);
         }
 
         #[test]
         fn subtitles_on_in_a_language_not_there_show_the_first() {
             let subtitles = [track(1, "eng"), track(2, "fra")];
-            assert_eq!(subtitle_choice(&on(Some("deu")), &subtitles).as_deref(), Some("1"));
-            assert_eq!(subtitle_choice(&on(None), &subtitles).as_deref(), Some("1"));
+            assert_eq!(subtitle_choice(&on(Some("deu")), &subtitles, true).as_deref(), Some("1"));
+            assert_eq!(subtitle_choice(&on(None), &subtitles, true).as_deref(), Some("1"));
             // A full track before a forced one (signs, a line of another
             // language), in the language and out of it.
             let forced = TrackDto {
@@ -4219,21 +4260,81 @@ mod tests {
                 ..track(1, "eng")
             };
             let subtitles = [forced.clone(), track(2, "eng"), track(3, "fra")];
-            assert_eq!(subtitle_choice(&on(Some("eng")), &subtitles).as_deref(), Some("2"));
-            assert_eq!(subtitle_choice(&on(Some("deu")), &subtitles).as_deref(), Some("2"));
-            assert_eq!(subtitle_choice(&on(Some("eng")), &[forced]).as_deref(), Some("1"));
+            assert_eq!(subtitle_choice(&on(Some("eng")), &subtitles, true).as_deref(), Some("2"));
+            assert_eq!(subtitle_choice(&on(Some("deu")), &subtitles, true).as_deref(), Some("2"));
+            assert_eq!(subtitle_choice(&on(Some("eng")), &[forced], true).as_deref(), Some("1"));
         }
 
         #[test]
-        fn subtitles_off_still_have_a_track_chosen_hidden() {
+        fn subtitles_off_on_a_live_channel_still_have_a_track_chosen_hidden() {
             // Off is sub-visibility, not the track: one is chosen all the
-            // same, so turning them on later is never a switch of tracks.
+            // same (captions found a moment in), so turning them on later is
+            // never a switch of tracks.
             let subtitles = [track(1, "eng"), track(2, "fra")];
-            assert_eq!(subtitle_choice(&off(), &subtitles).as_deref(), Some("2"));
+            assert_eq!(subtitle_choice(&off(), &subtitles, true).as_deref(), Some("2"));
             let chosen = [selected(track(1, "eng")), track(2, "fra")];
-            assert_eq!(subtitle_choice(&off(), &chosen).as_deref(), Some("2"));
+            assert_eq!(subtitle_choice(&off(), &chosen, true).as_deref(), Some("2"));
             let right = [track(1, "eng"), selected(track(2, "fra"))];
-            assert_eq!(subtitle_choice(&off(), &right), None);
+            assert_eq!(subtitle_choice(&off(), &right, true), None);
+        }
+
+        #[test]
+        fn subtitles_off_on_a_title_are_never_chosen_late() {
+            // A movie's or an episode's track mpv did not pick as it loaded
+            // (its captions, made late): left alone while subtitles are off,
+            // since choosing one is a trip back through the file.
+            let subtitles = [track(1, "eng"), track(2, "fra")];
+            assert_eq!(subtitle_choice(&off(), &subtitles, false), None);
+            let chosen = [selected(track(1, "eng")), track(2, "fra")];
+            assert_eq!(subtitle_choice(&off(), &chosen, false), None);
+            // On, they are chosen as before.
+            assert_eq!(subtitle_choice(&on(Some("fra")), &subtitles, false).as_deref(), Some("2"));
+        }
+
+        #[test]
+        fn late_captions_with_subtitles_off_are_chosen_hidden_only_live() {
+            let audio = [selected(track(1, "eng"))];
+            let captions = [track(1, "eng")];
+            // A movie: nothing.
+            let mut m = Machine::new();
+            m.opening(Opened::Movie(2));
+            m.live = false;
+            m.choose_tracks(&TrackChoice::Fresh);
+            assert!(m.tracks_listed(&off(), &audio, &[]).is_empty());
+            assert!(m.tracks_listed(&off(), &audio, &captions).is_empty());
+            // A catch-up programme: nothing either.
+            let mut m = Machine::new();
+            m.opening(Opened::Channel(1));
+            m.live = false;
+            m.catch_up = Some(CatchUp { near_edge: false });
+            m.choose_tracks(&TrackChoice::Fresh);
+            assert!(m.tracks_listed(&off(), &audio, &captions).is_empty());
+            // A channel, live: chosen (hidden, by sub-visibility).
+            let mut m = Machine::new();
+            m.opening(Opened::Channel(1));
+            m.choose_tracks(&TrackChoice::Fresh);
+            assert!(m.tracks_listed(&off(), &audio, &[]).is_empty());
+            assert_eq!(m.tracks_listed(&off(), &audio, &captions), [("sid", "1".to_owned())]);
+        }
+
+        #[test]
+        fn a_track_no_longer_listed_keeps_subtitles_on_and_sets_nothing() {
+            let listed = [selected(track(1, "eng")), track(2, "fra")];
+            assert_eq!(subtitle_ask(&listed, Some(7)), SubtitleAsk::Gone);
+            // What is listed is chosen as ever.
+            assert_eq!(
+                subtitle_ask(&listed, Some(2)),
+                SubtitleAsk::Choose(
+                    vec![("sid", "2".to_owned()), ("sub-visibility", "yes".to_owned())],
+                    Some(track(2, "fra"))
+                )
+            );
+            assert_eq!(
+                subtitle_ask(&listed, None),
+                SubtitleAsk::Choose(vec![("sub-visibility", "no".to_owned())], None)
+            );
+            // Nothing listed at all (a zap under way): gone too.
+            assert_eq!(subtitle_ask(&[], Some(1)), SubtitleAsk::Gone);
         }
 
         #[test]
@@ -4259,13 +4360,13 @@ mod tests {
             // A second English track (for the hard of hearing, say): still
             // English, and switching would cost a trip back through the file.
             let subtitles = [track(1, "eng"), selected(track(2, "eng"))];
-            assert_eq!(subtitle_choice(&on(Some("eng")), &subtitles), None);
+            assert_eq!(subtitle_choice(&on(Some("eng")), &subtitles, true), None);
             // Any track, when the language wanted is not there.
             let subtitles = [selected(track(1, "eng")), track(2, "spa")];
-            assert_eq!(subtitle_choice(&on(Some("fra")), &subtitles), None);
+            assert_eq!(subtitle_choice(&on(Some("fra")), &subtitles, true), None);
             // The wrong language, with the right one there: switched.
             let subtitles = [selected(track(1, "eng")), track(2, "fra")];
-            assert_eq!(subtitle_choice(&on(Some("fra")), &subtitles).as_deref(), Some("2"));
+            assert_eq!(subtitle_choice(&on(Some("fra")), &subtitles, true).as_deref(), Some("2"));
         }
 
         #[test]
@@ -4276,6 +4377,10 @@ mod tests {
                 [
                     ("slang", "fra".to_owned()),
                     ("subs-fallback", "yes".to_owned()),
+                    // mpv's pick is slang's alone, whatever the sound or the
+                    // computer's language.
+                    ("subs-with-matching-audio", "yes".to_owned()),
+                    ("subs-match-os-language", "no".to_owned()),
                     ("sid", "auto".to_owned()),
                     ("sub-visibility", "no".to_owned())
                 ]
@@ -4285,6 +4390,10 @@ mod tests {
                 [
                     ("slang", "fra".to_owned()),
                     ("subs-fallback", "yes".to_owned()),
+                    // mpv's pick is slang's alone, whatever the sound or the
+                    // computer's language.
+                    ("subs-with-matching-audio", "yes".to_owned()),
+                    ("subs-match-os-language", "no".to_owned()),
                     ("sid", "auto".to_owned()),
                     ("sub-visibility", "yes".to_owned())
                 ]
@@ -4294,8 +4403,8 @@ mod tests {
 
         #[test]
         fn no_subtitle_tracks_is_nothing_to_do() {
-            assert_eq!(subtitle_choice(&on(Some("fra")), &[]), None);
-            assert_eq!(subtitle_choice(&off(), &[]), None);
+            assert_eq!(subtitle_choice(&on(Some("fra")), &[], true), None);
+            assert_eq!(subtitle_choice(&off(), &[], true), None);
         }
 
         #[test]
@@ -4308,29 +4417,29 @@ mod tests {
             let audio = [track(1, "fra"), selected(track(2, "eng"))];
             let subtitles = [track(1, "eng")];
             assert_eq!(
-                carried_choice(Some(&french), Some(&on(Some("eng"))), &audio, &subtitles),
+                carried_choice(Some(&french), Some(&on(Some("eng"))), &audio, &subtitles, true),
                 [("aid", "1".to_owned()), ("sid", "1".to_owned())]
             );
             // Already right: nothing to do.
             let audio = [selected(track(1, "fra")), track(2, "eng")];
             let subtitles = [selected(track(1, "eng"))];
-            assert!(carried_choice(Some(&french), Some(&on(Some("eng"))), &audio, &subtitles).is_empty());
+            assert!(carried_choice(Some(&french), Some(&on(Some("eng"))), &audio, &subtitles, true).is_empty());
             // A language this one does not have is mpv's choice.
             let german = Languages {
                 audio: Some("deu".into()),
             };
             assert_eq!(
-                carried_choice(Some(&german), Some(&on(Some("eng"))), &audio, &subtitles),
+                carried_choice(Some(&german), Some(&on(Some("eng"))), &audio, &subtitles, true),
                 [("aid", "auto".to_owned())]
             );
             // Subtitles that are off keep their track, hidden.
-            assert!(carried_choice(Some(&french), Some(&off()), &audio, &subtitles).is_empty());
+            assert!(carried_choice(Some(&french), Some(&off()), &audio, &subtitles, true).is_empty());
             // Any other open leaves the sound to mpv.
             assert_eq!(
-                carried_choice(None, Some(&off()), &audio, &[track(1, "eng"), track(2, "fra")]),
+                carried_choice(None, Some(&off()), &audio, &[track(1, "eng"), track(2, "fra")], true),
                 [("sid", "2".to_owned())]
             );
-            assert!(carried_choice(None, None, &audio, &subtitles).is_empty());
+            assert!(carried_choice(None, None, &audio, &subtitles, true).is_empty());
             assert_eq!(
                 Languages::of(&audio),
                 Languages {
