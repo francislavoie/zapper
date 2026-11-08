@@ -51,19 +51,23 @@ import { RadioItem } from "./SubMenu";
 const same = (a: TitleRef | null, b: TitleRef | null) =>
   a !== null && b !== null && a.kind === b.kind && a.id === b.id;
 
-/** Adds a kept subtitle to what is playing; it comes back selected. */
+/** Adds a kept subtitle to what is playing; it comes back selected, and is
+ *  the standing choice from now, as a track chosen in the menu is. */
 function useAddKept() {
   const { settings } = useApp();
   const dispatch = useDispatch();
+  const { remember } = useSubtitles();
   return async (t: TitleRef, k: KeptSubtitleDto) => {
+    const lang = trackLanguage(k.language, settings.subtitleLanguage);
     const value = await backend.addSubtitleFile(
       t.kind,
       t.id,
       k.fileId,
       downloadTrackTitle(k.release),
-      trackLanguage(k.language, settings.subtitleLanguage),
+      lang,
     );
     dispatch({ type: "options", value });
+    remember({ lang });
   };
 }
 
