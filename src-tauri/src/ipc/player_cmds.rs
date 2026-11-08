@@ -12,6 +12,7 @@
 //! across - never a toolkit handle. The shared state that
 //! both sides read is a `Mutex<Machine>` here, which is ordinary `Send` data.
 
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
@@ -3718,6 +3719,95 @@ pub async fn set_subtitle_track(
     }))
 }
 
+/// Whether a subtitle file may be added for title `kind` `id`: that title
+/// is open, and playing or paused.
+fn may_add_subtitle(dto: &PlayerStateDto, kind: OnDemandKind, id: i64) -> bool {
+    matches!(dto.state, PlaybackState::Playing | PlaybackState::Paused)
+        && dto.on_demand.is_some_and(|o| o.kind == kind && o.id == id)
+}
+
+/// The longest track title given to mpv, in characters.
+const ADDED_TITLE_MAX: usize = 200;
+
+/// mpv's `sub-add` arguments for the file at `path`: selected at once, named
+/// `title` (at most [`ADDED_TITLE_MAX`] characters, without line breaks or
+/// other control characters) and in `lang` when it is a language code
+/// (`en`, `fre`, `pt-br`), else in none.
+fn subtitle_add_args(path: &str, title: &str, lang: &str) -> [String; 4] {
+    let title: String = title.chars().filter(|c| !c.is_control()).take(ADDED_TITLE_MAX).collect();
+    let lower = |s: &str, n: std::ops::RangeInclusive<usize>| {
+        n.contains(&s.len()) && s.bytes().all(|b| b.is_ascii_lowercase())
+    };
+    let code = match lang.split_once('-') {
+        None => lower(lang, 2..=3),
+        Some((l, region)) => lower(l, 2..=3) && lower(region, 2..=2),
+    };
+    [
+        path.to_owned(),
+        "select".to_owned(),
+        title,
+        if code { lang.to_owned() } else { String::new() },
+    ]
+}
+
+/// Adds the subtitle file at `path` to title `kind` `id`, which must still
+/// be the one open (playing or paused), selects it and shows it: the
+/// viewer's choice, as [`set_subtitle_track`]'s is, so it is the standing
+/// one from now, in `lang` when that is a language code.
+///
+/// Unlike switching between a title's own tracks, this never sends mpv back
+/// through the title's stream (the reason [`subtitle_command`] avoids
+/// switches): an external file is mpv's own demuxer, read whole, so
+/// choosing it seeks only that file. The track list itself follows from
+/// mpv's notification.
+pub(crate) async fn add_external_subtitle(
+    app: &AppHandle,
+    kind: OnDemandKind,
+    id: i64,
+    path: &Path,
+    title: &str,
+    lang: &str,
+) -> Result<PlayerOptionsDto, String> {
+    let path = path
+        .to_str()
+        .ok_or("the subtitle file's name cannot be given to the player")?;
+    let args = subtitle_add_args(path, title, lang);
+    let lang = Some(args[3].clone()).filter(|l| !l.is_empty());
+    // On the main thread, which is where every open is made too: whether
+    // the title is still the one open cannot change between this check and
+    // the file being added.
+    on_player(app, move |p| {
+        let open = STATE
+            .lock()
+            .map(|m| may_add_subtitle(&m.dto, kind, id))
+            .unwrap_or(false);
+        if !open {
+            return Err("that title is no longer playing".to_owned());
+        }
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        p.command("sub-add", &args)
+            .map_err(|e| crate::catalog::sync_engine::scrub(&format!("{e:#}")))?;
+        p.set_property("sub-visibility", "yes").map_err(|e| e.to_string())
+    })
+    .await?;
+    commit(app, Machine::chose_subtitles);
+    set_subtitle_pref(|p| {
+        p.chose(Some(&TrackDto {
+            id: 0,
+            title: None,
+            lang,
+            codec: None,
+            channels: None,
+            default: false,
+            forced: false,
+            hearing_impaired: false,
+            visual_impaired: false,
+            selected: true,
+        }))
+    });
+    Ok(commit_options(app, |o| o.subtitles_visible = true))
+}
+
 #[tauri::command]
 pub async fn set_aspect(app: AppHandle, aspect: AspectMode) -> Result<PlayerOptionsDto, String> {
     let props: Vec<(&'static str, String)> = tracks::aspect_properties(aspect)
@@ -6796,6 +6886,68 @@ mod tests {
         assert!(!live, "under the exit threshold but over the entry one");
         live = live_edge_with_hysteresis(live, c + 1.0);
         assert!(live, "just past the cushion is live again");
+    }
+
+    mod online_subtitles {
+        use super::*;
+
+        #[test]
+        fn may_add_subtitle_only_to_the_open_title() {
+            let m = a_playing_movie(7);
+            assert!(may_add_subtitle(&m.dto, OnDemandKind::Movie, 7));
+            assert!(!may_add_subtitle(&m.dto, OnDemandKind::Episode, 7));
+            assert!(!may_add_subtitle(&m.dto, OnDemandKind::Movie, 8));
+            let mut m = a_playing_movie(7);
+            m.set_paused(true);
+            assert_eq!(m.dto.state, PlaybackState::Paused);
+            assert!(may_add_subtitle(&m.dto, OnDemandKind::Movie, 7));
+            let m = a_playing_episode(7);
+            assert!(may_add_subtitle(&m.dto, OnDemandKind::Episode, 7));
+            assert!(!may_add_subtitle(&m.dto, OnDemandKind::Movie, 7));
+            let mut m = a_playing_movie(7);
+            m.stopped();
+            assert!(!may_add_subtitle(&m.dto, OnDemandKind::Movie, 7));
+            let mut m = Machine::new();
+            m.opening(Opened::Movie(7));
+            assert!(!may_add_subtitle(&m.dto, OnDemandKind::Movie, 7));
+            let mut m = a_playing_movie(7);
+            m.failed("could not open");
+            assert!(!may_add_subtitle(&m.dto, OnDemandKind::Movie, 7));
+            // A channel is never a title, whatever its id.
+            let mut m = Machine::new();
+            m.opening(Opened::Channel(7));
+            m.playing();
+            assert_eq!(m.dto.state, PlaybackState::Playing);
+            assert!(!may_add_subtitle(&m.dto, OnDemandKind::Movie, 7));
+            assert!(!may_add_subtitle(&m.dto, OnDemandKind::Episode, 7));
+        }
+
+        #[test]
+        fn subtitle_add_args_select_and_name_the_track() {
+            assert_eq!(
+                subtitle_add_args("/d/subtitles/7000001.srt", "Downloaded · Film.0001", "fre"),
+                [
+                    "/d/subtitles/7000001.srt".to_owned(),
+                    "select".into(),
+                    "Downloaded · Film.0001".into(),
+                    "fre".into()
+                ]
+            );
+            // A title with a newline loses it; a lang that is not a code is
+            // none.
+            let [_, _, title, lang] = subtitle_add_args("/d/s.srt", "Film\n.0001\r", "fr;rm");
+            assert_eq!(title, "Film.0001");
+            assert_eq!(lang, "");
+            for good in ["en", "fre", "pt-br"] {
+                assert_eq!(subtitle_add_args("/d/s.srt", "t", good)[3], good);
+            }
+            for bad in ["", "e", "engl", "EN", "en-", "en-BR", "pt-bra", "en_us", " en"] {
+                assert_eq!(subtitle_add_args("/d/s.srt", "t", bad)[3], "", "{bad:?}");
+            }
+            // At most 200 characters, counted as characters.
+            let long = "é".repeat(250);
+            assert_eq!(subtitle_add_args("/d/s.srt", &long, "en")[2].chars().count(), 200);
+        }
     }
 }
 

@@ -28,6 +28,8 @@ pub mod handover;
 #[cfg(feature = "gui")]
 pub mod live_start;
 #[cfg(feature = "gui")]
+pub mod online_cmds;
+#[cfg(feature = "gui")]
 pub mod player_cmds;
 #[cfg(feature = "gui")]
 pub mod recording_cmds;

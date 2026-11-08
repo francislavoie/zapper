@@ -66,6 +66,18 @@
 //! --keep-alive-timeout 5` the switch comes after the server has closed the
 //! connection the episode arrived on.
 //!
+//! `--find-subtitles` (with `fake_stream.py --movies 2`,
+//! `ZAPPER_FIXTURE_MOVIE=movie/u/p/1.mkv`, and `ZAPPER_OPENSUBTITLES_URL` at
+//! `tools/fake_opensubtitles.py`) lists movie 1 in the scratch catalogue as
+//! "Film 0001" (2021), plays it, finds its English subtitles, is asked to
+//! sign in to download one, signs in, downloads it and adds it mid-play:
+//! mpv lists it as an external track, chosen, named and shown, draws its
+//! lines, and the film plays on without being opened again. A second
+//! download of it asks the stand-in nothing. `--find-subtitles
+//! --search-only --tmdb <id>` lists movie 1 under that TMDB id and only
+//! searches (no sign-in, no download, nothing played), printing the
+//! answer's kind and how many it found.
+//!
 //! `--captions` plays a channel with closed captions (CEA-608 in the
 //! picture) that shows one caption top left, one centred at the bottom and
 //! one on the right: `ZAPPER_FIXTURE_NAME=captions169.ts` (16:9) or
@@ -199,6 +211,17 @@ fn main() {
                     run_captions(&handle).await
                 } else if args.iter().any(|a| a == "--subtitles") {
                     run_subtitles(&handle).await
+                } else if args.iter().any(|a| a == "--find-subtitles") {
+                    let tmdb = args
+                        .iter()
+                        .position(|a| a == "--tmdb")
+                        .and_then(|i| args.get(i + 1))
+                        .and_then(|s| s.parse::<i64>().ok());
+                    if args.iter().any(|a| a == "--search-only") {
+                        run_subtitle_search(tmdb.unwrap_or(FILM_TMDB)).await
+                    } else {
+                        run_find_subtitles(&handle).await
+                    }
                 } else if args.iter().any(|a| a == "--episode") {
                     run_episode(&handle).await
                 } else {
@@ -1064,6 +1087,247 @@ async fn run_subtitles(app: &tauri::AppHandle) -> Result<String, String> {
         French, as did the next title; off chosen stayed off on the next, French hidden; the \
         settings' English showed English"
         .into())
+}
+
+/// Movie 1's TMDB id in `--find-subtitles`: the stand-in's "Film 0001".
+#[cfg(target_os = "linux")]
+const FILM_TMDB: i64 = 900_001;
+
+/// Lists movie 1 in the scratch catalogue as "Film 0001" (2021), under
+/// TMDB id `tmdb`.
+#[cfg(target_os = "linux")]
+fn seed_film(tmdb: i64) -> Result<(), String> {
+    use zapper_lib::catalog::{db, vod_sync};
+    let film = vod_sync::NewMovie {
+        movie_id: 1,
+        name: "Film 0001".into(),
+        year: Some(2021),
+        tmdb_id: Some(tmdb),
+        container: Some("mkv".into()),
+        ..vod_sync::NewMovie::default()
+    };
+    let now = zapper_lib::catalog::activity::now_secs();
+    db::with_write_db(|c| vod_sync::land_movies(c, &[], &[film], now))
+        .map(|_| ())
+        .map_err(|e| format!("could not list the film in the scratch catalogue: {e}"))
+}
+
+/// The `--find-subtitles --search-only` run: a search alone, which never
+/// signs in or downloads, whichever API it is pointed at.
+#[cfg(target_os = "linux")]
+async fn run_subtitle_search(tmdb: i64) -> Result<String, String> {
+    use zapper_lib::ipc::online_cmds as online;
+    use zapper_lib::ipc::types::{OnDemandKind, SubtitleSearchDto};
+
+    seed_film(tmdb)?;
+    let found = online::find_subtitles(OnDemandKind::Movie, 1, vec!["en".into()]).await?;
+    Ok(match found {
+        SubtitleSearchDto::Results { results, .. } => format!("results {}", results.len()),
+        SubtitleSearchDto::Off => "off 0".into(),
+        SubtitleSearchDto::UnknownTitle => "unknownTitle 0".into(),
+        SubtitleSearchDto::Busy { .. } => "busy 0".into(),
+    })
+}
+
+/// A JSON answer from a test server on this machine, over a plain socket.
+#[cfg(target_os = "linux")]
+fn local_json(port: u16, path: &str) -> Option<serde_json::Value> {
+    use std::io::{Read, Write};
+    let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).ok()?;
+    s.set_read_timeout(Some(std::time::Duration::from_secs(5))).ok()?;
+    s.write_all(format!("GET {path} HTTP/1.0\r\nHost: x\r\n\r\n").as_bytes()).ok()?;
+    let mut body = String::new();
+    s.read_to_string(&mut body).ok()?;
+    serde_json::from_str(&body[body.find("\r\n\r\n")? + 4..]).ok()
+}
+
+/// What mpv says now of the subtitle track chosen, when it is an external
+/// file: its title; whether subtitles are shown; and the line drawn.
+#[cfg(target_os = "linux")]
+async fn external_subtitle(
+    app: &tauri::AppHandle,
+) -> Result<(Option<String>, bool, Option<String>), String> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.run_on_main_thread(move || {
+        let r = zapper_lib::surface::mpv::with_player(|p| {
+            let count = p.get_i64("track-list/count").unwrap_or(0);
+            let external = (0..count).find_map(|i| {
+                let key = |k: &str| format!("track-list/{i}/{k}");
+                (p.get_string(&key("type")).as_deref() == Some("sub")
+                    && p.get_bool(&key("external")) == Some(true)
+                    && p.get_bool(&key("selected")) == Some(true))
+                .then(|| p.get_string(&key("title")).unwrap_or_default())
+            });
+            (external, p.get_bool("sub-visibility") == Some(true), p.get_string("sub-text"))
+        });
+        let _ = tx.send(r);
+    })
+    .map_err(|e| e.to_string())?;
+    rx.recv_timeout(std::time::Duration::from_secs(5))
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "no player on the main thread".to_owned())
+}
+
+/// The `--find-subtitles` run; see the top of the file.
+#[cfg(target_os = "linux")]
+async fn run_find_subtitles(app: &tauri::AppHandle) -> Result<String, String> {
+    use std::time::{Duration, Instant};
+    use zapper_lib::ipc::online_cmds as online;
+    use zapper_lib::ipc::player_cmds as cmds;
+    use zapper_lib::ipc::types::{
+        OnDemandKind, PlaybackState, PlayerStateDto, SubtitleDownloadDto, SubtitleSearchDto,
+    };
+
+    const RELEASE: &str = "Film.0001.2021.1080p.TEST";
+    const FILE: i64 = 7_000_001;
+
+    let os_port: u16 = std::env::var(zapper_lib::online::opensubtitles::API_OVERRIDE)
+        .ok()
+        .and_then(|u| u.strip_prefix("http://127.0.0.1:")?.split('/').next()?.parse().ok())
+        .ok_or("ZAPPER_OPENSUBTITLES_URL is not the stand-in on this machine")?;
+    let os_stat = |key: &str| local_json(os_port, "/_stats").and_then(|v| v.get(key)?.as_i64());
+    let stream_port = fixture_port()?;
+    let opens = || {
+        local_json(stream_port, "/vodopens")
+            .and_then(|v| v.get("opens")?.as_i64())
+            .ok_or("the fixture server did not say how often the film was opened")
+    };
+    let at = |s: &PlayerStateDto| s.on_demand.map_or(-1.0, |o| o.position);
+    let playing = |s: &PlayerStateDto| {
+        s.state == PlaybackState::Playing
+            && s.on_demand.is_some_and(|o| o.kind == OnDemandKind::Movie && o.id == 1)
+    };
+
+    seed_film(FILM_TMDB)?;
+    cmds::play_movie(app.clone(), 1, None, None).await?;
+    let opened = await_state(Duration::from_secs(25), playing).await;
+    if !playing(&opened) {
+        return Err(format!(
+            "play_movie(1) ended in {:?}: {}",
+            opened.state,
+            opened.error.as_deref().unwrap_or("no reason given")
+        ));
+    }
+
+    // Found: the stand-in's two English files; its third, machine
+    // translated, is ranked out.
+    let found = online::find_subtitles(OnDemandKind::Movie, 1, vec!["en".into()]).await?;
+    let SubtitleSearchDto::Results { results, .. } = found else {
+        return Err(format!("the search answered {found:?}"));
+    };
+    if results.len() != 2 || results[0].file_id != FILE {
+        let ids: Vec<i64> = results.iter().map(|r| r.file_id).collect();
+        return Err(format!("the search found {ids:?}, not {FILE} and one more"));
+    }
+
+    // Not signed in: asked to.
+    let first = online::download_subtitle(OnDemandKind::Movie, 1, FILE).await?;
+    if !matches!(first, SubtitleDownloadDto::SignIn { .. }) {
+        return Err(format!("a download before signing in answered {first:?}"));
+    }
+    online::opensubtitles_sign_in("tester".into(), "test-pass".into()).await?;
+    let got = online::download_subtitle(OnDemandKind::Movie, 1, FILE).await?;
+    let SubtitleDownloadDto::Downloaded { subtitle, .. } = got else {
+        return Err(format!("a download once signed in answered {got:?}"));
+    };
+    if subtitle.release != RELEASE {
+        return Err(format!("the file kept is {:?}, not {RELEASE}", subtitle.release));
+    }
+
+    // Added mid-play: a few seconds in, inside the file's lines (1s to 41s).
+    let before = await_state(Duration::from_secs(15), |s| playing(s) && at(s) >= 5.0).await;
+    if !playing(&before) || at(&before) < 5.0 {
+        return Err(format!(
+            "the film was {:?} at {:.1}s before the file was added",
+            before.state,
+            at(&before)
+        ));
+    }
+    let opens_before = opens()?;
+    if opens_before != 1 {
+        return Err(format!("the film was opened {opens_before} times before the file was added"));
+    }
+    let title = format!("Downloaded · {RELEASE}");
+    let added =
+        online::add_subtitle_file(app.clone(), OnDemandKind::Movie, 1, FILE, title.clone(), "en".into())
+            .await?;
+    if !added.subtitles_visible {
+        return Err("adding the file left subtitles hidden".into());
+    }
+    let added_at = Instant::now();
+
+    let mut now = external_subtitle(app).await?;
+    while now.0.is_none() && added_at.elapsed() < Duration::from_secs(3) {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        now = external_subtitle(app).await?;
+    }
+    match &now.0 {
+        None => return Err("3s after the file was added, mpv had no external track chosen".into()),
+        Some(t) if *t != title => return Err(format!("the track added is named {t:?}, not {title:?}")),
+        Some(_) => {}
+    }
+    if !now.1 {
+        return Err("the file was added with subtitles hidden".into());
+    }
+    while now.2.is_none() && added_at.elapsed() < Duration::from_secs(4) {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        now = external_subtitle(app).await?;
+    }
+    let line = now.2.clone().ok_or_else(|| {
+        format!("4s after the file was added (at {:.1}s), mpv drew no line of it", at(&before))
+    })?;
+    if !line.contains(&format!("of file {FILE}")) {
+        return Err(format!("mpv drew {line:?}, not a line of the file added"));
+    }
+
+    // The film plays on, without being opened again.
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    let after = cmds::player_state().await?;
+    if !playing(&after) || after.ending.is_some() || at(&after) < at(&before) + 3.0 {
+        return Err(format!(
+            "after the file was added, the film was {:?} at {:.1}s (from {:.1}s): {}",
+            after.state,
+            at(&after),
+            at(&before),
+            after.error.as_deref().unwrap_or("no reason given")
+        ));
+    }
+    let opens_after = opens()?;
+    if opens_after != 1 {
+        return Err(format!("adding the file opened the film again ({opens_after} opens)"));
+    }
+    // The picture menu hears of it too, as the track chosen.
+    let listed = cmds::player_options().await?;
+    if !listed.subtitles.iter().any(|t| t.selected && t.title.as_deref() == Some(title.as_str())) {
+        return Err("the picture menu does not list the file added as chosen".into());
+    }
+
+    // Kept: a second download asks the stand-in nothing, and no token ever
+    // went to where the file is fetched from.
+    let again = online::download_subtitle(OnDemandKind::Movie, 1, FILE).await?;
+    if !matches!(again, SubtitleDownloadDto::Downloaded { .. }) {
+        return Err(format!("a second download answered {again:?}"));
+    }
+    match (os_stat("downloads"), os_stat("authorized_files")) {
+        (Some(1), Some(0)) => {}
+        (d, a) => {
+            return Err(format!("the stand-in counted {d:?} downloads and {a:?} files fetched with a token"))
+        }
+    }
+
+    // Stopped, there is nothing to add the file to.
+    cmds::stop(app.clone()).await?;
+    match online::add_subtitle_file(app.clone(), OnDemandKind::Movie, 1, FILE, title, "en".into()).await {
+        Err(e) if e == "that title is no longer playing" => {}
+        other => return Err(format!("adding the file once stopped answered {other:?}")),
+    }
+    Ok(format!(
+        "ok: 2 English files found; asked to sign in, signed in, downloaded; added at {:.1}s, \
+         chosen and shown, drawing {line:?}; the film played on to {:.1}s, opened once; a \
+         second download asked nothing",
+        at(&before),
+        at(&after)
+    ))
 }
 
 #[cfg(target_os = "linux")]

@@ -145,6 +145,7 @@ interface have their own page: [recording.md](recording.md).
 - **Find subtitles…**, in the Subtitles menu of a movie or an episode (and behind the subtitles
   button when the title has none): searches OpenSubtitles.com in your subtitle languages, lists
   what you downloaded before for that title first, and adds the one you pick to the player at once.
+  The title plays on where it was, and subtitles stay on, in that language, for what you open next.
   The first download asks you to sign in to your own free OpenSubtitles account. Downloads kept for
   a title are offered in the Subtitles menu the next time it plays.
 - Mouse: wheel for volume, double-click for fullscreen, double-click the edges to skip. Theater
