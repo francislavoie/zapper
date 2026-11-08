@@ -249,9 +249,9 @@ export function posterGrid(
  *  before the stream id does. */
 export function playingKind(
   p: Pick<PlayerStateDto, "state" | "streamId" | "onDemand">,
-): "channel" | "movie" | null {
+): "channel" | "movie" | "episode" | null {
   if (p.state === "stopped") return null;
-  if (p.onDemand?.kind === "movie") return "movie";
+  if (p.onDemand) return p.onDemand.kind;
   return p.streamId !== null ? "channel" : null;
 }
 
@@ -261,13 +261,14 @@ export const DETAILS_DELAY_MS = 400;
 
 /** Remembers `d` as the answer for `id`, forgetting the oldest answers past
  *  `max`. A Map keeps its keys in the order they were set, so the first key
- *  is the oldest. Changes and returns `cache`. */
-export function rememberDetails(
-  cache: Map<number, MovieDetailsDto>,
+ *  is the oldest. Changes and returns `cache`. A movie's details or a show's
+ *  alike. */
+export function rememberDetails<T>(
+  cache: Map<number, T>,
   id: number,
-  d: MovieDetailsDto,
+  d: T,
   max: number,
-): Map<number, MovieDetailsDto> {
+): Map<number, T> {
   cache.delete(id);
   cache.set(id, d);
   while (cache.size > max) {
@@ -279,10 +280,7 @@ export function rememberDetails(
 }
 
 /** What was remembered for `id`; asking makes it the newest. */
-export function recallDetails(
-  cache: Map<number, MovieDetailsDto>,
-  id: number,
-): MovieDetailsDto | undefined {
+export function recallDetails<T>(cache: Map<number, T>, id: number): T | undefined {
   const d = cache.get(id);
   if (d !== undefined) {
     cache.delete(id);

@@ -10,7 +10,9 @@ import { useClock } from "./useClock";
 export function usePlayerRecord(): PlayerRecord | null {
   const { recordings, nowChannel, nowProgramme, player } = useApp();
   const now = useClock(15_000);
-  // A movie has no programme to record; the channel last browsed is not it.
-  if (player.state === "stopped" || playingKind(player) === "movie") return null;
+  // A movie or an episode has no programme to record; the channel last
+  // browsed is not it.
+  const kind = playingKind(player);
+  if (player.state === "stopped" || kind === "movie" || kind === "episode") return null;
   return playerRecord(recordings, nowChannel, nowProgramme, now);
 }

@@ -17,13 +17,17 @@ import { windowControls } from "./window";
 import { ALL_CATEGORIES, run, type Action, type Mode } from "./store";
 import type {
   ChannelDto,
+  EpisodeDto,
   FavouriteDto,
   MovieDto,
   PlayerStateDto,
+  PlayingEpisodeDto,
   ProgrammeDto,
   ProgrammeHitDto,
   RecordingDto,
+  SeriesDto,
 } from "./types";
+import { episodeCode } from "./logic/shows";
 import {
   conflictLosesProgramme,
   conflictText,
@@ -443,6 +447,116 @@ export async function loadMovieCategories(
     dispatch({ type: "movies/categories", value: ready(await backend.movieCategories()) });
   } catch (e) {
     dispatch({ type: "movies/categories", value: failed(errorMessage(e)) });
+  }
+}
+
+// ------------------------------------------------------------------ shows
+
+/** Opens an episode in the player, from `start` seconds or, with `null`, from
+ *  the start: as a movie does (see `playMovie`), and the show's sheet closes
+ *  for the player. Only Play comes through here; choosing a show, opening
+ *  its sheet or a season never does. */
+export async function playEpisode(
+  dispatch: Dispatch<Action>,
+  playing: PlayingEpisodeDto,
+  start: number | null = null,
+): Promise<void> {
+  if (!capabilities.playback) {
+    dispatch({ type: "toast", text: NO_PLAYBACK, kind: "info" });
+    return;
+  }
+  const e = playing.episode;
+  dispatch({ type: "shows/playing", playing });
+  dispatch({ type: "shows/sheet", id: null });
+  dispatch({ type: "mode", mode: "watch" });
+  const ok = await run(
+    dispatch,
+    `play ${playing.series.cleanName} ${episodeCode(e.season, e.episode, e.episodeEnd)}`,
+    backend.playEpisode(e.episodeId, start),
+  );
+  if (!ok) {
+    dispatch({ type: "shows/playing", playing: null });
+    dispatch({ type: "mode", mode: "browse" });
+  }
+}
+
+/** Sets one of a show's marks and reports it, then re-reads the counts the
+ *  rail shows. Watched reaches every episode, so the show's details are read
+ *  again too. */
+async function markShow(
+  dispatch: Dispatch<Action>,
+  show: SeriesDto,
+  what: string,
+  marks: { favourite?: boolean; watched?: boolean },
+): Promise<void> {
+  try {
+    dispatch({ type: "shows/marked", marks: await backend.setSeriesMarks(show.seriesId, marks) });
+  } catch (e) {
+    dispatch({ type: "toast", text: `${what}: ${errorMessage(e)}` });
+    return;
+  }
+  if (marks.watched !== undefined) dispatch({ type: "shows/played", seriesId: show.seriesId });
+  await loadShowsSummary(dispatch, true);
+}
+
+export function toggleShowFavourite(dispatch: Dispatch<Action>, show: SeriesDto): Promise<void> {
+  return markShow(dispatch, show, "favourite", { favourite: !show.favourite });
+}
+
+export function setShowWatched(
+  dispatch: Dispatch<Action>,
+  show: SeriesDto,
+  watched: boolean,
+): Promise<void> {
+  return markShow(dispatch, show, "watched", { watched });
+}
+
+/** Marks one episode watched or not. Its show's details (the season's
+ *  count, what is next) and whether the show is watched follow from it, so
+ *  both are read again. */
+export async function setEpisodeWatched(
+  dispatch: Dispatch<Action>,
+  episode: EpisodeDto,
+  watched: boolean,
+): Promise<void> {
+  try {
+    const marks = await backend.setEpisodeMarks(episode.episodeId, watched);
+    dispatch({ type: "shows/episodeMarked", seriesId: episode.seriesId, marks });
+  } catch (e) {
+    dispatch({ type: "toast", text: `watched: ${errorMessage(e)}` });
+    return;
+  }
+  dispatch({ type: "shows/played", seriesId: episode.seriesId });
+  await loadShowsSummary(dispatch, true);
+}
+
+/** Which catalogue the last summary's shows came from; `null` before one. */
+let showsOrigin: string | null = null;
+
+/** The rail's counts, and whether the account has shows at all, as
+ *  `loadMoviesSummary`. When the shows are another account's, the pictures
+ *  that failed to load are asked for again (the store resets the rest). */
+export async function loadShowsSummary(dispatch: Dispatch<Action>, quiet = false): Promise<void> {
+  if (!quiet) dispatch({ type: "shows/summary", value: loading() });
+  try {
+    const summary = await backend.showsSummary();
+    if (showsOrigin !== null && showsOrigin !== summary.origin) clearDeadPosters();
+    showsOrigin = summary.origin;
+    dispatch({ type: "shows/summary", value: ready(summary) });
+  } catch (e) {
+    dispatch({ type: "shows/summary", value: failed(errorMessage(e)) });
+  }
+}
+
+export async function loadShowCategories(
+  dispatch: Dispatch<Action>,
+  quiet = false,
+): Promise<void> {
+  if (!quiet) dispatch({ type: "shows/categories", value: loading() });
+  try {
+    dispatch({ type: "shows/categories", value: ready(await backend.seriesCategories()) });
+  } catch (e) {
+    dispatch({ type: "shows/categories", value: failed(errorMessage(e)) });
   }
 }
 

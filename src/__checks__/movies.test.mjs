@@ -98,10 +98,11 @@ test("posters fill the width in whole columns", () => {
   assert.equal(posterGrid(100, 3).columns, 1);
   assert.equal(posterGrid(1000, 0).rows, 0);
 });
-test("what is playing: a channel, a movie, or nothing", () => {
+test("what is playing: a channel, a movie, an episode, or nothing", () => {
   assert.equal(playingKind({ state: "playing", streamId: 7, onDemand: null }), "channel");
   assert.equal(playingKind({ state: "paused", streamId: null, onDemand: { kind: "movie", id: 7, position: 1, duration: null, bufferedTo: null } }), "movie");
   assert.equal(playingKind({ state: "stopped", streamId: null, onDemand: null }), null);
+  assert.equal(playingKind({ state: "playing", streamId: null, onDemand: { kind: "episode", id: 7, position: 1, duration: null, bufferedTo: null } }), "episode");
 });
 test("people and languages lines", () => {
   assert.equal(peopleLine({ director: "D", cast: ["A", "B", "C", "E", "F"] }), "Director D · With A, B, C, E");

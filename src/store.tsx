@@ -54,7 +54,15 @@ import {
   type MoviesAction,
   type MoviesState,
 } from "./moviesState";
-import { loadMoviesView } from "./moviesView";
+import { loadMoviesView, loadVodView } from "./moviesView";
+import {
+  initialShows,
+  isShowsAction,
+  showsReducer,
+  type ShowsAction,
+  type ShowsState,
+} from "./showsState";
+import { SHOWS_VIEW_STORAGE_KEY } from "./logic/shows";
 
 import { ALL_CATEGORIES, RECORDINGS, modeSelection } from "./logic/railItems";
 import { keepSelected } from "./logic/recordings";
@@ -296,6 +304,8 @@ export interface State {
   programmeMenu: ProgrammeMenu | null;
   /** The Movies tab, with a reducer of its own: see moviesState.ts. */
   movies: MoviesState;
+  /** The Shows tab, likewise: see showsState.ts. */
+  shows: ShowsState;
 }
 
 /** An open context menu over a programme: record it, or cancel its
@@ -412,10 +422,12 @@ export const initialState: State = {
   programmeMenu: null,
   // The List/Posters choice is read before the first render, like zoom.
   movies: initialMovies(loadMoviesView()),
+  shows: initialShows(loadVodView(SHOWS_VIEW_STORAGE_KEY)),
 };
 
 export type Action =
   | MoviesAction
+  | ShowsAction
   /** A fetch of the recordings: the list, or why there is none. */
   | { type: "recordings"; list: RecordingDto[] | null; error?: string | null }
   /** Something was asked of the recording service (record, stop, …). */
@@ -511,6 +523,7 @@ let toastSeq = 0;
 
 export function reducer(state: State, action: Action): State {
   if (isMoviesAction(action)) return { ...state, movies: moviesReducer(state.movies, action) };
+  if (isShowsAction(action)) return { ...state, shows: showsReducer(state.shows, action) };
   switch (action.type) {
     case "categories":
       return { ...state, categories: action.value };
@@ -729,6 +742,7 @@ export function reducer(state: State, action: Action): State {
         sync: action.value,
         catalogueRev: changed ? state.catalogueRev + 1 : state.catalogueRev,
         movies: changed ? moviesReducer(state.movies, { type: "movies/catalogue" }) : state.movies,
+        shows: changed ? showsReducer(state.shows, { type: "shows/catalogue" }) : state.shows,
       };
     }
     case "channelQuality":
