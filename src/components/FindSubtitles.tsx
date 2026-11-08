@@ -21,6 +21,7 @@ import {
   downloadNotice,
   downloadTrackTitle,
   findHeading,
+  keptTrack,
   offeredDownloads,
   resultLine,
   searchLanguages,
@@ -198,7 +199,7 @@ function FindDialog({ target: title }: { target: TitleRef }) {
   /** The subtitle is kept: into the player, if this title is what plays. */
   const added = async (k: KeptSubtitleDto) => {
     if (same(playing, title)) {
-      const track = app.options.subtitles.find((t) => t.title === downloadTrackTitle(k.release));
+      const track = keptTrack(k, app.options.subtitles);
       if (track) {
         dispatch({ type: "options", value: await subtitles.choose(track.id) });
         closeFindSubtitles();
