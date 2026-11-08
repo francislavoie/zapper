@@ -60,6 +60,10 @@ export function useFindSubtitles(): TitleRef | null {
 
 export type KeptFetch = (kind: OnDemandKind, id: number) => Promise<KeptSubtitleDto[]>;
 
+// `./backend` is imported when first needed, not at the top: node checks load
+// this module, and the backend and what it imports can't load under node.
+// The build's warning that it is also imported statically elsewhere (so it
+// isn't split into a chunk of its own) is expected.
 const defaultFetch: KeptFetch = async (kind, id) =>
   (await import("./backend")).backend.keptSubtitles(kind, id);
 let fetchKept: KeptFetch = defaultFetch;
@@ -163,6 +167,7 @@ const notifyServices = (next: Async<OnlineServicesDto>) => {
 };
 
 export type ServicesFetch = () => Promise<OnlineServicesDto>;
+// Imported when first needed, as `defaultFetch` above says.
 const defaultServices: ServicesFetch = async () =>
   (await import("./backend")).backend.onlineServices();
 let fetchServices: ServicesFetch = defaultServices;
