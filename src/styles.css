@@ -7585,7 +7585,7 @@ html[data-backend="web"] {
 }
 
 @container list (max-width: 40rem) {
-  .list-head .list-count {
+  .list-head .list-total {
     display: none;
   }
 }

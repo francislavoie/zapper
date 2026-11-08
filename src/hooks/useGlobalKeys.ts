@@ -192,7 +192,10 @@ export function useGlobalKeys(
             : state.section === "shows"
               ? state.shows.query !== ""
               : state.query !== "",
-        queryFocused: typingInto(document.activeElement),
+        // The tab's own search box, not any field (the rail's filter).
+        queryFocused:
+          typingInto(document.activeElement) &&
+          document.activeElement?.closest(".list-search") !== null,
         mode: state.mode,
         playing: state.player.state !== "stopped",
       });

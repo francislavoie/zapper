@@ -109,9 +109,10 @@ export function ShowsList({ besideRail = true }: { besideRail?: boolean }) {
         setWantsFocus(null);
         dispatch({ type: "shows/selectShow", show: s });
       },
-      // A click opens the pane on it.
+      // A click opens the pane on it. Stacked, the pane hides the list the
+      // click was in, so focus goes on to the episodes.
       pick: (s: SeriesDto) => {
-        setWantsFocus(null);
+        setWantsFocus(stacked ? s.seriesId : null);
         dispatch({ type: "shows/selectShow", show: s, pane: true });
       },
       // The show the pane is on has left the list (unfavourited under
@@ -134,7 +135,7 @@ export function ShowsList({ besideRail = true }: { besideRail?: boolean }) {
       sort: (sort: MovieSort) => dispatch({ type: "shows/sort", sort }),
       years: (range: YearRange | null) => dispatch({ type: "shows/years", range }),
     };
-  }, [dispatch, selected, paneOpen, posters]);
+  }, [dispatch, selected, paneOpen, posters, stacked]);
 
   useEffect(() => {
     if (!paneOpen) setWantsFocus(null);
