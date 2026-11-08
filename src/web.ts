@@ -315,6 +315,7 @@ export const webBackend: typeof api = {
   // Shows, as the movies are: pictures come as this service's addresses.
   // The browser's player for episodes is still to come.
   playEpisode: notHere,
+  playNextEpisode: notHere,
   showsSummary: () => get<ShowsSummaryDto>("/api/vod/shows/summary"),
   seriesCategories: () => get<SeriesCategoryDto[]>("/api/vod/series/categories"),
   series: (query, offset, limit) =>

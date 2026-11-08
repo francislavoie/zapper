@@ -88,6 +88,7 @@ const STOPPED: PlayerStateDto = {
   ending: null,
   reconnect: null,
   onDemand: null,
+  finished: null,
 };
 
 const NO_OPTIONS: PlayerOptionsDto = {
@@ -290,6 +291,7 @@ export async function play(streamId: number, replacing: string | null = null): P
     reconnect: null,
     joiningLive: false,
     onDemand: null,
+    finished: null,
   });
   const lib = loadMpegts();
   const { status, body } = await watchRequest(streamId, anyway, old?.viewer ?? replacing, null);

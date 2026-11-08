@@ -345,6 +345,7 @@ export const initialPlayer: PlayerStateDto = {
   ending: null,
   reconnect: null,
   onDemand: null,
+  finished: null,
 };
 
 /** Until the backend answers: nothing known, nothing to show. */

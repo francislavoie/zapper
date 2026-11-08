@@ -108,6 +108,11 @@ export const api = {
   /** Plays an episode, from `start` seconds or, with `null`, from the start. */
   playEpisode: (episodeId: number, start: number | null) =>
     invoke<void>("play_episode", { episodeId, start }),
+  /** Up next: moves on from the episode playing, or the one that just played
+   *  to its end, to the next, from its start, marking the first watched.
+   *  Refused once anything else is open, after a drop, or after a stop. */
+  playNextEpisode: (fromEpisodeId: number, nextEpisodeId: number) =>
+    invoke<void>("play_next_episode", { fromEpisodeId, nextEpisodeId }),
   /** To an absolute position in a movie, in seconds. */
   seekTo: (seconds: number) => invoke<void>("seek_to", { seconds }),
   setVolume: (volume: number) => invoke<void>("set_volume", { volume }),

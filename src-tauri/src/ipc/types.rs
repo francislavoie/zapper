@@ -197,6 +197,12 @@ pub struct PlayerStateDto {
     /// guide's now line) must not light up for it. What is on is named here
     /// instead, with its own clock.
     pub on_demand: Option<OnDemandDto>,
+    /// The title as it stood when it played to its end and stopped there:
+    /// the one signal that a title was finished rather than stopped or
+    /// dropped. `None` after any open, a stop, a failure, and a drop (an end
+    /// short of the title's end, which fails as the provider's). Up next
+    /// reads it and nothing else does.
+    pub finished: Option<OnDemandDto>,
 }
 
 /// One automatic reconnect, in progress or waiting its turn.
@@ -263,6 +269,7 @@ impl Default for PlayerStateDto {
             ending: None,
             reconnect: None,
             on_demand: None,
+            finished: None,
         }
     }
 }

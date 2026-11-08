@@ -22,7 +22,7 @@ use crate::catalog::activity::{self, Accumulator};
 use crate::catalog::credentials;
 use crate::catalog::store;
 use crate::catalog::vod_progress::{write_progress, ProgressSaver, ProgressWrite};
-use crate::catalog::vod_store::{self, VodItem};
+use crate::catalog::vod_store::{self, ItemKind, VodItem};
 use crate::connections::{self, Limit, Verdict};
 use crate::ipc::ending::{self, Clues, Ending, EndingKind, Flow, How};
 use crate::ipc::live_start::{Join, Settle};
@@ -30,7 +30,7 @@ use crate::ipc::tracks;
 use crate::ipc::types::{
     events, AspectMode, ChannelQualityDto, ConnectionsDto, DeinterlaceMode, LiveJumpDto,
     LiveStart, OnDemandDto, OnDemandKind, PlaybackState, PlayerOptionsDto, PlayerStateDto,
-    ReconnectDto,
+    ReconnectDto, TrackDto,
 };
 use crate::recording::client::{Client, PlayerWatch, Watching};
 use crate::surface::mpv::{self, Player, Probe, Signal};
@@ -211,6 +211,13 @@ struct Machine {
     /// Bumped by anything that makes a waiting reconnect stale: an open, a
     /// stop, Cancel. A reconnect checks it before acting.
     reconnect_token: u64,
+    /// The audio and subtitle languages this open is heard and read in, as
+    /// its track list last said: what moving on to the next episode
+    /// carries. Kept past a finished end, which empties the list.
+    languages: Option<Languages>,
+    /// The languages the last episode was in, to look for in this one's
+    /// tracks once they are known: moving on to the next episode only.
+    carry_languages: Option<Languages>,
 }
 
 /// What an open has shown about its channel that is worth keeping: see
@@ -315,6 +322,8 @@ impl Machine {
             unreached: false,
             chain_ending: None,
             reconnect_token: 0,
+            languages: None,
+            carry_languages: None,
         }
     }
 
@@ -412,6 +421,9 @@ impl Machine {
         };
         self.dto.error = None;
         self.dto.ending = None;
+        self.dto.finished = None;
+        self.languages = None;
+        self.carry_languages = None;
         self.live = true;
         self.catch_up = None;
         self.has_video = None;
@@ -797,6 +809,22 @@ impl Machine {
         }
     }
 
+    /// Moves on from episode `from` to episode `next`, when `from` is the
+    /// one playing or the one that just played to its end
+    /// ([`up_next_allowed`]). Claimed here, under the state lock, by opening
+    /// `next`: a second ask then finds `next` open and is refused, so a
+    /// double press opens it once. Returns the languages `from` was in, for
+    /// `next` to carry.
+    fn advance(&mut self, from: i64, next: i64) -> Result<Option<Languages>, String> {
+        if !up_next_allowed(&self.dto, from) {
+            return Err("that episode is not the one playing".to_owned());
+        }
+        let languages = self.languages.take();
+        self.opening(Opened::Episode(next));
+        self.live = false;
+        Ok(languages)
+    }
+
     /// Failed, with words but no account of why: the open itself could not
     /// be sent. [`Machine::ended_with`] is the failure mpv reports.
     fn failed(&mut self, why: impl Into<String>) {
@@ -812,6 +840,7 @@ impl Machine {
         self.dto.state = PlaybackState::Failed;
         self.dto.error = Some(why.into());
         self.dto.ending = None;
+        self.dto.finished = None;
         self.opened_at = None;
     }
 
@@ -832,6 +861,7 @@ impl Machine {
         self.dto.state = PlaybackState::Stopped;
         self.dto.stream_id = None;
         self.dto.on_demand = None;
+        self.dto.finished = None;
         self.dto.error = None;
         self.dto.ending = None;
         self.dto.behind_live = 0.0;
@@ -882,7 +912,11 @@ impl Machine {
                 .is_some_and(|d| d > 0.0 && d - o.position <= MOVIE_END_SLACK_SECS)
         });
         if how == How::Eof && self.shown && !self.live && at_end {
+            let title = self.dto.on_demand;
             self.stopped();
+            // After `stopped`, which forgets what was open: this is the one
+            // way a title is reported as having played to its end.
+            self.dto.finished = title;
             return;
         }
         let why = match how {
@@ -1111,6 +1145,93 @@ fn item_of(o: &OnDemandDto) -> VodItem {
     }
 }
 
+/// Whether moving on from episode `from` is allowed: it is open and playing
+/// or paused, or it is what just played to its end. Never after a drop (an
+/// end short of the end, which fails), a Stop or the sleep timer (which
+/// stops), or anything else being opened since.
+fn up_next_allowed(dto: &PlayerStateDto, from: i64) -> bool {
+    let is_from = |o: Option<OnDemandDto>| o.is_some_and(|o| o.kind == OnDemandKind::Episode && o.id == from);
+    match dto.state {
+        PlaybackState::Playing | PlaybackState::Paused => is_from(dto.on_demand),
+        PlaybackState::Stopped => is_from(dto.finished),
+        PlaybackState::Opening | PlaybackState::Failed => false,
+    }
+}
+
+/// The audio and subtitle languages an open is heard and read in.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct Languages {
+    /// The audio track's, when it declares one.
+    audio: Option<String>,
+    /// The subtitle track's, when one is shown and declares one.
+    subtitles: Option<String>,
+    /// No subtitles are shown.
+    subtitles_off: bool,
+}
+
+impl Languages {
+    /// As a track list says: whichever tracks are selected in it.
+    fn of(audio: &[TrackDto], subtitles: &[TrackDto]) -> Self {
+        let selected = |tracks: &[TrackDto]| tracks.iter().find(|t| t.selected).cloned();
+        let sub = selected(subtitles);
+        Self {
+            audio: selected(audio).and_then(|t| t.lang),
+            subtitles_off: sub.is_none(),
+            subtitles: sub.and_then(|t| t.lang),
+        }
+    }
+}
+
+/// The first of `tracks` in the language `prev_lang`, the one the last
+/// episode was in. `None` when that language is unknown or not there, which
+/// leaves the choice to mpv.
+fn carried_track(prev_lang: Option<&str>, tracks: &[TrackDto]) -> Option<i64> {
+    let want = prev_lang?;
+    tracks
+        .iter()
+        .find(|t| t.lang.as_deref().is_some_and(|l| l.eq_ignore_ascii_case(want)))
+        .map(|t| t.id)
+}
+
+/// The `aid` and `sid` to set on an episode whose tracks have just become
+/// known, to keep the languages the last one was in: each the first track
+/// of the same language, or mpv's own choice when there is none; subtitles
+/// off when they were off. Only what differs from what is selected.
+fn carried_choice(l: &Languages, audio: &[TrackDto], subtitles: &[TrackDto]) -> Vec<(&'static str, String)> {
+    let selected = |tracks: &[TrackDto]| tracks.iter().find(|t| t.selected).map(|t| t.id);
+    let mut out = Vec::new();
+    match carried_track(l.audio.as_deref(), audio) {
+        Some(id) if selected(audio) == Some(id) => {}
+        id => out.push(("aid", id.map_or_else(|| "auto".to_owned(), |id| id.to_string()))),
+    }
+    if l.subtitles_off {
+        if selected(subtitles).is_some() {
+            out.push(("sid", "no".to_owned()));
+        }
+    } else {
+        match carried_track(l.subtitles.as_deref(), subtitles) {
+            Some(id) if selected(subtitles) == Some(id) => {}
+            id => out.push(("sid", id.map_or_else(|| "auto".to_owned(), |id| id.to_string()))),
+        }
+    }
+    out
+}
+
+/// Writes down that the viewer moved on from episode `from`: where it got
+/// to (`place`, when that is not written yet), then watched. An episode the
+/// catalogue does not know is marked all the same, with no show to refresh.
+fn mark_moved_on(
+    c: &rusqlite::Connection,
+    place: Option<ProgressWrite>,
+    from: i64,
+    at: i64,
+) -> anyhow::Result<vod_store::Marks> {
+    if let Some(w) = place {
+        write_progress(c, w, at)?;
+    }
+    vod_store::set_marks(c, ItemKind::Episode, from, None, Some(true), at)
+}
+
 /// How close to a movie's length its position has to be for an end of file
 /// to be its end rather than a dropped connection.
 const MOVIE_END_SLACK_SECS: f64 = 10.0;
@@ -1334,7 +1455,7 @@ fn spawn_reconnect(app: &AppHandle, due: Due, token: u64, stream_id: i64) {
                     .lock()
                     .map(|m| m.reconnects + 1)
                     .unwrap_or(1);
-                if let Err(e) = open_as(&app, Opened::Channel(stream_id), target, kind, Some(attempt), via, None, None).await {
+                if let Err(e) = open_as(&app, Opened::Channel(stream_id), target, kind, Some(attempt), via, TrackChoice::Fresh, None).await {
                     tracing::warn!("reconnect could not be sent: {e}");
                 }
                 return;
@@ -1387,7 +1508,7 @@ fn spawn_reconnect(app: &AppHandle, due: Due, token: u64, stream_id: i64) {
                     }
                     m.reconnects + 1
                 };
-                if let Err(e) = open_as(&app, id, target, kind, Some(attempt), via, None, None).await {
+                if let Err(e) = open_as(&app, id, target, kind, Some(attempt), via, TrackChoice::Fresh, None).await {
                     tracing::warn!("reconnect could not be sent: {e}");
                 }
             }
@@ -1530,11 +1651,11 @@ fn tick(app: &AppHandle, p: &Player) {
         Signal::Tracks(json) => Some(json.as_str()),
         _ => None,
     });
-    if let Some(json) = tracks {
-        let (audio, subtitles) = tracks::parse_track_list(json);
+    let track_lists = tracks.map(tracks::parse_track_list);
+    if let Some((audio, subtitles)) = &track_lists {
         commit_options(app, |o| {
-            o.audio = audio;
-            o.subtitles = subtitles;
+            o.audio = audio.clone();
+            o.subtitles = subtitles.clone();
         });
     }
     let mut finished = None;
@@ -1576,12 +1697,13 @@ fn tick(app: &AppHandle, p: &Player) {
                     replaced,
                 } => {
                     if !replaced {
-                        let title = m.dto.on_demand.filter(|_| m.shown);
+                        let was_open = m.dto.state != PlaybackState::Stopped;
                         m.ended();
                         // Played to its end: where it got to is the whole of
-                        // it, which is what marks it watched.
-                        if m.dto.state == PlaybackState::Stopped {
-                            finished = title;
+                        // it, which is what marks it watched. `ended` keeps
+                        // the title as `finished`, for Up next.
+                        if was_open {
+                            finished = m.dto.finished;
                         }
                     }
                 }
@@ -1590,6 +1712,21 @@ fn tick(app: &AppHandle, p: &Player) {
                 Signal::Log(text) => m.heard(text),
                 Signal::StartFile => m.file_started(),
                 Signal::FileLoaded | Signal::Tracks(_) => {}
+            }
+        }
+        // This open's tracks, once known: the languages it is in, and the
+        // last episode's looked for in them when this one is the next.
+        if let Some((audio, subtitles)) = &track_lists {
+            let known = !audio.is_empty() || !subtitles.is_empty();
+            if known && m.started && this_opens_file {
+                if let Some(l) = m.carry_languages.take() {
+                    for (key, value) in carried_choice(&l, audio, subtitles) {
+                        if let Err(e) = p.set_property(key, &value) {
+                            tracing::warn!("could not keep the last episode's {key}: {e}");
+                        }
+                    }
+                }
+                m.languages = Some(Languages::of(audio, subtitles));
             }
         }
         // A radio channel's "it works"; see `Machine::audio_only`.
@@ -1953,7 +2090,7 @@ async fn play_channel(app: &AppHandle, stream_id: i64) -> Result<(), String> {
     // a second connection to the same channel.
     if crate::ipc::handover::captured(stream_id) {
         if let Some((target, via)) = through_service_target(stream_id).await {
-            return open_as(app, Opened::Channel(stream_id), target, OpenKind::Live, None, via, None, None).await;
+            return open_as(app, Opened::Channel(stream_id), target, OpenKind::Live, None, via, TrackChoice::Fresh, None).await;
         }
     }
     play_direct(app, stream_id).await
@@ -1995,7 +2132,7 @@ fn movie_target(movie_id: i64) -> Result<Playable, String> {
 #[tauri::command]
 pub async fn play_movie(app: AppHandle, movie_id: i64, start: Option<f64>) -> Result<(), String> {
     let target = movie_target(movie_id)?;
-    open_as(&app, Opened::Movie(movie_id), target, OpenKind::OnDemand, None, Via::Direct, None, start).await
+    open_as(&app, Opened::Movie(movie_id), target, OpenKind::OnDemand, None, Via::Direct, TrackChoice::Fresh, start).await
 }
 
 /// Where the provider serves an episode.
@@ -2017,7 +2154,44 @@ fn episode_target(episode_id: i64) -> Result<Playable, String> {
 #[tauri::command]
 pub async fn play_episode(app: AppHandle, episode_id: i64, start: Option<f64>) -> Result<(), String> {
     let target = episode_target(episode_id)?;
-    open_as(&app, Opened::Episode(episode_id), target, OpenKind::OnDemand, None, Via::Direct, None, start).await
+    open_as(&app, Opened::Episode(episode_id), target, OpenKind::OnDemand, None, Via::Direct, TrackChoice::Fresh, start).await
+}
+
+/// Moves on from episode `from_episode_id`, playing or just played to its
+/// end, to episode `next_episode_id`, from its start: Up next.
+///
+/// Refused unless `from_episode_id` is still what is open or what finished
+/// ([`up_next_allowed`]): never after a drop, a Stop or the sleep timer, or
+/// once anything else was opened. Claimed under the state lock
+/// ([`Machine::advance`]), so a second call (a double press, the countdown
+/// and a press together) is refused rather than opening it twice. The
+/// episode moved on from is marked watched, off the main thread. mpv
+/// replaces its one stream, as for any open; the audio and subtitle
+/// languages are kept.
+#[tauri::command]
+pub async fn play_next_episode(app: AppHandle, from_episode_id: i64, next_episode_id: i64) -> Result<(), String> {
+    let target = episode_target(next_episode_id)?;
+    let mut claimed = Err(String::new());
+    let mut place = None;
+    commit(&app, |m| {
+        claimed = m.advance(from_episode_id, next_episode_id);
+        // Where it got to, if not written yet: written before the mark, so
+        // that the place is the one it was left at.
+        if claimed.is_ok() {
+            place = PROGRESS.lock().ok().and_then(|mut p| p.flush());
+        }
+    });
+    let languages = claimed?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let r = crate::catalog::db::with_db(|c| {
+            mark_moved_on(c, place, from_episode_id, activity::now_secs()).map(|_| ())
+        });
+        if let Err(e) = r {
+            tracing::warn!("could not mark the episode moved on from as watched: {e}");
+        }
+    });
+    let tracks = languages.map_or(TrackChoice::Fresh, TrackChoice::Carry);
+    open_as(&app, Opened::Episode(next_episode_id), target, OpenKind::OnDemand, None, Via::Direct, tracks, None).await
 }
 
 /// The player's current place on the recording service's connection, if
@@ -2135,6 +2309,7 @@ pub async fn move_to_service(app: &AppHandle, client: &Client, stream_id: i64) -
     match answer {
         Ok(w) => {
             let (target, via) = service_target(client, &w);
+            let tracks = tracks.map_or(TrackChoice::Fresh, |(aid, sid)| TrackChoice::Keep(aid, sid));
             open_as(app, Opened::Channel(stream_id), target, OpenKind::Live, None, via, tracks, None).await
         }
         Err(r) => {
@@ -2303,13 +2478,26 @@ fn live_start_mode() -> LiveStart {
 
 /// Shared by live and catchup: state first, then the one connection.
 async fn open(app: &AppHandle, stream_id: i64, target: Playable, kind: OpenKind) -> Result<(), String> {
-    open_as(app, Opened::Channel(stream_id), target, kind, None, Via::Direct, None, None).await
+    open_as(app, Opened::Channel(stream_id), target, kind, None, Via::Direct, TrackChoice::Fresh, None).await
+}
+
+/// Which audio and subtitle tracks an open starts on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TrackChoice {
+    /// mpv's own: a track picked on one stream is not a choice for the
+    /// next ([`reset_track_choice`]).
+    Fresh,
+    /// These (mpv's `aid` and `sid`): the same channel, moved onto another
+    /// connection.
+    Keep(String, String),
+    /// The next episode of a show: the last one's tracks stay chosen until
+    /// this one's are known, and then its languages are looked for in them
+    /// ([`carried_choice`]).
+    Carry(Languages),
 }
 
 /// [`open`], as automatic reconnect number `reconnect` when it is one,
-/// from where `via` says, with the audio and subtitle tracks `tracks`
-/// (mpv's `aid` and `sid`) rather than mpv's own choice when given: the same
-/// channel, moved onto another connection.
+/// from where `via` says, on the audio and subtitle tracks `tracks` says.
 ///
 /// `start` is where in a movie to begin, in seconds; mpv is told on every
 /// open, so a channel opened after a resumed movie starts at its beginning.
@@ -2321,7 +2509,7 @@ async fn open_as(
     kind: OpenKind,
     reconnect: Option<u32>,
     via: Via,
-    tracks: Option<(String, String)>,
+    tracks: TrackChoice,
     start: Option<f64>,
 ) -> Result<(), String> {
     let left = LAST_OPEN.lock().ok().and_then(|mut last| {
@@ -2358,6 +2546,9 @@ async fn open_as(
     commit(app, |m| {
         was_holding = m.joining;
         m.opening(what);
+        if let TrackChoice::Carry(l) = &tracks {
+            m.carry_languages = Some(l.clone());
+        }
         m.live = kind == OpenKind::Live;
         m.catch_up = match kind {
             OpenKind::CatchUp(c) => Some(c),
@@ -2383,14 +2574,17 @@ async fn open_as(
         apply_http_headers(p, &target, &via);
         apply_start(p, start);
         match &tracks {
-            Some((aid, sid)) => {
+            TrackChoice::Keep(aid, sid) => {
                 for (key, value) in [("aid", aid), ("sid", sid)] {
                     if let Err(e) = p.set_property(key, value) {
                         tracing::warn!("could not keep {key}: {e}");
                     }
                 }
             }
-            None => reset_track_choice(p),
+            // Left as they are, for the heartbeat to settle once this
+            // episode's tracks are known.
+            TrackChoice::Carry(_) => {}
+            TrackChoice::Fresh => reset_track_choice(p),
         }
         // `pause` is global in mpv and outlives the file, so it is set
         // before the open: paused, the stream opens, decodes its first frame
@@ -3392,6 +3586,227 @@ mod tests {
         };
         assert_eq!(item_of(&od), VodItem::episode(7));
         assert_eq!(item_of(&OnDemandDto { kind: OnDemandKind::Movie, ..od }), VodItem::movie(7));
+    }
+
+    /// Up next: what says an episode played to its end, and moving on.
+    mod up_next {
+        use super::*;
+        use crate::ipc::types::TrackDto;
+
+        fn at(m: &mut Machine, position: f64) {
+            m.shown = true;
+            m.apply(&Probe {
+                time_pos: Some(position),
+                duration: Some(120.0),
+                ..Probe::default()
+            });
+        }
+
+        fn finished_episode(id: i64) -> Machine {
+            let mut m = a_playing_episode(id);
+            at(&mut m, 115.0);
+            m.ended();
+            m
+        }
+
+        fn title(o: Option<OnDemandDto>) -> Option<(OnDemandKind, i64, f64)> {
+            o.map(|o| (o.kind, o.id, o.position))
+        }
+
+        #[test]
+        fn a_finished_episode_is_reported_as_finished() {
+            let m = finished_episode(7);
+            assert_eq!(m.dto.state, PlaybackState::Stopped);
+            assert_eq!(title(m.dto.finished), Some((OnDemandKind::Episode, 7, 115.0)));
+            assert!(m.dto.on_demand.is_none());
+        }
+
+        #[test]
+        fn a_drop_reports_no_finished_title() {
+            let mut m = a_playing_episode(7);
+            at(&mut m, 40.0);
+            m.ended();
+            assert_eq!(m.dto.state, PlaybackState::Failed);
+            assert!(m.dto.ending.is_some());
+            assert!(m.dto.finished.is_none());
+        }
+
+        #[test]
+        fn any_open_or_stop_clears_finished() {
+            let mut m = finished_episode(7);
+            m.opening(Opened::Movie(1));
+            assert!(m.dto.finished.is_none());
+            let mut m = finished_episode(7);
+            m.opening(Opened::Channel(1));
+            assert!(m.dto.finished.is_none());
+            let mut m = finished_episode(7);
+            m.opening(Opened::Episode(8));
+            assert!(m.dto.finished.is_none());
+            let mut m = finished_episode(7);
+            m.stopped();
+            assert!(m.dto.finished.is_none());
+            let mut m = finished_episode(7);
+            m.failed("could not open");
+            assert!(m.dto.finished.is_none());
+        }
+
+        #[test]
+        fn play_next_is_allowed_only_from_the_open_or_finished_episode() {
+            let m = a_playing_episode(7);
+            assert!(up_next_allowed(&m.dto, 7));
+            assert!(!up_next_allowed(&m.dto, 8));
+            let mut m = a_playing_episode(7);
+            m.set_paused(true);
+            assert_eq!(m.dto.state, PlaybackState::Paused);
+            assert!(up_next_allowed(&m.dto, 7));
+            let m = finished_episode(7);
+            assert!(up_next_allowed(&m.dto, 7));
+            assert!(!up_next_allowed(&m.dto, 8));
+            // A movie with the same id is not the episode.
+            let m = a_playing_movie(7);
+            assert!(!up_next_allowed(&m.dto, 7));
+            // Stopped by Stop (or by the sleep timer, which is a Stop).
+            let mut m = a_playing_episode(7);
+            m.stopped();
+            assert!(!up_next_allowed(&m.dto, 7));
+            // Still opening is not playing.
+            let mut m = Machine::new();
+            m.opening(Opened::Episode(7));
+            assert!(!up_next_allowed(&m.dto, 7));
+        }
+
+        #[test]
+        fn play_next_is_refused_after_a_drop() {
+            let mut m = a_playing_episode(7);
+            at(&mut m, 40.0);
+            m.ended();
+            assert_eq!(m.dto.state, PlaybackState::Failed);
+            assert!(!up_next_allowed(&m.dto, 7));
+            assert!(m.advance(7, 8).is_err());
+        }
+
+        #[test]
+        fn a_claimed_advance_is_not_claimed_twice() {
+            let mut m = finished_episode(7);
+            assert!(m.advance(7, 8).is_ok());
+            assert_eq!(m.dto.state, PlaybackState::Opening);
+            assert_eq!(title(m.dto.on_demand), Some((OnDemandKind::Episode, 8, 0.0)));
+            assert!(m.dto.finished.is_none());
+            assert_eq!(
+                m.advance(7, 8).unwrap_err(),
+                "that episode is not the one playing"
+            );
+            // From one still playing, too.
+            let mut m = a_playing_episode(7);
+            assert!(m.advance(7, 8).is_ok());
+            assert!(m.advance(7, 8).is_err());
+        }
+
+        #[test]
+        fn the_languages_of_the_episode_left_go_with_the_claim() {
+            let mut m = finished_episode(7);
+            m.languages = Some(Languages {
+                audio: Some("fra".into()),
+                subtitles: None,
+                subtitles_off: true,
+            });
+            let carried = m.advance(7, 8).unwrap();
+            assert_eq!(carried.and_then(|l| l.audio).as_deref(), Some("fra"));
+            assert!(m.languages.is_none());
+        }
+
+        fn track(id: i64, lang: &str) -> TrackDto {
+            TrackDto {
+                id,
+                title: None,
+                lang: Some(lang.into()),
+                codec: None,
+                channels: None,
+                default: false,
+                forced: false,
+                hearing_impaired: false,
+                visual_impaired: false,
+                selected: false,
+            }
+        }
+
+        #[test]
+        fn the_next_episode_keeps_the_language_chosen() {
+            let tracks = [track(1, "eng"), track(2, "fra")];
+            assert_eq!(carried_track(Some("fra"), &tracks), Some(2));
+            assert_eq!(carried_track(Some("FRA"), &tracks), Some(2));
+            assert_eq!(carried_track(Some("deu"), &tracks), None);
+            assert_eq!(carried_track(None, &tracks), None);
+            // The first of that language, when there are two.
+            let tracks = [track(1, "eng"), track(2, "fra"), track(3, "fra")];
+            assert_eq!(carried_track(Some("fra"), &tracks), Some(2));
+        }
+
+        #[test]
+        fn the_carried_languages_change_only_what_differs() {
+            let selected = |t: TrackDto| TrackDto { selected: true, ..t };
+            let french = Languages {
+                audio: Some("fra".into()),
+                subtitles: Some("eng".into()),
+                subtitles_off: false,
+            };
+            // mpv kept the last episode's track numbers: French audio is
+            // now 1, and English subtitles are not shown.
+            let audio = [track(1, "fra"), selected(track(2, "eng"))];
+            let subtitles = [track(1, "eng")];
+            assert_eq!(
+                carried_choice(&french, &audio, &subtitles),
+                [("aid", "1".to_owned()), ("sid", "1".to_owned())]
+            );
+            // Already right: nothing to do.
+            let audio = [selected(track(1, "fra")), track(2, "eng")];
+            let subtitles = [selected(track(1, "eng"))];
+            assert!(carried_choice(&french, &audio, &subtitles).is_empty());
+            // A language this one does not have is mpv's choice.
+            let german = Languages {
+                audio: Some("deu".into()),
+                ..french.clone()
+            };
+            assert_eq!(carried_choice(&german, &audio, &subtitles), [("aid", "auto".to_owned())]);
+            // Subtitles that were off stay off.
+            let off = Languages {
+                subtitles: None,
+                subtitles_off: true,
+                ..french
+            };
+            assert_eq!(carried_choice(&off, &audio, &subtitles), [("sid", "no".to_owned())]);
+            assert_eq!(
+                Languages::of(&audio, &subtitles),
+                Languages {
+                    audio: Some("fra".into()),
+                    subtitles: Some("eng".into()),
+                    subtitles_off: false,
+                }
+            );
+        }
+
+        #[test]
+        fn play_next_marks_the_finished_episode_and_opens_the_next() {
+            let c = crate::catalog::open_in_memory().unwrap();
+            let place = ProgressWrite {
+                item: VodItem::episode(7),
+                position: 60.0,
+                duration: Some(120.0),
+            };
+            let marks = mark_moved_on(&c, Some(place), 7, 1_000).unwrap();
+            assert!(marks.watched);
+            let rows: Vec<(String, bool, Option<f64>)> = c
+                .prepare("SELECT kind, watched_at IS NOT NULL, position FROM vod_marks WHERE item_id = 7")
+                .unwrap()
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+                .unwrap()
+                .collect::<rusqlite::Result<_>>()
+                .unwrap();
+            assert_eq!(rows, [("episode".to_owned(), true, Some(60.0))]);
+            // Nothing new to write down: marked all the same.
+            let marks = mark_moved_on(&c, None, 9, 1_000).unwrap();
+            assert!(marks.watched);
+        }
     }
 
     #[test]
