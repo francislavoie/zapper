@@ -33,6 +33,10 @@ export interface EpisodeListProps {
   nextUp: number | null;
   onPlay: (e: EpisodeDto) => void;
   onWatched: (e: EpisodeDto, watched: boolean) => void;
+  /** Scroll the next-up episode (or the list's top) into sight when the
+   *  list appears. Off for a list that has just opened with its sheet,
+   *  which starts at the sheet's top. */
+  revealOnMount?: boolean;
 }
 
 /** The nearest ancestor that scrolls vertically. */
@@ -69,7 +73,7 @@ interface Geometry {
 
 const H = EPISODE_ROW_HEIGHT;
 
-export function EpisodeList({ episodes, nextUp, onPlay, onWatched }: EpisodeListProps) {
+export function EpisodeList({ episodes, nextUp, onPlay, onWatched, revealOnMount = true }: EpisodeListProps) {
   const listRef = useRef<HTMLDivElement | null>(null);
   const count = episodes.length;
   const nextIndex = episodes.findIndex((e) => e.episodeId === nextUp);
@@ -104,10 +108,14 @@ export function EpisodeList({ episodes, nextUp, onPlay, onWatched }: EpisodeList
     [geometry],
   );
 
-  // Opened on the season of what is next: that episode in sight. Another
-  // season starts at its first episode, wherever the last one was left. Once
-  // per season: the sheet keys the list by it.
+  // A season chosen: what is next in sight if it is in this one, else its
+  // first episode, wherever the last one was left. Once per season: the
+  // sheet keys the list by it. Not when the sheet has just opened: its
+  // scroller is the sheet itself, and scrolling to the next-up episode
+  // scrolled the poster and the facts out of sight before they were seen.
+  // The cursor is still on that episode, and the first key brings it in.
   useLayoutEffect(() => {
+    if (!revealOnMount) return;
     const g = geometry();
     if (!g) return;
     const sc = g.scroller;

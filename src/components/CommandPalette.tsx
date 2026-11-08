@@ -26,6 +26,7 @@ import { categoryNames, categoryOf } from "../logic/searchGroups";
 import { listedFor } from "../logic/railItems";
 import { useApp, useDispatch } from "../store";
 import { usePlayerRecord } from "../hooks/usePlayerRecord";
+import { isSideButton } from "../logic/navHistory";
 
 /** Enough to pick from without the programmes, which follow the channels,
  *  sitting a long scroll down. The list's own search shows more of both. */
@@ -127,7 +128,8 @@ export function CommandPalette() {
     <div
       className="modal-backdrop"
       onMouseDown={(e) => {
-        if (e.target === e.currentTarget) close();
+        // Not the mouse's back button: it closes this as a step of its own.
+        if (e.target === e.currentTarget && !isSideButton(e)) close();
       }}
     >
       <div className="palette" role="dialog" aria-label="Command palette">

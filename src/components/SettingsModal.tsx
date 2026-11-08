@@ -50,6 +50,7 @@ import { RangeField, Segmented, SettingRow, SettingsGroup, SettingsPage } from "
 import { Switch } from "./Switch";
 import { VolumeControl } from "./VolumeControl";
 import type { LiveStart, SubtitleBackdrop, SettingsDto } from "../types";
+import { isSideButton } from "../logic/navHistory";
 
 /** The pages there is something to do on here: in a browser, not the
  *  player's or updates (logic/capabilities.ts). */
@@ -126,7 +127,8 @@ export function SettingsModal() {
     <div
       className="modal-backdrop"
       onMouseDown={(e) => {
-        if (e.target === e.currentTarget) close();
+        // Not the mouse's back button: it closes this as a step of its own.
+        if (e.target === e.currentTarget && !isSideButton(e)) close();
       }}
     >
       <div className="settings" role="dialog" aria-label="Settings">

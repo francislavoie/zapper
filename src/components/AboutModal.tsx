@@ -5,6 +5,7 @@
 import { useState } from "react";
 import { useDispatch } from "../store";
 import { AboutPane } from "./AboutPane";
+import { isSideButton } from "../logic/navHistory";
 
 export function AboutModal() {
   const dispatch = useDispatch();
@@ -15,7 +16,8 @@ export function AboutModal() {
     <div
       className="modal-backdrop"
       onMouseDown={(e) => {
-        if (e.target === e.currentTarget) close();
+        // Not the mouse's back button: it closes this as a step of its own.
+        if (e.target === e.currentTarget && !isSideButton(e)) close();
       }}
     >
       <div className={`about ${wide ? "wide" : ""}`} role="dialog" aria-label="About zapper">

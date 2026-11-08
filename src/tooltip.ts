@@ -27,10 +27,19 @@
 // with its own tip shows the name when it is cut off and the button's tip
 // when it is not.
 //
+// Text that can be read in full gets no tip: a name, a title or a heading
+// takes `data-tip-overflow`, never `data-tip`. `data-tip` is for controls
+// whose label is not on them (an icon) or says less than the tip.
+//
+// Where it goes (logic/tooltip.ts tipAnchor): a truncation tip starts where
+// the cut text does, so the whole name reads on from the same place; any
+// other tip centres on a control, and over something wider — a row — on
+// the pointer, never on the middle of a full-width box.
+//
 // No delay, deliberately: a tooltip that waits is a tooltip nobody sees,
 // and the point of these is to be read in passing.
 
-import { placeTip } from "./logic/tooltip";
+import { overflows, placeTip, tipAnchor } from "./logic/tooltip";
 import { documentScale } from "./zoom";
 
 const TIPPED = "[data-tip],[data-tip-overflow]";
@@ -40,21 +49,26 @@ export const TIP_ID = "app-tooltip";
 
 /** Whether an element's text is cut short right now.
  *
- *  `scrollWidth > clientWidth` is the usual test and catches nearly every
- *  case, but both are rounded to whole pixels, and a name that overflows its
- *  box by half a pixel is still drawn with an ellipsis. So when the integers
- *  agree and the element is one that ellipsizes, the text's own laid-out
- *  width is measured against the box it has to fit in, unrounded.
+ *  `scrollWidth > clientWidth` is the usual test, but both are rounded to
+ *  whole pixels, and not always the same way: WebKit can round a box of
+ *  939.05px to a client width of 939 and a scroll width of 940, and a name
+ *  that fits with room to spare then counts as cut short — the tooltip that
+ *  repeats a fully visible episode title. So a difference of a pixel is not
+ *  trusted either way. Beyond that the integers decide; within it, when the
+ *  element is one that ellipsizes, the text's own laid-out width is
+ *  measured against the box it has to fit in, unrounded (a name that
+ *  overflows by half a pixel is still drawn with an ellipsis).
  *
  *  Line-clamped text (the programme description) overflows downwards
  *  instead, and is checked that way — but only when a clamp is in force,
- *  because a single line's height and its scroll height can differ by a
- *  descender without anything being hidden. */
+ *  and by more than a pixel, because a single line's height and its scroll
+ *  height can differ by a descender or a rounding without anything being
+ *  hidden. A clamp that bites hides a whole line. */
 function isTruncated(el: HTMLElement): boolean {
-  if (el.scrollWidth > el.clientWidth) return true;
+  if (overflows(el.scrollWidth, el.clientWidth, null, 0)) return true;
   const cs = getComputedStyle(el);
   const clamp = cs.getPropertyValue("-webkit-line-clamp");
-  if (clamp && clamp !== "none" && el.scrollHeight > el.clientHeight) return true;
+  if (clamp && clamp !== "none" && overflows(el.scrollHeight, el.clientHeight, null, 0)) return true;
   if (cs.textOverflow !== "ellipsis") return false;
 
   const range = document.createRange();
@@ -68,7 +82,7 @@ function isTruncated(el: HTMLElement): boolean {
       parseFloat(cs.borderRightWidth)) *
     documentScale();
   const room = el.getBoundingClientRect().width - inset;
-  return text > room + 0.5;
+  return overflows(el.scrollWidth, el.clientWidth, text, room);
 }
 
 /** What `el` would say, or null if it has nothing to say at the moment. */
@@ -83,6 +97,17 @@ function textOf(el: Element): string | null {
   const given = el.getAttribute("data-tip-overflow");
   if (given && given !== "true") return given;
   return el.textContent?.trim() || null;
+}
+
+/** Where `el`'s text begins on screen, from the left: its laid-out contents,
+ *  kept inside the element's own box (`box`, already measured). An element
+ *  with no text to measure starts where it does. */
+function textLeft(el: HTMLElement, box: DOMRect): number {
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  const r = range.getBoundingClientRect();
+  if (!(r.width > 0)) return box.left;
+  return Math.min(Math.max(r.left, box.left), box.right);
 }
 
 /** The nearest tipped element at or above `start` that has something to say. */
@@ -111,6 +136,10 @@ export function installTooltips(tip: HTMLElement): () => void {
    *  has been read, and one reappearing over the result of the click — a
    *  play button that has just become a pause button — is in the way. */
   let quiet: HTMLElement | null = null;
+  /** Where the pointer came onto `current`, horizontally; null when it was
+   *  focus that showed the tip. Taken once per target, so a tip over a wide
+   *  row holds still while the pointer moves along it. */
+  let pointerX: number | null = null;
 
   const place = () => {
     if (!current) return;
@@ -120,18 +149,25 @@ export function installTooltips(tip: HTMLElement): () => void {
     tip.style.top = "0px";
     const t = current.getBoundingClientRect();
     const r = tip.getBoundingClientRect();
-    const at = placeTip(t, r.width, r.height, window.innerWidth, window.innerHeight);
     // Visual pixels in, CSS pixels out; see documentScale.
     const scale = documentScale();
+    const overflow = !current.getAttribute("data-tip");
+    // Lined up text to text: the tip's own inset taken off, so the full name
+    // starts exactly where the cut one does.
+    const cs = getComputedStyle(tip);
+    const inset = (parseFloat(cs.paddingLeft) + parseFloat(cs.borderLeftWidth)) * scale;
+    const anchor = tipAnchor(t, overflow, textLeft(current, t) - inset, pointerX);
+    const at = placeTip(t, r.width, r.height, window.innerWidth, window.innerHeight, anchor);
     tip.style.left = `${at.left / scale}px`;
     tip.style.top = `${at.top / scale}px`;
     tip.dataset.side = at.side;
   };
 
-  const show = (el: HTMLElement, text: string, focus: boolean) => {
+  const show = (el: HTMLElement, text: string, focus: boolean, x: number | null = null) => {
     if (current !== el) {
       release();
       current = el;
+      pointerX = focus ? null : x;
       // Only when the text adds something. A button already named "Stop"
       // described as "Stop" would be read out twice.
       if (!el.hasAttribute("aria-describedby") && el.getAttribute("aria-label") !== text) {
@@ -208,7 +244,7 @@ export function installTooltips(tip: HTMLElement): () => void {
     }
     if (found.el === quiet) return;
     quiet = null;
-    show(found.el, found.text, false);
+    show(found.el, found.text, false, e.clientX);
   };
 
   const onOut = (e: PointerEvent) => {

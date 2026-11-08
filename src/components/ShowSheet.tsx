@@ -6,9 +6,9 @@
 // season of what is next. Opening it, or choosing a season, plays nothing;
 // an episode plays on Enter, a double-click or its ▶, which also closes the
 // sheet for the full player. Closing it (Escape, which useGlobalKeys
-// answers, or the ✕) returns focus to the Shows list.
+// answers, the mouse's back button, ‹ Back or ✕) returns focus to the Shows list.
 
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { playEpisode, setEpisodeWatched } from "../actions";
 import { useShowDetails } from "../hooks/useShowDetails";
 import { playingKind, peopleLine } from "../logic/movies";
@@ -17,6 +17,7 @@ import { useApp, useDispatch } from "../store";
 import type { EpisodeDto } from "../types";
 import { EpisodeList } from "./EpisodeList";
 import { Poster } from "./Poster";
+import { SheetControls } from "./SheetControls";
 import { ShowActions, ShowFacts } from "./ShowBand";
 
 export function ShowSheet({ id }: { id: number }) {
@@ -67,12 +68,26 @@ export function ShowSheet({ id }: { id: number }) {
 
   const tabs = useRef<HTMLDivElement | null>(null);
   // The chosen tab in sight in its row, which scrolls sideways when a show
-  // has more seasons than fit.
+  // has more seasons than fit. Sideways only: scrollIntoView would also
+  // scroll the sheet down to the row, which on opening put the poster and
+  // the facts out of sight.
   useEffect(() => {
-    tabs.current
-      ?.querySelector<HTMLElement>('[aria-selected="true"]')
-      ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    const row = tabs.current;
+    const tab = row?.querySelector<HTMLElement>('[aria-selected="true"]');
+    if (!row || !tab) return;
+    const left = tab.offsetLeft - row.offsetLeft;
+    const right = left + tab.offsetWidth;
+    if (left < row.scrollLeft) row.scrollLeft = left;
+    else if (right > row.scrollLeft + row.clientWidth) row.scrollLeft = right - row.clientWidth;
   }, [season]);
+
+  // Every show's sheet starts at its top: on opening (the sheet is keyed by
+  // the show, so another show is a new sheet), before the frame is drawn,
+  // and again once the show is there, as the sheet draws nothing until it is.
+  const shown = show !== null;
+  useLayoutEffect(() => {
+    if (root.current) root.current.scrollTop = 0;
+  }, [id, shown]);
 
   if (!show) return null;
   const playing =
@@ -140,14 +155,7 @@ export function ShowSheet({ id }: { id: number }) {
           <Poster url={show.posterUrl} name={show.cleanName} className="movie-sheet-blur" />
         )}
       </div>
-      <button
-        className="ctl icon movie-sheet-close"
-        aria-label="Close"
-        data-tip="Close (Esc)"
-        onClick={() => dispatch({ type: "shows/sheet", id: null })}
-      >
-        ✕
-      </button>
+      <SheetControls onClose={() => dispatch({ type: "shows/sheet", id: null })} />
       <div className="sheet-top">
         <Poster url={show.posterUrl} name={show.cleanName} className="poster sheet-poster" />
         <div className="sheet-text">
@@ -200,6 +208,8 @@ export function ShowSheet({ id }: { id: number }) {
             nextUp={d.nextUp}
             onPlay={play}
             onWatched={mark}
+            // Only for a season chosen: the sheet opens at its top.
+            revealOnMount={shows.sheetSeason !== null}
           />
         </div>
       ) : null}
