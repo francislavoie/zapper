@@ -46,6 +46,7 @@ import type {
   MoviePageDto,
   MoviesSummaryDto,
   NetworkDto,
+  PlayingEpisodeDto,
   PlayerOptionsDto,
   PlayerStateDto,
   ProgrammeDto,
@@ -56,7 +57,12 @@ import type {
   RecordingSettingsDto,
   RecordingStatusDto,
   ScheduleRequest,
+  SeriesCategoryDto,
+  SeriesDetailsDto,
+  SeriesDto,
+  SeriesPageDto,
   SettingsDto,
+  ShowsSummaryDto,
   SyncStatusDto,
   VodCategoryDto,
 } from "./types";
@@ -306,17 +312,32 @@ export const webBackend: typeof api = {
   setMovieMarks: (movieId, marks) =>
     put<MarksDto>(`/api/vod/movies/${movieId}/marks`, marks),
 
-  // Shows: the service's routes and the browser's player for episodes are
-  // still to come; until then the calls say they are not available.
+  // Shows, as the movies are: pictures come as this service's addresses.
+  // The browser's player for episodes is still to come.
   playEpisode: notHere,
-  showsSummary: notHere,
-  seriesCategories: notHere,
-  series: notHere,
-  searchSeries: notHere,
-  seriesDetails: notHere,
-  setSeriesMarks: notHere,
-  setEpisodeMarks: notHere,
-  playingEpisode: notHere,
+  showsSummary: () => get<ShowsSummaryDto>("/api/vod/shows/summary"),
+  seriesCategories: () => get<SeriesCategoryDto[]>("/api/vod/series/categories"),
+  series: (query, offset, limit) =>
+    get<SeriesPageDto>(
+      apiUrl("/api/vod/series", {
+        list: query.list,
+        category: query.categoryId,
+        sort: query.sort,
+        from: query.yearFrom,
+        to: query.yearTo,
+        offset,
+        limit,
+      }),
+    ),
+  searchSeries: (query, limit) =>
+    get<SeriesDto[]>(apiUrl("/api/vod/series/search", { q: query, limit })),
+  seriesDetails: (seriesId) => get<SeriesDetailsDto>(`/api/vod/series/${seriesId}`),
+  setSeriesMarks: (seriesId, marks) =>
+    put<MarksDto>(`/api/vod/series/${seriesId}/marks`, marks),
+  setEpisodeMarks: (episodeId, watched) =>
+    put<MarksDto>(`/api/vod/episodes/${episodeId}/marks`, { watched }),
+  playingEpisode: (episodeId) =>
+    get<PlayingEpisodeDto>(`/api/vod/episodes/${episodeId}`),
 
   activityRows: notHere,
   importActivity: notHere,

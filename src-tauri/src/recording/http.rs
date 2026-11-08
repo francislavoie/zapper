@@ -33,7 +33,7 @@ use super::api::{
 use super::backup::SetBackupRequest;
 use super::now;
 use super::server::Server;
-use super::{account, browse, strm, vod_browse, vodwatch, watch, web};
+use super::{account, browse, series_browse, strm, vod_browse, vodwatch, watch, web};
 
 type Shared = Arc<Server>;
 
@@ -440,6 +440,7 @@ pub fn router(server: Shared) -> Router {
         .route("/api/logout", post(logout))
         .merge(browse::routes())
         .merge(vod_browse::routes())
+        .merge(series_browse::routes())
         .merge(account::routes())
         .merge(watch::routes())
         .merge(vodwatch::routes())
@@ -2218,6 +2219,303 @@ pub(crate) mod tests {
             )
             .await;
             assert_eq!(st, StatusCode::BAD_REQUEST);
+        });
+    }
+
+    /// The provider's own date for the shows below, which their kept
+    /// details were fetched under (so they are fresh, and never asked for).
+    const SHOWS_ADDED: i64 = 1_700_000_000;
+
+    /// Shows 9_200_001.. in one category. The first has the poster at
+    /// `poster`, kept details with one backdrop at `backdrop`, and two
+    /// episodes (9_200_101, 9_200_102) with the still at `still`; the second
+    /// has nothing more than its name.
+    fn seed_series(poster: &str, backdrop: &str, still: &str) {
+        use crate::catalog::{db, series_sync};
+        db::install_test_db();
+        let show = |id: i64, name: &str, poster: Option<&str>| series_sync::NewSeries {
+            series_id: id,
+            category_id: Some("ser-9200".into()),
+            name: name.into(),
+            poster_url: poster.map(str::to_owned),
+            added: Some(SHOWS_ADDED),
+            ..Default::default()
+        };
+        let episode = |id: i64, n: i32| series_sync::NewEpisode {
+            episode_id: id,
+            series_id: 9_200_001,
+            season: 1,
+            episode: n,
+            title: Some(format!("Night Shift {n}")),
+            still_url: Some(still.into()),
+            container: Some("mkv".into()),
+            ..Default::default()
+        };
+        db::with_db(|c| {
+            series_sync::land_series(
+                c,
+                &[crate::xtream::Category {
+                    category_id: "ser-9200".into(),
+                    category_name: "Web Shows".into(),
+                }],
+                &[
+                    show(9_200_001, "Lantern Bay", Some(poster)),
+                    show(9_200_002, "Lantern Point", None),
+                ],
+                now(),
+            )?;
+            let info = serde_json::json!({
+                "backdrops": [backdrop],
+                "genres": ["Drama"],
+                "modified": SHOWS_ADDED,
+            });
+            series_sync::land_series_details(
+                c,
+                9_200_001,
+                now(),
+                &info.to_string(),
+                &[episode(9_200_101, 1), episode(9_200_102, 2)],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn the_series_catalogue_is_read_and_marked_without_provider_addresses() {
+        let _catalogue = movie_catalogue();
+        let s = server("series");
+        enable(&s, true).await;
+        let poster = "http://provider.example/u/secret-user/p/secret-pass/poster.jpg";
+        let backdrop = "http://provider.example/u/secret-user/p/secret-pass/back.jpg";
+        let still = "http://provider.example/u/secret-user/p/secret-pass/still.jpg";
+        seed_series(poster, backdrop, still);
+        let token = browser_login(&s).await;
+        let get = |uri: &str| from_page("GET", uri, Some(&token), None);
+        let put = |uri: &str, body: serde_json::Value| from_page("PUT", uri, Some(&token), Some(body));
+
+        let (st, sum) = call(&s, get("/api/vod/shows/summary")).await;
+        assert_eq!(st, StatusCode::OK);
+        assert!(sum["total"].as_u64().unwrap() >= 2, "{sum}");
+        assert!(sum["origin"].is_string(), "{sum}");
+        let (st, cats) = call(&s, get("/api/vod/series/categories")).await;
+        assert_eq!(st, StatusCode::OK);
+        assert!(cats.as_array().unwrap().iter().any(|c| c["id"] == "ser-9200"));
+
+        let page_uri = "/api/vod/series?list=category&category=ser-9200&sort=az&offset=0&limit=10";
+        let (st, page) = call(&s, get(page_uri)).await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(page["total"], 2);
+        let posters: Vec<&str> = page["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|m| m["posterUrl"].as_str())
+            .collect();
+        assert_eq!(posters, ["/api/poster/series/9200001"]);
+        assert!(posters.iter().all(|p| p.starts_with("/api/poster/series/") && !p.starts_with("http")));
+        assert_eq!(
+            call(&s, get("/api/vod/series?list=category&limit=10")).await.0,
+            StatusCode::BAD_REQUEST
+        );
+
+        let (st, hits) = call(&s, get("/api/vod/series/search?q=lantern%20bay&limit=5")).await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(hits[0]["seriesId"], 9_200_001);
+        assert_eq!(hits[0]["posterUrl"], "/api/poster/series/9200001");
+
+        // Opened, a show's pictures are this service's, every episode's too.
+        let (st, d) = call(&s, get("/api/vod/series/9200001")).await;
+        assert_eq!(st, StatusCode::OK, "{d}");
+        assert_eq!(d["series"]["posterUrl"], "/api/poster/series/9200001");
+        assert_eq!(d["backdropUrls"], serde_json::json!(["/api/backdrop/series/9200001/0"]));
+        assert_eq!(d["genres"][0], "Drama");
+        let eps = d["episodes"].as_array().unwrap();
+        assert_eq!(eps.len(), 2);
+        for e in eps {
+            assert!(e["stillUrl"].as_str().unwrap().starts_with("/api/"), "{e}");
+        }
+        assert_eq!(eps[0]["stillUrl"], "/api/still/episode/9200101");
+        assert_eq!(
+            call(&s, get("/api/vod/series/9299999")).await.0,
+            StatusCode::NOT_FOUND
+        );
+
+        // The episode playing, for the player's title.
+        let (st, p) = call(&s, get("/api/vod/episodes/9200102")).await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(p["series"]["posterUrl"], "/api/poster/series/9200001");
+        assert_eq!(p["episode"]["stillUrl"], "/api/still/episode/9200102");
+        assert_eq!(
+            call(&s, get("/api/vod/episodes/9299999")).await.0,
+            StatusCode::NOT_FOUND
+        );
+
+        let (st, m) = call(&s, put("/api/vod/series/9200001/marks", serde_json::json!({"favourite": true}))).await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(m["favourite"], true);
+        let (_, favs) = call(&s, get("/api/vod/series?list=favourites&limit=1000")).await;
+        assert!(favs["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m["seriesId"] == 9_200_001));
+        assert_eq!(
+            call(&s, put("/api/vod/series/9299999/marks", serde_json::json!({"favourite": true}))).await.0,
+            StatusCode::NOT_FOUND
+        );
+
+        // Played past most of its length, an episode is watched; the show
+        // is once every episode is.
+        let (st, m) = call(
+            &s,
+            put("/api/vod/episodes/9200101/progress", serde_json::json!({"position": 95, "duration": 100})),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(m["watched"], true);
+        let (_, d) = call(&s, get("/api/vod/series/9200001")).await;
+        assert_eq!(d["series"]["watched"], false, "one episode is still to watch");
+        let (st, m) = call(
+            &s,
+            put("/api/vod/episodes/9200102/progress", serde_json::json!({"position": 95, "duration": 100})),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(m["watched"], true);
+        let (_, d) = call(&s, get("/api/vod/series/9200001")).await;
+        assert_eq!(d["series"]["watched"], true, "{d}");
+        let (st, m) = call(&s, put("/api/vod/episodes/9200102/marks", serde_json::json!({"watched": false}))).await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(m["watched"], false);
+        assert_eq!(
+            call(&s, put("/api/vod/episodes/9200101/progress", serde_json::json!({"position": 5, "duration": 0}))).await.0,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            call(&s, put("/api/vod/episodes/9299999/marks", serde_json::json!({"watched": true}))).await.0,
+            StatusCode::NOT_FOUND
+        );
+
+        // Nothing of the provider's address in any answer.
+        for uri in [
+            page_uri,
+            "/api/vod/series/search?q=lantern&limit=5",
+            "/api/vod/series/9200001",
+            "/api/vod/series?list=favourites&limit=10",
+            "/api/vod/episodes/9200101",
+        ] {
+            let (_, _, body) = call_raw(&s, get(uri)).await;
+            let text = String::from_utf8(body).unwrap();
+            assert!(!text.contains("provider.example") && !text.contains("secret"), "{uri}: {text}");
+        }
+
+        // Not without signing in.
+        for uri in [
+            "/api/vod/shows/summary",
+            "/api/vod/series/9200001",
+            "/api/vod/episodes/9200101",
+            "/api/poster/series/9200001",
+            "/api/backdrop/series/9200001/0",
+            "/api/still/episode/9200101",
+        ] {
+            assert_eq!(
+                call(&s, from_page("GET", uri, None, None)).await.0,
+                StatusCode::UNAUTHORIZED,
+                "{uri}"
+            );
+        }
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn series_posters_backdrops_and_stills_are_fetched_by_the_service() {
+        let _catalogue = movie_catalogue();
+        let provider = crate::test_http::serve(|r, _| match r.route() {
+            "/poster.jpg" | "/back.jpg" | "/still.jpg" => {
+                crate::test_http::Reply::ok(b"\xff\xd8 fake".to_vec()).header("Content-Type", "image/jpeg")
+            }
+            _ => crate::test_http::Reply::ok("<html>no</html>").header("Content-Type", "text/html"),
+        });
+        let s = server("series-images");
+        enable(&s, true).await;
+        let token = browser_login(&s).await;
+        seed_series(
+            &format!("{}/poster.jpg", provider.base),
+            &format!("{}/back.jpg", provider.base),
+            &format!("{}/still.jpg", provider.base),
+        );
+        for uri in [
+            "/api/poster/series/9200001",
+            "/api/backdrop/series/9200001/0",
+            "/api/still/episode/9200101",
+        ] {
+            let (st, h, body) = call_raw(&s, from_page("GET", uri, Some(&token), None)).await;
+            assert_eq!(st, StatusCode::OK, "{uri}");
+            assert_eq!(h[header::CONTENT_TYPE], "image/jpeg");
+            assert_eq!(h[header::CONTENT_SECURITY_POLICY], web::LOGO_CSP);
+            assert_eq!(h[header::CACHE_CONTROL], "private, max-age=86400");
+            assert_eq!(body, b"\xff\xd8 fake");
+        }
+        // No picture, no such backdrop, no such show or episode.
+        for uri in [
+            "/api/poster/series/9200002",
+            "/api/backdrop/series/9200001/1",
+            "/api/backdrop/series/9200002/0",
+            "/api/poster/series/9299999",
+            "/api/still/episode/9299999",
+        ] {
+            let (st, h, _) = call_raw(&s, from_page("GET", uri, Some(&token), None)).await;
+            assert_eq!(st, StatusCode::NOT_FOUND, "{uri}");
+            assert_eq!(h[header::CACHE_CONTROL], "private, max-age=3600");
+        }
+    }
+
+    #[test]
+    fn a_failed_series_fetch_says_why_without_where_the_provider_is() {
+        use crate::catalog::{db, origin, series_sync};
+        let _catalogue = movie_catalogue();
+        let provider = crate::test_http::serve(|_, _| crate::test_http::Reply::new(500, "nope"));
+        with_account("seriesfail", async {
+            let creds = crate::xtream::Credentials {
+                host: provider.base.clone(),
+                username: "viewer".into(),
+                password: "series-secret-42".into(),
+            };
+            crate::catalog::credentials::save(&creds).unwrap();
+            db::install_test_db();
+            db::with_db(|c| {
+                // The shows are this account's, so it is asked about them.
+                origin::record(c, &origin::of_xtream(&creds))?;
+                series_sync::land_series(
+                    c,
+                    &[crate::xtream::Category {
+                        category_id: "ser-9201".into(),
+                        category_name: "Web Shows Two".into(),
+                    }],
+                    &[series_sync::NewSeries {
+                        series_id: 9_201_001,
+                        category_id: Some("ser-9201".into()),
+                        name: "Lantern Fog".into(),
+                        ..Default::default()
+                    }],
+                    now(),
+                )?;
+                Ok(())
+            })
+            .unwrap();
+            let s = server("series-fail");
+            enable(&s, true).await;
+            let token = browser_login(&s).await;
+            let (st, _, body) =
+                call_raw(&s, from_page("GET", "/api/vod/series/9201001", Some(&token), None)).await;
+            assert_eq!(st, StatusCode::BAD_GATEWAY);
+            let text = String::from_utf8(body).unwrap();
+            assert!(text.contains("could not be fetched"), "{text}");
+            for leak in [provider.base.as_str(), "127.0.0.1", "player_api", "series-secret-42", "viewer"] {
+                assert!(!text.contains(leak), "{leak} reached the browser: {text}");
+            }
         });
     }
 

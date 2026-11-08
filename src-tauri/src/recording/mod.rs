@@ -79,6 +79,8 @@ pub mod watch;
 #[cfg(feature = "server")]
 pub mod vod_browse;
 #[cfg(feature = "server")]
+pub mod series_browse;
+#[cfg(feature = "server")]
 pub mod web;
 
 /// Unix seconds now.
