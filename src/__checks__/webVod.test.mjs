@@ -23,7 +23,9 @@ import {
   stuckAgain,
   stuckTooOften,
   subtitleAfter,
+  progressPath,
   vodStreamUrl,
+  watchBody,
 } from "../logic/webVod.ts";
 
 test("a remux stream is asked for from a time, with its audio", () => {
@@ -156,4 +158,26 @@ test("the service's WebVTT is read into cues", () => {
     { start: 1, end: 2, text: "Short form" },
   ]);
   assert.deepEqual(parseVtt("not a subtitle file"), []);
+});
+
+test("a watch names the title it asks for: an episode or a movie, not both", () => {
+  const rest = { anyway: false, replaces: null, audio: null, can: {} };
+  const ep = watchBody({ kind: "episode", id: 7 }, rest);
+  assert.equal(ep.episodeId, 7);
+  assert.equal("movieId" in ep, false);
+  assert.equal(ep.anyway, false);
+  assert.equal(ep.replaces, null);
+  assert.equal(ep.audio, null);
+  assert.deepEqual(ep.can, {});
+  const mv = watchBody({ kind: "movie", id: 7 }, { ...rest, anyway: true, replaces: "v1", audio: 2 });
+  assert.equal(mv.movieId, 7);
+  assert.equal("episodeId" in mv, false);
+  assert.equal(mv.anyway, true);
+  assert.equal(mv.replaces, "v1");
+  assert.equal(mv.audio, 2);
+});
+
+test("a title's place is reported to its own kind's address", () => {
+  assert.equal(progressPath({ kind: "episode", id: 7 }), "/api/vod/episodes/7/progress");
+  assert.equal(progressPath({ kind: "movie", id: 7 }), "/api/vod/movies/7/progress");
 });

@@ -1,6 +1,8 @@
-// A movie in a browser signed in to the recording service: what the app's
-// player does for a title (play from a place, seek, pause, another sound,
-// subtitles, report how far it got), made of the page's <video> element.
+// A movie or an episode in a browser signed in to the recording service:
+// what the app's player does for a title (play from a place, seek, pause,
+// another sound, subtitles, report how far it got), made of the page's
+// <video> element. Both are watched the same way; only the title named in
+// the watch, and where its place is reported, differ.
 //
 // The service decides how the film reaches this browser
 // (recording::vodwatch, `POST /api/vod/watch`). A file the browser plays as
@@ -48,6 +50,7 @@ import {
   parseVtt,
   positionOf,
   progressDue,
+  progressPath,
   releaseDue,
   seekPlan,
   stallDue,
@@ -56,7 +59,9 @@ import {
   stuckTooOften,
   subtitleAfter,
   vodStreamUrl,
+  watchBody,
   type Stuck,
+  type VodItemRef,
   type VodMode,
 } from "./logic/webVod";
 import type { OnDemandDto, PlayerOptionsDto, StreamEnding, TrackDto } from "./types";
@@ -111,7 +116,7 @@ interface VodAnswer {
 }
 
 interface Session {
-  movieId: number;
+  item: VodItemRef;
   viewer: string;
   stream: string;
   mode: VodMode;
@@ -156,24 +161,29 @@ interface Session {
 
 let session: Session | null = null;
 let seq = 0;
-/** The last movie that failed, and how: playing it again from the picture's
- *  "Watch here anyway" means exactly that. */
-let lastFailure: { movieId: number; ending: StreamEnding | null } | null = null;
+/** The last title that failed, and how: playing the same one again from
+ *  the picture's "Watch here anyway" means exactly that. */
+let lastFailure: { item: VodItemRef; ending: StreamEnding | null } | null = null;
 let ticker: ReturnType<typeof setInterval> | undefined;
 let poller: ReturnType<typeof setInterval> | undefined;
 
-/** Whether a movie is open (playing, paused or opening). */
+/** Whether a title is open (playing, paused or opening). */
 export const active = (): boolean => session !== null;
 
+const sameItem = (a: VodItemRef, b: VodItemRef): boolean => a.kind === b.kind && a.id === b.id;
+
+/** What the title is called in what the picture says about it. */
+const noun = (item: VodItemRef): string => (item.kind === "episode" ? "episode" : "movie");
+
 function onDemandOf(
-  id: number,
+  item: VodItemRef,
   position: number,
   duration: number | null,
   bufferedTo: number | null,
 ): OnDemandDto {
   return {
-    kind: "movie",
-    id,
+    kind: item.kind,
+    id: item.id,
     // Whole seconds, as the app's player reports them: the readout moves
     // once a second.
     position: Math.max(0, Math.floor(position)),
@@ -184,10 +194,11 @@ function onDemandOf(
 
 /** Reports the film's place to the player's listeners, when it moved. */
 function showPlace(s: Session, bufferedTo: number | null) {
-  const next = onDemandOf(s.movieId, s.position, durationOf(s), bufferedTo);
+  const next = onDemandOf(s.item, s.position, durationOf(s), bufferedTo);
   const was = playerFeed.last.onDemand;
   if (
     was &&
+    was.kind === next.kind &&
     was.id === next.id &&
     was.position === next.position &&
     was.duration === next.duration &&
@@ -216,7 +227,7 @@ function ranges(el: HTMLVideoElement): [number, number][] {
 // ------------------------------------------------------------- watching
 
 async function watchRequest(
-  movieId: number,
+  item: VodItemRef,
   anyway: boolean,
   replaces: string | null,
   audio: number | null,
@@ -224,7 +235,7 @@ async function watchRequest(
   try {
     const resp = await fetch(
       "/api/vod/watch",
-      requestInit("POST", { movieId, anyway, replaces, audio, can: browserCan(host) }),
+      requestInit("POST", watchBody(item, { anyway, replaces, audio, can: browserCan(host) })),
     );
     const body: unknown = await resp.json().catch(() => null);
     return { status: resp.status, body };
@@ -237,7 +248,17 @@ async function watchRequest(
  *  `null`). Resolves once the service has answered; what happens then comes
  *  through `playerFeed`, as with a channel. */
 export function playMovie(movieId: number, start: number | null): Promise<void> {
-  return watch(movieId, Math.max(0, start ?? 0), {
+  return playItem({ kind: "movie", id: movieId }, start);
+}
+
+/** Plays episode `episodeId` from `start` seconds in, as `playMovie` does a
+ *  movie. */
+export function playEpisode(episodeId: number, start: number | null): Promise<void> {
+  return playItem({ kind: "episode", id: episodeId }, start);
+}
+
+function playItem(item: VodItemRef, start: number | null): Promise<void> {
+  return watch(item, Math.max(0, start ?? 0), {
     audio: null,
     subtitle: null,
     duration: null,
@@ -254,10 +275,10 @@ interface Keep {
 
 /** Asks the service for the film, from `from`, keeping what was chosen on
  *  an earlier watch of it (`keep`). */
-async function watch(movieId: number, from: number, keep: Keep): Promise<void> {
+async function watch(item: VodItemRef, from: number, keep: Keep): Promise<void> {
   if (!playableHere) throw new Error(UNSUPPORTED);
   const anyway =
-    lastFailure !== null && lastFailure.movieId === movieId && meansAnyway(lastFailure.ending);
+    lastFailure !== null && sameItem(lastFailure.item, item) && meansAnyway(lastFailure.ending);
   lastFailure = null;
   // What was on goes first; the service is told to let its viewer go as
   // this one is made, so a single connection serves the next.
@@ -280,9 +301,10 @@ async function watch(movieId: number, from: number, keep: Keep): Promise<void> {
     ending: null,
     reconnect: null,
     joiningLive: false,
-    onDemand: onDemandOf(movieId, from, keep.duration, null),
+    onDemand: onDemandOf(item, from, keep.duration, null),
+    finished: null,
   });
-  const { status, body } = await watchRequest(movieId, anyway, replaces, keep.audio);
+  const { status, body } = await watchRequest(item, anyway, replaces, keep.audio);
   if (my !== seq) {
     // Superseded while asking: let the answer's viewer go at once.
     const late = body as Partial<VodAnswer> | null;
@@ -292,13 +314,13 @@ async function watch(movieId: number, from: number, keep: Keep): Promise<void> {
   if (status !== 200) {
     if (status === 401) signedOutNow();
     const r = refusalState(status, body as WatchRefusal | null);
-    fail(movieId, from, keep.duration, r.ending, r.error);
+    fail(item, from, keep.duration, r.ending, r.error);
     return;
   }
   const a = body as VodAnswer;
   const subtitles = a.subtitles ?? [];
   const s: Session = {
-    movieId,
+    item,
     viewer: a.viewer,
     stream: a.stream,
     mode: a.mode === "direct" ? "direct" : "remux",
@@ -334,7 +356,7 @@ async function watch(movieId: number, from: number, keep: Keep): Promise<void> {
       await loadMpegts();
     } catch {
       if (session === s) {
-        fail(movieId, from, s.duration, null, "The player couldn't be loaded. Reload the page.");
+        fail(item, from, s.duration, null, "The player couldn't be loaded. Reload the page.");
       }
       return;
     }
@@ -512,7 +534,7 @@ async function broke(s: Session, reading: number) {
     if (refused.status === 401) signedOutNow();
     if ([400, 401, 404, 422].includes(refused.status)) {
       const r = refusalState(refused.status, refused.body as WatchRefusal | null);
-      fail(s.movieId, s.position, s.duration, r.ending, r.error);
+      fail(s.item, s.position, s.duration, r.ending, r.error);
       return;
     }
   }
@@ -524,18 +546,18 @@ async function broke(s: Session, reading: number) {
   }
   if (st?.ended) {
     if (st.takenOver) {
-      fail(s.movieId, s.position, s.duration, endedBy("inUse"),
+      fail(s.item, s.position, s.duration, endedBy("inUse"),
         "Another browser started watching on this account's connection.");
     } else {
-      fail(s.movieId, s.position, s.duration, endingOf(st.ended), "The movie stopped.");
+      fail(s.item, s.position, s.duration, endingOf(st.ended), `The ${noun(s.item)} stopped.`);
     }
     return;
   }
   const now = Date.now();
   s.reopens = s.reopens.filter((t) => now - t < 60_000);
   if (st === null || s.reopens.length >= 3) {
-    fail(s.movieId, s.position, s.duration, endedBy("network"),
-      "The movie from the recording service broke off.");
+    fail(s.item, s.position, s.duration, endedBy("network"),
+      `The ${noun(s.item)} from the recording service broke off.`);
     return;
   }
   s.reopens.push(now);
@@ -554,7 +576,7 @@ const endedBy = (kind: StreamEnding["kind"]): StreamEnding => ({
 /** The film stopped for a reason, shown over the picture, its place kept
  *  for Retry. */
 function fail(
-  movieId: number,
+  item: VodItemRef,
   position: number,
   duration: number | null,
   ending: StreamEnding | null,
@@ -568,7 +590,7 @@ function fail(
     clearSubtitles();
     if (!s.released) void forget(s.viewer);
   }
-  lastFailure = { movieId, ending };
+  lastFailure = { item, ending };
   stopTimers();
   noticeFeed.set({ recording: null, silent: null });
   patch({
@@ -578,7 +600,8 @@ function fail(
     error,
     reconnect: null,
     joiningLive: false,
-    onDemand: onDemandOf(movieId, position, duration, null),
+    onDemand: onDemandOf(item, position, duration, null),
+    finished: null,
   });
 }
 
@@ -643,15 +666,15 @@ async function rewatch(s: Session) {
   const now = Date.now();
   rewatches = rewatches.filter((t) => now - t < 60_000);
   if (rewatches.length >= 3) {
-    fail(s.movieId, s.position, s.duration, endedBy("network"),
-      "The recording service let the movie go.");
+    fail(s.item, s.position, s.duration, endedBy("network"),
+      `The recording service let the ${noun(s.item)} go.`);
     return;
   }
   rewatches.push(now);
   const el = currentVideo();
   // Its viewer is gone: there is nothing to let go or replace.
   s.released = true;
-  await watch(s.movieId, s.position, {
+  await watch(s.item, s.position, {
     audio: s.audioIndex,
     subtitle: s.subtitle,
     duration: s.duration,
@@ -682,7 +705,7 @@ function report(s: Session, final = false, keepalive = false) {
   if (final && s.lastProgress?.position === s.position) return;
   s.lastProgress = { at: Date.now(), position: s.position };
   const body = { position: s.position, duration: durationOf(s) };
-  void fetch(`/api/vod/movies/${s.movieId}/progress`, {
+  void fetch(progressPath(s.item), {
     ...requestInit("PUT", body),
     keepalive,
   }).catch(() => {
@@ -743,8 +766,8 @@ function tick() {
 function stuck(s: Session) {
   s.stuck = stuckAgain(s.stuck);
   if (stuckTooOften(s.stuck)) {
-    fail(s.movieId, s.position, s.duration, endedBy("network"),
-      "The movie stopped coming from the recording service.");
+    fail(s.item, s.position, s.duration, endedBy("network"),
+      `The ${noun(s.item)} stopped coming from the recording service.`);
     return;
   }
   // Not again until this has been dealt with: a new reading counts afresh.
@@ -811,7 +834,7 @@ export async function togglePause(): Promise<void> {
   const el = currentVideo();
   if (!s || !el) return;
   if (s.released) {
-    await watch(s.movieId, s.position, {
+    await watch(s.item, s.position, {
       audio: s.audioIndex,
       subtitle: s.subtitle,
       duration: s.duration,
@@ -903,7 +926,7 @@ export async function setAudioTrack(id: number): Promise<PlayerOptionsDto> {
   if (index === s.audioIndex || index < 0 || index >= s.tracks.length) return optionsFeed.last;
   const playing = s.started ? !el.paused : s.wantPlay;
   if (s.mode === "direct" || s.released) {
-    await watch(s.movieId, s.position, {
+    await watch(s.item, s.position, {
       audio: index,
       subtitle: s.subtitle,
       duration: s.duration,
