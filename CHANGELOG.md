@@ -20,6 +20,7 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
   as watched past 92 %.
 - **Up next**: near an episode's end, a 10-second countdown into the next one, with Play now and
   Cancel. It keeps your audio and subtitle languages.
+- Up next plays a next episode you had started from where you left it.
 - Movies and episodes play in the browser through the recording service, converted on the fly when
   the browser can't play the file. Text subtitles included.
 - Browsers signed in to the recording service share the app's Continue watching list.
