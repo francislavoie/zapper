@@ -28,15 +28,16 @@ const EPISODE_WITH_RESULTS = 201001;
 const hasResults = (kind: OnDemandKind, id: number) =>
   (kind === "movie" && id === 1) || (kind === "episode" && id === EPISODE_WITH_RESULTS);
 
-/** The results, in the order OpenSubtitles ranks them. */
+/** The results, in the order OpenSubtitles ranks them: the stand-in's rows
+ *  (tools/fake_opensubtitles.py) as the backend passes them on, so without
+ *  its AI-translated English row (7000003), which the backend drops. */
 const RESULTS: Record<string, Omit<SubtitleResultDto, "kept">[]> = {
   en: [
-    { fileId: 7000001, language: "en", release: "Film.0001.2021.1080p.TEST", hearingImpaired: false, forced: false, trusted: true, downloads: 5200 },
-    { fileId: 7000002, language: "en", release: "Film.0001.2021.720p.TEST", hearingImpaired: true, forced: false, trusted: false, downloads: 310 },
-    { fileId: 7000003, language: "en", release: "Film.0001.2021.2160p.TEST", hearingImpaired: false, forced: true, trusted: false, downloads: 12 },
+    { fileId: 7000001, language: "en", release: "Film.0001.2021.1080p.TEST", hearingImpaired: false, forced: false, trusted: true, downloads: 1200 },
+    { fileId: 7000002, language: "en", release: "Film.0001.2021.1080p.TEST.SDH", hearingImpaired: true, forced: false, trusted: false, downloads: 10 },
   ],
   fr: [
-    { fileId: 7000004, language: "fr", release: "Film.0001.2021.1080p.TEST", hearingImpaired: false, forced: false, trusted: true, downloads: 940 },
+    { fileId: 7000004, language: "fr", release: "Film.0001.2021.1080p.TEST", hearingImpaired: false, forced: false, trusted: false, downloads: 10 },
   ],
 };
 
