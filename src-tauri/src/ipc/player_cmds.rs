@@ -61,6 +61,10 @@ const FAILURE_SETTLE: Duration = Duration::from_secs(3);
 /// watched before it answers ([`play_next_episode`]).
 const MARK_WAIT: Duration = Duration::from_secs(5);
 
+/// How long Up next waits to read where the next episode was left before
+/// opening it from its start instead ([`place_then_claim`]).
+const PLACE_WAIT: Duration = Duration::from_secs(1);
+
 // ---------------------------------------------------------------------------
 // Main-thread access
 // ---------------------------------------------------------------------------
@@ -138,6 +142,13 @@ struct Machine {
     joining: bool,
     /// The hold itself, from the first frame until it lets go.
     join: Option<Join>,
+    /// This title was opened held ([`OpenAt::held`]) and has not played
+    /// since: paused at its place while the viewer is asked whether to
+    /// resume. That pause is the app's, as the live hold's is, so the next
+    /// open puts it back ([`Machine::holding`]). Its place is not saved
+    /// meanwhile ([`Machine::place_to_save`]). Forgotten once it plays, or
+    /// at the next open.
+    held: bool,
     /// Automatic catch-ups so far this session, for [`LiveJumpDto::seq`].
     jumps: u64,
     /// Whether this stream is live rather than a catch-up programme. A
@@ -313,6 +324,7 @@ impl Machine {
             settle: None,
             joining: false,
             join: None,
+            held: false,
             jumps: 0,
             live: true,
             catch_up: None,
@@ -481,6 +493,8 @@ impl Machine {
         self.joining = false;
         self.join = None;
         self.dto.joining_live = false;
+        // Asked for by the caller, after this, for a title.
+        self.held = false;
         // The last stream's catch-up is not news about this one.
         self.dto.live_jump = None;
     }
@@ -651,7 +665,8 @@ impl Machine {
             }
             return;
         }
-        self.dto.state = if self.dto.paused_flag() {
+        // A title opened held shows its first frame paused, as mpv has it.
+        self.dto.state = if self.dto.paused_flag() || self.held {
             PlaybackState::Paused
         } else {
             PlaybackState::Playing
@@ -814,6 +829,32 @@ impl Machine {
         }
     }
 
+    /// Where the title open got to, for the place saved: only once a picture
+    /// is up (the position it opens at is not where the viewer got to), and
+    /// not while it is held (a viewer who only looked at the question did
+    /// not get anywhere, and the title keeps its place and its date).
+    fn place_to_save(&self) -> Option<f64> {
+        let shown = matches!(self.dto.state, PlaybackState::Playing | PlaybackState::Paused);
+        self.dto.on_demand.filter(|_| shown && !self.held).map(|o| o.position)
+    }
+
+    /// The viewer paused or played (`set_paused`, `toggle_pause`): a title
+    /// opened held is not held any more once it plays, even before its first
+    /// frame.
+    fn chose_pause(&mut self, paused: bool) {
+        if !paused {
+            self.held = false;
+        }
+        self.set_paused(paused);
+    }
+
+    /// Whether the pause mpv is in is the app's own, to be put back by the
+    /// next open ([`pause_on_open`]): the live hold on a first frame, or a
+    /// title opened held that has not played yet.
+    fn holding(&self) -> bool {
+        self.joining || self.held
+    }
+
     /// A picture, on an open that was a reconnect: it worked.
     fn came_back(&mut self) {
         if self.dto.reconnect.take().is_some() {
@@ -822,6 +863,10 @@ impl Machine {
     }
 
     fn set_paused(&mut self, paused: bool) {
+        // A title opened held, playing: any pause from now on is the viewer's.
+        if !paused && matches!(self.dto.state, PlaybackState::Playing | PlaybackState::Paused) {
+            self.held = false;
+        }
         match self.dto.state {
             PlaybackState::Playing if paused => self.dto.state = PlaybackState::Paused,
             PlaybackState::Paused if !paused => self.dto.state = PlaybackState::Playing,
@@ -1664,7 +1709,7 @@ fn spawn_reconnect(app: &AppHandle, due: Due, token: u64, stream_id: i64) {
                     .lock()
                     .map(|m| m.reconnects + 1)
                     .unwrap_or(1);
-                if let Err(e) = open_as(&app, Opened::Channel(stream_id), target, kind, Some(attempt), via, TrackChoice::Fresh, None).await {
+                if let Err(e) = open_as(&app, Opened::Channel(stream_id), target, kind, Some(attempt), via, TrackChoice::Fresh, OpenAt::BEGINNING).await {
                     tracing::warn!("reconnect could not be sent: {e}");
                 }
                 return;
@@ -1717,7 +1762,7 @@ fn spawn_reconnect(app: &AppHandle, due: Due, token: u64, stream_id: i64) {
                     }
                     m.reconnects + 1
                 };
-                if let Err(e) = open_as(&app, id, target, kind, Some(attempt), via, TrackChoice::Fresh, None).await {
+                if let Err(e) = open_as(&app, id, target, kind, Some(attempt), via, TrackChoice::Fresh, OpenAt::BEGINNING).await {
                     tracing::warn!("reconnect could not be sent: {e}");
                 }
             }
@@ -2124,11 +2169,10 @@ fn tick(app: &AppHandle, p: &Player) {
                         .or_else(|| saver.flush())
                 }
                 None => {
-                    let shown = matches!(m.dto.state, PlaybackState::Playing | PlaybackState::Paused);
                     let od = m.dto.on_demand;
                     saver.observe(
                         od.as_ref().map(item_of),
-                        od.filter(|_| shown).map(|o| o.position),
+                        m.place_to_save(),
                         od.and_then(|o| o.duration),
                         m.dto.state == PlaybackState::Playing,
                         clock_secs(),
@@ -2313,7 +2357,7 @@ async fn play_channel(app: &AppHandle, stream_id: i64) -> Result<(), String> {
     // a second connection to the same channel.
     if crate::ipc::handover::captured(stream_id) {
         if let Some((target, via)) = through_service_target(stream_id).await {
-            return open_as(app, Opened::Channel(stream_id), target, OpenKind::Live, None, via, TrackChoice::Fresh, None).await;
+            return open_as(app, Opened::Channel(stream_id), target, OpenKind::Live, None, via, TrackChoice::Fresh, OpenAt::BEGINNING).await;
         }
     }
     play_direct(app, stream_id).await
@@ -2349,13 +2393,16 @@ fn movie_target(movie_id: i64) -> Result<Playable, String> {
         .map_err(|e| crate::catalog::sync_engine::scrub(&e.to_string()))
 }
 
-/// Plays a movie, from `start` seconds in when given. On the player's own
-/// connection, like a live channel and under the same budget: never through
-/// the recording service, which has nothing to do with a title.
+/// Plays a movie, from `start` seconds in when given; `held`, paused there
+/// while the viewer is asked whether to resume ([`OpenAt`]). On the
+/// player's own connection, like a live channel and under the same budget:
+/// never through the recording service, which has nothing to do with a
+/// title.
 #[tauri::command]
-pub async fn play_movie(app: AppHandle, movie_id: i64, start: Option<f64>) -> Result<(), String> {
+pub async fn play_movie(app: AppHandle, movie_id: i64, start: Option<f64>, held: Option<bool>) -> Result<(), String> {
     let target = movie_target(movie_id)?;
-    open_as(&app, Opened::Movie(movie_id), target, OpenKind::OnDemand, None, Via::Direct, TrackChoice::Fresh, start).await
+    let at = OpenAt::asked(start, held);
+    open_as(&app, Opened::Movie(movie_id), target, OpenKind::OnDemand, None, Via::Direct, TrackChoice::Fresh, at).await
 }
 
 /// Where the provider serves an episode.
@@ -2372,16 +2419,71 @@ fn episode_target(episode_id: i64) -> Result<Playable, String> {
         .map_err(|e| crate::catalog::sync_engine::scrub(&e.to_string()))
 }
 
-/// Plays an episode, from `start` seconds in when given: on the player's
-/// own connection and under the same rules as a movie.
+/// Plays an episode, from `start` seconds in when given (`held`, paused
+/// there): on the player's own connection and under the same rules as a
+/// movie.
 #[tauri::command]
-pub async fn play_episode(app: AppHandle, episode_id: i64, start: Option<f64>) -> Result<(), String> {
+pub async fn play_episode(app: AppHandle, episode_id: i64, start: Option<f64>, held: Option<bool>) -> Result<(), String> {
     let target = episode_target(episode_id)?;
-    open_as(&app, Opened::Episode(episode_id), target, OpenKind::OnDemand, None, Via::Direct, TrackChoice::Fresh, start).await
+    let at = OpenAt::asked(start, held);
+    open_as(&app, Opened::Episode(episode_id), target, OpenKind::OnDemand, None, Via::Direct, TrackChoice::Fresh, at).await
+}
+
+/// Where Up next opens the next episode, read by `read` off the main thread
+/// for `wait` at most (from its start after that, or on an error), and then
+/// `claim`: the read comes before the claim, so the episode playing is not
+/// left showing the next one as opening while the database is busy.
+async fn place_then_claim<T>(
+    read: impl FnOnce() -> anyhow::Result<OpenAt> + Send + 'static,
+    wait: Duration,
+    claim: impl FnOnce() -> T,
+) -> (OpenAt, T) {
+    let at = match tokio::time::timeout(wait, tauri::async_runtime::spawn_blocking(read)).await {
+        Ok(Ok(Ok(at))) => at,
+        Ok(Ok(Err(e))) => {
+            tracing::warn!("could not read where the next episode was left: {e}");
+            OpenAt::BEGINNING
+        }
+        Ok(Err(e)) => {
+            tracing::warn!("reading where the next episode was left did not finish: {e}");
+            OpenAt::BEGINNING
+        }
+        Err(_) => {
+            tracing::warn!(
+                "reading where the next episode was left took over {}ms; opening it from its start",
+                wait.as_millis()
+            );
+            OpenAt::BEGINNING
+        }
+    };
+    (at, claim())
+}
+
+/// Where Up next opens episode `episode_id`: at its place when it is in
+/// progress, else from its start. Never held: it does not ask.
+fn next_episode_start(conn: &rusqlite::Connection, episode_id: i64) -> OpenAt {
+    match crate::catalog::continue_store::resume_point_of(conn, VodItem::episode(episode_id)) {
+        Ok(Some(secs)) => OpenAt::at(secs),
+        Ok(None) => OpenAt::BEGINNING,
+        Err(e) => {
+            tracing::warn!("could not read where the next episode was left: {e}");
+            OpenAt::BEGINNING
+        }
+    }
 }
 
 /// Moves on from episode `from_episode_id`, playing or just played to its
-/// end, to episode `next_episode_id`, from its start: Up next.
+/// end, to episode `next_episode_id`: Up next. From where it was left when
+/// it is in progress ([`next_episode_start`], without asking), else from
+/// its start.
+///
+/// Where it was left is read first, before anything is claimed, for
+/// [`PLACE_WAIT`] at most ([`place_then_claim`]): the episode playing plays
+/// on meanwhile, and the claim and the open then follow each other at once.
+/// A read that takes longer (a catalogue refresh holding the database) opens
+/// it from its start, and its saved place is then lost once it has played
+/// [`SAVE_EVERY_SECS`](crate::catalog::vod_progress::SAVE_EVERY_SECS) from
+/// there.
 ///
 /// Refused unless `from_episode_id` is still what is open or what finished
 /// ([`up_next_allowed`]): never after a drop, a Stop or the sleep timer, or
@@ -2396,16 +2498,21 @@ pub async fn play_episode(app: AppHandle, episode_id: i64, start: Option<f64>) -
 #[tauri::command]
 pub async fn play_next_episode(app: AppHandle, from_episode_id: i64, next_episode_id: i64) -> Result<(), String> {
     let target = episode_target(next_episode_id)?;
-    let mut claimed = Err(String::new());
-    let mut place = None;
-    commit(&app, |m| {
-        claimed = m.advance(from_episode_id, next_episode_id);
-        // Where it got to, if not written yet: written before the mark, so
-        // that the place is the one it was left at.
-        if claimed.is_ok() {
-            place = PROGRESS.lock().ok().and_then(|mut p| p.flush());
-        }
-    });
+    let read = move || crate::catalog::db::with_db(|c| Ok(next_episode_start(c, next_episode_id)));
+    let (at, (claimed, place)) = place_then_claim(read, PLACE_WAIT, || {
+        let mut claimed = Err(String::new());
+        let mut place = None;
+        commit(&app, |m| {
+            claimed = m.advance(from_episode_id, next_episode_id);
+            // Where it got to, if not written yet: written before the mark, so
+            // that the place is the one it was left at.
+            if claimed.is_ok() {
+                place = PROGRESS.lock().ok().and_then(|mut p| p.flush());
+            }
+        });
+        (claimed, place)
+    })
+    .await;
     let languages = claimed?;
     // Written beside the open, and waited for before answering: whoever
     // asked re-reads the show's marks next, and finds this one there.
@@ -2419,7 +2526,7 @@ pub async fn play_next_episode(app: AppHandle, from_episode_id: i64, next_episod
     });
     let tracks = languages.map_or(TrackChoice::Fresh, TrackChoice::Carry);
     let opened =
-        open_as(&app, Opened::Episode(next_episode_id), target, OpenKind::OnDemand, None, Via::Direct, tracks, None)
+        open_as(&app, Opened::Episode(next_episode_id), target, OpenKind::OnDemand, None, Via::Direct, tracks, at)
             .await;
     // Not a reason to fail the move on: the next episode is open either way.
     // Waited for a few seconds at most: a catalogue refresh holding the
@@ -2551,7 +2658,7 @@ pub async fn move_to_service(app: &AppHandle, client: &Client, stream_id: i64) -
         Ok(w) => {
             let (target, via) = service_target(client, &w);
             let tracks = tracks.map_or(TrackChoice::Fresh, |(aid, sid)| TrackChoice::Keep(aid, sid));
-            open_as(app, Opened::Channel(stream_id), target, OpenKind::Live, None, via, tracks, None).await
+            open_as(app, Opened::Channel(stream_id), target, OpenKind::Live, None, via, tracks, OpenAt::BEGINNING).await
         }
         Err(r) => {
             tracing::warn!("the player could not move onto the recording service: {}", r.error);
@@ -2719,7 +2826,7 @@ fn live_start_mode() -> LiveStart {
 
 /// Shared by live and catchup: state first, then the one connection.
 async fn open(app: &AppHandle, stream_id: i64, target: Playable, kind: OpenKind) -> Result<(), String> {
-    open_as(app, Opened::Channel(stream_id), target, kind, None, Via::Direct, TrackChoice::Fresh, None).await
+    open_as(app, Opened::Channel(stream_id), target, kind, None, Via::Direct, TrackChoice::Fresh, OpenAt::BEGINNING).await
 }
 
 /// Which audio and subtitle tracks an open starts on.
@@ -2748,9 +2855,16 @@ enum TrackChoice {
 /// episode of a show ([`TrackChoice::Carry`]) opens playing, even when the
 /// last one was paused when its viewer moved on, and so does any other open
 /// a viewer asked for (`asked`: not an automatic reconnect), unless it is the
-/// same channel handed over ([`TrackChoice::Keep`]).
-fn pause_on_open(tracks: &TrackChoice, join: bool, was_holding: bool, asked: bool) -> Option<bool> {
-    if join || was_holding {
+/// same channel handed over ([`TrackChoice::Keep`]). Before all of these, a
+/// title opened `held` ([`OpenAt::held`]) opens paused: it asks before it
+/// plays. `was_holding` is also true when the title replaced was opened held
+/// and never played ([`Machine::holding`]); that only changes an open nobody
+/// asked for (a channel's reconnect), since any asked open plays anyway, so
+/// it cannot change how a title opens today.
+fn pause_on_open(tracks: &TrackChoice, join: bool, was_holding: bool, asked: bool, held: bool) -> Option<bool> {
+    if held {
+        Some(true)
+    } else if join || was_holding {
         Some(join)
     } else if matches!(tracks, TrackChoice::Carry(_)) || (asked && !matches!(tracks, TrackChoice::Keep(..))) {
         Some(false)
@@ -2759,11 +2873,46 @@ fn pause_on_open(tracks: &TrackChoice, join: bool, was_holding: bool, asked: boo
     }
 }
 
+/// Where a title opens, and whether it waits there.
+///
+/// A held open asks before it plays: it opens paused at `secs` while the
+/// viewer is asked whether to resume or start over, and either answer is a
+/// pause and a seek on that one open. The pause is the app's, not the
+/// viewer's, so the next open puts it back ([`Machine::holding`]), as it
+/// does the live hold's.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+struct OpenAt {
+    /// Where to begin, in seconds; `None` for the beginning.
+    secs: Option<f64>,
+    /// Opened paused there, until the viewer answers.
+    held: bool,
+}
+
+impl OpenAt {
+    const BEGINNING: OpenAt = OpenAt { secs: None, held: false };
+
+    fn at(secs: f64) -> Self {
+        Self {
+            secs: Some(secs),
+            held: false,
+        }
+    }
+
+    /// As `play_movie` and `play_episode` are asked.
+    fn asked(start: Option<f64>, held: Option<bool>) -> Self {
+        Self {
+            secs: start,
+            held: held.unwrap_or(false),
+        }
+    }
+}
+
 /// [`open`], as automatic reconnect number `reconnect` when it is one,
 /// from where `via` says, on the audio and subtitle tracks `tracks` says.
 ///
-/// `start` is where in a movie to begin, in seconds; mpv is told on every
-/// open, so a channel opened after a resumed movie starts at its beginning.
+/// `at` is where in a title to begin, and whether to wait there; mpv is told
+/// on every open, so a channel opened after a resumed movie starts at its
+/// beginning.
 #[allow(clippy::too_many_arguments)]
 async fn open_as(
     app: &AppHandle,
@@ -2773,7 +2922,7 @@ async fn open_as(
     reconnect: Option<u32>,
     via: Via,
     tracks: TrackChoice,
-    start: Option<f64>,
+    at: OpenAt,
 ) -> Result<(), String> {
     let left = LAST_OPEN.lock().ok().and_then(|mut last| {
         let before = last.replace((what, target.clone(), kind, via.clone()));
@@ -2807,8 +2956,9 @@ async fn open_as(
     let mut was_holding = false;
     let mut join = false;
     commit(app, |m| {
-        was_holding = m.joining;
+        was_holding = m.holding();
         m.opening(what);
+        m.held = at.held;
         m.choose_tracks(&tracks);
         m.live = kind == OpenKind::Live;
         m.catch_up = match kind {
@@ -2837,7 +2987,7 @@ async fn open_as(
     }
     let r = on_player(app, move |p| {
         apply_http_headers(p, &target, &via);
-        apply_start(p, start);
+        apply_start(p, at.secs);
         if let Err(e) = p.set_property("stream-lavf-o", &stream_options(kind)) {
             tracing::warn!("could not set the stream's HTTP options: {e}");
         }
@@ -2866,7 +3016,7 @@ async fn open_as(
                 open_subtitles(p, &subtitles);
             }
         }
-        if let Some(paused) = pause_on_open(&tracks, join, was_holding, reconnect.is_none()) {
+        if let Some(paused) = pause_on_open(&tracks, join, was_holding, reconnect.is_none(), at.held) {
             if let Err(e) = p.set_flag("pause", paused) {
                 tracing::warn!("could not set the pause the open starts with: {e}");
             }
@@ -2915,7 +3065,17 @@ pub async fn toggle_pause(app: AppHandle) -> Result<(), String> {
         Ok(want)
     })
     .await?;
-    commit(&app, |m| m.set_paused(paused));
+    commit(&app, |m| m.chose_pause(paused));
+    Ok(())
+}
+
+/// Pauses, or plays, as `paused` says: unlike [`toggle_pause`], asking twice
+/// is asking once, so a Resume after a Space still plays. Playing a title
+/// opened held ends its hold.
+#[tauri::command]
+pub async fn set_paused(app: AppHandle, paused: bool) -> Result<(), String> {
+    on_player(&app, move |p| p.set_flag("pause", paused).map_err(|e| e.to_string())).await?;
+    commit(&app, |m| m.chose_pause(paused));
     Ok(())
 }
 
@@ -4628,19 +4788,186 @@ mod tests {
         #[test]
         fn the_next_episode_opens_playing() {
             let carry = TrackChoice::Carry(Languages::default());
-            assert_eq!(pause_on_open(&carry, false, false, false), Some(false), "even after a pause");
-            assert_eq!(pause_on_open(&carry, false, true, false), Some(false));
+            assert_eq!(pause_on_open(&carry, false, false, false, false), Some(false), "even after a pause");
+            assert_eq!(pause_on_open(&carry, false, true, false, false), Some(false));
             // The hold's pause is put back, and the live join holds.
-            assert_eq!(pause_on_open(&TrackChoice::Fresh, true, false, true), Some(true));
-            assert_eq!(pause_on_open(&TrackChoice::Fresh, false, true, true), Some(false));
+            assert_eq!(pause_on_open(&TrackChoice::Fresh, true, false, true, false), Some(true));
+            assert_eq!(pause_on_open(&TrackChoice::Fresh, false, true, true, false), Some(false));
             // Anything a viewer asks for plays, even after a pause.
-            assert_eq!(pause_on_open(&TrackChoice::Fresh, false, false, true), Some(false));
+            assert_eq!(pause_on_open(&TrackChoice::Fresh, false, false, true, false), Some(false));
             // A reconnect keeps the pause.
-            assert_eq!(pause_on_open(&TrackChoice::Fresh, false, false, false), None);
+            assert_eq!(pause_on_open(&TrackChoice::Fresh, false, false, false, false), None);
             // So does a same-channel handover.
             let keep = TrackChoice::Keep("1".into(), "no".into());
-            assert_eq!(pause_on_open(&keep, false, false, true), None);
-            assert_eq!(pause_on_open(&keep, false, false, false), None);
+            assert_eq!(pause_on_open(&keep, false, false, true, false), None);
+            assert_eq!(pause_on_open(&keep, false, false, false, false), None);
+        }
+
+        #[test]
+        fn a_held_open_starts_paused() {
+            assert_eq!(pause_on_open(&TrackChoice::Fresh, false, false, false, true), Some(true));
+            assert_eq!(pause_on_open(&TrackChoice::Fresh, false, false, false, false), None); // unchanged
+        }
+
+        /// Opens `what` on `m` as `open_as` does, held or not; returns whether
+        /// the open it replaced was holding.
+        fn open_on(m: &mut Machine, what: Opened, held: bool) -> bool {
+            let was_holding = m.holding();
+            m.opening(what);
+            m.held = held;
+            was_holding
+        }
+
+        #[test]
+        fn a_held_open_asks_to_be_paused_before_the_other_rules() {
+            let carry = TrackChoice::Carry(Languages::default());
+            let keep = TrackChoice::Keep("1".into(), "no".into());
+            for tracks in [&TrackChoice::Fresh, &carry, &keep] {
+                for (join, was_holding, asked) in [
+                    (false, false, false),
+                    (false, false, true),
+                    (false, true, true),
+                    (true, false, true),
+                    (false, true, false),
+                ] {
+                    assert_eq!(
+                        pause_on_open(tracks, join, was_holding, asked, true),
+                        Some(true),
+                        "{tracks:?} join {join} was_holding {was_holding} asked {asked}"
+                    );
+                }
+            }
+            // Not held: the rules as they were.
+            assert_eq!(pause_on_open(&TrackChoice::Fresh, false, false, true, false), Some(false));
+            assert_eq!(pause_on_open(&keep, false, false, true, false), None);
+            assert_eq!(pause_on_open(&carry, false, false, false, false), Some(false));
+        }
+
+        #[test]
+        fn the_open_after_an_unanswered_question_plays() {
+            let mut m = Machine::new();
+            open_on(&mut m, Opened::Movie(2), true);
+            // Its first frame, shown paused, never as playing: still the
+            // app's pause.
+            m.playing();
+            assert_eq!(m.dto.state, PlaybackState::Paused);
+            m.set_paused(true);
+            assert_eq!(m.dto.state, PlaybackState::Paused);
+            let was_holding = open_on(&mut m, Opened::Movie(3), false);
+            assert!(was_holding, "the pause was ours");
+            // Even an open nobody asked for puts it back.
+            assert_eq!(pause_on_open(&TrackChoice::Fresh, false, was_holding, false, false), Some(false));
+            assert_eq!(pause_on_open(&TrackChoice::Fresh, false, was_holding, true, false), Some(false));
+            // And the open after that one was not held.
+            assert!(!open_on(&mut m, Opened::Movie(4), false));
+        }
+
+        #[test]
+        fn a_held_title_that_played_is_not_held_any_more() {
+            let mut m = Machine::new();
+            open_on(&mut m, Opened::Movie(2), true);
+            m.playing();
+            m.set_paused(true);
+            // Resume, then the viewer's own pause.
+            m.set_paused(false);
+            assert_eq!(m.dto.state, PlaybackState::Playing);
+            m.set_paused(true);
+            let was_holding = open_on(&mut m, Opened::Movie(3), false);
+            assert!(!was_holding, "the viewer's pause");
+            assert_eq!(pause_on_open(&TrackChoice::Fresh, false, was_holding, false, false), None);
+        }
+
+        #[test]
+        fn an_unanswered_held_open_keeps_the_place_and_its_date() {
+            let mut m = Machine::new();
+            open_on(&mut m, Opened::Movie(2), true);
+            m.dto.on_demand = Some(OnDemandDto {
+                kind: OnDemandKind::Movie,
+                id: 2,
+                position: 30.0,
+                duration: Some(120.0),
+                buffered_to: None,
+            });
+            m.playing();
+            assert_eq!(m.place_to_save(), None, "held: nothing to save");
+            // What the heartbeat does with it: nothing is written, at the
+            // pause, nor when another title replaces it.
+            let mut saver = ProgressSaver::new();
+            let item = Some(VodItem::movie(2));
+            assert!(saver.observe(item, m.place_to_save(), Some(120.0), false, 0.0).is_none());
+            assert!(saver.observe(item, m.place_to_save(), Some(120.0), false, 5.0).is_none());
+            assert!(saver.observe(Some(VodItem::movie(3)), None, None, false, 6.0).is_none());
+            // Resumed: its place is saved again.
+            let mut m2 = Machine::new();
+            open_on(&mut m2, Opened::Movie(2), true);
+            m2.dto.on_demand = m.dto.on_demand;
+            m2.playing();
+            m2.chose_pause(false);
+            assert_eq!(m2.place_to_save(), Some(30.0));
+        }
+
+        #[test]
+        fn set_paused_twice_is_set_paused_once() {
+            let mut m = Machine::new();
+            open_on(&mut m, Opened::Movie(2), true);
+            // Resume before the first frame: not held any more.
+            m.chose_pause(false);
+            assert!(!m.holding());
+            m.playing();
+            assert_eq!(m.dto.state, PlaybackState::Playing);
+            // Held again, shown: a pause asked for keeps the hold; a play ends it.
+            open_on(&mut m, Opened::Movie(3), true);
+            m.playing();
+            assert_eq!(m.dto.state, PlaybackState::Paused);
+            m.chose_pause(true);
+            assert!(m.holding(), "still the app's pause");
+            m.chose_pause(false);
+            m.chose_pause(false);
+            assert_eq!(m.dto.state, PlaybackState::Playing, "Resume twice still plays");
+            assert!(!m.holding());
+            m.chose_pause(true);
+            m.chose_pause(true);
+            assert_eq!(m.dto.state, PlaybackState::Paused);
+            assert!(!m.holding(), "the viewer's pause");
+        }
+
+        #[tokio::test]
+        async fn up_next_reads_the_place_before_it_claims() {
+            use std::sync::Arc;
+            let order = Arc::new(Mutex::new(Vec::new()));
+            let o = order.clone();
+            let read = move || {
+                o.lock().unwrap().push("read");
+                Ok(OpenAt::at(60.0))
+            };
+            let (at, ()) = place_then_claim(read, Duration::from_secs(5), || order.lock().unwrap().push("claim")).await;
+            assert_eq!(at, OpenAt::at(60.0));
+            assert_eq!(*order.lock().unwrap(), ["read", "claim"]);
+
+            // A read held up past the wait: claimed all the same, from the start.
+            let slow = || {
+                std::thread::sleep(Duration::from_millis(500));
+                Ok(OpenAt::at(60.0))
+            };
+            let claimed = Mutex::new(false);
+            let (at, ()) = place_then_claim(slow, Duration::from_millis(50), || *claimed.lock().unwrap() = true).await;
+            assert_eq!(at, OpenAt::BEGINNING);
+            assert!(*claimed.lock().unwrap());
+            // An error: from the start.
+            let failing = || Err(anyhow::anyhow!("busy"));
+            let (at, ()) = place_then_claim(failing, Duration::from_secs(5), || ()).await;
+            assert_eq!(at, OpenAt::BEGINNING);
+        }
+
+        #[test]
+        fn up_next_resumes_a_next_episode_in_progress() {
+            let c = crate::catalog::open_in_memory().unwrap();
+            vod_store::record_progress(&c, ItemKind::Episode, 8, 60.0, Some(120.0), 1_000).unwrap();
+            assert_eq!(next_episode_start(&c, 8), OpenAt::at(60.0));
+            assert_eq!(next_episode_start(&c, 8).secs, Some(60.0));
+            assert!(!next_episode_start(&c, 8).held, "Up next never asks");
+            assert_eq!(next_episode_start(&c, 9), OpenAt::BEGINNING);
+            assert_eq!(next_episode_start(&c, 9).secs, None);
         }
     }
 
