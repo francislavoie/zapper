@@ -478,7 +478,8 @@ pub fn set_marks(
 /// Writes down how far into a title the player is. Keeps the longest length
 /// ever reported, since a stream's first reports can under-state it, and
 /// marks the title watched the first time the position is past the line
-/// (an episode's reaching what it covers and its show, as in [`set_marks`]).
+/// (an episode's then reaching what it covers and its show, as in
+/// [`set_marks`]; see [`series_store::episode_played_in_tx`]).
 pub fn record_progress(
     conn: &Connection,
     kind: ItemKind,
@@ -493,7 +494,8 @@ pub fn record_progress(
         "INSERT OR IGNORE INTO vod_marks (origin, kind, item_id) VALUES (?1, ?2, ?3)",
         params![origin, kind.as_str(), id],
     )?;
-    let known = marks_of(&tx, &origin, kind, id)?.duration;
+    let before = marks_of(&tx, &origin, kind, id)?;
+    let known = before.duration;
     let duration = match (known, duration) {
         (Some(a), Some(b)) => Some(a.max(b)),
         (a, b) => a.or(b),
@@ -507,7 +509,8 @@ pub fn record_progress(
         params![origin, kind.as_str(), id, position, duration, at, finished],
     )?;
     if kind == ItemKind::Episode {
-        series_store::episode_marked_in_tx(&tx, id, at)?;
+        let became_watched = finished && !before.watched;
+        series_store::episode_played_in_tx(&tx, id, became_watched, at)?;
     }
     let marks = marks_of(&tx, &origin, kind, id)?;
     tx.commit()?;

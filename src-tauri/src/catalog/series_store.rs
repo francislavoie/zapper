@@ -576,6 +576,40 @@ pub fn episode_marked_in_tx(tx: &Connection, episode_id: i64, at: i64) -> Result
     refresh_series_watched_in_tx(tx, series_id, at)
 }
 
+/// After a progress save of an episode (inside the caller's transaction).
+/// Only the save that first makes it watched takes a multi-episode entry's
+/// covered episodes with it, so replaying a watched entry does not re-mark
+/// one the viewer has since unmarked; the show's watched mark is refreshed
+/// on every save.
+pub fn episode_played_in_tx(
+    tx: &Connection,
+    episode_id: i64,
+    became_watched: bool,
+    at: i64,
+) -> Result<()> {
+    if became_watched {
+        return episode_marked_in_tx(tx, episode_id, at);
+    }
+    let series_id: Option<i64> = tx
+        .prepare_cached("SELECT series_id FROM episodes WHERE episode_id = ?1")?
+        .query_row([episode_id], |r| r.get(0))
+        .optional()?;
+    match series_id {
+        Some(id) => refresh_series_watched_in_tx(tx, id, at),
+        None => Ok(()),
+    }
+}
+
+/// How many live episodes show `?1` has, specials aside, and how many of
+/// them are not watched.
+const WATCHED_COUNT: &str = concat!(
+    "SELECT COUNT(*), COUNT(*) - COUNT(k.watched_at)
+     FROM episodes e LEFT JOIN vod_marks k ON k.origin = ",
+    current_origin_sql!(),
+    " AND k.kind = 'episode' AND k.item_id = e.episode_id
+     WHERE e.series_id = ?1 AND e.deleted_at IS NULL AND e.season <> 0"
+);
+
 /// Sets or clears the show's watched mark (inside the caller's
 /// transaction): watched when every live episode, specials aside, is, so a
 /// watched show that gains an episode is not any more. A show with no
@@ -583,13 +617,7 @@ pub fn episode_marked_in_tx(tx: &Connection, episode_id: i64, at: i64) -> Result
 /// left as it is: there is nothing to judge it by. The ★ is never touched.
 pub fn refresh_series_watched_in_tx(tx: &Connection, series_id: i64, at: i64) -> Result<()> {
     let (known, unwatched): (i64, i64) = tx
-        .prepare_cached(concat!(
-            "SELECT COUNT(*), COUNT(*) - COUNT(k.watched_at)
-             FROM episodes e LEFT JOIN vod_marks k ON k.origin = ",
-            current_origin_sql!(),
-            " AND k.kind = 'episode' AND k.item_id = e.episode_id
-             WHERE e.series_id = ?1 AND e.deleted_at IS NULL AND e.season <> 0"
-        ))?
+        .prepare_cached(WATCHED_COUNT)?
         .query_row([series_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
     if known == 0 {
         return Ok(());
@@ -863,6 +891,14 @@ mod tests {
         assert!(p.contains("episodes_by_series"), "{p}");
         assert!(!p.contains("SCAN"), "{p}");
         assert!(!p.contains("TEMP B-TREE"), "{p}");
+        // What marking an episode reads: the rows a range covers, and the
+        // show's watched count.
+        let p = plan(&c, covered_sql!(), vec![Value::Integer(1)]);
+        assert!(p.contains("episodes_by_series"), "{p}");
+        assert!(!p.contains("SCAN"), "{p}");
+        let p = plan(&c, WATCHED_COUNT, vec![Value::Integer(1)]);
+        assert!(p.contains("episodes_by_series"), "{p}");
+        assert!(!p.contains("SCAN"), "{p}");
 
         c.execute(
             "INSERT INTO vod_categories (kind, id, name, sort) VALUES ('series','c','Cat',0)",
@@ -1173,6 +1209,19 @@ mod tests {
         assert!(!r.watched && !covered.watched);
         assert_eq!((r.position, covered.position), (None, None));
         assert_eq!(other.position, Some(40.0), "outside the range");
+    }
+
+    #[test]
+    fn replaying_a_watched_range_leaves_a_row_unmarked_on_its_own_alone() {
+        let c = open_in_memory().unwrap();
+        show_with(&c, &[range(10, 1, 1, 2), ep(12, 1, 2)]);
+        play(&c, 10, 95.0, 1);
+        assert!(episode(&c, 12).watched);
+        assert!(show_watched(&c, 1));
+        unwatch(&c, 12, 2);
+        play(&c, 10, 97.0, 3);
+        assert!(!episode(&c, 12).watched, "the save did not re-cover it");
+        assert!(!show_watched(&c, 1));
     }
 
     #[test]
