@@ -61,19 +61,92 @@ const MOVIES_ORIGIN: &str = "movies_origin";
 /// before any movies were landed. When it changes, the titles are another
 /// account's, whatever ids they share with the ones shown so far.
 pub fn movies_origin(conn: &Connection) -> Result<String> {
-    let landed: Option<String> = conn
-        .query_row(
-            "SELECT value FROM meta WHERE key = ?1",
-            [MOVIES_ORIGIN],
-            |r| r.get(0),
-        )
-        .optional()?;
-    Ok(landed.map_or_else(String::new, |o| {
+    landed_hash(conn, MOVIES_ORIGIN)
+}
+
+/// The catalogue a kind of title was last landed from, as `meta` records it
+/// under `key`.
+fn landed(conn: &Connection, key: &str) -> Result<Option<String>> {
+    Ok(conn
+        .query_row("SELECT value FROM meta WHERE key = ?1", [key], |r| r.get(0))
+        .optional()?)
+}
+
+/// [`landed`] hashed for the interface, empty before any landed.
+pub(super) fn landed_hash(conn: &Connection, key: &str) -> Result<String> {
+    Ok(landed(conn, key)?.map_or_else(String::new, |o| {
         format!("{:016x}", ids::fnv1a(o.as_bytes()))
     }))
 }
 
-fn plausible_year(y: &i32) -> bool {
+/// The catalogue being written now, and whether the titles recorded under
+/// `key` are another one's.
+///
+/// Each kind keeps its own record apart from the channels', because the
+/// channels are written first and will already have recorded the new one.
+pub(super) fn current_origin(conn: &Connection, key: &str) -> Result<(String, bool)> {
+    let origin = crate::catalog::origin::recorded(conn)?.unwrap_or_default();
+    let switched = landed(conn, key)?.is_some_and(|l| l != origin);
+    Ok((origin, switched))
+}
+
+/// Notes under `key` that the titles now came from `origin`.
+pub(super) fn record_origin(conn: &Connection, key: &str, origin: &str) -> Result<()> {
+    conn.execute(
+        "INSERT INTO meta (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        params![key, origin],
+    )?;
+    Ok(())
+}
+
+/// A kind's categories in the order they are shown: a source's own list,
+/// or a playlist's groups in order of first appearance.
+#[derive(Default)]
+pub(super) struct CategoryList {
+    /// `(id, name)`.
+    list: Vec<(String, String)>,
+    ids: HashSet<String>,
+}
+
+impl CategoryList {
+    pub(super) fn extend(&mut self, cats: &[Category]) {
+        for c in cats {
+            if self.ids.insert(c.category_id.clone()) {
+                self.list
+                    .push((c.category_id.clone(), c.category_name.clone()));
+            }
+        }
+    }
+
+    /// The category a playlist group becomes.
+    pub(super) fn group(&mut self, g: &str) -> String {
+        let id = ids::category_id(g);
+        if self.ids.insert(id.clone()) {
+            self.list.push((id.clone(), g.to_owned()));
+        }
+        id
+    }
+
+    pub(super) fn len(&self) -> usize {
+        self.list.len()
+    }
+
+    /// Replaces `kind`'s categories wholesale. Derived from what the source
+    /// says each time, so one it dropped is not a category any more.
+    pub(super) fn replace(&self, conn: &Connection, kind: &str) -> Result<()> {
+        conn.execute("DELETE FROM vod_categories WHERE kind = ?1", [kind])?;
+        let mut insert = conn.prepare_cached(
+            "INSERT INTO vod_categories (kind, id, name, sort) VALUES (?1, ?2, ?3, ?4)",
+        )?;
+        for (i, (id, name)) in self.list.iter().enumerate() {
+            insert.execute(params![kind, id, name, i as i64])?;
+        }
+        Ok(())
+    }
+}
+
+pub(super) fn plausible_year(y: &i32) -> bool {
     (1900..=2099).contains(y)
 }
 
@@ -94,7 +167,7 @@ pub fn year_from_name(name: &str) -> Option<i32> {
     tail.parse().ok().filter(plausible_year)
 }
 
-fn is_separator(name: &str) -> bool {
+pub(super) fn is_separator(name: &str) -> bool {
     let t = name.trim();
     t.starts_with("##") && t.ends_with("##")
 }
@@ -107,9 +180,7 @@ pub struct MovieWriter<'t> {
     conn: &'t Connection,
     existing: HashSet<i64>,
     seen: HashSet<i64>,
-    /// `(id, name)` in the order they are shown.
-    categories: Vec<(String, String)>,
-    category_ids: HashSet<String>,
+    categories: CategoryList,
     stats: SyncStats,
     /// Whether an empty list is believed. See [`Self::accept_empty`].
     empty_ok: bool,
@@ -133,8 +204,7 @@ impl<'t> MovieWriter<'t> {
             conn,
             existing,
             seen: HashSet::new(),
-            categories: Vec::new(),
-            category_ids: HashSet::new(),
+            categories: CategoryList::default(),
             stats: SyncStats::default(),
             empty_ok: false,
         })
@@ -155,12 +225,7 @@ impl<'t> MovieWriter<'t> {
     /// Names the categories as the source lists them, for a source that has
     /// a list of its own rather than groups.
     fn set_categories(&mut self, cats: &[Category]) {
-        for c in cats {
-            if self.category_ids.insert(c.category_id.clone()) {
-                self.categories
-                    .push((c.category_id.clone(), c.category_name.clone()));
-            }
-        }
+        self.categories.extend(cats);
     }
 
     /// Writes one movie. `group` is the playlist group it sits in, which
@@ -171,13 +236,7 @@ impl<'t> MovieWriter<'t> {
             return Ok(());
         }
         let category = match group {
-            Some(g) => {
-                let id = ids::category_id(g);
-                if self.category_ids.insert(id.clone()) {
-                    self.categories.push((id.clone(), g.to_owned()));
-                }
-                Some(id)
-            }
+            Some(g) => Some(self.categories.group(g)),
             None => m.category_id.clone(),
         };
         // As the Xtream conversion does: a zero is "no date", not 1970.
@@ -263,18 +322,7 @@ impl<'t> MovieWriter<'t> {
             empty_ok,
             ..
         } = self;
-        // Which catalogue the mirror's movies came from is kept apart from
-        // the channels' record, because the channels are written first and
-        // will already have recorded the new one.
-        let origin = crate::catalog::origin::recorded(conn)?.unwrap_or_default();
-        let landed: Option<String> = conn
-            .query_row(
-                "SELECT value FROM meta WHERE key = ?1",
-                [MOVIES_ORIGIN],
-                |r| r.get(0),
-            )
-            .optional()?;
-        let switched = landed.as_deref().is_some_and(|l| l != origin);
+        let (origin, switched) = current_origin(conn, MOVIES_ORIGIN)?;
         // A different account's list may well be empty, and then the old
         // one's titles must go; the same account's empty answer is a bad
         // minute and changes nothing.
@@ -290,11 +338,7 @@ impl<'t> MovieWriter<'t> {
             conn.execute("DELETE FROM movie_details", [])?;
             conn.execute("UPDATE movies SET duration_secs = NULL", [])?;
         }
-        conn.execute(
-            "INSERT INTO meta (key, value) VALUES (?1, ?2)
-             ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            params![MOVIES_ORIGIN, origin],
-        )?;
+        record_origin(conn, MOVIES_ORIGIN, &origin)?;
         conn.execute("UPDATE movies SET added = ?1 WHERE added = 0", [now])?;
         let mut soft_delete =
             conn.prepare_cached("UPDATE movies SET deleted_at=?1 WHERE movie_id=?2")?;
@@ -302,15 +346,7 @@ impl<'t> MovieWriter<'t> {
             soft_delete.execute(params![now, gone])?;
             stats.deleted += 1;
         }
-        // Derived from what the source says each time, so one it dropped is
-        // not a category any more.
-        conn.execute("DELETE FROM vod_categories WHERE kind = 'movie'", [])?;
-        let mut insert = conn.prepare_cached(
-            "INSERT INTO vod_categories (kind, id, name, sort) VALUES ('movie', ?1, ?2, ?3)",
-        )?;
-        for (i, (id, name)) in categories.iter().enumerate() {
-            insert.execute(params![id, name, i as i64])?;
-        }
+        categories.replace(conn, "movie")?;
         Ok((stats, categories.len()))
     }
 }

@@ -19,6 +19,7 @@ pub mod prune;
 pub mod reads;
 pub mod schema;
 pub mod search;
+pub mod series_sync;
 pub mod settings;
 pub mod status;
 pub mod store;
