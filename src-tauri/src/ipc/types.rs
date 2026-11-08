@@ -990,6 +990,8 @@ pub enum MovieSort {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum MovieListKind {
+    /// Every title, whatever its category: what a search looks through.
+    All,
     Favourites,
     Recent,
     Watched,
@@ -1005,6 +1007,10 @@ pub struct MovieQueryDto {
     pub sort: MovieSort,
     pub year_from: Option<i32>,
     pub year_to: Option<i32>,
+    /// Only the titles whose name matches, in the list's own order; blank or
+    /// absent is no search. See `catalog::title_search`.
+    #[serde(default)]
+    pub search: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1153,6 +1159,10 @@ pub struct SeriesQueryDto {
     pub sort: MovieSort,
     pub year_from: Option<i32>,
     pub year_to: Option<i32>,
+    /// Only the titles whose name matches, in the list's own order; blank or
+    /// absent is no search. See `catalog::title_search`.
+    #[serde(default)]
+    pub search: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -2069,8 +2069,16 @@ pub(crate) mod tests {
             StatusCode::BAD_REQUEST
         );
 
-        let (_, hits) = call(&s, get("/api/vod/movies/search?q=harbour%20lights&limit=5")).await;
-        assert_eq!(hits[0]["movieId"], 9_100_001);
+        // A search is the list's own query, with the words it looks for.
+        let (st, hits) = call(
+            &s,
+            get("/api/vod/movies?list=all&sort=az&q=harbour%20lights&limit=5"),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(hits["total"], 1, "{hits}");
+        assert_eq!(hits["items"][0]["movieId"], 9_100_001);
+        assert_eq!(hits["items"][0]["posterUrl"], "/api/poster/movie/9100001");
         let (_, like) = call(&s, get("/api/vod/movies/9100001/similar?limit=5")).await;
         assert!(like.is_array());
 
@@ -2113,7 +2121,7 @@ pub(crate) mod tests {
         // Nothing of the provider's address in any answer.
         for uri in [
             page_uri,
-            "/api/vod/movies/search?q=harbour&limit=5",
+            "/api/vod/movies?list=all&q=harbour&limit=5",
             "/api/vod/movies/9100001",
             "/api/vod/movies/9100002/similar?limit=5",
             "/api/vod/movies?list=favourites&limit=10",
@@ -2322,10 +2330,15 @@ pub(crate) mod tests {
             StatusCode::BAD_REQUEST
         );
 
-        let (st, hits) = call(&s, get("/api/vod/series/search?q=lantern%20bay&limit=5")).await;
+        let (st, hits) = call(
+            &s,
+            get("/api/vod/series?list=all&sort=added&q=lantern%20bay&limit=5"),
+        )
+        .await;
         assert_eq!(st, StatusCode::OK);
-        assert_eq!(hits[0]["seriesId"], 9_200_001);
-        assert_eq!(hits[0]["posterUrl"], "/api/poster/series/9200001");
+        assert_eq!(hits["total"], 1, "{hits}");
+        assert_eq!(hits["items"][0]["seriesId"], 9_200_001);
+        assert_eq!(hits["items"][0]["posterUrl"], "/api/poster/series/9200001");
 
         // Opened, a show's pictures are this service's, every episode's too.
         let (st, d) = call(&s, get("/api/vod/series/9200001")).await;
@@ -2403,7 +2416,7 @@ pub(crate) mod tests {
         // Nothing of the provider's address in any answer.
         for uri in [
             page_uri,
-            "/api/vod/series/search?q=lantern&limit=5",
+            "/api/vod/series?list=all&q=lantern&limit=5",
             "/api/vod/series/9200001",
             "/api/vod/series?list=favourites&limit=10",
             "/api/vod/episodes/9200101",

@@ -56,7 +56,10 @@ interface have their own page: [recording.md](recording.md).
 - A tab of its own (`M`) beside Live TV. A rail lists Favourites, Recently added, Watched and the
   movie categories; a list or posters (remembered per computer, a list at first) shows the movies
   in one, sorted by recently added, name, year or rating, and limited to a range of years.
-- Mark a movie as a favourite or as watched. Search by name.
+- Mark a movie as a favourite or as watched. Search by name: the search narrows the list to the
+  movies whose name has the text at the start of a word (`EN -` finds "EN - A Movie" but not
+  "Garden - A Movie"; case and accents don't count, `a|b` finds either), across every category,
+  in the chosen sort and years. Shows search the same way.
 - A movie's details (plot, cast, rating, pictures, movies like it) open in a sheet.
 - Browsing never starts or stops what is playing: only Play does.
 

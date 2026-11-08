@@ -4,7 +4,7 @@
 
 import { useCallback, useMemo } from "react";
 import { backend } from "../backend";
-import { useMovieSearch } from "../hooks/useMovieSearch";
+import { useSettledSearch } from "../hooks/useSettledSearch";
 import {
   MOVIE_SEARCH_PLACEHOLDER,
   movieCard,
@@ -42,16 +42,16 @@ export function MoviesList({ besideRail = true }: { besideRail?: boolean }) {
   const { movies } = useApp();
   const dispatch = useDispatch();
 
+  const searched = useSettledSearch(movies.query);
   const query = useMemo(
-    () => movieQuery(movies.selection, movies.sort, movies.years),
-    [movies.selection, movies.sort, movies.years],
+    () => movieQuery(movies.selection, movies.sort, movies.years, searched),
+    [movies.selection, movies.sort, movies.years, searched],
   );
   const listKey = JSON.stringify(query);
   const fetchPage = useCallback(
     (offset: number, limit: number) => backend.movies(query, offset, limit),
     [query],
   );
-  const search = useMovieSearch(movies.query);
 
   const searching = movies.query.trim() !== "";
   const categories = movies.categories.status === "ready" ? movies.categories.data : [];
@@ -106,7 +106,6 @@ export function MoviesList({ besideRail = true }: { besideRail?: boolean }) {
       listKey={listKey}
       fetchPage={fetchPage}
       pages={MOVIE_PAGES}
-      search={search}
       state={state}
       marks={movies.marks}
       idOf={idOf}
