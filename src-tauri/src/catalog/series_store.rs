@@ -269,12 +269,12 @@ fn page_sql(q: &MovieQuery, offset: u32, limit: u32, now: i64) -> (String, Vec<V
 }
 
 /// As the movies': only a list of marks needs the marks to count, and a
-/// search of every show reads the names from their index.
+/// search of every show reads the names from the year's index.
 fn count_sql(q: &MovieQuery, now: i64) -> (String, Vec<Value>) {
     let (from, conds, args) = scope(q, now);
     let count_from = match (&q.list, &q.search) {
         (MovieList::Favourites | MovieList::Watched, _) => from,
-        (MovieList::All, Some(_)) => "series s INDEXED BY series_live_by_name",
+        (MovieList::All, Some(_)) => "series s INDEXED BY series_live_by_year",
         _ => "series s",
     };
     let sql = format!(
@@ -967,7 +967,7 @@ mod tests {
         let p = page(&q(MovieList::Favourites, MovieSort::Az));
         assert!(!p.contains("SCAN s"), "{p}");
         // As the movies': a search reads the names from the index that gives
-        // the list's order, and its count from the names' own.
+        // the list's order, and its count from the year's.
         for (sort, index) in [
             (MovieSort::Added, "series_live_by_added"),
             (MovieSort::Az, "series_live_by_name"),
@@ -980,7 +980,13 @@ mod tests {
         }
         let (sql, args) = count_sql(&search(MovieList::All, MovieSort::Az, "x"), NOW);
         let p = plan(&c, &sql, args);
-        assert!(p.contains("series_live_by_name"), "{p}");
+        assert!(p.contains("series_live_by_year"), "{p}");
+        let mut years = search(MovieList::All, MovieSort::Added, "x");
+        years.year_from = Some(2000);
+        years.year_to = Some(2009);
+        let (sql, args) = count_sql(&years, NOW);
+        let p = plan(&c, &sql, args);
+        assert!(p.contains("SEARCH s USING INDEX series_live_by_year (year>? AND year<?)"), "{p}");
     }
 
     #[test]

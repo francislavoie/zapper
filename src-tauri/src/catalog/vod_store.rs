@@ -257,11 +257,12 @@ fn count_sql(q: &MovieQuery, now: i64) -> (String, Vec<Value>) {
         // Only a list of marks needs the marks to count; joining them for
         // the others costs several times as much on a large catalogue.
         (MovieList::Favourites | MovieList::Watched, _) => from,
-        // A search of every title reads every name, and reads them from the
-        // index that holds them. Left to choose, SQLite takes the smallest
-        // index instead and looks each name up in the table, which on a
-        // large catalogue is several times slower.
-        (MovieList::All, Some(_)) => "movies m INDEXED BY movies_live_by_name",
+        // A search of every title reads every name, and reads them from an
+        // index that holds them: the year's, which also serves a range of
+        // years. Left to choose, SQLite takes the smallest index instead and
+        // looks each name up in the table, several times slower on a large
+        // catalogue; the name's would look each year up.
+        (MovieList::All, Some(_)) => "movies m INDEXED BY movies_live_by_year",
         _ => "movies m",
     };
     let sql = format!(
@@ -885,15 +886,24 @@ mod tests {
             assert!(p.contains(index), "{p}");
             assert!(!p.contains("TEMP B-TREE"), "{p}");
         }
-        let (sql, args) = count_sql(&search(MovieList::All, MovieSort::Az, "x"), NOW);
-        let p: String = c
-            .query_row(
+        // A search's count reads the names from the year's index, which
+        // narrows to a range of years too: every page asks for it.
+        let count_plan = |q: &MovieQuery| -> String {
+            let (sql, args) = count_sql(q, NOW);
+            c.query_row(
                 &format!("EXPLAIN QUERY PLAN {sql}"),
                 params_from_iter(args),
                 |r| r.get(3),
             )
-            .unwrap();
-        assert!(p.contains("movies_live_by_name"), "{p}");
+            .unwrap()
+        };
+        let p = count_plan(&search(MovieList::All, MovieSort::Az, "x"));
+        assert!(p.contains("movies_live_by_year"), "{p}");
+        let mut years = search(MovieList::All, MovieSort::Added, "x");
+        years.year_from = Some(2000);
+        years.year_to = Some(2009);
+        let p = count_plan(&years);
+        assert!(p.contains("SEARCH m USING INDEX movies_live_by_year (year>? AND year<?)"), "{p}");
     }
 
     #[test]
