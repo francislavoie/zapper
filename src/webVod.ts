@@ -1242,8 +1242,8 @@ export async function setSubtitleTrack(id: number | null): Promise<PlayerOptions
 }
 
 /** Adds a downloaded subtitle file (kept by the service) to the title
- *  playing, once, and shows it. Refused, with nothing changed, unless that
- *  title is the one playing. */
+ *  playing, once, and shows it. Refused, with nothing changed and the
+ *  app's sentence, unless that title is the one playing. */
 export async function addSubtitleFile(
   kind: OnDemandKind,
   id: number,
@@ -1252,7 +1252,7 @@ export async function addSubtitleFile(
   lang: string,
 ): Promise<PlayerOptionsDto> {
   const s = session;
-  if (!s || !sameItem(s.item, { kind, id })) return optionsFeed.last;
+  if (!s || !sameItem(s.item, { kind, id })) throw new Error("That title is no longer playing.");
   let index = s.subtitles.findIndex((t) => t.file === fileId);
   if (index < 0) {
     s.subtitles.push({ index: -1, language: lang, title, text: true, file: fileId });
