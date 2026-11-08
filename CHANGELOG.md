@@ -24,6 +24,8 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
 - Movies and episodes play in the browser through the recording service, converted on the fly when
   the browser can't play the file. Text subtitles included.
 - Browsers signed in to the recording service share the app's Continue watching list.
+- A movie or episode left partway offers Resume and Start over, with the time left, in the details
+  band, the movie sheet and the episode list.
 - Off-air channels: when the provider sends a placeholder clip instead of the broadcast, zapper
   says so and suggests channels showing the same programmes. Recordings retry until the broadcast
   starts.

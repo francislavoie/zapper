@@ -24,6 +24,7 @@ import {
 import { movieCursorKey, scrollToShow } from "../logic/movieKeys";
 import { clock } from "../logic/format";
 import { runtime } from "../logic/movies";
+import { timeLeft } from "../logic/resume";
 import { EPISODE_ROW_HEIGHT, episodeProgress, episodeTitle, episodeWindow } from "../logic/shows";
 import type { EpisodeDto } from "../types";
 import { Poster } from "./Poster";
@@ -316,7 +317,10 @@ const EpisodeRow = memo(function EpisodeRow({
           </span>
         ) : null}
       </span>
-      <span className="ep-len">{length}</span>
+      <span className="ep-len">
+        {length}
+        {progress !== null ? <span className="ep-left">{timeLeft({ ...e })}</span> : null}
+      </span>
       <button
         className={`ctl icon ep-check ${e.watched ? "on" : ""}`}
         aria-label={e.watched ? "Mark unwatched" : "Mark watched"}

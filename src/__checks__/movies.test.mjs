@@ -12,6 +12,7 @@ import {
   fixedMovieItems,
   languagesLine,
   moviesAvailable,
+  movieActions,
   movieBadges,
   movieCard,
   movieCount,
@@ -166,4 +167,15 @@ test("recalling details refreshes their age", () => {
   rememberDetails(c, 3, d(3), 2);
   assert.ok(recallDetails(c, 1), "the one just recalled stays");
   assert.equal(recallDetails(c, 2), undefined, "the one left alone goes");
+});
+
+test("a movie left partway offers Resume and Start over; otherwise Play", () => {
+  assert.deepEqual(movieActions({ watched: false, position: 2770, duration: 7260, durationSecs: null }), {
+    label: "Resume from 46:10",
+    start: "resume",
+    startOver: true,
+  });
+  const play = { label: "Play", start: "ask", startOver: false };
+  assert.deepEqual(movieActions({ watched: true, position: 2770, duration: 7260, durationSecs: null }), play);
+  assert.deepEqual(movieActions({ watched: false, position: null, duration: null, durationSecs: null }), play);
 });

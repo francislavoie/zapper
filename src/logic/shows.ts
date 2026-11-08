@@ -26,7 +26,7 @@ import {
   type YearRange,
 } from "./movies.ts";
 import { CONTINUE, type FixedRailItem } from "./railItems.ts";
-import { progressOf } from "./resume.ts";
+import { progressOf, timeLeft } from "./resume.ts";
 import { OVERSCAN, computeWindow } from "./virtual.ts";
 
 export const SHOW_FAVOURITES = "*favourites*";
@@ -241,7 +241,7 @@ export function watchedSummary(d: Pick<SeriesDetailsDto, "seasons">): string {
 }
 
 /** A show's main action: which episode it plays, and what it says. */
-export type ShowAction = { label: string; episodeId: number } | null;
+export type ShowAction = { label: string; episodeId: number; resume: boolean } | null;
 
 /** Plays the next-up episode; with none (all watched), the first one in
  *  order, the specials after the seasons; nothing without episodes. */
@@ -251,7 +251,11 @@ export function showAction(d: SeriesDetailsDto): ShowAction {
     d.episodes.find((x) => x.season !== 0) ??
     d.episodes[0];
   if (!e) return null;
-  return { label: `Play ${episodeCode(e.season, e.episode, e.episodeEnd)}`, episodeId: e.episodeId };
+  const code = episodeCode(e.season, e.episode, e.episodeEnd);
+  if (progressOf({ ...e }) !== null) {
+    return { label: `Resume ${code} · ${timeLeft({ ...e })}`, episodeId: e.episodeId, resume: true };
+  }
+  return { label: `Play ${code}`, episodeId: e.episodeId, resume: false };
 }
 
 /** The season a show's episode list opens on: the next-up's, else the

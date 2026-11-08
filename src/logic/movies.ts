@@ -14,7 +14,7 @@ import type {
 import type { Async } from "./async.ts";
 import { runtime } from "./format.ts";
 import { CONTINUE, type FixedRailItem } from "./railItems.ts";
-import { progressOf } from "./resume.ts";
+import { progressOf, resumeLabel, resumePoint, type StartAt } from "./resume.ts";
 import { isTitleSearch } from "./titleMatch.ts";
 
 /** Lengths are format.ts's; kept importable from here. */
@@ -326,4 +326,15 @@ export function recallDetails<T>(cache: Map<number, T>, id: number): T | undefin
     cache.set(id, d);
   }
   return d;
+}
+
+/** What a movie's main button says and does: in progress, Resume from the
+ *  place (and Start over beside it); else Play, which asks about a place
+ *  only if there is one. */
+export function movieActions(
+  m: Pick<MovieDto, "watched" | "position" | "duration" | "durationSecs">,
+): { label: string; start: StartAt; startOver: boolean } {
+  const point = resumePoint({ ...m });
+  if (point === null) return { label: "Play", start: "ask", startOver: false };
+  return { label: resumeLabel(point), start: "resume", startOver: true };
 }

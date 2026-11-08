@@ -9,7 +9,7 @@
 // movie alone in the band, its audio and subtitles.
 
 import type { ReactNode } from "react";
-import { playMovie, setMovieWatched, toggleMovieFavourite } from "../actions";
+import { openMovieSheet, playMovie, setMovieWatched, toggleMovieFavourite } from "../actions";
 import { backend } from "../backend";
 import { useMovieDetails } from "../hooks/useMovieDetails";
 import type { Async } from "../logic/async";
@@ -17,10 +17,12 @@ import { playedFraction, positionLabel } from "../logic/format";
 import {
   DETAILS_DELAY_MS,
   languagesLine,
+  movieActions,
   movieBadges,
   movieFacts,
   peopleLine,
 } from "../logic/movies";
+import { progressOf, watchedLine } from "../logic/resume";
 import { run, useApp, useDispatch } from "../store";
 import type { MovieDetailsDto, MovieDto } from "../types";
 import { BandMain, BandPoster, BandSide, Credits, Kicker, ProgressLine, SwapButton } from "./BandParts";
@@ -37,9 +39,11 @@ export interface MovieBandProps {
   dual?: boolean;
   /** The side column, when WatchBand fills it; else the movie's languages. */
   side?: ReactNode;
+  /** Another action at the end of the row (Continue watching's Remove). */
+  extra?: ReactNode;
 }
 
-export function MovieBand({ movie, playing, dual = false, side }: MovieBandProps) {
+export function MovieBand({ movie, playing, dual = false, side, extra }: MovieBandProps) {
   const dispatch = useDispatch();
   const { player } = useApp();
   const details = useMovieDetails(movie, playing ? 0 : DETAILS_DELAY_MS);
@@ -56,7 +60,8 @@ export function MovieBand({ movie, playing, dual = false, side }: MovieBandProps
           <MovieActions
             movie={movie}
             playing={playing}
-            onDetails={() => dispatch({ type: "movies/sheet", id: movie.movieId })}
+            onDetails={() => openMovieSheet(dispatch, movie)}
+            extra={extra}
           />
         }
         credits={
@@ -75,7 +80,7 @@ export function MovieBand({ movie, playing, dual = false, side }: MovieBandProps
           {movie.cleanName}
         </h2>
         <MovieFacts movie={movie} details={details} className="movie-band-facts" />
-        {at ? <ProgressLine fraction={playedFraction(at)} label={positionLabel(at)} /> : null}
+        {at ? <ProgressLine fraction={playedFraction(at)} label={positionLabel(at)} /> : <MoviePlace movie={movie} />}
         <DetailsState details={details} />
         {d?.plot ? (
           <p className={`watch-desc band-plot ${dual ? "" : "long"}`} data-tip-overflow="">
@@ -188,20 +193,40 @@ export function MovieFacts({
   );
 }
 
-/** ▶ Play: opens the full player, and closes the sheet it may be on. */
+/** ▶ Play, or ▶ Resume from 46:10 for a title left partway: opens the full
+ *  player, and closes the sheet it may be on. */
 export function MoviePlayButton({ movie }: { movie: MovieDto }) {
   const dispatch = useDispatch();
+  const action = movieActions(movie);
   return (
     <button
       className="ctl primary movie-play"
       onClick={() => {
         // Play takes the window over; the sheet would only be under it.
         dispatch({ type: "movies/sheet", id: null });
-        void playMovie(dispatch, movie);
+        void playMovie(dispatch, movie, action.start);
       }}
     >
-      <Play className="i" /> Play
+      <Play className="i" /> {action.label}
     </button>
+  );
+}
+
+/** How far a title was left and when, under its facts: "46:10 watched ·
+ *  1h 15m left · yesterday 22:40", with a thin bar. Only while in progress. */
+export function MoviePlace({ movie }: { movie: MovieDto }) {
+  const fraction = progressOf({ ...movie });
+  if (fraction === null) return null;
+  const line = watchedLine({ ...movie }, movie.playedAt, Math.floor(Date.now() / 1000));
+  return (
+    <div className="vod-place">
+      <div className="watch-progress">
+        <span style={{ width: `${Math.round(fraction * 100)}%` }} />
+      </div>
+      <span className="vod-place-line" data-tip-overflow="">
+        {line}
+      </span>
+    </div>
   );
 }
 
@@ -212,15 +237,29 @@ export function MovieActions({
   movie,
   playing,
   onDetails,
+  extra,
 }: {
   movie: MovieDto;
   playing: boolean;
   onDetails?: () => void;
+  extra?: ReactNode;
 }) {
   const dispatch = useDispatch();
+  const action = movieActions(movie);
   return (
     <>
       {playing ? null : <MoviePlayButton movie={movie} />}
+      {!playing && action.startOver ? (
+        <button
+          className="ctl"
+          onClick={() => {
+            dispatch({ type: "movies/sheet", id: null });
+            void playMovie(dispatch, movie, null);
+          }}
+        >
+          ↺ Start over
+        </button>
+      ) : null}
       <button
         className={`ctl ${movie.favourite ? "on" : ""}`}
         aria-pressed={movie.favourite}
@@ -237,6 +276,7 @@ export function MovieActions({
         </button>
       ) : null}
       {playing ? <PlayingEnd /> : null}
+      {extra}
     </>
   );
 }
