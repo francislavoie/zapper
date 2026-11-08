@@ -43,6 +43,7 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
 
 ### Fixed
 
+- Closed captions on wide video keep their place instead of drifting to the left.
 - Rewinding into a provider's archive plays the moment you picked, in the provider's time zone,
   including right after an update.
 - Live returns to live from a replayed programme.

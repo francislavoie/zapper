@@ -16,6 +16,8 @@
 #[cfg(feature = "gui")]
 pub mod backup_cmds;
 #[cfg(feature = "gui")]
+pub mod captions;
+#[cfg(feature = "gui")]
 pub mod catalog_cmds;
 pub mod ending;
 pub mod health;
