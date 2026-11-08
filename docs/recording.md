@@ -958,7 +958,8 @@ The catalogue, for the web interface (the app or a device); channels come as the
 
 None of these answers carries the app's OpenSubtitles key, the password, the token or a download
 link. A failure is a fixed sentence in `{"error"}` (`502` when OpenSubtitles could not be asked,
-`409` while it is turned off); why in full goes to the service's log, scrubbed.
+`409` for a sign-in while it is turned off; a search or a download then answers `200`
+`{"kind": "off"}`); why in full goes to the service's log, scrubbed.
 
 Watching (the app or a device; a viewer is its device's alone, `404` to anyone else):
 

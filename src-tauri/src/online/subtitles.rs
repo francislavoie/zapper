@@ -50,6 +50,13 @@ pub const FAILED_KEEP_SECS: u64 = 60;
 pub const RESULTS_MAX: usize = 50;
 /// A token older than this is renewed before it is used.
 pub const TOKEN_RENEW_SECS: i64 = 12 * 3600;
+// The fixed sentences a failure may be, beside an [`OnlineError`]'s: they
+// hold nothing but themselves.
+pub(crate) const NOT_IN_CATALOGUE: &str = "That title is not in the catalogue any more.";
+pub(crate) const NOT_A_FILE: &str = "That is not an OpenSubtitles file.";
+pub(crate) const DOWNLOAD_STOPPED: &str = "The download stopped before it ended.";
+pub(crate) const NOT_SUBTITLES: &str = "OpenSubtitles sent something that is not a subtitle file.";
+pub(crate) const ENTER_SIGN_IN: &str = "Enter your OpenSubtitles username and password.";
 /// The least time between two sign-ins: OpenSubtitles allows about one a
 /// second, and none should be needed more often than this.
 pub const LOGIN_MIN_GAP: Duration = Duration::from_secs(10);
@@ -544,7 +551,7 @@ pub(crate) async fn search_with(
         db::with_db(|c| Ok((subtitle_store::subject(c, item)?, vod_store::origin(c)?)))
             .map_err(failed)?;
     let Some(subject) = subject else {
-        return Err("That title is not in the catalogue any more.".to_owned());
+        return Err(NOT_IN_CATALOGUE.to_owned());
     };
     let key = SearchKey {
         origin,
@@ -829,7 +836,7 @@ pub(crate) async fn download_with(
         return Ok(SubtitleDownloadDto::Off);
     }
     if file_id <= 0 {
-        return Err("That is not an OpenSubtitles file.".to_owned());
+        return Err(NOT_A_FILE.to_owned());
     }
     // The catalogue it is asked in: the row is kept under it, even if
     // another account's catalogue replaces it before the file arrives.
@@ -850,7 +857,7 @@ pub(crate) async fn download_with(
     });
     task.await.unwrap_or_else(|e| {
         tracing::warn!("a subtitle download stopped: {e}");
-        Err("The download stopped before it ended.".to_owned())
+        Err(DOWNLOAD_STOPPED.to_owned())
     })
 }
 
@@ -891,7 +898,7 @@ async fn fetch_and_keep(
     if !srt::looks_like_srt(&text) {
         tracing::info!("OpenSubtitles: file {file_id} is not a subtitle file");
         return Err(NotKept {
-            answer: Err("OpenSubtitles sent something that is not a subtitle file.".to_owned()),
+            answer: Err(NOT_SUBTITLES.to_owned()),
             link_failed: true,
         });
     }
@@ -1049,7 +1056,7 @@ pub(crate) async fn sign_in_with(
 ) -> Result<OnlineServicesDto, String> {
     let username = username.trim().to_owned();
     if username.is_empty() || password.is_empty() {
-        return Err("Enter your OpenSubtitles username and password.".to_owned());
+        return Err(ENTER_SIGN_IN.to_owned());
     }
     if !ctx.settings().enabled {
         return Err(OnlineError::Off.to_string());
