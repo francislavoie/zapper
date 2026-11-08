@@ -208,11 +208,17 @@ pub async fn set_series_marks(
     favourite: Option<bool>,
     watched: Option<bool>,
 ) -> Result<MarksDto> {
-    let source = Source::load().ok();
+    // Only marking watched may need the provider; the account file is read
+    // off the async threads.
+    let source = if watched == Some(true) {
+        blocking(|| Ok(Source::load().ok())).await?
+    } else {
+        None
+    };
     marks_with(source.as_ref(), id, favourite, watched, now()).await
 }
 
-/// [`set_series_marks`] with the account's source, if it loads.
+/// [`set_series_marks`] with the account's source, when it was loaded.
 async fn marks_with(
     source: Option<&Source>,
     id: i64,

@@ -999,7 +999,8 @@ export interface SeriesDetailsDto {
   seasons: SeasonDto[];
   /** By season, specials last, then by number. */
   episodes: EpisodeDto[];
-  /** The episode the main action plays; `null` when all are watched. */
+  /** The episode the main action plays; `null` when all are watched or
+   *  there are no episodes. */
   nextUp: number | null;
   /** Unix seconds; `null` when there are no details to show. */
   fetchedAt: number | null;

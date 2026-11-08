@@ -62,6 +62,10 @@ pub struct SeriesInfoKept {
     pub tmdb_id: Option<i64>,
     /// The seasons as the details name them; blank names are left blank.
     pub seasons: Vec<(i32, String)>,
+    /// The show's `added` when this was fetched: the provider's own clock,
+    /// so a change is seen by comparing it with the row's, never with ours.
+    /// `None` in a copy kept before it was written down.
+    pub modified: Option<i64>,
 }
 
 fn now() -> i64 {
@@ -86,6 +90,7 @@ pub fn info_from_xtream(v: &SeriesInfo) -> SeriesInfoKept {
             .iter()
             .map(|s| (s.season_number, s.name.clone().unwrap_or_default()))
             .collect(),
+        modified: None,
     }
 }
 
@@ -124,29 +129,44 @@ fn state(id: i64) -> Result<Option<(i64, Kept)>> {
 enum Landing {
     Landed,
     Gone,
+    Renamed,
     Switched,
 }
 
+/// What a fetch was asked under: the show's name (which the episode titles
+/// were cleaned with) and the catalogue its shows were landed from.
+struct Asked<'a> {
+    name: &'a str,
+    from: &'a str,
+}
+
 /// Lands a show's details in one transaction, after checking in it that the
-/// show is still live and the shows are still `from`'s.
+/// show is still live under the name it was asked about, and the shows are
+/// still `from`'s. The transaction takes the write lock first (IMMEDIATE),
+/// so a sync committing between the checks and the write waits rather than
+/// failing the landing.
 fn land_if_current(
     c: &Connection,
     id: i64,
-    from: &str,
+    asked: &Asked,
     at: i64,
     json: &str,
     episodes: &[series_sync::NewEpisode],
 ) -> Result<Landing> {
-    let tx = c.unchecked_transaction()?;
-    let live: bool = tx.query_row(
-        "SELECT EXISTS (SELECT 1 FROM series WHERE series_id = ?1 AND deleted_at IS NULL)",
-        [id],
-        |r| r.get(0),
-    )?;
-    if !live {
-        return Ok(Landing::Gone);
+    let tx = rusqlite::Transaction::new_unchecked(c, rusqlite::TransactionBehavior::Immediate)?;
+    let name: Option<String> = tx
+        .query_row(
+            "SELECT name FROM series WHERE series_id = ?1 AND deleted_at IS NULL",
+            [id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    match name {
+        None => return Ok(Landing::Gone),
+        Some(n) if n != asked.name => return Ok(Landing::Renamed),
+        Some(_) => {}
     }
-    if series_sync::series_landed_from(&tx)?.as_deref() != Some(from) {
+    if series_sync::series_landed_from(&tx)?.as_deref() != Some(asked.from) {
         return Ok(Landing::Switched);
     }
     series_sync::land_series_details_in_tx(&tx, id, at, json, episodes)?;
@@ -163,20 +183,27 @@ async fn fetch(
     id: i64,
     from: &str,
     now: i64,
+    added: i64,
 ) -> Result<std::result::Result<SeriesInfoKept, anyhow::Error>> {
     // The name as the list gave it, which episode titles repeat. Read
-    // before asking: a show dropped meanwhile is the landing's to refuse.
+    // before asking: a show dropped or renamed meanwhile is the landing's
+    // to refuse.
     let Some(name) = series_name(id)? else {
         return Ok(Err(gone()));
     };
     let v = client.series_info(id).await?;
-    let info = info_from_xtream(&v);
+    let mut info = info_from_xtream(&v);
+    info.modified = Some(added);
     let json = serde_json::to_string(&info)?;
     let episodes = series_sync::episodes_from_info(id, &name, &v);
+    let asked = Asked { name: &name, from };
     Ok(
-        match db::with_db(|c| land_if_current(c, id, from, now, &json, &episodes))? {
+        match db::with_db(|c| land_if_current(c, id, &asked, now, &json, &episodes))? {
             Landing::Landed => Ok(info),
             Landing::Gone => Err(gone()),
+            Landing::Renamed => Err(anyhow!(
+                "the show changed while it was being fetched; open it again"
+            )),
             Landing::Switched => Err(anyhow!(
                 "the catalogue changed while the show was being fetched; open it again"
             )),
@@ -189,9 +216,13 @@ async fn fetch(
 /// provider fails, the stale copy.
 async fn info_at(source: &Source, id: i64, now: i64) -> Result<Kept> {
     let (added, kept) = state(id)?.ok_or_else(gone)?;
+    // Fresh for a week, while the show's `added` is the one it was fetched
+    // under: the provider's clock against the provider's, so a server whose
+    // clock runs ahead of ours is not asked again on every open. A copy
+    // kept before `modified` was written down is asked about once more.
     let fresh = kept
         .as_ref()
-        .is_some_and(|(at, _)| now - at < DETAILS_FRESH_SECS && added <= *at);
+        .is_some_and(|(at, k)| now - at < DETAILS_FRESH_SECS && k.modified == Some(added));
     if fresh {
         return Ok(kept);
     }
@@ -202,7 +233,12 @@ async fn info_at(source: &Source, id: i64, now: i64) -> Result<Kept> {
     // not landed yet): this server's answer is not about them.
     let from = origin::of_xtream(client.credentials());
     if db::with_db(series_sync::series_landed_from)?.as_deref() != Some(from.as_str()) {
-        return Ok(kept);
+        return match kept {
+            Some(k) => Ok(Some(k)),
+            None => Err(anyhow!(
+                "The shows are being refreshed for this account; open it again shortly."
+            )),
+        };
     }
     let failed = |why: String| match kept.clone() {
         Some(k) => Ok(Some(k)),
@@ -216,7 +252,7 @@ async fn info_at(source: &Source, id: i64, now: i64) -> Result<Kept> {
     if let Some(why) = recent {
         return failed(why);
     }
-    match fetch(client, id, &from, now).await {
+    match fetch(client, id, &from, now, added).await {
         Ok(Ok(info)) => {
             failures().remove(&id);
             Ok(Some((now, info)))
@@ -648,12 +684,93 @@ mod tests {
         let _catalogue = db::movie_catalogue();
         let (s, calls) = server(|_| Reply::ok(info_for(9911)));
         seed(9911, "http://another.example.test");
-        let d = details_with(&source(&s.base), 9911, 1_000_000)
+        let err = details_with(&source(&s.base), 9911, 1_000_000)
             .await
-            .unwrap();
+            .unwrap_err()
+            .to_string();
         assert_eq!(calls.load(Ordering::SeqCst), 0);
-        assert_eq!(d.fetched_at, None);
-        assert!(d.episodes.is_empty());
+        assert_eq!(
+            err,
+            "The shows are being refreshed for this account; open it again shortly."
+        );
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn a_show_dated_ahead_of_our_clock_is_asked_once() {
+        let _catalogue = db::movie_catalogue();
+        let (s, calls) = server(|_| Reply::ok(info_for(9912)));
+        seed(9912, &s.base);
+        let t = 1_000_000;
+        // The provider's clock runs an hour ahead of ours.
+        db::with_db(|c| {
+            c.execute(
+                "UPDATE series SET added = ?1 WHERE series_id = 9912",
+                [t + 3600],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        let src = source(&s.base);
+        details_with(&src, 9912, t).await.unwrap();
+        details_with(&src, 9912, t + 60).await.unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn a_copy_kept_without_the_shows_date_is_asked_again_once() {
+        let _catalogue = db::movie_catalogue();
+        let (s, calls) = server(|_| Reply::ok(info_for(9913)));
+        seed(9913, &s.base);
+        let t = 1_000_000;
+        db::with_db(|c| {
+            c.execute(
+                "INSERT INTO series_details (series_id, fetched_at, info)
+                 VALUES (9913, ?1, '{\"plot\":\"Old\"}')",
+                [t],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        let src = source(&s.base);
+        let d = details_with(&src, 9913, t + 60).await.unwrap();
+        assert_eq!(d.plot.as_deref(), Some("A plot"));
+        details_with(&src, 9913, t + 120).await.unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn a_show_renamed_during_the_fetch_lands_nothing() {
+        let _catalogue = db::movie_catalogue();
+        let (s, _) = server(|_| {
+            db::with_db(|c| {
+                c.execute(
+                    "UPDATE series SET name = 'Another Show' WHERE series_id = 9914",
+                    [],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+            Reply::ok(info_for(9914))
+        });
+        seed(9914, &s.base);
+        let src = source(&s.base);
+        let err = format!(
+            "{:#}",
+            details_with(&src, 9914, 1_000_000).await.unwrap_err()
+        );
+        assert!(err.contains("show changed"), "{err}");
+        let kept: i64 = db::with_db(|c| {
+            Ok(c.query_row(
+                "SELECT COUNT(*) FROM series_details WHERE series_id = 9914",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .unwrap();
+        assert_eq!(kept, 0);
     }
 
     #[test]
