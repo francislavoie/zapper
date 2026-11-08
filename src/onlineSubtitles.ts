@@ -7,7 +7,8 @@
 
 import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
 import { failed, idle, loading, ready, errorMessage, type Async } from "./logic/async.ts";
-import type { KeptSubtitleDto, OnDemandKind, OnlineServicesDto } from "./types";
+import { servicesAfterDownload } from "./logic/onlineSubtitles.ts";
+import type { KeptSubtitleDto, OnDemandKind, OnlineServicesDto, SubtitleDownloadDto } from "./types";
 
 export type TitleRef = { kind: OnDemandKind; id: number };
 
@@ -178,6 +179,15 @@ export const currentServices = (): Async<OnlineServicesDto> => services;
 export function setServices(next: OnlineServicesDto): void {
   generation++;
   notifyServices(ready(next));
+}
+
+/** A download answered: the settings' account line follows what it said
+ *  (the downloads left, a sign-in refused). Nothing when they were never
+ *  read: their first read says the same. */
+export function downloadAnswered(d: SubtitleDownloadDto): void {
+  if (services.status !== "ready") return;
+  const next = servicesAfterDownload(services.data, d);
+  if (next !== services.data) setServices(next);
 }
 
 export async function loadServices(): Promise<void> {

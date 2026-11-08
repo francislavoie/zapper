@@ -15,6 +15,8 @@ import {
   keptTrack,
   offeredDownloads,
   resultLine,
+  servicesAfterDownload,
+  signInPrompt,
   searchLanguages,
   searchNotice,
   toSearchLanguage,
@@ -105,6 +107,71 @@ test("with English loaded, French of the same release is still offered", () => {
   assert.deepEqual(offeredDownloads([en, fr], both), []);
 });
 
+// ---- the settings' account line follows what a download says
+
+const os = (over) => ({
+  openSubtitles: {
+    enabled: true,
+    languages: ["en"],
+    signedInAs: "tester",
+    signInRefused: false,
+    downloadsLeft: 20,
+    downloadsResetAt: null,
+    ...over,
+  },
+});
+
+test("a download counts what is left", () => {
+  const s = os({});
+  const next = servicesAfterDownload(s, { kind: "downloaded", subtitle: en, downloadsLeft: 19 });
+  assert.equal(next.openSubtitles.downloadsLeft, 19);
+  assert.equal(next.openSubtitles.signedInAs, "tester");
+  assert.deepEqual(next.openSubtitles.languages, ["en"]);
+  // Unknown to the service: the count is left as it was.
+  assert.equal(servicesAfterDownload(s, { kind: "downloaded", subtitle: en, downloadsLeft: null }), s);
+  // A download is proof the sign-in works.
+  assert.equal(
+    servicesAfterDownload(os({ signInRefused: true }), { kind: "downloaded", subtitle: en, downloadsLeft: 5 })
+      .openSubtitles.signInRefused,
+    false,
+  );
+});
+
+test("used up: none left, until when the service said", () => {
+  const next = servicesAfterDownload(os({}), { kind: "quota", resetAt: 5000 });
+  assert.equal(next.openSubtitles.downloadsLeft, 0);
+  assert.equal(next.openSubtitles.downloadsResetAt, 5000);
+  const unknown = servicesAfterDownload(os({}), { kind: "quota", resetAt: null });
+  assert.equal(unknown.openSubtitles.downloadsResetAt, null);
+});
+
+test("a refused sign-in is no longer a sign-in", () => {
+  const next = servicesAfterDownload(os({}), { kind: "signIn", refused: true, email: false });
+  assert.equal(next.openSubtitles.signInRefused, true);
+  assert.equal(isSignedIn(next.openSubtitles), false);
+  // Asked for a first sign-in: nothing was signed in.
+  const none = servicesAfterDownload(os({}), { kind: "signIn", refused: false, email: false });
+  assert.equal(none.openSubtitles.signedInAs, null);
+});
+
+test("busy and off change nothing", () => {
+  const s = os({});
+  assert.equal(servicesAfterDownload(s, { kind: "busy", retryAt: 1 }), s);
+  assert.equal(servicesAfterDownload(s, { kind: "off" }), s);
+});
+
+test("the sign-in the finder asks for", () => {
+  assert.equal(signInPrompt(false, false), "Downloads need your OpenSubtitles account. Searching doesn't.");
+  assert.equal(
+    signInPrompt(true, false),
+    "OpenSubtitles no longer accepts the account signed in here. Sign in again to download.",
+  );
+  assert.equal(
+    signInPrompt(true, true),
+    "OpenSubtitles no longer accepts the account signed in here. It signs in with your username, not your email address.",
+  );
+});
+
 test("resultLine", () => {
   const r = {
     fileId: 1,
@@ -193,7 +260,7 @@ test("findHeading", () => {
 // ---- the finder's state (src/onlineSubtitles.ts)
 import {
   clearKept, closeFindSubtitles, currentFind, keptChanged, keptFor, loadKept, openFindSubtitles,
-  currentServices, loadServices, setKeptSource, setServices, setServicesSource,
+  currentServices, downloadAnswered, loadServices, setKeptSource, setServices, setServicesSource,
 } from "../onlineSubtitles.ts";
 
 test("the finder opens on a title and closes", () => {
@@ -276,6 +343,16 @@ test("a settings read still in flight does not overwrite a newer answer", async 
   d.resolve(services(null));
   await load;
   assert.equal(currentServices().data.openSubtitles.signedInAs, "tester");
+  setServicesSource();
+});
+test("a download's answer is written back to the settings read", () => {
+  setServicesSource();
+  // Never read: nothing to correct.
+  downloadAnswered({ kind: "quota", resetAt: null });
+  assert.equal(currentServices().status, "idle");
+  setServices(services("tester"));
+  downloadAnswered({ kind: "signIn", refused: true, email: false });
+  assert.equal(currentServices().data.openSubtitles.signInRefused, true);
   setServicesSource();
 });
 

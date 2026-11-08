@@ -26,11 +26,13 @@ import {
   resultLine,
   searchLanguages,
   searchNotice,
+  signInPrompt,
   trackLanguage,
 } from "../logic/onlineSubtitles";
 import { languageName } from "../logic/tracks";
 import {
   closeFindSubtitles,
+  downloadAnswered,
   findOpener,
   keptChanged,
   openFindSubtitles,
@@ -184,7 +186,9 @@ function FindDialog({ target: title }: { target: TitleRef }) {
   const [active, setActive] = useState(0);
   const at = Math.min(active, Math.max(rows.length - 1, 0));
 
-  const [signIn, setSignIn] = useState<{ fileId: number; refused: boolean } | null>(null);
+  const [signIn, setSignIn] = useState<{ fileId: number; refused: boolean; email: boolean } | null>(
+    null,
+  );
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState<number | null>(null);
   const busyRef = useRef(false);
@@ -233,12 +237,14 @@ function FindDialog({ target: title }: { target: TitleRef }) {
   const download = (fileId: number) =>
     act(async () => {
       const d = await backend.downloadSubtitle(title.kind, title.id, fileId);
+      // Kept, and counted, even when the dialog was closed meanwhile.
+      downloadAnswered(d);
+      if (d.kind === "downloaded") keptChanged(title);
       if (!alive.current) return;
       if (d.kind === "downloaded") {
-        keptChanged(title);
         await added(d.subtitle);
       } else if (d.kind === "signIn") {
-        setSignIn({ fileId, refused: d.refused });
+        setSignIn({ fileId, refused: d.refused, email: d.email });
       } else {
         setNotice(downloadNotice(d, now()));
       }
@@ -366,11 +372,7 @@ function FindDialog({ target: title }: { target: TitleRef }) {
 
         {signIn ? (
           <div className="find-subs-signin">
-            <p className="find-subs-line">
-              {signIn.refused
-                ? "OpenSubtitles no longer accepts the account signed in here. Sign in again to download."
-                : "Downloads need your OpenSubtitles account. Searching doesn't."}
-            </p>
+            <p className="find-subs-line">{signInPrompt(signIn.refused, signIn.email)}</p>
             <OpenSubtitlesSignIn
               onSignedIn={(next) => {
                 services.set(next);
