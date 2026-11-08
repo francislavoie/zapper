@@ -508,16 +508,18 @@ fn survive_a_failed_interface(webview: &webkit2gtk::WebView, win: &gtk::Window) 
             return false;
         }
         tracing::error!("the interface failed to load from {uri}: {error}");
-        if told.replace(true) {
-            return false;
-        }
         // Not in a harness. The verification binaries load the same frontend
         // with no dev server behind it, so this fires every time they run —
         // a modal dialog and a header bar over whatever they were showing,
         // on somebody else's screen. They are not the app and nobody is
         // going to click Quit on them; the log line above is the whole
-        // answer there.
+        // answer there. Handled, too, so that WebKit draws no error page
+        // into the layer over the picture, where it would show in their
+        // captures.
         if std::env::var_os("ZAPPER_HARNESS").is_some() {
+            return true;
+        }
+        if told.replace(true) {
             return false;
         }
 

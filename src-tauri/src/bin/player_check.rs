@@ -63,8 +63,8 @@
 //! mpv draws each on its side and rows of the picture, a side caption's edge
 //! inside the picture rather than in a band; that turning them off hides
 //! them and keeps the track; and that with no captions track mpv's own
-//! values are back. `ZAPPER_CAPTION_SHOTS=<dir>` saves the window at each
-//! caption there.
+//! placement is back. A caption drawn twice fails it.
+//! `ZAPPER_CAPTION_SHOTS=<dir>` saves the window at each caption there.
 //!
 //! `--ending <kind>` plays a channel that is expected to stop by itself, and
 //! checks it stops the way the app explains it (`offAir`, `dropped`, …), as
@@ -876,6 +876,19 @@ async fn run_subtitles(app: &tauri::AppHandle) -> Result<String, String> {
     if chosen(&cmds::player_options().await?).as_deref() == Some("fra") {
         return Err("the switch to French had nothing to switch from".into());
     }
+    // Past the server's keep-alive timeout (`fake_stream.py
+    // --keep-alive-timeout 5`), so the connection the episode arrived on is
+    // closed when the switch goes back for the new track; and the server
+    // says it closed it.
+    tokio::time::sleep(IDLE_BEFORE_SWITCH).await;
+    let port = fixture_port()?;
+    match keep_alive(port) {
+        Some((timeout, closed)) if timeout > 0.0 && timeout < IDLE_BEFORE_SWITCH.as_secs_f64() && closed == 0 => {
+            return Err(format!("the server kept the idle connection past its {timeout}s timeout"));
+        }
+        Some(_) => {}
+        None => return Err("the fixture server did not say what it does with idle connections".into()),
+    }
     cmds::set_subtitle_track(app.clone(), Some(french)).await?;
     plays_on("switching from English to French").await?;
     let switched = cmds::player_options().await?;
@@ -942,6 +955,25 @@ async fn grab(app: &tauri::AppHandle, path: String) -> Result<(), String> {
     })
     .map_err(|e| e.to_string())?;
     rx.recv_timeout(std::time::Duration::from_secs(10)).map_err(|e| e.to_string())?
+}
+
+/// How long `--subtitles` lets the episode's connection sit idle before the
+/// mid-play switch: past `fake_stream.py --keep-alive-timeout 5`.
+#[cfg(target_os = "linux")]
+const IDLE_BEFORE_SWITCH: std::time::Duration = std::time::Duration::from_secs(8);
+
+/// The fixture server's keep-alive timeout (0: none) and how many idle
+/// connections it has closed, from its /keepalive.
+#[cfg(target_os = "linux")]
+fn keep_alive(port: u16) -> Option<(f64, i64)> {
+    use std::io::{Read, Write};
+    let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).ok()?;
+    s.set_read_timeout(Some(std::time::Duration::from_secs(5))).ok()?;
+    s.write_all(b"GET /keepalive HTTP/1.0\r\nHost: x\r\n\r\n").ok()?;
+    let mut body = String::new();
+    s.read_to_string(&mut body).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&body[body.find("\r\n\r\n")? + 4..]).ok()?;
+    Some((v.get("timeout")?.as_f64()?, v.get("idleClosed")?.as_i64()?))
 }
 
 /// The `--captions` run; see the top of the file.
@@ -1020,6 +1052,12 @@ async fn run_captions(app: &tauri::AppHandle) -> Result<String, String> {
             if readings.last() != Some(&v) && readings.len() < 40 {
                 readings.push(v.clone());
             }
+            // One caption on screen, once: the same event twice is a caption
+            // drawn twice, which must not pass for a placed one.
+            let events: Vec<&str> = v[0].split('\n').filter(|e| !e.is_empty()).collect();
+            if events.iter().enumerate().any(|(i, e)| events[..i].contains(e)) {
+                return Err(format!("a caption was drawn twice: {:?}", v[0]));
+            }
             if !v[0].contains(text) {
                 tokio::time::sleep(Duration::from_millis(100)).await;
                 continue;
@@ -1078,14 +1116,16 @@ async fn run_captions(app: &tauri::AppHandle) -> Result<String, String> {
     cmds::stop(app.clone()).await?;
     tokio::time::sleep(Duration::from_millis(1200)).await;
     let v = read(app).await.ok_or("could not read mpv's properties")?;
-    if v[1..5] != before[1..5] {
-        return Err(format!("with no captions track, mpv was left with {:?}, not {:?}", &v[1..5], &before[1..5]));
+    // The placement only: how a channel's subtitles are styled
+    // (sub-ass-override) is the open's, set again by the next one.
+    if v[2..5] != before[2..5] {
+        return Err(format!("with no captions track, mpv was left with {:?}, not {:?}", &v[2..5], &before[2..5]));
     }
     Ok(format!(
         "{}; turned off, hidden with the track kept, playing on; with no captions track, mpv's \
-         own values ({}) again",
+         own placement ({}) again",
         seen.join("; "),
-        before[1..5].join(", ")
+        before[2..5].join(", ")
     ))
 }
 
