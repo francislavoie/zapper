@@ -106,6 +106,7 @@ export const SETTINGS_SECTIONS = [
   "Guide",
   "Recording",
   "Data",
+  "Online services",
   "Updates",
   "Keyboard",
   "About",

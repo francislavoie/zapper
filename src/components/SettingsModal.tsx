@@ -8,6 +8,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { backend, capabilities } from "../backend";
+import { OnlineServicesPane } from "./OnlineServicesPane";
 import { settingsSections, type SettingsSection } from "../logic/capabilities";
 import { useSettings, type SettingsControl } from "../hooks/useSettings";
 import { clampVolume, dateTime, duration, hhmm, systemUses12h, uses12h } from "../logic/format";
@@ -76,6 +77,7 @@ const SUMMARY: Record<Section, string> = {
   Data: capabilities.data
     ? "The catalogue, and backups of your settings and favourites."
     : "The catalogue the recording service keeps, and refreshing it from the provider.",
+  "Online services": "Services on the internet that zapper may ask, and what each is sent.",
   Updates: "Whether zapper looks for new versions, and which one is installed.",
   Keyboard: "Every shortcut and mouse gesture, grouped by where it works.",
   About: "",
@@ -182,6 +184,9 @@ export function SettingsModal() {
             {section === "Guide" ? <GuidePage s={s} /> : null}
             {section === "Recording" ? <RecordingPane s={s} /> : null}
             {section === "Data" ? <DataPage s={s} /> : null}
+            {section === "Online services" ? (
+              <OnlineServicesPane standing={s.settings.subtitleLanguage} />
+            ) : null}
             {section === "Updates" ? <UpdatesPage s={s} /> : null}
             {section === "Keyboard" ? <KeyboardPane /> : null}
             {section === "About" ? <AboutPane /> : null}
