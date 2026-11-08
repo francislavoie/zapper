@@ -278,6 +278,8 @@ export const api = {
     invoke<InstallOutcomeDto>("update_install", { when }),
   updateRestart: () => invoke<void>("update_restart"),
   updateOpenPage: () => invoke<void>("update_open_page"),
+  /** Opens OpenSubtitles' sign-up page; the address is the backend's. */
+  openOpenSubtitlesSignUp: () => invoke<void>("open_opensubtitles_sign_up"),
 
   // The recording service, asked through the Rust side (which holds its
   // token). Each rejects with the service's words, or "The recording service

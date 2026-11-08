@@ -125,7 +125,15 @@ pub async fn update_open_page(u: State<'_>) -> Result<(), String> {
     open_in_browser(&url).map_err(|e| format!("Couldn't open {url}: {e}"))
 }
 
-fn open_in_browser(url: &str) -> std::io::Result<()> {
+/// Opens OpenSubtitles' sign-up page in the browser. The address is fixed
+/// here, never taken from the webview.
+#[tauri::command]
+pub async fn open_opensubtitles_sign_up() -> Result<(), String> {
+    const URL: &str = "https://www.opensubtitles.com/en/users/sign_up";
+    open_in_browser(URL).map_err(|e| format!("Couldn't open {URL}: {e}"))
+}
+
+pub(crate) fn open_in_browser(url: &str) -> std::io::Result<()> {
     let mut c = if cfg!(target_os = "macos") {
         let mut c = std::process::Command::new("open");
         c.arg(url);

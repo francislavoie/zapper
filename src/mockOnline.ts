@@ -6,7 +6,8 @@
 // Sign in with `tester` / `test-pass`. Flags in the URL, for the UI checks:
 // `?online=refused` is a signed-in account OpenSubtitles no longer accepts,
 // `quota` one with no downloads left, `busy` a service asking to wait, `off`
-// the service switched off, `nothing` a search that finds nothing.
+// the service switched off, `nothing` a search that finds nothing, `unknown`
+// a title the catalogue can't search by.
 
 import type {
   KeptSubtitleDto,
@@ -104,6 +105,7 @@ export function createMockOnline(deps: MockOnlineDeps) {
     ): Promise<SubtitleSearchDto> => {
       await delay(150);
       if (!enabled) return { kind: "off" };
+      if (MODE === "unknown") return { kind: "unknownTitle" };
       if (MODE === "busy") return { kind: "busy", retryAt: NOW() + 90 };
       const have = kept.get(key(kind, id)) ?? [];
       const found =
@@ -151,12 +153,16 @@ export function createMockOnline(deps: MockOnlineDeps) {
       [...(kept.get(key(kind, id)) ?? [])],
 
     addSubtitleFile: async (
-      _kind: OnDemandKind,
-      _id: number,
-      _fileId: number,
+      kind: OnDemandKind,
+      id: number,
+      fileId: number,
       title: string,
       lang: string,
     ): Promise<PlayerOptionsDto> => {
+      // Only what was downloaded for this title can be added.
+      if (!(kept.get(key(kind, id)) ?? []).some((k) => k.fileId === fileId)) {
+        throw "That subtitle isn't kept for this title.";
+      }
       const subs = deps.options().subtitles;
       const added: TrackDto = {
         id: subs.reduce((m, t) => Math.max(m, t.id), 0) + 1,

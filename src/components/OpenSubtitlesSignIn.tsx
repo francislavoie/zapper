@@ -4,7 +4,7 @@
 // it is sent to the backend and never kept here.
 
 import { useRef, useState, type FormEvent } from "react";
-import { api } from "../api";
+import { backend, capabilities, passwordsInClear } from "../backend";
 import { errorMessage } from "../logic/async";
 import type { OnlineServicesDto } from "../types";
 
@@ -30,7 +30,7 @@ export function OpenSubtitlesSignIn({
     setBusy(true);
     setError(null);
     try {
-      const next = await api.signInOpenSubtitles(username.trim(), password);
+      const next = await backend.signInOpenSubtitles(username.trim(), password);
       setPassword("");
       onSignedIn(next);
     } catch (err) {
@@ -50,6 +50,7 @@ export function OpenSubtitlesSignIn({
       <input
         className="field"
         type="text"
+        name="username"
         autoComplete="username"
         aria-label="OpenSubtitles username"
         placeholder="Username"
@@ -61,6 +62,7 @@ export function OpenSubtitlesSignIn({
       <input
         className="field"
         type="password"
+        name="password"
         autoComplete="current-password"
         aria-label="OpenSubtitles password"
         placeholder="Password"
@@ -75,6 +77,13 @@ export function OpenSubtitlesSignIn({
       >
         Sign in
       </button>
+      {passwordsInClear ? (
+        <div className="settings-note bad os-signin-why" role="note">
+          This page uses plain HTTP, so a password typed here crosses the network unencrypted. To
+          encrypt it, turn off “Plain HTTP on the network” in the zapper app’s Settings →
+          Recording.
+        </div>
+      ) : null}
       {error ? (
         <div className="net-why os-signin-why" role="alert">
           {error}
@@ -82,7 +91,17 @@ export function OpenSubtitlesSignIn({
       ) : null}
       <p className="os-signin-note">
         Downloads count against your own free OpenSubtitles account.{" "}
-        <a href={SIGN_UP} target="_blank" rel="noreferrer noopener">
+        <a
+          href={SIGN_UP}
+          target="_blank"
+          rel="noreferrer noopener"
+          onClick={(e) => {
+            // The app's window has nowhere to open a link: its backend does.
+            if (!capabilities.window) return;
+            e.preventDefault();
+            void backend.openOpenSubtitlesSignUp().catch(() => {});
+          }}
+        >
           Create an account
         </a>
       </p>

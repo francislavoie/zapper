@@ -50,7 +50,7 @@ export function useFindSubtitles(): TitleRef | null {
 export type KeptFetch = (kind: OnDemandKind, id: number) => Promise<KeptSubtitleDto[]>;
 
 const defaultFetch: KeptFetch = async (kind, id) =>
-  (await import("./api")).api.keptSubtitles(kind, id);
+  (await import("./backend")).backend.keptSubtitles(kind, id);
 let fetchKept: KeptFetch = defaultFetch;
 
 /** For checks: where kept subtitles come from. No argument restores the backend. */
@@ -64,7 +64,9 @@ export const keptKey = (t: TitleRef): string => `${t.kind}:${t.id}`;
 const kept = new Map<string, KeptSubtitleDto[]>();
 const keptListeners = new Set<() => void>();
 let keptVersion = 0;
-const inflight = new Map<string, number>();
+/** The read under way for each title, and which one is the latest. */
+const pending = new Map<string, { ticket: number; promise: Promise<void> }>();
+let tickets = 0;
 const notifyKept = () => {
   keptVersion++;
   keptListeners.forEach((f) => f());
@@ -78,19 +80,30 @@ function remember(key: string, list: KeptSubtitleDto[]) {
   notifyKept();
 }
 
-/** Reads the title's kept subtitles, once unless it is asked again. */
-export async function loadKept(t: TitleRef, force = false): Promise<void> {
+/** Reads the title's kept subtitles, once unless it is asked again. A read
+ *  already under way is joined; a forced one supersedes it, and the older
+ *  answer is dropped if it lands later. */
+export function loadKept(t: TitleRef, force = false): Promise<void> {
   const key = keptKey(t);
-  if (!force && kept.has(key)) return;
-  const ticket = (inflight.get(key) ?? 0) + 1;
-  inflight.set(key, ticket);
-  try {
-    const list = await fetchKept(t.kind, t.id);
-    if (inflight.get(key) === ticket) remember(key, list);
-  } catch {
-    // A failed read leaves what was known; the dialog's own search reports
-    // what is wrong with the service.
+  const current = pending.get(key);
+  if (!force) {
+    if (kept.has(key)) return Promise.resolve();
+    if (current) return current.promise;
   }
+  const ticket = ++tickets;
+  const promise = (async () => {
+    try {
+      const list = await fetchKept(t.kind, t.id);
+      if (pending.get(key)?.ticket === ticket) remember(key, list);
+    } catch {
+      // A failed read leaves what was known; the dialog's own search reports
+      // what is wrong with the service.
+    } finally {
+      if (pending.get(key)?.ticket === ticket) pending.delete(key);
+    }
+  })();
+  pending.set(key, { ticket, promise });
+  return promise;
 }
 
 /** The cached list for a title, without fetching. */
@@ -104,7 +117,7 @@ export function keptChanged(t: TitleRef): void {
 /** For checks. */
 export function clearKept(): void {
   kept.clear();
-  inflight.clear();
+  pending.clear();
   notifyKept();
 }
 
@@ -129,19 +142,43 @@ export function useKeptSubtitles(t: TitleRef | null): KeptSubtitleDto[] {
 // ------------------------------------------------------ online services
 
 let services: Async<OnlineServicesDto> = idle();
+/** Bumped by every answer put in directly, so a read begun before it can't
+ *  overwrite it when it lands. */
+let generation = 0;
 const serviceListeners = new Set<() => void>();
 const notifyServices = (next: Async<OnlineServicesDto>) => {
   services = next;
   serviceListeners.forEach((f) => f());
 };
 
-async function loadServices() {
+export type ServicesFetch = () => Promise<OnlineServicesDto>;
+const defaultServices: ServicesFetch = async () =>
+  (await import("./backend")).backend.onlineServices();
+let fetchServices: ServicesFetch = defaultServices;
+
+/** For checks: where the settings come from, and a clean start. */
+export function setServicesSource(f?: ServicesFetch): void {
+  fetchServices = f ?? defaultServices;
+  generation++;
+  services = idle();
+}
+
+export const currentServices = (): Async<OnlineServicesDto> => services;
+
+export function setServices(next: OnlineServicesDto): void {
+  generation++;
+  notifyServices(ready(next));
+}
+
+export async function loadServices(): Promise<void> {
   if (services.status === "loading") return;
+  const mine = generation;
   if (services.status !== "ready") notifyServices(loading());
   try {
-    notifyServices(ready(await (await import("./api")).api.onlineServices()));
+    const next = await fetchServices();
+    if (generation === mine) notifyServices(ready(next));
   } catch (e) {
-    notifyServices(failed(errorMessage(e)));
+    if (generation === mine) notifyServices(failed(errorMessage(e)));
   }
 }
 
@@ -166,6 +203,6 @@ export function useOnlineServices(): {
     }
   }, []);
   const reload = useCallback(() => void loadServices(), []);
-  const set = useCallback((next: OnlineServicesDto) => notifyServices(ready(next)), []);
+  const set = useCallback((next: OnlineServicesDto) => setServices(next), []);
   return { status, reload, set };
 }

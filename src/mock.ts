@@ -2475,6 +2475,9 @@ export const mockApi = {
     (globalThis as Record<string, unknown>).__mockRestarted = true;
   },
 
+  openOpenSubtitlesSignUp: async () => {
+    (globalThis as Record<string, unknown>).__openedSignUp = true;
+  },
   updateOpenPage: async () => {
     if (updateEmitter.last.state.state === "notConfigured") {
       throw "Updates aren't configured for this build, so there's no release page to open.";
