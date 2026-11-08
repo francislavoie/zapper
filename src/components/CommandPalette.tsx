@@ -82,6 +82,13 @@ export function CommandPalette() {
 
   const close = useCallback(() => dispatch({ type: "palette", open: false }), [dispatch]);
 
+  // The whole state, for the actions that read it as they run: read when an
+  // item is chosen, so `choose` is not made again on every tick of the player.
+  const stateNow = useRef(state);
+  useEffect(() => {
+    stateNow.current = state;
+  });
+
   const choose = useCallback(
     (item: PaletteItem | undefined) => {
       if (!item) return;
@@ -110,7 +117,7 @@ export function CommandPalette() {
         player: state.player,
         previous: state.previousChannel,
         record,
-        state,
+        state: stateNow.current,
       });
     },
     [
@@ -122,7 +129,6 @@ export function CommandPalette() {
       state.categoryId,
       state.mode,
       state.settings.guideHours,
-      state,
     ],
   );
 
