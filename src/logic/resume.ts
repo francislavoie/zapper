@@ -189,3 +189,11 @@ export function placeReportDue(r: {
   if (r.position < 1 && r.last === null) return false;
   return !(r.final && r.last?.position === r.position);
 }
+
+/** How a show's ▶ Play opens its episode: Resume when its details say it is
+ *  in progress; else asking, so a place another device gave it since they
+ *  were read is read as it opens and asked about rather than played over
+ *  from the beginning. */
+export function showPlayStart(resume: boolean): StartAt {
+  return resume ? "resume" : "ask";
+}
