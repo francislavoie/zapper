@@ -88,6 +88,22 @@ interface have their own page: [recording.md](recording.md).
 - An Xtream show's seasons and episodes are asked of the provider when it is first selected, then
   kept for a week.
 
+## Continue watching
+
+- ▶ Continue watching is the first item of both the Movies and the Shows rail, with how many
+  titles it holds; `W` (or the command palette) goes there from anywhere. It lists the movies and
+  episodes you stopped partway, and the next episode of each show you're following, last watched
+  first, as one mixed list on either tab.
+- Each row shows the poster (the show's, for an episode), the title with the episode's code
+  (`S2 E4`, or `S1 E3 · next` for one not started), the year, length and rating, a progress bar
+  with the time left, and when you last watched it. Posters show the same entries as cards.
+- Selecting an entry plays nothing; `Enter` or a double-click plays it. Right-click (or the menu
+  key, or `Shift+F10`) opens its menu: Resume from where you stopped and Start over (or Play for
+  a next episode), Details, Mark watched, and Remove from Continue watching, which takes it off
+  the list without forgetting the place.
+- Typing in the search box searches the whole tab, as from any other list; clearing it comes back
+  to Continue watching.
+
 ## Playback
 
 - libmpv with hardware decoding (VA-API on Linux) and HDR tone-mapping.

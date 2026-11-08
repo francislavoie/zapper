@@ -206,3 +206,20 @@ test("Movies, Shows and Live TV are offered where there is something to switch b
   assert.ok(has("liveTv", { capabilities: on, movies: true, shows: false }));
   assert.ok(!has("liveTv", { capabilities: on, movies: false, shows: false }));
 });
+
+test("Continue watching is offered, with W, where Movies or Shows are", () => {
+  const on = { ...DESKTOP, onDemand: true };
+  const off = { ...DESKTOP, onDemand: false };
+  const a = ACTIONS.find((x) => x.id === "continue");
+  assert.ok(a, "listed");
+  assert.equal(a.label, "Continue watching");
+  assert.equal(a.hint, "W");
+  assert.equal(a.group, "view");
+  assert.equal(a.needsCapability, "onDemand");
+  const has = (conditions) => availableActions(false, conditions).some((x) => x.id === "continue");
+  assert.ok(has({ capabilities: on }));
+  assert.ok(!has({ capabilities: off }), "not without on-demand");
+  assert.ok(!has({ capabilities: on, movies: false, shows: false }), "not with neither tab");
+  assert.ok(has({ capabilities: on, movies: false, shows: true }), "with only shows");
+  assert.ok(has({ capabilities: on, movies: true, shows: false }), "with only movies");
+});

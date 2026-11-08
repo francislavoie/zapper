@@ -179,3 +179,28 @@ test("a movie left partway offers Resume and Start over; otherwise Play", () => 
   assert.deepEqual(movieActions({ watched: true, position: 2770, duration: 7260, durationSecs: null }), play);
   assert.deepEqual(movieActions({ watched: false, position: null, duration: null, durationSecs: null }), play);
 });
+test("Continue watching is never a category: searched, it is the whole tab's search; else nothing is asked", () => {
+  const CONTINUE = "*continue*";
+  assert.equal(movieRailKind(CONTINUE), "all");
+  assert.deepEqual(movieQuery(CONTINUE, "added", null, "a"), {
+    list: "all",
+    categoryId: null,
+    sort: "added",
+    yearFrom: null,
+    yearTo: null,
+    search: "a",
+  });
+  // The list is the Continue pane's, read from the store: nothing for the
+  // backend to build.
+  assert.equal(movieQuery(CONTINUE, "added", null, ""), null);
+  assert.equal(movieQuery(CONTINUE, "az", { from: 2020, to: 2029 }, "  "), null);
+  assert.equal(movieQuery(CONTINUE, "az", null), null);
+  for (const search of ["", " ", "|", "a", " EN - ", "Night Shift"]) {
+    for (const years of [null, { from: 1990, to: 1999 }]) {
+      const q = movieQuery(CONTINUE, "year", years, search);
+      assert.ok(q === null || q.categoryId === null, `search ${JSON.stringify(search)}`);
+      assert.ok(!JSON.stringify(q).includes(CONTINUE), `search ${JSON.stringify(search)}`);
+    }
+  }
+  assert.equal(movieTitle(CONTINUE, []), "Continue watching");
+});

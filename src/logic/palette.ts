@@ -43,6 +43,7 @@ export const ACTION_IDS = [
   "movies",
   "shows",
   "liveTv",
+  "continue",
   "settings",
   "updates",
   "about",
@@ -194,6 +195,8 @@ export const ACTIONS: PaletteAction[] = [
   { id: "movies", label: "Movies", hint: "M", group: "view", needsCapability: "onDemand" },
   { id: "shows", label: "Shows", hint: "N", group: "view", needsCapability: "onDemand" },
   { id: "liveTv", label: "Live TV", hint: "", group: "view", needsCapability: "onDemand" },
+  // What was left partway, on the Movies or the Shows tab.
+  { id: "continue", label: "Continue watching", hint: "W", group: "view", needsCapability: "onDemand" },
   { id: "settings", label: "Open settings", hint: "⚙", group: "app" },
   // "upgrade" and "version" are what people type looking for this one.
   {
@@ -250,6 +253,7 @@ export function availableActions(
       !(a.id === "movies" && noMovies) &&
       !(a.id === "shows" && noShows) &&
       !(a.id === "liveTv" && noMovies && noShows) &&
+      !(a.id === "continue" && noMovies && noShows) &&
       (!a.needsPlayer || (playing && caps.playback)) &&
       (!a.needsPrevious || conditions.hasPrevious === true) &&
       (a.needs === undefined || conditions[a.needs] === true),

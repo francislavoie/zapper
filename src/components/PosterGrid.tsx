@@ -8,6 +8,7 @@
 import { memo } from "react";
 import { POSTER_GAP } from "../logic/movies";
 import type { PosterCard, posterGrid } from "../logic/movies";
+import type { MenuAt, RowKey } from "./OnDemandList";
 import { Poster } from "./Poster";
 
 export type PosterGeometry = ReturnType<typeof posterGrid>;
@@ -20,14 +21,16 @@ export interface PosterGridProps<T> {
   total: number;
   rowAt: (index: number) => T | undefined;
   /** The title's id: the card's key, its element id and the selection. */
-  idOf: (t: T) => number;
+  idOf: (t: T) => RowKey;
   /** What the card draws. Called inside the memoised card, so it should be
    *  the same function from one render to the next. */
   card: (t: T, now: number) => PosterCard;
-  selectedId: number | null;
+  selectedId: RowKey | null;
   now: number;
   onSelect: (t: T, index: number) => void;
   onOpen: (t: T, index: number) => void;
+  /** A right-click on a card, where the list has a menu for its titles. */
+  onMenu?: (t: T, index: number, at: MenuAt) => void;
   idPrefix: string;
 }
 
@@ -42,6 +45,7 @@ export function PosterGrid<T>({
   now,
   onSelect,
   onOpen,
+  onMenu,
   idPrefix,
 }: PosterGridProps<T>) {
   const { columns, cardWidth, rowHeight } = geometry;
@@ -73,6 +77,7 @@ export function PosterGrid<T>({
           now={now}
           onSelect={onSelect as CardProps["onSelect"]}
           onOpen={onOpen as CardProps["onOpen"]}
+          onMenu={onMenu as CardProps["onMenu"]}
         />,
       );
     }
@@ -86,7 +91,7 @@ type CardOf = (t: unknown, now: number) => PosterCard;
 interface CardProps {
   /** `idOf(item)`: the element's id, so the list's active descendant (made
    *  from the same function) always names a card that is there. */
-  id: number;
+  id: RowKey;
   item: unknown;
   card: CardOf;
   index: number;
@@ -98,6 +103,7 @@ interface CardProps {
   now: number;
   onSelect: (t: unknown, index: number) => void;
   onOpen: (t: unknown, index: number) => void;
+  onMenu?: (t: unknown, index: number, at: MenuAt) => void;
 }
 
 const Card = memo(function Card({
@@ -113,6 +119,7 @@ const Card = memo(function Card({
   now,
   onSelect,
   onOpen,
+  onMenu,
 }: CardProps) {
   const c = card(item, now);
   return (
@@ -124,6 +131,14 @@ const Card = memo(function Card({
       style={{ left, top, width }}
       onClick={() => onSelect(item, index)}
       onDoubleClick={() => onOpen(item, index)}
+      onContextMenu={
+        onMenu
+          ? (e) => {
+              e.preventDefault();
+              onMenu(item, index, { x: e.clientX, y: e.clientY });
+            }
+          : undefined
+      }
     >
       <div className="poster-art" style={{ height: Math.round(width * 1.5) }}>
         <Poster url={c.posterUrl} name={c.title} className="poster poster-img" />

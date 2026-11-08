@@ -35,6 +35,8 @@ export const SHOW_WATCHED = "*watched*";
 
 export function showRailKind(id: string): MovieRailKind {
   switch (id) {
+    case CONTINUE:
+      return "all";
     case SHOW_FAVOURITES:
       return "favourites";
     case SHOW_RECENT:
@@ -95,7 +97,7 @@ export function showQuery(
   sort: MovieSort,
   years: YearRange | null,
   search = "",
-): SeriesQueryDto {
+): SeriesQueryDto | null {
   return vodQuery(showRailKind(selection), selection, sort, years, search);
 }
 
@@ -110,6 +112,8 @@ export function showTitle(
       return "Recently added";
     case "watched":
       return "Watched";
+    case "all":
+      return "Continue watching";
     default:
       return categories.find((c) => c.id === selection)?.name ?? "Shows";
   }

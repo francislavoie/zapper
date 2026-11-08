@@ -110,6 +110,7 @@ export function CommandPalette() {
         player: state.player,
         previous: state.previousChannel,
         record,
+        state,
       });
     },
     [
@@ -121,6 +122,7 @@ export function CommandPalette() {
       state.categoryId,
       state.mode,
       state.settings.guideHours,
+      state,
     ],
   );
 

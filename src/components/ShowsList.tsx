@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { backend } from "../backend";
 import { useSettledSearch } from "../hooks/useSettledSearch";
+import { CONTINUE } from "../logic/continueWatching";
 import { playingKind } from "../logic/movies";
 import { paneKey } from "../logic/showPane";
 import type { MoviesView, YearRange } from "../logic/movies";
@@ -26,6 +27,7 @@ import type { MoviesMenu } from "../moviesState";
 import { saveVodView } from "../moviesView";
 import { useApp, useDispatch } from "../store";
 import type { MovieSort, SeriesDto } from "../types";
+import { ContinueList } from "./ContinueList";
 import { OnDemandList } from "./OnDemandList";
 import { ShowPane } from "./ShowPane";
 import { ShowRow } from "./ShowRow";
@@ -64,13 +66,17 @@ export function ShowsList({ besideRail = true }: { besideRail?: boolean }) {
   );
   const listKey = JSON.stringify(query);
   const fetchPage = useCallback(
-    (offset: number, limit: number) => backend.series(query, offset, limit),
+    (offset: number, limit: number) =>
+      query ? backend.series(query, offset, limit) : Promise.resolve({ total: 0, items: [] }),
     [query],
   );
 
   // What the list shows, not what is being typed: the two differ for
   // the moment of the pause.
   const searching = isTitleSearch(searched);
+  // Continue watching, until a search there makes it the tab's results. Its
+  // entries open no episode pane: the band shows the one selected.
+  const continuing = shows.selection === CONTINUE && !searching;
   const categories = shows.categories.status === "ready" ? shows.categories.data : [];
   const heading = searching ? "Search results" : showTitle(shows.selection, categories);
 
@@ -92,7 +98,7 @@ export function ShowsList({ besideRail = true }: { besideRail?: boolean }) {
   );
 
   const selected = shows.selected;
-  const paneOpen = shows.paneOpen && selected !== null;
+  const paneOpen = shows.paneOpen && selected !== null && !continuing;
   const posters = shows.view === "posters";
   const on = useMemo(() => {
     // Enter (or → in the list view) goes into the episodes, opening the
@@ -153,28 +159,30 @@ export function ShowsList({ besideRail = true }: { besideRail?: boolean }) {
       className={`list-split shows-split ${paneOpen ? "pane-open" : ""} ${stacked ? "stacked" : ""}`}
       ref={split}
     >
-    <OnDemandList<SeriesDto>
-      besideRail={besideRail}
-      idPrefix="show"
-      kindClass="shows"
-      colsClass="show-cols"
-      unavailableLabel="Shows unavailable"
-      listKey={listKey}
-      fetchPage={fetchPage}
-      pages={SHOW_PAGES}
-      state={state}
-      marks={shows.seriesMarks}
-      idOf={idOf}
-      withMarks={withMarks}
-      heading={heading}
-      countLabel={showCount}
-      placeholder={SHOW_SEARCH_PLACEHOLDER}
-      emptyNote={emptyNote(shows.selection, searching, searched, shows.years)}
-      columns={SHOW_COLUMNS}
-      Row={ShowRow}
-      card={showCard}
-      on={on}
-    />
+    <ContinueList tab="shows" besideRail={besideRail} shown={continuing}>
+      <OnDemandList<SeriesDto>
+        besideRail={besideRail}
+        idPrefix="show"
+        kindClass="shows"
+        colsClass="show-cols"
+        unavailableLabel="Shows unavailable"
+        listKey={listKey}
+        fetchPage={fetchPage}
+        pages={SHOW_PAGES}
+        state={state}
+        marks={shows.seriesMarks}
+        idOf={idOf}
+        withMarks={withMarks}
+        heading={heading}
+        countLabel={showCount}
+        placeholder={SHOW_SEARCH_PLACEHOLDER}
+        emptyNote={emptyNote(shows.selection, searching, searched, shows.years)}
+        columns={SHOW_COLUMNS}
+        Row={ShowRow}
+        card={showCard}
+        on={on}
+      />
+    </ContinueList>
     {paneOpen && selected ? (
       <ShowPane
         key={stacked ? "stacked" : "beside"}

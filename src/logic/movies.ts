@@ -24,10 +24,14 @@ export const MOVIE_FAVOURITES = "*favourites*";
 export const MOVIE_RECENT = "*added*";
 export const MOVIE_WATCHED = "*watched*";
 
-export type MovieRailKind = "favourites" | "recent" | "watched" | "category";
+/** `all`: Continue watching, which is never a category: its list is read
+ *  from the store, and a search typed there is the whole tab's. */
+export type MovieRailKind = "favourites" | "recent" | "watched" | "category" | "all";
 
 export function movieRailKind(id: string): MovieRailKind {
   switch (id) {
+    case CONTINUE:
+      return "all";
     case MOVIE_FAVOURITES:
       return "favourites";
     case MOVIE_RECENT:
@@ -120,23 +124,26 @@ export function movieQuery(
   sort: MovieSort,
   years: YearRange | null,
   search = "",
-): MovieQueryDto {
+): MovieQueryDto | null {
   return vodQuery(movieRailKind(selection), selection, sort, years, search);
 }
 
-/** movieQuery, for either tab: the rail's kind of list and its id. */
+/** movieQuery, for either tab: the rail's kind of list and its id. `null`
+ *  for Continue watching without a search: its list is the store's, so there
+ *  is nothing to ask the backend for. */
 export function vodQuery(
   kind: MovieRailKind,
   selection: string,
   sort: MovieSort,
   years: YearRange | null,
   search: string,
-): MovieQueryDto {
+): MovieQueryDto | null {
   const yearFrom = years?.from ?? null;
   const yearTo = years?.to ?? null;
   if (isTitleSearch(search)) {
     return { list: "all", categoryId: null, sort, yearFrom, yearTo, search: search.trim() };
   }
+  if (kind === "all") return null;
   return {
     list: kind,
     categoryId: kind === "category" ? selection : null,
@@ -158,6 +165,8 @@ export function movieTitle(
       return "Recently added";
     case "watched":
       return "Watched";
+    case "all":
+      return "Continue watching";
     default:
       return categories.find((c) => c.id === selection)?.name ?? "Movies";
   }

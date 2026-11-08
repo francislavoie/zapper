@@ -89,7 +89,7 @@ export function Toolbar() {
 
   const choose = (action: PaletteAction) => {
     closeMenu();
-    runAction(action.id, { dispatch, player: state.player, previous: state.previousChannel });
+    runAction(action.id, { dispatch, player: state.player, previous: state.previousChannel, state });
   };
 
   const max = maximiseLabel(maximised);

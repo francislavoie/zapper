@@ -24,6 +24,8 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
 - Up next plays a next episode you had started from where you left it.
 - Movies and episodes play in the browser through the recording service, converted on the fly when
   the browser can't play the file. Text subtitles included.
+- **Continue watching** (`W`), first in the Movies and Shows rails: what you stopped partway and
+  the next episode of each show you're following, with Remove from Continue watching.
 - Browsers signed in to the recording service share the app's Continue watching list.
 - A movie or episode left partway offers Resume and Start over, with the time left, in the details
   band, the movie sheet and the episode list.
