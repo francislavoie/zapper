@@ -2,7 +2,7 @@
 // palette, the guide and the chrome all fail the same way.
 
 import type { Dispatch } from "react";
-import { backend, backendKind, capabilities, signOut } from "./backend";
+import { backend, capabilities, signOut } from "./backend";
 import { toggleFullscreen } from "./fullscreen";
 import { errorMessage, failed, loading, ready } from "./logic/async";
 import { anchorFor, catchupMinutes } from "./logic/guide";
@@ -944,20 +944,14 @@ export async function deleteRecording(dispatch: Dispatch<Action>, rec: Recording
 }
 
 /** Answers the Resume question with Resume: the held title plays from where
- *  it stands, and the question goes. The browser's player has no explicit
- *  play command yet, so there a paused title is toggled. */
-export async function resumeHeld(dispatch: Dispatch<Action>, state: PlayerStateDto["state"]): Promise<void> {
+ *  it stands, and the question goes. */
+export async function resumeHeld(dispatch: Dispatch<Action>): Promise<void> {
   dispatch({ type: "continue/prompt", prompt: null });
-  await run(dispatch, "resume", playHeld(state));
+  await run(dispatch, "resume", backend.setPaused(false));
 }
 
 /** Answers it with Start over: back to 0:00, playing. */
-export async function startOverHeld(dispatch: Dispatch<Action>, state: PlayerStateDto["state"]): Promise<void> {
+export async function startOverHeld(dispatch: Dispatch<Action>): Promise<void> {
   dispatch({ type: "continue/prompt", prompt: null });
-  await run(dispatch, "start over", backend.seekTo(0).then(() => playHeld(state)));
+  await run(dispatch, "start over", backend.seekTo(0).then(() => backend.setPaused(false)));
 }
-
-const playHeld = async (state: PlayerStateDto["state"]): Promise<void> => {
-  if (backendKind !== "web") return backend.setPaused(false);
-  if (state === "paused") return backend.togglePause();
-};

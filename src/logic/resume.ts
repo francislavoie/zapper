@@ -5,6 +5,7 @@
 // src/__checks__/resume.test.mjs.
 
 import { calendarDate, clock, hhmm, runtime } from "./format.ts";
+import type { MarksDto } from "../types.ts";
 
 export const STARTED_FRACTION = 0.01;
 export const WATCHED_FRACTION = 0.92;
@@ -32,6 +33,30 @@ export function progressOf(t: Place): number | null {
 /** Where Resume starts, while the title is in progress. */
 export function resumePoint(t: Place): number | null {
   return progressOf(t) === null ? null : t.position;
+}
+
+/** Where Up next starts the next episode: where it was left while in
+ *  progress (`listedSecs`, the provider's length, when the player measured
+ *  none), else its beginning. */
+export function nextStart(marks: MarksDto | null, listedSecs: number | null): number {
+  if (!marks) return 0;
+  return resumePoint({ ...marks, durationSecs: listedSecs }) ?? 0;
+}
+
+/** Whether a film read again (after a break, a seek, another sound, its
+ *  viewer let go) plays once it is ready. Started, as the picture was:
+ *  playing, or run out of what it had (`ended`, which the element also calls
+ *  paused); with no element (`paused: null`), playing. Not started yet, as it
+ *  was asked to (`wantPlay`): a title held for the Resume question stays
+ *  paused behind it. */
+export function playsOnReopen(p: {
+  started: boolean;
+  paused: boolean | null;
+  ended: boolean;
+  wantPlay: boolean;
+}): boolean {
+  if (!p.started) return p.wantPlay;
+  return p.paused === null || !p.paused || p.ended;
 }
 
 /** "14m left", at least "1m left"; nothing when not in progress. */

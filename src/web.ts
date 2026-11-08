@@ -240,7 +240,7 @@ export const webBackend: typeof api = {
     await player.stop();
   },
   togglePause: () => (vod.active() ? vod.togglePause() : player.togglePause()),
-  setPaused: notHere,
+  setPaused: (paused) => (vod.active() ? vod.setPaused(paused) : player.setPaused(paused)),
   seekRelative: (seconds) =>
     vod.active() ? vod.seekRelative(seconds) : player.seekRelative(seconds),
   seekLive: () => (vod.active() ? Promise.resolve() : player.seekLive()),
@@ -295,7 +295,7 @@ export const webBackend: typeof api = {
   forgetActivity: (streamId) =>
     del<unknown>(`/api/favourites/${streamId}`).then(() => undefined),
 
-  playMovie: (movieId, start) => vod.playMovie(movieId, start),
+  playMovie: (movieId, start, held) => vod.playMovie(movieId, start, held),
   seekTo: (seconds) => vod.seekTo(seconds),
   moviesSummary: () => get<MoviesSummaryDto>("/api/vod/summary"),
   movieCategories: () => get<VodCategoryDto[]>("/api/vod/categories"),
@@ -320,7 +320,7 @@ export const webBackend: typeof api = {
 
   // Shows, as the movies are: pictures come as this service's addresses, and
   // an episode plays in the page as a movie does.
-  playEpisode: (episodeId, start) => vod.playEpisode(episodeId, start),
+  playEpisode: (episodeId, start, held) => vod.playEpisode(episodeId, start, held),
   playNextEpisode: (from, next) => vod.playNextEpisode(from, next),
   showsSummary: () => get<ShowsSummaryDto>("/api/vod/shows/summary"),
   seriesCategories: () => get<SeriesCategoryDto[]>("/api/vod/series/categories"),

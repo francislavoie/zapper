@@ -19,7 +19,6 @@ export function ResumeCard({ compact = false }: { compact?: boolean }) {
     if (shown && !compact) resumeBtn.current?.focus({ preventScroll: true });
   }, [shown, compact]);
   if (!prompt || !shown) return null;
-  const state = player.state;
   return (
     <div
       className={`resume-prompt ${compact ? "compact" : ""}`}
@@ -39,11 +38,11 @@ export function ResumeCard({ compact = false }: { compact?: boolean }) {
         <button
           ref={resumeBtn}
           className="ctl primary resume-prompt-resume"
-          onClick={() => void resumeHeld(dispatch, state)}
+          onClick={() => void resumeHeld(dispatch)}
         >
           ▶ {resumeLabel(prompt.position)}
         </button>
-        <button className="ctl resume-prompt-start" onClick={() => void startOverHeld(dispatch, state)}>
+        <button className="ctl resume-prompt-start" onClick={() => void startOverHeld(dispatch)}>
           ↺ Start over
         </button>
       </div>

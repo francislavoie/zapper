@@ -68,7 +68,15 @@ import {
   type VodItemRef,
   type VodMode,
 } from "./logic/webVod";
-import type { OnDemandDto, PlayerOptionsDto, StreamEnding, TrackDto } from "./types";
+import { nextStart, playsOnReopen } from "./logic/resume";
+import type {
+  MarksDto,
+  OnDemandDto,
+  PlayerOptionsDto,
+  PlayingEpisodeDto,
+  StreamEnding,
+  TrackDto,
+} from "./types";
 import {
   currentAspect,
   currentVideo,
@@ -287,24 +295,25 @@ async function watchRequest(
 
 /** Plays movie `movieId` from `start` seconds in (from its beginning with
  *  `null`). Resolves once the service has answered; what happens then comes
- *  through `playerFeed`, as with a channel. */
-export function playMovie(movieId: number, start: number | null): Promise<void> {
-  return playItem({ kind: "movie", id: movieId }, start);
+ *  through `playerFeed`, as with a channel. `held`: opened paused there, for
+ *  the Resume question, and paused from its open, so a long pause lets it go. */
+export function playMovie(movieId: number, start: number | null, held = false): Promise<void> {
+  return playItem({ kind: "movie", id: movieId }, start, held);
 }
 
 /** Plays episode `episodeId` from `start` seconds in, as `playMovie` does a
  *  movie. */
-export function playEpisode(episodeId: number, start: number | null): Promise<void> {
-  return playItem({ kind: "episode", id: episodeId }, start);
+export function playEpisode(episodeId: number, start: number | null, held = false): Promise<void> {
+  return playItem({ kind: "episode", id: episodeId }, start, held);
 }
 
-function playItem(item: VodItemRef, start: number | null): Promise<void> {
+function playItem(item: VodItemRef, start: number | null, held: boolean): Promise<void> {
   return watch(item, Math.max(0, start ?? 0), {
     audio: null,
     subtitle: null,
     preferred: true,
     duration: null,
-    wantPlay: true,
+    wantPlay: !held,
   });
 }
 
@@ -462,7 +471,9 @@ async function openReading(s: Session, from: number, wantPlay: boolean) {
   s.started = false;
   s.wantPlay = wantPlay;
   s.openedAt = Date.now();
-  s.pausedAt = null;
+  // Opened paused (held for the Resume question, or sought while paused):
+  // paused from now, so a long pause lets it go.
+  s.pausedAt = wantPlay ? null : Date.now();
   s.moved = null;
   resetCues(s);
   patch({ state: "opening" });
@@ -578,7 +589,7 @@ function startWhenReady(s: Session, el: HTMLVideoElement) {
   if (!ready && !(waited > 8000 && ahead > 0.5)) return;
   s.started = true;
   if (!s.wantPlay) {
-    s.pausedAt = Date.now();
+    s.pausedAt ??= Date.now();
     patch({ state: "paused" });
     return;
   }
@@ -657,8 +668,17 @@ async function broke(s: Session, reading: number) {
   // An element that ran out of the stream (`ended`) says it is paused, but
   // was playing: it plays on when opened again, and a stream that keeps
   // stopping short ends in the failure above rather than a quiet pause.
-  await openReading(s, s.position, el ? !el.paused || el.ended || !s.started : true);
+  await openReading(s, s.position, playsAgain(s, el));
 }
+
+/** Whether the film plays once read again (logic/resume.ts `playsOnReopen`). */
+const playsAgain = (s: Session, el: HTMLVideoElement | null): boolean =>
+  playsOnReopen({
+    started: s.started,
+    paused: el ? el.paused : null,
+    ended: el?.ended ?? false,
+    wantPlay: s.wantPlay,
+  });
 
 const endedBy = (kind: StreamEnding["kind"]): StreamEnding => ({
   kind,
@@ -735,7 +755,8 @@ export async function stop(): Promise<void> {
 }
 
 /** Up next: moves on from episode `from`, playing or just played to its
- *  end, to episode `next` from its start, in the languages `from` was in.
+ *  end, to episode `next` from where it was left while in progress
+ *  (`nextStart`), else from its start, in the languages `from` was in.
  *  `from` is marked watched first. The next one's viewer replaces the old
  *  one's, so one connection serves both. It opens playing, even when `from`
  *  was paused, as the app's player does. Refused unless `from` is still what
@@ -752,6 +773,8 @@ export async function playNextEpisode(from: number, next: number): Promise<void>
   const refused = new Error("That episode is no longer the one playing.");
   if (!upNextAllowed(subject(), from)) throw refused;
   const carry = s ? languagesOf(s) : (finishedLanguages ?? { audio: null });
+  // Where the next one was left is read while `from` is marked.
+  const starting = nextEpisodeStart(next);
   try {
     const r = await fetch(`/api/vod/episodes/${from}/marks`, requestInit("PUT", { watched: true }));
     if (r.status === 401) signedOutNow();
@@ -763,9 +786,10 @@ export async function playNextEpisode(from: number, next: number): Promise<void>
   } catch {
     console.warn("Up next: the episode moved on from could not be marked watched");
   }
+  const start = await starting;
   // Stopped, or something else played, while it was being marked.
   if (session !== s || !upNextAllowed(subject(), from)) throw refused;
-  await watch({ kind: "episode", id: next }, 0, {
+  await watch({ kind: "episode", id: next }, start, {
     audio: null,
     subtitle: null,
     preferred: true,
@@ -773,6 +797,31 @@ export async function playNextEpisode(from: number, next: number): Promise<void>
     wantPlay: true,
     carry,
   });
+}
+
+/** How long Up next waits to hear where the next episode was left before
+ *  starting it from its beginning. */
+const NEXT_PLACE_WAIT_MS = 3000;
+
+/** Where episode `id` was left, with its listed length for one the player
+ *  never measured; its beginning when its marks cannot be read, or not
+ *  within `NEXT_PLACE_WAIT_MS`. */
+async function nextEpisodeStart(id: number): Promise<number> {
+  const signal = AbortSignal.timeout(NEXT_PLACE_WAIT_MS);
+  const read = async <T>(path: string): Promise<T | null> => {
+    try {
+      const r = await fetch(path, { ...requestInit("GET"), signal });
+      if (r.status === 401) signedOutNow();
+      return r.ok ? ((await r.json()) as T) : null;
+    } catch {
+      return null;
+    }
+  };
+  const [marks, listed] = await Promise.all([
+    read<MarksDto>(`/api/vod/episodes/${id}/marks`),
+    read<PlayingEpisodeDto>(`/api/vod/episodes/${id}`),
+  ]);
+  return nextStart(marks, listed?.episode.durationSecs ?? null);
 }
 
 /** Lets the service's viewer go. `keepalive`: sent even as the page goes. */
@@ -819,7 +868,7 @@ async function rewatch(s: Session) {
     subtitle: s.subtitle,
     shown: s.subtitlesShown,
     duration: s.duration,
-    wantPlay: el ? !el.paused || !s.started : true,
+    wantPlay: playsAgain(s, el),
   });
 }
 
@@ -974,7 +1023,17 @@ export async function togglePause(): Promise<void> {
   const s = session;
   const el = currentVideo();
   if (!s || !el) return;
+  await setPaused(!(s.released || (s.started ? el.paused : !s.wantPlay)));
+}
+
+/** Pauses the film or plays it, as asked; nothing when it already is. One
+ *  let go after a long pause is watched anew from its place to play. */
+export async function setPaused(paused: boolean): Promise<void> {
+  const s = session;
+  const el = currentVideo();
+  if (!s || !el) return;
   if (s.released) {
+    if (paused) return;
     await watch(s.item, s.position, {
       audio: s.audioIndex,
       subtitle: s.subtitle,
@@ -985,11 +1044,14 @@ export async function togglePause(): Promise<void> {
     return;
   }
   if (!s.started) {
-    s.wantPlay = !s.wantPlay;
+    s.wantPlay = !paused;
     return;
   }
-  if (el.paused) await el.play().catch(() => {});
-  else el.pause();
+  if (paused) {
+    if (!el.paused) el.pause();
+  } else if (el.paused) {
+    await el.play().catch(() => {});
+  }
 }
 
 /** Goes to `seconds` into the film: within what the element holds, or by
@@ -1016,7 +1078,7 @@ export async function seekTo(seconds: number): Promise<void> {
     showPlace(s, null);
     return;
   }
-  await openReading(s, plan.from, s.started ? !el.paused : s.wantPlay);
+  await openReading(s, plan.from, playsAgain(s, el));
 }
 
 export function seekRelative(by: number): Promise<void> {
@@ -1072,7 +1134,7 @@ export async function setAudioTrack(id: number): Promise<PlayerOptionsDto> {
   if (!s || !el) return optionsFeed.last;
   const index = id - 1;
   if (index === s.audioIndex || index < 0 || index >= s.tracks.length) return optionsFeed.last;
-  const playing = s.started ? !el.paused : s.wantPlay;
+  const playing = playsAgain(s, el);
   if (s.mode === "direct" || s.released) {
     await watch(s.item, s.position, {
       audio: index,

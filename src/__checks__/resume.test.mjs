@@ -5,6 +5,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { setTimeFormat } from "../logic/format.ts";
 import {
+  nextStart,
+  playsOnReopen,
   progressOf,
   promptLine,
   promptStep,
@@ -128,4 +130,27 @@ test("a question is seen for its own prompt only", () => {
   const seen = seenFor(a, true, c);
   assert.deepEqual(promptStep(c, seen, at("paused", 1)), { shown: false, seen: false, clear: false });
   assert.deepEqual(promptStep(c, seen, at("opening", 3)), { shown: true, seen: true, clear: false });
+});
+
+test("the next episode starts where it was left, while in progress", () => {
+  const marks = (o = {}) => ({ id: 8, favourite: false, watched: false, position: 60, duration: 120, playedAt: 1, ...o });
+  assert.equal(nextStart(marks(), null), 60);
+  assert.equal(nextStart(marks({ watched: true }), null), 0);
+  assert.equal(nextStart(null, null), 0);
+  assert.equal(nextStart(marks({ position: 0.5 }), null), 0);           // under 1 %
+  assert.equal(nextStart(marks({ duration: null }), 120), 60);           // the listed length
+  assert.equal(nextStart(marks({ duration: null }), null), 0);           // no length known
+});
+
+test("a reading opened again plays as the picture did, and a held title stays paused", () => {
+  const at = (o) => ({ started: true, paused: false, ended: false, wantPlay: true, ...o });
+  // Held for the question, before its first frame: it stays paused.
+  assert.equal(playsOnReopen(at({ started: false, paused: true, wantPlay: false })), false);
+  assert.equal(playsOnReopen(at({ started: false, paused: null, wantPlay: false })), false);
+  // Not started yet, asked to play: plays.
+  assert.equal(playsOnReopen(at({ started: false, paused: true, wantPlay: true })), true);
+  assert.equal(playsOnReopen(at({})), true);                                       // playing
+  assert.equal(playsOnReopen(at({ paused: true, wantPlay: true })), false);        // paused
+  assert.equal(playsOnReopen(at({ paused: true, ended: true, wantPlay: false })), true); // ran out
+  assert.equal(playsOnReopen(at({ paused: null, wantPlay: false })), true);        // no element
 });

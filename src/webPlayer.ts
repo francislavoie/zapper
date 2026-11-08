@@ -621,6 +621,14 @@ export async function togglePause(): Promise<void> {
   }
 }
 
+/** Pauses the channel or plays it, as asked; nothing when it already is. */
+export async function setPaused(paused: boolean): Promise<void> {
+  const s = session;
+  const el = video;
+  if (!s || !el) return;
+  if ((s.suspended || el.paused) !== paused) await togglePause();
+}
+
 export async function seekRelative(seconds: number): Promise<void> {
   const s = session;
   const el = video;
