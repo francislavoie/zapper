@@ -12,7 +12,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { backend } from "../backend";
 import { errorMessage, failed, loading, ready, type Async } from "../logic/async";
 import { clampSettings, planSave } from "../logic/settings";
-import { trackSave } from "../quit";
+import { onPageHide, trackSave } from "../quit";
 import { useApp, useDispatch } from "../store";
 import type { SettingsDto, SubtitleStyleDto } from "../types";
 
@@ -117,9 +117,9 @@ export function useSettings(loadOnMount = false): SettingsControl {
         flush();
       }
     };
-    window.addEventListener("pagehide", flushPending);
+    const off = onPageHide(flushPending);
     return () => {
-      window.removeEventListener("pagehide", flushPending);
+      off();
       flushPending();
     };
   }, [flush, loadOnMount, reload]);
