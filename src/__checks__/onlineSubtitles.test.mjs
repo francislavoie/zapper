@@ -158,3 +158,39 @@ test("findHeading", () => {
   );
   assert.equal(findHeading(null, null), "");
 });
+
+// ---- the finder's state (src/onlineSubtitles.ts)
+import {
+  clearKept, closeFindSubtitles, currentFind, keptChanged, keptFor, loadKept, openFindSubtitles,
+  setKeptSource,
+} from "../onlineSubtitles.ts";
+
+test("the finder opens on a title and closes", () => {
+  assert.equal(currentFind(), null);
+  openFindSubtitles({ kind: "movie", id: 7 });
+  assert.deepEqual(currentFind(), { kind: "movie", id: 7 });
+  closeFindSubtitles();
+  assert.equal(currentFind(), null);
+});
+test("the kept cache is keyed by kind and id, and kept for 20 titles", async () => {
+  clearKept();
+  const calls = [];
+  setKeptSource(async (kind, id) => {
+    calls.push(`${kind}:${id}`);
+    return [{ fileId: id, language: "en", release: kind, hearingImpaired: false, downloadedAt: 1 }];
+  });
+  await loadKept({ kind: "movie", id: 7 });
+  await loadKept({ kind: "episode", id: 7 });
+  await loadKept({ kind: "movie", id: 7 });
+  assert.deepEqual(calls, ["movie:7", "episode:7"]);
+  assert.equal(keptFor({ kind: "movie", id: 7 })[0].release, "movie");
+  assert.equal(keptFor({ kind: "episode", id: 7 })[0].release, "episode");
+  keptChanged({ kind: "movie", id: 7 });
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(calls.length, 3);
+  for (let i = 100; i < 120; i++) await loadKept({ kind: "movie", id: i });
+  assert.equal(keptFor({ kind: "movie", id: 7 }), undefined);
+  assert.ok(keptFor({ kind: "movie", id: 119 }));
+  setKeptSource();
+  clearKept();
+});
