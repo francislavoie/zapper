@@ -470,6 +470,11 @@ Posters and backdrops reach the page through the service (`/api/poster/movie/{id
 `/api/backdrop/movie/{id}/{n}`), fetched like a channel's logo, so the provider's address and login
 never reach a browser; the film itself is named by the viewer the page was given.
 
+**Continue watching.** The list and the places belong to the service: browsers signed in to it
+and the app on its computer show the same one (`/api/vod/continue`, below), built from the
+catalogue without asking the provider. Opening an entry plays nothing until Play, Resume or Start
+over; a held open is one connection, and Resume and Start over are a pause and a seek on it.
+
 ### Recording what you watch
 
 **Record from the player.** Right-click the picture and choose **Record “…”**, use the **Record**

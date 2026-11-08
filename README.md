@@ -83,6 +83,7 @@ The short list; [docs/features.md](docs/features.md) has how each part behaves.
 - libmpv with hardware decoding and HDR tone-mapping.
 - A live rewind buffer, and catch-up where the source has an archive.
 - Movies and episodes with a seek bar, resume, and watched past 92 %.
+- **Continue watching** (`W`): resume movies and shows where you left off, in the app and the browser.
 - **Up next**: a countdown into the next episode, keeping your audio and subtitle languages.
 - `P` for the previous channel; type a number to tune.
 - Volume to 200 %, a compressor, track choice, aspect ratio, deinterlacing and a sleep timer.
