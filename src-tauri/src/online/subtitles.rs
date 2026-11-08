@@ -117,10 +117,57 @@ fn year_word(w: &str) -> Option<i32> {
     (1900..=2100).contains(&y).then_some(y)
 }
 
-/// The name searched for, lower-case, without a trailing year (which
-/// becomes the year when none is known); `None` when nothing is left.
+/// Whether `code` is a provider's language label: upper-case codes of two
+/// or three letters (`EN`, `PT-BR`), alone or joined with `/` (`FR/EN`).
+fn language_label(code: &str) -> bool {
+    let upper = |s: &str| s.bytes().all(|b| b.is_ascii_uppercase());
+    !code.is_empty()
+        && code.split('/').all(|part| match part.split_once('-') {
+            None => (2..=3).contains(&part.len()) && upper(part),
+            Some((lang, region)) => {
+                lang.len() == 2 && region.len() == 2 && upper(lang) && upper(region)
+            }
+        })
+}
+
+/// `name` without the language label a provider puts before it
+/// (`EN - Film 0001`, `FR/EN: Film 0001`), which [`crate::catalog::clean_name`]
+/// keeps; unchanged when there is no label, or nothing after it.
+fn without_language_label(name: &str) -> &str {
+    let name = name.trim_start();
+    let end = name
+        .find(|c: char| !(c.is_ascii_alphabetic() || c == '/' || c == '-'))
+        .unwrap_or(name.len());
+    let (code, rest) = name.split_at(end);
+    if !language_label(code) {
+        return name;
+    }
+    let after = if let Some(r) = rest.strip_prefix(':') {
+        r
+    } else {
+        let r = rest.trim_start();
+        let dashed = r.strip_prefix('-').or_else(|| r.strip_prefix('–'));
+        match dashed {
+            Some(d)
+                if rest.starts_with(char::is_whitespace) && d.starts_with(char::is_whitespace) =>
+            {
+                d
+            }
+            _ => return name,
+        }
+    };
+    if after.chars().any(char::is_alphanumeric) {
+        after.trim_start()
+    } else {
+        name
+    }
+}
+
+/// The name searched for, lower-case, without a provider's language label
+/// before it and a trailing year (which becomes the year when none is
+/// known); `None` when nothing is left.
 fn searchable_name(name: &str, year: Option<i32>) -> Option<(String, Option<i32>)> {
-    let mut words: Vec<&str> = name.split_whitespace().collect();
+    let mut words: Vec<&str> = without_language_label(name).split_whitespace().collect();
     let mut year = year;
     if words.len() > 1 {
         if let Some(y) = words.last().and_then(|w| year_word(w)) {
@@ -205,10 +252,14 @@ pub fn rank(
         .filter(|f| !f.translated && fits(f, s) && seen.insert(f.file_id))
         .filter_map(|f| {
             let language = f.language.trim().to_ascii_lowercase();
+            // A language asked for without a region takes every region's.
+            let primary = language.split('-').next().unwrap_or_default();
             let place = if wanted.is_empty() {
                 Some(0)
             } else {
-                wanted.iter().position(|w| *w == language)
+                wanted
+                    .iter()
+                    .position(|w| *w == language || (!w.contains('-') && w == primary))
             };
             place.map(|p| (p, Found { language, ..f }))
         })
@@ -1147,6 +1198,28 @@ mod tests {
                 year: Some(2019)
             }
         );
+        // A provider's language label is not part of the name.
+        let query = |name: &str| {
+            let mut s = subject_of(VodItem::movie(FILM_2));
+            s.name = name.into();
+            match search_plan(&s, &en()).pop().map(|(p, _)| p.lookup) {
+                Some(Lookup::Name { query, .. }) => query,
+                other => panic!("{other:?}"),
+            }
+        };
+        assert_eq!(query("EN - Film 0001"), "film 0001");
+        assert_eq!(query("FR/EN - Film 0001"), "film 0001");
+        assert_eq!(query("PT-BR - Film 0001"), "film 0001");
+        assert_eq!(query("EN: Film 0001"), "film 0001");
+        assert_eq!(query("Garden - Lantern"), "garden - lantern");
+        assert_eq!(
+            query("Up - Film 0001"),
+            "up - film 0001",
+            "a word, not a label"
+        );
+        assert_eq!(query("EN-Film 0001"), "en-film 0001");
+        assert_eq!(query("EN - "), "en", "nothing after the label");
+
         // Nothing to go by.
         s.name = " - ".into();
         assert!(search_plan(&s, &en()).is_empty());
@@ -1254,6 +1327,18 @@ mod tests {
         // At most RESULTS_MAX.
         let many: Vec<Found> = (0..80).map(|n| found(n, "en", ep(1, 2))).collect();
         assert_eq!(rank(many, &s, &en(), &HashSet::new()).len(), RESULTS_MAX);
+
+        // A language without a region takes its regions; one with, only it.
+        let pt = vec![found(1, "pt-BR", ep(1, 2)), found(2, "pt-PT", ep(1, 2))];
+        assert_eq!(
+            rank(pt.clone(), &s, &["pt".into()], &HashSet::new()).len(),
+            2
+        );
+        let ids: Vec<i64> = rank(pt, &s, &["pt-br".into()], &HashSet::new())
+            .iter()
+            .map(|r| r.file_id)
+            .collect();
+        assert_eq!(ids, [1]);
     }
 
     #[test]
