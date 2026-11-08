@@ -31,9 +31,10 @@ export function usePagedRows<T>(
   shared?: PageBook<T>,
 ): PagedRows<T> {
   const [, bump] = useReducer((n: number) => n + 1, 0);
-  const held = useRef<PageBook<T> | null>(null);
-  held.current ??= shared ?? new PageBook<T>();
-  const book = held.current;
+  const own = useRef<PageBook<T> | null>(null);
+  // The shared one as given now: a list that becomes another (Continue
+  // watching into the tab's search, in one place) changes cache with it.
+  const book = shared ?? (own.current ??= new PageBook<T>());
   // The reset happens during render, so another list never shows the last
   // one's rows for a frame, and a refresh does not fetch into a cache that
   // is about to be thrown away.

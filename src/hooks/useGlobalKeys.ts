@@ -27,7 +27,7 @@ import {
   type NavHistory,
   type Place,
 } from "../logic/navHistory";
-import { playNextEpisode, playPrevious, recordFromPlayer, resumeHeld, runAction } from "../actions";
+import { goToContinue, playNextEpisode, playPrevious, recordFromPlayer, resumeHeld, runAction } from "../actions";
 import { focusSearch, typingInto } from "../focus";
 import { exitFullscreen, toggleFullscreen } from "../fullscreen";
 import { fullscreenNow, refreshFullscreen } from "./useFullscreen";
@@ -35,7 +35,7 @@ import { useSubtitles } from "./useSubtitles";
 import { blocksPlainKey, shortcutModifier } from "../logic/keys";
 import { moviesAvailable, playingKind } from "../logic/movies";
 import { showsAvailable } from "../logic/shows";
-import { ALL_CATEGORIES, railItemKind } from "../logic/railItems";
+import { ALL_CATEGORIES, CONTINUE, railItemKind } from "../logic/railItems";
 import { playerRecord } from "../logic/recordings";
 import { upNextTakesEnter, type UpNext } from "../logic/upNext";
 import { VOD_SKIP_SECONDS, isOnDemandKind } from "../logic/vodTransport";
@@ -170,6 +170,7 @@ export function useGlobalKeys(
         categoryOptions: state.categoryOptions !== null,
         moviesMenu: state.movies.menu !== null,
         showsMenu: state.shows.menu !== null,
+        continueMenu: state.continue.menu !== null,
         videoMenu: state.videoMenu !== null,
         menuOpen: state.menuOpen,
         aboutOpen: state.aboutOpen,
@@ -192,7 +193,9 @@ export function useGlobalKeys(
           state.section === "shows" &&
           state.shows.paneOpen &&
           state.shows.selected !== null &&
-          showsAvailable(state.shows.summary),
+          showsAvailable(state.shows.summary) &&
+          // Continue watching's list opens no pane (ShowsList).
+          !(state.shows.selection === CONTINUE && state.shows.query.trim() === ""),
         // Only in the full player: docked, Escape is the list's.
         resumePrompt: promptShown && state.mode === "watch" && !stacked,
         upNextCard: card !== null,
@@ -234,6 +237,9 @@ export function useGlobalKeys(
             break;
           case "showsMenu":
             dispatch({ type: "shows/menu", menu: null });
+            break;
+          case "continueMenu":
+            dispatch({ type: "continue/menu", menu: null });
             break;
           case "videoMenu":
             // A submenu inside it that has focus closes itself first on
@@ -450,6 +456,18 @@ export function useGlobalKeys(
         if ((e.key === "n" || e.key === "N") && capabilities.onDemand && showsAvailable(state.shows.summary)) {
           e.preventDefault();
           dispatch({ type: "section", section: "shows" });
+          return;
+        }
+
+        // Continue watching: on the tab showing if Movies or Shows, else on
+        // the one there is (goToContinue). Choosing it plays nothing.
+        if (
+          (e.key === "w" || e.key === "W") &&
+          capabilities.onDemand &&
+          (moviesAvailable(state.movies.summary) || showsAvailable(state.shows.summary))
+        ) {
+          e.preventDefault();
+          goToContinue(dispatch, state);
           return;
         }
 

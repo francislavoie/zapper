@@ -47,6 +47,7 @@ export const SHORTCUT_GROUPS: readonly ShortcutGroup[] = [
       { keys: [["/"]], does: "Search channels" },
       { keys: [["M"]], does: "Go to Movies", needs: "onDemand" },
       { keys: [["N"]], does: "Go to Shows", needs: "onDemand" },
+      { keys: [["W"]], does: "Continue watching", needs: "onDemand" },
       { keys: [["G"]], does: "Switch between the list and the guide" },
       { keys: [["S"]], does: "Stats for nerds", needs: "mpv" },
       { keys: [["P"]], does: "Previous channel; again to come back", needs: "playback" },

@@ -8092,3 +8092,100 @@ html[data-backend="web"] {
   padding: 0.125rem 0.4375rem;
   font-size: 0.6875rem;
 }
+
+/* ---------------------------------------------------- Continue watching */
+
+/* The order a list keeps, said where the other lists have their sort and
+   years menus. */
+.list-order {
+  flex: 0 0 auto;
+  font-size: 0.75rem;
+  color: var(--dimmer);
+  white-space: nowrap;
+}
+
+/* An entry's row: the movie row's columns, then how far along it is and
+   when it was last watched. */
+.cw-cols,
+.cw-row {
+  --list-cols: 1.625rem minmax(0, 1fr) 3.5rem 4.5rem 4rem 9.5rem 5.5rem;
+}
+
+.cw-cols > :nth-child(3),
+.cw-cols > :nth-child(4),
+.cw-cols > :nth-child(5),
+.cw-row-fig {
+  text-align: right;
+}
+
+.cw-row-fig,
+.cw-row-progress,
+.cw-row-when {
+  font-size: 0.75rem;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.cw-row-code {
+  font-variant-numeric: tabular-nums;
+}
+
+.cw-row-progress {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.cw-row-bar {
+  flex: 0 0 auto;
+  width: 4.375rem;
+  height: 0.25rem;
+  border-radius: 0.125rem;
+  background: var(--track);
+  overflow: hidden;
+}
+
+.cw-row-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+.cw-row-left,
+.cw-row-when {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cw-row-left.dim,
+.cw-row-when {
+  color: var(--dimmer);
+}
+
+/* A narrow list keeps the title and how far along: the length and the
+   rating go first. */
+@container list (max-width: 40rem) {
+  .cw-cols,
+  .cw-row {
+    --list-cols: 1.625rem minmax(0, 1fr) 3.5rem 8rem 4.5rem;
+  }
+
+  .cw-cols > :nth-child(4),
+  .cw-cols > :nth-child(5),
+  .cw-row > :nth-child(4),
+  .cw-row > :nth-child(5) {
+    display: none;
+  }
+
+  .cw-row-bar {
+    width: 2.5rem;
+  }
+}
+
+/* The entry the player has open. */
+.cw-row.playing .row-name-text {
+  color: var(--accent);
+}

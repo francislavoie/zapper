@@ -54,6 +54,7 @@ import { saveStacked } from "./stacked";
 import { saveCategoryHidden, saveCategoryPins, saveCategorySort } from "./categoryPrefs";
 import { AboutModal } from "./components/AboutModal";
 import { ProgrammeMenu } from "./components/ProgrammeMenu";
+import { ContinueMenu } from "./components/ContinueMenu";
 import { MoviesList } from "./components/MoviesList";
 import { MovieSheet } from "./components/MovieSheet";
 import { MoviesRail } from "./components/MoviesRail";
@@ -801,6 +802,9 @@ export function App() {
         <RecordingsWatcher />
       </Boundary>
       <Boundary what="Updates">{state.updateOpen ? <UpdateModal /> : null}</Boundary>
+      <Boundary what="Continue watching">
+        <ContinueMenu />
+      </Boundary>
 
       {/* While browsing, a channel number being typed floats over the views;
           while watching it is in the picture's corner (PictureCorner). */}

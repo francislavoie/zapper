@@ -137,6 +137,9 @@ export interface ActionContext {
   /** What Record from the player would do (logic/recordings.ts
    *  `playerRecord`), where Record can be chosen. */
   record?: PlayerRecord | null;
+  /** The store, for an action that goes where it is (Continue watching:
+   *  the tab showing, else the one there is). */
+  state?: State;
 }
 
 /** One behaviour per action id. `Record<ActionId, …>` makes the compiler
@@ -175,6 +178,9 @@ const HANDLERS: Record<ActionId, (ctx: ActionContext) => void> = {
   movies: ({ dispatch }) => dispatch({ type: "section", section: "movies" }),
   shows: ({ dispatch }) => dispatch({ type: "section", section: "shows" }),
   liveTv: ({ dispatch }) => dispatch({ type: "section", section: "live" }),
+  continue: ({ dispatch, state }) => {
+    if (state) goToContinue(dispatch, state);
+  },
   settings: ({ dispatch }) => dispatch({ type: "settings", open: true }),
   updates: ({ dispatch }) => {
     dispatch({ type: "updateDialog", open: true });
