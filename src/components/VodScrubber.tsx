@@ -106,7 +106,7 @@ export function VodScrubber({ onDemand, compact = false, onPin, hintWithin }: Vo
   const played = drag ?? playedFraction(onDemand);
   const target = shown === null || !known ? null : seekTarget(shown, duration);
   const hint = target === null ? null : vodTimes(target, null).elapsed;
-  const preview = useTitleThumbnail(target, duration);
+  const preview = useTitleThumbnail(`${onDemand.kind}:${onDemand.id}`, target, duration);
 
   // Measured before paint, as Scrubber does: the card is a picture wide
   // with one and a time wide without, and is never seen unclamped first.

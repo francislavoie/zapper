@@ -218,7 +218,8 @@ let finishedLanguages: Languages | null = null;
 
 /** The seek bar's previews of the title, by slot (logic/trickplay.ts): a
  *  small copy of the picture as it played, about every ten seconds of the
- *  title. Kept while the same title is watched again, dropped for another.
+ *  title. Kept while the same title is watched again, dropped for another
+ *  and on Stop.
  *  `blocked` once the page may not read the picture back (a file the
  *  browser fetched from elsewhere), so it is not asked again. */
 /** The frames are `blob:` addresses of small JPEGs, which the service's
@@ -232,13 +233,19 @@ let previews: {
   taking: boolean;
 } | null = null;
 
+/** Lets the previews go: Stop, as the app does. */
+function dropPreviews() {
+  for (const url of previews?.frames.values() ?? []) URL.revokeObjectURL(url);
+  previews = null;
+}
+
 /** Takes the playing picture's preview for its slot, when one is due. Off
  *  screen: the canvas is never in the page, so nothing is drawn over the
  *  picture. */
 function keepPlayedFrame(s: Session, el: HTMLVideoElement) {
   if (el.readyState < 2 || el.videoWidth <= 0 || el.videoHeight <= 0) return;
   if (!previews || !sameItem(previews.item, s.item)) {
-    for (const url of previews?.frames.values() ?? []) URL.revokeObjectURL(url);
+    dropPreviews();
     previews = { item: s.item, frames: new Map(), blocked: false, taking: false };
   }
   const kept = previews;
@@ -877,6 +884,7 @@ export async function stop(): Promise<void> {
   lastFailure = null;
   finished = null;
   finishedLanguages = null;
+  dropPreviews();
   const viewer = leave();
   if (viewer) await forget(viewer);
 }
