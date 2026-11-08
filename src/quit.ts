@@ -4,7 +4,8 @@
 // page to say goodbye through `window.__zapperQuit`, waits for the promise,
 // and only then ends the page's process (src-tauri/src/surface/linux). So the
 // goodbye has to cover everything that would otherwise be lost: `pagehide`
-// for whatever saves on it (the session, a debounced settings change), and
+// for whatever saves on it (the session, a debounced settings or recording
+// settings change), and
 // the saves already on their way to the backend, which are calls across the
 // IPC bridge that the process must outlive.
 
@@ -18,6 +19,15 @@ export function trackSave<T>(save: Promise<T>): Promise<T> {
   const done = () => pending.delete(save);
   save.then(done, done);
   return save;
+}
+
+/** Runs `flush` when the page hides, the quit's goodbye included; returns
+ *  the unsubscribe. For a debounced save: `flush` sends what is waiting, and
+ *  sends it through `trackSave` so the quit waits for the answer. */
+export function onPageHide(flush: () => void): () => void {
+  if (typeof window === "undefined") return () => {};
+  window.addEventListener("pagehide", flush);
+  return () => window.removeEventListener("pagehide", flush);
 }
 
 declare global {

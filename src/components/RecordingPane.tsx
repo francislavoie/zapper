@@ -26,6 +26,7 @@ import {
 } from "../logic/recordings";
 import { DEFAULT_SETTINGS, STREAMS_MAX, STREAMS_MIN } from "../logic/settings";
 import type { SettingsControl } from "../hooks/useSettings";
+import { onPageHide, trackSave } from "../quit";
 import { useDispatch } from "../store";
 import type {
   RecordingSettingsDto,
@@ -95,7 +96,8 @@ export function RecordingPane({ s }: { s: SettingsControl }) {
     const next = pending.current;
     if (!next) return;
     try {
-      const saved = await backend.setRecordingSettings(next);
+      // Tracked so that quitting waits for the service's answer.
+      const saved = await trackSave(backend.setRecordingSettings(next));
       if (pending.current === next) {
         pending.current = null;
         setSettings(saved);
@@ -108,14 +110,20 @@ export function RecordingPane({ s }: { s: SettingsControl }) {
     }
   }, [load]);
 
-  // A page closed with a change still waiting sends it on the way out.
-  useEffect(
-    () => () => {
+  // A page closed, or the app quit, with a change still waiting sends it on
+  // the way out. Quitting does not unmount the pane, only hides the page.
+  useEffect(() => {
+    const flushPending = () => {
       if (timer.current) clearTimeout(timer.current);
+      timer.current = null;
       void flush();
-    },
-    [flush],
-  );
+    };
+    const off = onPageHide(flushPending);
+    return () => {
+      off();
+      flushPending();
+    };
+  }, [flush]);
 
   const patch = (p: Partial<RecordingSettingsDto>) => {
     if (!settings) return;
