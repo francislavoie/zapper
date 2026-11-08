@@ -10,6 +10,8 @@ import {
   downloadNotice,
   downloadTrackTitle,
   findHeading,
+  isSignedIn,
+  signInLine,
   offeredDownloads,
   resultLine,
   searchLanguages,
@@ -17,7 +19,7 @@ import {
   toSearchLanguage,
   trackLanguage,
 } from "../logic/onlineSubtitles.ts";
-import { dateTime, setTimeFormat } from "../logic/format.ts";
+import { dateTime, hhmm, setTimeFormat } from "../logic/format.ts";
 
 const at = (h, m, day = 4) => new Date(2027, 2, day, h, m).getTime() / 1000;
 const NOW = at(12, 0);
@@ -246,4 +248,52 @@ test("a settings read still in flight does not overwrite a newer answer", async 
   await load;
   assert.equal(currentServices().data.openSubtitles.signedInAs, "tester");
   setServicesSource();
+});
+
+// ---- Settings › Online services: the sign-in line
+
+const status = (over) => ({
+  enabled: true,
+  languages: [],
+  signedInAs: "tester",
+  signInRefused: false,
+  downloadsLeft: null,
+  downloadsResetAt: null,
+  ...over,
+});
+
+test("the sign-in line counts what is left, in the singular for one", () => {
+  const now = at(9, 0);
+  assert.equal(signInLine(status({}), now), "Signed in as tester");
+  assert.equal(
+    signInLine(status({ downloadsLeft: 17 }), now),
+    "Signed in as tester · 17 downloads left today",
+  );
+  assert.equal(
+    signInLine(status({ downloadsLeft: 1 }), now),
+    "Signed in as tester · 1 download left today",
+  );
+});
+
+test("with none left, the line says when there will be more", () => {
+  setTimeFormat("24h");
+  const now = at(9, 0);
+  assert.equal(
+    signInLine(status({ downloadsLeft: 0, downloadsResetAt: at(18, 30) }), now),
+    `Signed in as tester · no downloads left until ${hhmm(at(18, 30))}`,
+  );
+  assert.equal(
+    signInLine(status({ downloadsLeft: 0, downloadsResetAt: at(18, 30, 5) }), now),
+    `Signed in as tester · no downloads left until ${dateTime(at(18, 30, 5))}`,
+  );
+  assert.equal(
+    signInLine(status({ downloadsLeft: 0 }), now),
+    "Signed in as tester · no downloads left today",
+  );
+});
+
+test("a sign-in OpenSubtitles refused is not a sign-in, whoever it names", () => {
+  assert.equal(isSignedIn(status({})), true);
+  assert.equal(isSignedIn(status({ signInRefused: true })), false);
+  assert.equal(isSignedIn(status({ signedInAs: null })), false);
 });

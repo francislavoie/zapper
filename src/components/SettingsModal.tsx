@@ -8,7 +8,6 @@
 
 import { useEffect, useRef, useState } from "react";
 import { backend, capabilities } from "../backend";
-import { OnlineServicesPane } from "./OnlineServicesPane";
 import { settingsSections, type SettingsSection } from "../logic/capabilities";
 import { useSettings, type SettingsControl } from "../hooks/useSettings";
 import { clampVolume, dateTime, duration, hhmm, systemUses12h, uses12h } from "../logic/format";
@@ -46,6 +45,7 @@ import { AboutPane } from "./AboutPane";
 import { AccountPane } from "./AccountPane";
 import { ConnectionsPane } from "./ConnectionsPane";
 import { BackupPane } from "./BackupPane";
+import { OnlineServicesPane } from "./OnlineServicesPane";
 import { RecordingPane } from "./RecordingPane";
 import { RangeField, Segmented, SettingRow, SettingsGroup, SettingsPage } from "./SettingsParts";
 import { Switch } from "./Switch";
