@@ -56,22 +56,52 @@ pub fn client_following(allowed: impl Fn(&str) -> bool + Send + Sync + 'static) 
             attempt.follow()
         }
     });
-    let built = reqwest::Client::builder()
-        .user_agent(USER_AGENT)
-        .connect_timeout(CONNECT_TIMEOUT)
-        .timeout(TIMEOUT)
-        // The page a redirect came from is nobody else's business.
-        .referer(false)
-        .redirect(policy)
-        .build();
-    built.unwrap_or_else(|e| {
-        tracing::warn!("building the online services' client: {}", e.without_url());
+    let builder = || {
         reqwest::Client::builder()
             .user_agent(USER_AGENT)
+            .connect_timeout(CONNECT_TIMEOUT)
+            .timeout(TIMEOUT)
+            // The page a redirect came from is nobody else's business.
+            .referer(false)
+    };
+    builder().redirect(policy).build().unwrap_or_else(|e| {
+        tracing::warn!("building the online services' client: {}", e.without_url());
+        // Following no redirect, with the same timeouts. One that cannot be
+        // built either is never replaced by a client without them.
+        match builder()
             .redirect(reqwest::redirect::Policy::none())
             .build()
-            .unwrap_or_default()
+        {
+            Ok(client) => client,
+            Err(e) => panic!(
+                "the online services' client could not be built: {}",
+                e.without_url()
+            ),
+        }
     })
+}
+
+/// The most of a JSON answer read.
+pub const ANSWER_MAX_BYTES: usize = 1 << 20;
+
+/// `resp`'s body, read a chunk at a time, or `too_big` once it is past
+/// `max` bytes (or says it will be).
+pub async fn read_capped(
+    mut resp: reqwest::Response,
+    max: usize,
+    too_big: impl Fn() -> OnlineError,
+) -> Result<Vec<u8>, OnlineError> {
+    if resp.content_length().is_some_and(|n| n > max as u64) {
+        return Err(too_big());
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = resp.chunk().await.map_err(OnlineError::unreachable)? {
+        if bytes.len() + chunk.len() > max {
+            return Err(too_big());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
 }
 
 /// What [`Pacer::admit`] decided.
@@ -188,6 +218,13 @@ pub enum OnlineError {
     Unreachable(String),
     #[error("The service's answer could not be read: {0}")]
     Invalid(String),
+    /// A download answered, and so counted, whose link could not be read.
+    /// The hour is how long the download is remembered as counted.
+    #[error(
+        "OpenSubtitles counted this download, but its answer was lost. \
+         Try this file again in an hour: asking sooner would count it again."
+    )]
+    AnswerLost,
 }
 
 fn refused_text(email: &bool) -> &'static str {

@@ -68,6 +68,7 @@ fn known(text: &str) -> Option<StatusCode> {
     if is(OnlineError::SignInNeeded)
         || is(OnlineError::Quota { reset_at: None })
         || is(OnlineError::Busy { retry_at: 0 })
+        || is(OnlineError::AnswerLost)
     {
         return Some(StatusCode::BAD_GATEWAY);
     }
