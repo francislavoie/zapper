@@ -370,12 +370,13 @@ export function App() {
   // looked up. Only on that transition: the store learns of a movie it
   // starts before the player reports it. Its place, and whether it now
   // counts as watched, were written as it played, so the lists and the
-  // rail's counts are read again, once for the stop.
+  // rail's counts are read again, once for the stop or for another movie
+  // played in its place.
   const hadMovie = useRef<number | null>(null);
   useEffect(() => {
     const was = hadMovie.current;
-    if (openMovie === null && was !== null) {
-      dispatch({ type: "movies/playing", movie: null });
+    if (was !== null && was !== openMovie) {
+      if (openMovie === null) dispatch({ type: "movies/playing", movie: null });
       dispatch({ type: "movies/catalogue" });
       dispatch({ type: "continue/changed" });
       void refreshMovieMarks(dispatch, was);
