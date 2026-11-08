@@ -57,6 +57,10 @@ const MEASURE_AFTER: Duration = Duration::from_secs(5);
 /// the channel; see [`Machine::ledger`].
 const FAILURE_SETTLE: Duration = Duration::from_secs(3);
 
+/// How long Up next waits for the episode moved on from to be marked
+/// watched before it answers ([`play_next_episode`]).
+const MARK_WAIT: Duration = Duration::from_secs(5);
+
 // ---------------------------------------------------------------------------
 // Main-thread access
 // ---------------------------------------------------------------------------
@@ -2209,9 +2213,10 @@ pub async fn play_episode(app: AppHandle, episode_id: i64, start: Option<f64>) -
 /// ([`Machine::advance`]), so a second call (a double press, the countdown
 /// and a press together) is refused rather than opening it twice. The
 /// episode moved on from is marked watched, off the main thread, before
-/// this answers. mpv replaces its one stream, as for any open; the audio
-/// and subtitle languages are kept. It opens playing, even when the
-/// episode moved on from was paused ([`pause_on_open`]).
+/// this answers (waited for [`MARK_WAIT`] at most). mpv replaces its one
+/// stream, as for any open; the audio and subtitle languages are kept. It
+/// opens playing, even when the episode moved on from was paused
+/// ([`pause_on_open`]).
 #[tauri::command]
 pub async fn play_next_episode(app: AppHandle, from_episode_id: i64, next_episode_id: i64) -> Result<(), String> {
     let target = episode_target(next_episode_id)?;
@@ -2241,8 +2246,15 @@ pub async fn play_next_episode(app: AppHandle, from_episode_id: i64, next_episod
         open_as(&app, Opened::Episode(next_episode_id), target, OpenKind::OnDemand, None, Via::Direct, tracks, None)
             .await;
     // Not a reason to fail the move on: the next episode is open either way.
-    if let Err(e) = marked.await {
-        tracing::warn!("marking the episode moved on from did not finish: {e}");
+    // Waited for a few seconds at most: a catalogue refresh holding the
+    // database must not hold up the answer; the mark still lands after.
+    match tokio::time::timeout(MARK_WAIT, marked).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => tracing::warn!("marking the episode moved on from did not finish: {e}"),
+        Err(_) => tracing::warn!(
+            "marking the episode moved on from took over {}s; answering without it",
+            MARK_WAIT.as_secs()
+        ),
     }
     opened
 }
