@@ -114,7 +114,7 @@ export function CommandPalette() {
       // behaviour per action, wherever it was picked from.
       runAction(item.action.id, {
         dispatch,
-        player: state.player,
+        player: stateNow.current.player,
         previous: state.previousChannel,
         record,
         state: stateNow.current,
@@ -124,7 +124,6 @@ export function CommandPalette() {
       close,
       dispatch,
       record,
-      state.player,
       state.previousChannel,
       state.categoryId,
       state.mode,
