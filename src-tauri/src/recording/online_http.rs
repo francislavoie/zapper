@@ -31,6 +31,7 @@ const SEARCH_FAILED: &str = "OpenSubtitles could not be searched just now. Try a
 const DOWNLOAD_FAILED: &str = "The subtitle could not be downloaded just now. Try again later.";
 const SIGN_IN_FAILED: &str = "OpenSubtitles could not be reached to sign in. Try again later.";
 const SAVE_FAILED: &str = "The Online services settings could not be saved.";
+const READ_FAILED: &str = "The Online services settings could not be read.";
 const KEPT_FAILED: &str = "The subtitles kept for this title could not be read.";
 const FILE_FAILED: &str = "The subtitle file could not be read.";
 
@@ -71,11 +72,9 @@ fn known(text: &str) -> Option<StatusCode> {
         return Some(StatusCode::BAD_GATEWAY);
     }
     match text {
-        "Enter your OpenSubtitles username and password."
-        | "That is not an OpenSubtitles file." => Some(StatusCode::BAD_REQUEST),
-        "That title is not in the catalogue any more." => Some(StatusCode::NOT_FOUND),
-        "OpenSubtitles sent something that is not a subtitle file."
-        | "The download stopped before it ended." => Some(StatusCode::BAD_GATEWAY),
+        subtitles::ENTER_SIGN_IN | subtitles::NOT_A_FILE => Some(StatusCode::BAD_REQUEST),
+        subtitles::NOT_IN_CATALOGUE => Some(StatusCode::NOT_FOUND),
+        subtitles::NOT_SUBTITLES | subtitles::DOWNLOAD_STOPPED => Some(StatusCode::BAD_GATEWAY),
         _ => None,
     }
 }
@@ -128,7 +127,7 @@ async fn blocking<T: Send + 'static>(
 
 async fn status(State(o): State<Online>) -> Result<Response, Failed> {
     let ctx = Arc::clone(o.ctx());
-    let dto = blocking("reading the online services", SAVE_FAILED, move || {
+    let dto = blocking("reading the online services", READ_FAILED, move || {
         Ok(subtitles::status_with(&ctx))
     })
     .await?;
@@ -562,6 +561,9 @@ mod tests {
             sign_in_body(),
         )
         .await;
+        // Found first, as the app does: the search describes the file kept.
+        let (_, body) = send_json(&app, "GET", &film(FILM_1, "?languages=en"), None).await;
+        assert_eq!(body["kind"], "results", "{body}");
         let (_, body) = send_json(
             &app,
             "POST",
@@ -663,10 +665,7 @@ mod tests {
         assert_eq!(body, json!({ "error": SEARCH_FAILED }));
         let (st, body) = send_json(&app, "GET", &film(940_999_999, ""), None).await;
         assert_eq!(st, StatusCode::NOT_FOUND);
-        assert_eq!(
-            body["error"],
-            "That title is not in the catalogue any more."
-        );
+        assert_eq!(body["error"], subtitles::NOT_IN_CATALOGUE);
 
         let (st, body) = send_json(
             &app,
@@ -688,10 +687,23 @@ mod tests {
         )
         .await;
         assert_eq!(st, StatusCode::BAD_REQUEST);
-        assert_eq!(
-            body["error"],
-            "Enter your OpenSubtitles username and password."
-        );
+        assert_eq!(body["error"], subtitles::ENTER_SIGN_IN);
+
+        // OpenSubtitles out of reach: the route's own sentence.
+        let nowhere = Server {
+            base: "http://127.0.0.1:9".into(),
+            seen: Default::default(),
+        };
+        let (app, _ctx, _scratch) = self::app(&nowhere, "errors-unreachable");
+        let (st, body) = send_json(
+            &app,
+            "POST",
+            "/api/online/opensubtitles/sign-in",
+            sign_in_body(),
+        )
+        .await;
+        assert_eq!(st, StatusCode::BAD_GATEWAY);
+        assert_eq!(body, json!({ "error": SIGN_IN_FAILED }));
     }
 
     #[tokio::test]
