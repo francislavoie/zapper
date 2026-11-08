@@ -7,6 +7,7 @@ import { setTimeFormat } from "../logic/format.ts";
 import {
   progressOf,
   promptLine,
+  promptStep,
   resumeLabel,
   resumePoint,
   startPlan,
@@ -91,4 +92,17 @@ test("where an open starts", () => {
   assert.deepEqual(startPlan(612, p), { start: 612, held: false, ask: false });     // a retry
   // the caller passes the fresh marks: a place written elsewhere wins over the row's
   assert.equal(startPlan("ask", { ...p, position: 2400 }).start, 2400);
+});
+
+test("the question shows while its title is held, and goes with it", () => {
+  const pr = { item: { kind: "movie", id: 2 }, title: "A Film", position: 2770, playedAt: null };
+  const at = (state, kind = "movie", id = 2) => ({ state, onDemand: kind ? { kind, id, position: 2770, duration: 7260, bufferedTo: null } : null });
+  assert.deepEqual(promptStep(pr, false, at("playing", "episode", 9)), { shown: false, seen: false, clear: false }); // the open is on its way
+  assert.deepEqual(promptStep(pr, false, at("opening")), { shown: true, seen: true, clear: false });
+  assert.deepEqual(promptStep(pr, true, at("paused")), { shown: true, seen: true, clear: false });
+  assert.equal(promptStep(pr, true, at("playing")).clear, true);           // Space, a media key, Resume
+  assert.equal(promptStep(pr, true, at("failed")).clear, true);            // refused or failed
+  assert.equal(promptStep(pr, true, at("stopped", null)).clear, true);     // Stop
+  assert.equal(promptStep(pr, true, at("playing", "episode", 2)).clear, true); // episode 2 is another title
+  assert.deepEqual(promptStep(null, false, at("paused")), { shown: false, seen: false, clear: false });
 });

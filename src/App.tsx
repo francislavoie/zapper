@@ -33,6 +33,7 @@ import { moviesAvailable } from "./logic/movies";
 import { heldEpisode, showsAvailable } from "./logic/shows";
 import { errorMessage } from "./logic/async";
 import { useGlobalKeys } from "./hooks/useGlobalKeys";
+import { useResumePrompt } from "./hooks/useResumePrompt";
 import { useUpNext } from "./hooks/useUpNext";
 import { useMenuCommands } from "./hooks/useMenuCommands";
 import { useMediaControls } from "./mediaKeys";
@@ -148,8 +149,9 @@ export function App() {
 
   // Up next counts and moves on from here, whichever view is up; the cards
   // and the keys are handed where it stands.
-  const upNext = useUpNext();
-  useGlobalKeys(state, dispatch, upNext, stacked);
+  const resume = useResumePrompt();
+  const upNext = useUpNext(resume.shown);
+  useGlobalKeys(state, dispatch, upNext, stacked, resume.shown);
   useMenuCommands(dispatch);
   // The desktop's media keys, when Settings › Playback turns them on.
   useMediaControls(state, dispatch);

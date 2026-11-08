@@ -135,3 +135,13 @@ test("the arrows' step names both kinds of title", () => {
     .map((it) => it.does);
   assert.ok(does.includes("Back or forward 5 seconds (10 in a movie or episode)"), does.join("; "));
 });
+
+test("the Resume question's keys are listed", () => {
+  const items = SHORTCUT_GROUPS.flatMap((g) => g.items);
+  const enter = items.find((it) => it.does === "Resume where you stopped (when asked)");
+  assert.ok(enter, "Enter resumes");
+  assert.deepEqual(enter.keys, [["Enter"]]);
+  const esc = items.find((it) => it.does === "Close the Resume question");
+  assert.ok(esc, "Escape closes");
+  assert.deepEqual(esc.keys, [["Esc"]]);
+});

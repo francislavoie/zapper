@@ -33,6 +33,7 @@ import { run, useApp, useDispatch } from "../store";
 import { TransportBar } from "./TransportBar";
 import { VideoFeedback } from "./VideoFeedback";
 import { PictureCorner } from "./PictureCorner";
+import { ResumeCard } from "./ResumeCard";
 import { UpNextCard } from "./UpNextCard";
 import type { UpNext } from "../logic/upNext";
 
@@ -145,6 +146,7 @@ export function MiniControls({ onActivate, upNext }: MiniControlsProps) {
       <PictureCorner docked />
       {/* Up next stays while the bar comes and goes: its buttons are what
           the count is about. */}
+      <ResumeCard compact />
       <UpNextCard upNext={upNext} compact />
 
       {/* Every click inside the bar belongs to the control it hit. Without

@@ -28,6 +28,8 @@ export interface EscapeContext {
    *  episodes goes back to the list first (ShowPane answers that itself);
    *  from anywhere else it closes the pane, the selection staying. */
   showPane: boolean;
+  /** The Resume question in the full player. */
+  resumePrompt?: boolean;
   /** The Up next card over the player. */
   upNextCard: boolean;
   fullscreen: boolean;
@@ -56,6 +58,7 @@ export type EscapeStep =
   | "movieSheet"
   | "showSheet"
   | "showPane"
+  | "resumePrompt"
   | "upNextCard"
   | "fullscreen"
   | "query"
@@ -95,6 +98,7 @@ export function escapeStep(c: EscapeContext, via: "key" | "mouse"): EscapeStep {
   if (c.movieSheet) return "movieSheet";
   if (c.showSheet) return "showSheet";
   // The countdown first: stacked, it runs over the list the pane is in.
+  if (c.resumePrompt && via === "key") return "resumePrompt";
   if (c.upNextCard && via === "key") return "upNextCard";
   if (c.showPane) {
     if (c.query && c.queryFocused && via === "key") return "query";
