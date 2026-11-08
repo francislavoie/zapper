@@ -33,5 +33,5 @@ export const SEARCH_SYNTAX: readonly { example: string; finds: string }[] = [
 ];
 
 /** The list's search box placeholder: what it searches, the syntax in
- *  brief, and the key that gets there. */
-export const SEARCH_PLACEHOLDER = "Search channels  ·  a|b for either    /";
+ *  brief. The key that gets there is the box's key hint. */
+export const SEARCH_PLACEHOLDER = "Search channels  ·  a|b for either";
