@@ -278,7 +278,22 @@ impl<'t> MovieWriter<'t> {
                    container=excluded.container, tmdb_id=excluded.tmdb_id,
                    stream_url=excluded.stream_url,
                    http_user_agent=excluded.http_user_agent,
-                   http_referrer=excluded.http_referrer, deleted_at=NULL",
+                   http_referrer=excluded.http_referrer, deleted_at=NULL
+                 -- A title the provider lists as it was is left alone: a
+                 -- write of every row would rewrite each index for nothing.
+                 WHERE movies.deleted_at IS NOT NULL
+                    OR movies.category_id IS NOT excluded.category_id
+                    OR movies.name IS NOT excluded.name
+                    OR movies.clean_name IS NOT excluded.clean_name
+                    OR movies.year IS NOT excluded.year
+                    OR movies.rating IS NOT excluded.rating
+                    OR movies.poster_url IS NOT excluded.poster_url
+                    OR (?8 IS NOT NULL AND movies.added IS NOT ?8)
+                    OR movies.container IS NOT excluded.container
+                    OR movies.tmdb_id IS NOT excluded.tmdb_id
+                    OR movies.stream_url IS NOT excluded.stream_url
+                    OR movies.http_user_agent IS NOT excluded.http_user_agent
+                    OR movies.http_referrer IS NOT excluded.http_referrer",
             )?
             .execute(params![
                 m.movie_id,
@@ -339,7 +354,10 @@ impl<'t> MovieWriter<'t> {
             conn.execute("UPDATE movies SET duration_secs = NULL", [])?;
         }
         record_origin(conn, MOVIES_ORIGIN, &origin)?;
-        conn.execute("UPDATE movies SET added = ?1 WHERE added = 0", [now])?;
+        conn.execute(
+            "UPDATE movies SET added = ?1 WHERE added = 0 AND deleted_at IS NULL",
+            [now],
+        )?;
         let mut soft_delete =
             conn.prepare_cached("UPDATE movies SET deleted_at=?1 WHERE movie_id=?2")?;
         for gone in existing.difference(&seen) {
@@ -426,6 +444,48 @@ mod tests {
             )
             .unwrap();
         assert_eq!(n, 2);
+    }
+
+    #[test]
+    fn a_title_listed_as_it_was_is_not_written_again() {
+        let c = open_in_memory().unwrap();
+        let (cats, mut movies) = three();
+        movies[0].added = Some(50);
+        land_movies(&c, &cats, &movies, 100).unwrap();
+        c.execute("UPDATE movies SET deleted_at = 150 WHERE movie_id = 3", [])
+            .unwrap();
+        // What each upsert changed, the one statement it ends with.
+        let upserts = |movies: &[NewMovie]| -> (Vec<u64>, SyncStats) {
+            let tx = c.unchecked_transaction().unwrap();
+            let mut w = MovieWriter::begin(&tx).unwrap();
+            w.set_categories(&cats);
+            let mut changed = Vec::new();
+            for m in movies {
+                w.push(m, None).unwrap();
+                changed.push(tx.changes());
+            }
+            let (stats, _) = w.finish(200).unwrap();
+            tx.commit().unwrap();
+            (changed, stats)
+        };
+        // The deleted one comes back; the other two are as they were.
+        let (changed, s) = upserts(&movies);
+        assert_eq!(changed, [0, 0, 1]);
+        assert_eq!((s.inserted, s.updated, s.deleted), (1, 2, 0));
+        // An identical list writes nothing, and still counts every title.
+        let (changed, s) = upserts(&movies);
+        assert_eq!(changed, [0, 0, 0]);
+        assert_eq!((s.inserted, s.updated, s.deleted), (0, 3, 0));
+        // A change to any column is written.
+        movies[1].rating = Some(7.5);
+        movies[0].added = Some(60);
+        let (changed, s) = upserts(&movies);
+        assert_eq!(changed, [1, 1, 0]);
+        assert_eq!((s.inserted, s.updated, s.deleted), (0, 3, 0));
+        let added: i64 = c
+            .query_row("SELECT added FROM movies WHERE movie_id = 1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(added, 60);
     }
 
     #[test]
