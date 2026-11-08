@@ -126,7 +126,7 @@ interface have their own page: [recording.md](recording.md).
 - Pausing holds the count. A skip into the last seconds starts the next one at once, and a skip
   through the credits to the end counts as reaching it.
 - The next episode keeps the sound and subtitle languages you had, and plays on the same
-  connection.
+  connection. One you had already started plays on from where you left it, without asking.
 - A Stop, a sleep timer, or a stream the provider cut short never moves on.
 
 ## Other

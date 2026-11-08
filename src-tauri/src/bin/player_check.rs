@@ -25,6 +25,11 @@
 //! with ranges at `movie/<user>/<pass>/2.mp4`) and checks its clock,
 //! `seek_to`, a relative seek past what was buffered, pause and stop.
 //!
+//! `--held` (with `fake_stream.py --movies 2`) opens a movie held at 30 s,
+//! as Resume / Start over asks: paused there and staying put; Resume
+//! (`toggle_pause`) plays it on from there; held again and then replaced
+//! by an open of the same movie, that one plays.
+//!
 //! `--pause-then-play` (with `fake_stream.py --movies 2`) checks that Play
 //! plays even when something was paused: a movie paused and stopped, then
 //! another movie; that one paused, then a channel. Each must reach Playing
@@ -41,7 +46,8 @@
 //! played to its end reports itself as `finished`; moving on from it opens
 //! the next and marks it watched in the scratch catalogue; moving on from
 //! one still playing does the same, once however often it is asked; moving
-//! on from one paused opens the next playing; and no
+//! on from one paused opens the next playing; a next episode left part way
+//! (written in the scratch catalogue) opens where it was left; and no
 //! second stream lingers on the fixture server (it sends a title as fast as
 //! it is read, so this catches a stream left open, not a brief overlap).
 //! With `--past-end` the first episode is ended by a skip past its end
@@ -182,6 +188,8 @@ fn main() {
                     run_keeps_playing(&handle, secs, args.iter().any(|a| a == "--after-movie")).await
                 } else if args.iter().any(|a| a == "--movie") {
                     run_movie(&handle).await
+                } else if args.iter().any(|a| a == "--held") {
+                    run_held(&handle).await
                 } else if args.iter().any(|a| a == "--pause-then-play") {
                     run_pause_then_play(&handle).await
                 } else if args.iter().any(|a| a == "--up-next") {
@@ -450,7 +458,7 @@ async fn run_keeps_playing(app: &tauri::AppHandle, secs: u64, after_movie: bool)
 
     let mut before = String::new();
     if after_movie {
-        cmds::play_movie(app.clone(), 2, None).await?;
+        cmds::play_movie(app.clone(), 2, None, None).await?;
         let s = await_state(Duration::from_secs(25), |s| {
             s.state == PlaybackState::Playing && s.on_demand.is_some_and(|o| o.duration.is_some())
         })
@@ -541,11 +549,11 @@ async fn run_pause_then_play(app: &tauri::AppHandle) -> Result<String, String> {
         Ok(())
     }
 
-    cmds::play_movie(app.clone(), 1, None).await?;
+    cmds::play_movie(app.clone(), 1, None, None).await?;
     plays("the first movie").await?;
     pause(app, "the first movie").await?;
     cmds::stop(app.clone()).await?;
-    cmds::play_movie(app.clone(), 2, None).await?;
+    cmds::play_movie(app.clone(), 2, None, None).await?;
     plays("a movie after a pause and a stop").await?;
     pause(app, "the second movie").await?;
     let stream_id = resolve_stream_id().await?;
@@ -678,7 +686,7 @@ async fn run_movie(app: &tauri::AppHandle) -> Result<String, String> {
         s.on_demand.map_or(-1.0, |o| o.position)
     }
 
-    cmds::play_movie(app.clone(), 1, None).await?;
+    cmds::play_movie(app.clone(), 1, None, None).await?;
     let opened = await_state(Duration::from_secs(25), |s| {
         s.state == PlaybackState::Playing && s.on_demand.is_some_and(|o| o.duration.is_some())
     })
@@ -748,6 +756,73 @@ async fn run_movie(app: &tauri::AppHandle) -> Result<String, String> {
     ))
 }
 
+/// The `--held` run; see the top of the file.
+#[cfg(target_os = "linux")]
+async fn run_held(app: &tauri::AppHandle) -> Result<String, String> {
+    use std::time::Duration;
+    use zapper_lib::ipc::player_cmds as cmds;
+    use zapper_lib::ipc::types::{PlaybackState, PlayerStateDto};
+
+    fn at(s: &PlayerStateDto) -> f64 {
+        s.on_demand.map_or(-1.0, |o| o.position)
+    }
+    fn failure(what: &str, s: &PlayerStateDto) -> String {
+        format!("{what} ended in {:?}: {}", s.state, s.error.as_deref().unwrap_or("no reason given"))
+    }
+    async fn held_at_30(app: &tauri::AppHandle, what: &str) -> Result<f64, String> {
+        cmds::play_movie(app.clone(), 2, Some(30.0), Some(true)).await?;
+        let s = await_state(Duration::from_secs(5), |s| {
+            s.state == PlaybackState::Paused && (28.0..=32.0).contains(&at(s))
+        })
+        .await;
+        if s.state != PlaybackState::Paused || !(28.0..=32.0).contains(&at(&s)) {
+            return Err(format!("{what}: {} at {:.1}s", failure("a held open", &s), at(&s)));
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        let later = cmds::player_state().await?;
+        if later.state != PlaybackState::Paused || (at(&later) - at(&s)).abs() > 0.5 {
+            return Err(format!(
+                "{what}: held at {:.1}s, then {:?} at {:.1}s",
+                at(&s),
+                later.state,
+                at(&later)
+            ));
+        }
+        Ok(at(&s))
+    }
+    async fn plays_on(what: &str) -> Result<(f64, f64), String> {
+        let s = await_state(Duration::from_secs(25), |s| {
+            s.state == PlaybackState::Playing || s.state == PlaybackState::Failed
+        })
+        .await;
+        if s.state != PlaybackState::Playing {
+            return Err(failure(what, &s));
+        }
+        let first = at(&s);
+        tokio::time::sleep(Duration::from_millis(2500)).await;
+        let s = cmds::player_state().await?;
+        if s.state != PlaybackState::Playing || at(&s) < first + 1.0 {
+            return Err(format!("{what} was {:?} with its clock at {first:.1}s then {:.1}s", s.state, at(&s)));
+        }
+        Ok((first, at(&s)))
+    }
+
+    let held = held_at_30(app, "the first held open").await?;
+    cmds::toggle_pause(app.clone()).await?;
+    let (from, to) = plays_on("Resume").await?;
+    if !(28.0..=34.0).contains(&from) {
+        return Err(format!("Resume played on from {from:.1}s, not where it was held"));
+    }
+    held_at_30(app, "the second held open").await?;
+    cmds::play_movie(app.clone(), 2, None, None).await?;
+    let (again, later) = plays_on("an open after an unanswered held one").await?;
+    cmds::stop(app.clone()).await?;
+    Ok(format!(
+        "held paused at {held:.1}s; Resume played {from:.1}s -> {to:.1}s; held again, the next open \
+         played {again:.1}s -> {later:.1}s"
+    ))
+}
+
 /// The `--episode` run: an episode opens as an episode (not a channel, not
 /// a movie), reports its length, seeks, pauses and stops.
 #[cfg(target_os = "linux")]
@@ -760,7 +835,7 @@ async fn run_episode(app: &tauri::AppHandle) -> Result<String, String> {
         s.on_demand.map_or(-1.0, |o| o.position)
     }
 
-    cmds::play_episode(app.clone(), 100_111, None).await?;
+    cmds::play_episode(app.clone(), 100_111, None, None).await?;
     let opened = await_state(Duration::from_secs(25), |s| {
         s.state == PlaybackState::Playing && s.on_demand.is_some_and(|o| o.duration.is_some())
     })
@@ -838,7 +913,7 @@ async fn run_subtitles(app: &tauri::AppHandle) -> Result<String, String> {
             }
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
-        cmds::play_episode(app.clone(), id, None).await?;
+        cmds::play_episode(app.clone(), id, None, None).await?;
         let playing = |s: &PlayerStateDto| {
             s.state == PlaybackState::Playing
                 && s.on_demand.is_some_and(|o| o.kind == OnDemandKind::Episode && o.id == id)
@@ -1193,6 +1268,7 @@ async fn run_captions(app: &tauri::AppHandle) -> Result<String, String> {
 async fn run_up_next(app: &tauri::AppHandle, drop: bool, past_end: bool) -> Result<String, String> {
     use std::time::Duration;
     use zapper_lib::ipc::player_cmds as cmds;
+    use zapper_lib::catalog::vod_store::ItemKind;
     use zapper_lib::ipc::types::{OnDemandKind, PlaybackState, PlayerStateDto};
 
     const A: i64 = 100_111;
@@ -1217,7 +1293,7 @@ async fn run_up_next(app: &tauri::AppHandle, drop: bool, past_end: bool) -> Resu
         format!("{what} ended in {:?}: {}", s.state, s.error.as_deref().unwrap_or("no reason given"))
     };
 
-    cmds::play_episode(app.clone(), A, None).await?;
+    cmds::play_episode(app.clone(), A, None, None).await?;
     let opened = await_state(Duration::from_secs(25), playing(A)).await;
     if !playing(A)(&opened) {
         return Err(failure("play_episode(A)", &opened));
@@ -1297,6 +1373,12 @@ async fn run_up_next(app: &tauri::AppHandle, drop: bool, past_end: bool) -> Resu
     if at(&near) < 104.0 || near.state != PlaybackState::Playing {
         return Err(format!("seek_to(105) left B at {:.1}s, {:?}", at(&near), near.state));
     }
+    // C was left part way: it opens there, without asking.
+    zapper_lib::catalog::db::with_db(|c| {
+        let at = zapper_lib::catalog::activity::now_secs();
+        zapper_lib::catalog::vod_store::record_progress(c, ItemKind::Episode, C, 60.0, Some(120.0), at)
+    })
+    .map_err(|e| format!("writing C's place in the scratch catalogue: {e}"))?;
     // At once, as a countdown running out under a press would.
     let (first, second) = tokio::join!(
         cmds::play_next_episode(app.clone(), B, C),
@@ -1310,6 +1392,9 @@ async fn run_up_next(app: &tauri::AppHandle, drop: bool, past_end: bool) -> Resu
     let last = await_state(Duration::from_secs(25), playing(C)).await;
     if !playing(C)(&last) {
         return Err(failure("play_next_episode(B, C)", &last));
+    }
+    if !(58.0..=62.0).contains(&at(&last)) {
+        return Err(format!("C, left at 60s, opened at {:.1}s", at(&last)));
     }
     if !watched_soon(B).await? {
         return Err("the episode moved on from while playing was not marked watched".into());
@@ -1348,10 +1433,11 @@ async fn run_up_next(app: &tauri::AppHandle, drop: bool, past_end: bool) -> Resu
     }
     Ok(format!(
         "A {} as finished; A to B opened B and marked A watched; B to C at {:.0}s \
-         opened C once, marked B watched and kept the subtitles; a paused C to D opened D \
-         playing; no second stream lingered",
+         opened C once at {:.0}s where it was left, marked B watched and kept the subtitles; \
+         a paused C to D opened D playing; no second stream lingered",
         if past_end { "skipped past its end" } else { "played to its end" },
-        at(&near)
+        at(&near),
+        at(&last)
     ))
 }
 
