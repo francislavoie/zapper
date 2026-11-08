@@ -4,11 +4,14 @@
 import { useState, type ReactNode } from "react";
 import { backend } from "../backend";
 import { errorMessage } from "../logic/async";
-import { dateTime, hhmm } from "../logic/format";
-import { OPENSUBTITLES_LANGUAGES, searchLanguages } from "../logic/onlineSubtitles";
+import {
+  OPENSUBTITLES_LANGUAGES,
+  isSignedIn,
+  searchLanguages,
+  signInLine,
+} from "../logic/onlineSubtitles";
 import { languageName } from "../logic/tracks";
 import { useOnlineServices } from "../onlineSubtitles";
-import type { OpenSubtitlesStatusDto } from "../types";
 import { OpenSubtitlesSignIn } from "./OpenSubtitlesSignIn";
 import { SettingRow, SettingsGroup } from "./SettingsParts";
 import { Switch } from "./Switch";
@@ -45,16 +48,7 @@ const SORTED_LANGUAGES = OPENSUBTITLES_LANGUAGES.map(
   (l) => [l.code, languageName(l.code) ?? l.code] as const,
 ).sort((a, b) => a[1].localeCompare(b[1]));
 
-function downloadsLine(os: OpenSubtitlesStatusDto): string {
-  const who = `Signed in as ${os.signedInAs}`;
-  if (os.downloadsLeft === null) return who;
-  if (os.downloadsLeft > 0) return `${who} · ${os.downloadsLeft} downloads left today`;
-  if (os.downloadsResetAt === null) return `${who} · no downloads left today`;
-  const sameDay = new Date(os.downloadsResetAt * 1000).toDateString() === new Date().toDateString();
-  return `${who} · no downloads left until ${
-    sameDay ? hhmm(os.downloadsResetAt) : dateTime(os.downloadsResetAt)
-  }`;
-}
+const KNOWN_LANGUAGES = new Set(OPENSUBTITLES_LANGUAGES.map((l) => l.code));
 
 export function OnlineServicesPane({ standing = null }: { standing?: string | null }) {
   const { status, reload, set } = useOnlineServices();
@@ -90,20 +84,24 @@ export function OnlineServicesPane({ standing = null }: { standing?: string | nu
   const auto = searchLanguages([], standing, locales)
     .map((l) => languageName(l) ?? l)
     .join(", ");
-  // A sign-in OpenSubtitles refused is not a sign-in, whoever it names.
-  const signedIn = os.signedInAs !== null && !os.signInRefused;
+  const signedIn = isSignedIn(os);
   const first = os.languages[0] ?? "";
   const second = os.languages[1] ?? "";
   const pick = (a: string, b: string) => {
     const langs = [a, b].filter((x, i, all) => x !== "" && all.indexOf(x) === i);
     void save({ languages: langs });
   };
-  const options = (skip: string) =>
-    SORTED_LANGUAGES.filter(([code]) => code !== skip).map(([code, name]) => (
+  // A saved code the list doesn't have is still shown, so the select never
+  // says something other than what is saved.
+  const options = (skip: string, own: string) => {
+    const rows = SORTED_LANGUAGES.filter(([code]) => code !== skip);
+    if (own !== "" && !KNOWN_LANGUAGES.has(own)) rows.push([own, languageName(own) ?? own]);
+    return rows.map(([code, name]) => (
       <option key={code} value={code}>
         {name}
       </option>
     ));
+  };
 
   return (
     <ServiceGroup
@@ -115,7 +113,7 @@ export function OnlineServicesPane({ standing = null }: { standing?: string | nu
       <SettingRow
         label="Languages"
         htmlFor="online-os-lang-1"
-        description="Searched for, at most two."
+        description="Up to two languages."
       >
         <div className="online-langs">
           <select
@@ -126,7 +124,7 @@ export function OnlineServicesPane({ standing = null }: { standing?: string | nu
             onChange={(e) => pick(e.target.value, e.target.value === "" ? "" : second)}
           >
             <option value="">Automatic ({auto})</option>
-            {options(second)}
+            {options(second, first)}
           </select>
           <select
             id="online-os-lang-2"
@@ -136,26 +134,30 @@ export function OnlineServicesPane({ standing = null }: { standing?: string | nu
             onChange={(e) => pick(first, e.target.value)}
           >
             <option value="">None</option>
-            {options(first)}
+            {options(first, second)}
           </select>
         </div>
       </SettingRow>
       <SettingRow
         label="Sign-in"
-        layout={signedIn ? "side" : os.signInRefused || form ? "stack" : "side"}
+        layout={!signedIn && os.enabled && (os.signInRefused || form) ? "stack" : "side"}
         description={
           signedIn
-            ? downloadsLine(os)
+            ? signInLine(os, Date.now() / 1000)
             : os.signInRefused
               ? "OpenSubtitles did not accept the saved sign-in."
               : "Searching needs no sign-in; downloading does, with your own free account."
         }
       >
         {signedIn ? (
-          <button className="ctl" onClick={() => void run(() => backend.signOutOpenSubtitles())}>
+          <button
+            className="ctl"
+            disabled={!os.enabled}
+            onClick={() => void run(() => backend.signOutOpenSubtitles())}
+          >
             Sign out
           </button>
-        ) : os.signInRefused || form ? (
+        ) : os.enabled && (os.signInRefused || form) ? (
           <OpenSubtitlesSignIn
             compact
             onSignedIn={(next) => {
