@@ -18,9 +18,8 @@ It's built with a Rust core, a React interface and [Tauri](https://tauri.app/), 
 
 ![zapper's browse view: a football match playing in the picture at the top right, the playing channel's now and next programmes beside it, and below, the category list on the left with the guide's timeline of what's on across the sports channels](docs/images/screenshot.webp)
 
-> **Status:** used day to day on Linux. Windows installers are published from the next release
-> on, newer and less tried than the Linux packages. macOS (Apple Silicon) builds and plays in CI,
-> but hasn't been tried on a real Mac or released yet.
+> **Status:** used daily on Linux. Windows is newer and less tried. macOS (Apple Silicon) builds
+> and plays in CI but isn't released yet.
 
 ## Platforms
 
@@ -53,136 +52,67 @@ Download the package for your system from the
 
 ## Features
 
+The short list; [docs/features.md](docs/features.md) has how each part behaves.
+
 ### Sources
 
-- Xtream Codes: server URL, username and password. Live channels, categories, guide, catch-up on
-  channels that have an archive, and the provider's movies and shows.
-- M3U playlists from a URL or a file, with one or more XMLTV guides. Catch-up from the playlist's
-  `catchup` attributes. Entries whose address is on demand are movies: a `/movie/` address, a
-  video file (`.mp4`, `.mkv`, `.avi`, `.m4v`, `.mov`, `.wmv`, `.webm`), or a `/series/` one.
-  An on-demand entry whose name has an episode number (`S01E02`, `s01.e02`, `1x02`,
-  `Season 1 Episode 2`, or a range such as `S01E01-E02`) is an episode instead, and is no longer
-  a channel: entries in the same group whose names match before the number make one show
-  (`A Show S01E01` and `A Show S01E02`), and an entry whose name starts with the number belongs
-  to a show named after its group. A `.ts`, `.m3u8` or `/live/` address is always a channel.
-- HDHomeRun tuners by address. Channels from the tuner's lineup, guide from SiliconDust or your
-  own XMLTV; subchannels shown as `5.1`.
-- Tvheadend servers, with or without a login. Categories from its channel tags, guide from its
-  XMLTV export.
-- Movies come from Xtream accounts and from playlists with movie entries, shows from Xtream
-  accounts and from playlists with episode entries. HDHomeRun, Tvheadend and playlists without
-  any have no Movies or Shows tab: each appears only when there is something to show in it.
-- Settings, favourites and category choices can be exported to a file and imported again.
+- Xtream Codes: live channels, guide, catch-up, movies and shows.
+- M3U playlists (URL or file) with XMLTV guides and catch-up. On-demand entries become movies, or
+  episodes when the name has an episode number (`S01E02`, `1x02`, `S01E01-E02`).
+- HDHomeRun tuners, with SiliconDust's guide or your own XMLTV.
+- Tvheadend servers, with or without a login.
+- Export and import of settings, favourites and categories.
 
 ### Browsing
 
-- The channel list and guide are stored locally in SQLite and refreshed in the background.
-- One list for Live TV. The rail on the left has Favourites, Recently watched, Recordings and
-  All channels, then your pinned categories, then the rest. Each channel row shows the
-  programme on now and the one next; where channels from many categories mix (All channels,
-  Favourites, Recently watched) the row also names its category.
-- Channel search from the filter box, `/` or the command palette, with results grouped by
-  category. `a|b` matches either term.
-- Programme search: finds airings in the guide that are on now, coming up, or still available on
-  catch-up. Opening one tunes in, jumps the guide to it, or plays it from catch-up.
-- List and guide views (`G`) for any rail item, Favourites and Recently watched included. The guide scrolls through time with Shift+wheel, its scrollbar, or
-  an hour at a time with `←`/`→`; `Home` returns to now.
-- Categories can be pinned, hidden, and sorted by the provider's order, name or size.
-- Recently watched: the last 20 channels you watched for at least 30 seconds, newest first.
-- Recordings sits in the rail too, with its free disk space and, for the selected recording,
-  its actions beside the picture.
-- Each channel's last measured resolution, frame rate and codec is shown in the list; channels
-  that failed to load are dimmed, with the reason.
-- The playing channel stays in a docked picture with its own controls while you browse.
-- Movies has a tab of its own (`M`) beside Live TV. A rail lists Favourites, Recently added,
-  Watched and the movie categories; a list or posters (remembered per computer, a list at first)
-  shows the movies in one, sorted by recently added, name, year or rating, and limited to a range
-  of years. Mark a movie as a favourite or as watched. Search by name; a movie's details (plot,
-  cast, rating, pictures, movies like it) open in a sheet. Browsing never starts or stops what is
-  playing: only Play does.
-- Shows has a tab of its own too (`N`), laid out as Movies is: a rail with Favourites, Recently
-  added, Watched and the show categories, and a list or posters (remembered per computer, a list
-  at first) with each show's years, seasons and rating, sorted by recently added, name, year or
-  rating, limited to a range of years, and searchable by name. A show is a favourite as a whole;
-  watched goes by episode: marking a show watched marks all its episodes (specials aside), and a
-  show counts as watched once all its episodes are. Selecting a show puts its plot, people and
-  genres beside the picture, with Play for the next episode: one you are partway through, else
-  the one after the last you watched. Details (or `Enter`) opens its sheet: the backdrop and
-  poster, the seasons as tabs, and each season's episodes with their stills, titles, plots and
-  lengths, the next one highlighted, each with its own watched mark. As with movies, browsing a show plays
-  nothing: Play, or `Enter` on an episode, does. An Xtream show's seasons and episodes are
-  asked of the provider when it is first selected, then kept for a week.
-- Command palette (`Ctrl+P`; `⌘P` on a Mac) with every action. Shortcuts are listed in
-  Settings › Keyboard, with ⌘ for Ctrl on a Mac.
+- The channel list and guide are kept locally, so browsing and search are instant.
+- **Live TV**: a rail with Favourites, Recently watched, Recordings, All channels and your
+  categories, each as a list or a guide (`G`). Rows show what's on now and next.
+- **Movies** (`M`) and **Shows** (`N`): browse by category as a list or posters, sort, filter by
+  year, search, and mark favourites and watched. A show's sheet lists its seasons and episodes.
+- Channel search (`/`, `a|b` for either) and programme search across the guide and catch-up.
+- Pin, hide and sort categories.
+- Each channel's resolution, frame rate and codec; channels that failed are dimmed with the reason.
+- The playing channel stays in a docked picture while you browse.
+- Command palette (`Ctrl+P`) and a full shortcut list in Settings › Keyboard.
 
 ### Playback
 
 ![The player filling the window: the channel name and programme at the top left, and along the bottom the transport bar with the scrollback timeline, pause, stop, volume, skip back and forward, and the Live marker](docs/images/screenshot-player.webp)
 
-- libmpv with hardware decoding (VA-API on Linux) and HDR tone-mapping.
-- Live rewind buffer, sized in megabytes; Settings shows roughly how many minutes it holds.
-  Skip 5 seconds back or forward, `L` to jump to live.
-- Catch-up on channels whose source has an archive.
-- Movies play on demand, on a connection of their own under the same rules as a channel's. The
-  picture gets a seek bar with the time played and left, `←`/`→` skip 10 seconds, Space or a click
-  pauses. How far you got is kept, and a movie played past 92 % counts as watched. A movie that
-  stops or can't start says why and can be played again from where it stopped.
-- Episodes play as movies do, from their beginning, with the show as the title and the episode
-  beneath (`S2 E4 · Night Shift · 52m`). An episode played past 92 % counts as watched.
-- Up next: 20 seconds before an episode ends, a card names the next one and counts 10 seconds
-  down to playing it, in the full player or the docked picture. **Play now** starts it at once,
-  even from pause; **Cancel** lets the episode play to its end and stop there. In the full
-  player `Enter` and `Esc` do the same. Pausing holds the count, a skip into the last seconds starts the
-  next one at once, and a skip through the credits to the end counts as reaching it. The next
-  episode keeps the sound and subtitle languages you had, and plays on the same connection. A
-  Stop, a sleep timer, or a stream the provider cut short never moves on.
-- `P` switches to the previous channel; typing a channel number tunes it.
-- Volume up to 200%, on a perceptual scale, remembered between launches.
-- A compressor that evens out loud and quiet audio.
-- Right-click menu on the picture: audio track, subtitles, aspect ratio, deinterlacing, sleep
-  timer.
+- libmpv with hardware decoding and HDR tone-mapping.
+- A live rewind buffer, and catch-up where the source has an archive.
+- Movies and episodes with a seek bar, resume, and watched past 92 %.
+- **Up next**: a countdown into the next episode, keeping your audio and subtitle languages.
+- `P` for the previous channel; type a number to tune.
+- Volume to 200 %, a compressor, track choice, aspect ratio, deinterlacing and a sleep timer.
 - Subtitle font, size, colour and backdrop.
-- Mouse: wheel for volume, double-click for fullscreen, double-click the edges to skip.
-  Theater mode (`T`).
-- Stats (`S`): bitrate, buffer, resolution, codec, dropped frames and stalls.
-- When a provider ends or refuses a stream (for example because another device took the
-  connection), zapper says so and doesn't reconnect on its own.
-- Optional media keys and desktop media controls (MPRIS on Linux), off by default.
-
-### Other
-
-- Restores the last channel, window size and volume on launch.
-- Interface zoom (`Ctrl` `+`/`−`/`0`, `⌘` on a Mac); 12- or 24-hour clock.
-- Updates itself from GitHub releases, verified against the release's checksums.
-- Credentials are stored in your config directory, readable only by you, and kept out of logs.
-- A log in the data directory (`zapper.log`, and `zapper-server.log` for the recording service),
-  kept to a few megabytes, for when a sync or a recording went wrong.
-- No telemetry. Apart from your sources, the only request zapper makes is the daily update
-  check, which can be turned off.
-- MIT licensed.
+- Theater mode (`T`) and stats (`S`).
+- A refused or ended stream says why; zapper reconnects on its own only after network failures.
+- Optional media keys and desktop media controls.
 
 ### Recording
 
-- **Record from the guide:** right-click a programme. A background service, zapper-server, wakes
-  to record it with zapper closed, copying the stream into a Matroska file named the way Jellyfin
-  and Plex expect (or by channel, by date, or a pattern of your own), with an optional wall-clock
-  subtitle track, named by season and episode when the guide numbers them. It switches to a
-  backup channel if the channel's feed fails (picked for you, or chosen in the guide), and never
-  takes a connection someone is watching on. Back-to-back programmes on one channel share one
-  connection, so both are recorded whole on an account of one stream, and the Record menu warns
-  when overlaps on other channels need more streams than the account has. Jellyfin can play a
-  recording while it records, through a `.strm` file pointing at the service. On Linux and
-  Windows; see [docs/recording.md](docs/recording.md).
-- **Record what you're watching:** press R, or Record in the picture's menu. On an account of one
-  stream the player moves onto the recording service's connection, so the picture and the
-  recording share it, and what the player had already buffered of the programme becomes the
-  recording's first part.
-- **In a browser:** with network access turned on, the recording service serves zapper's own
-  interface to other devices on your network, behind a password: browse the channels and the
-  guide, search, schedule or cancel recordings, and watch live TV from a phone or another
-  computer. The service streams the channel itself (the provider's address never reaches the
-  browser), shares the connection with a recording of the same channel, and converts sound a
-  browser can't play to AAC.
+- Record from the guide, or what you're watching (`R`), with zapper closed. Files are named for
+  Jellyfin and Plex, with a backup channel if the feed fails.
+- Works on a one-connection account: recordings and the player share the connection.
+- Conflicts are shown before recording.
+- Jellyfin can play a recording while it records.
+- On Linux and Windows. See [docs/recording.md](docs/recording.md).
+
+### In a browser
+
+- With network access on, the recording service serves zapper to other devices behind a
+  password: live TV, movies, shows, the guide and recordings. The provider's address never
+  reaches the browser.
+
+### Other
+
+- Restores the last channel, window size and volume.
+- Interface zoom and a 12- or 24-hour clock.
+- Updates itself from GitHub releases, checked against their checksums.
+- Credentials are readable only by you and kept out of logs.
+- No telemetry: apart from your sources, only the daily update check, which can be turned off.
 
 ## Performance
 
@@ -256,6 +186,7 @@ on macOS, and [docs/releasing.md](docs/releasing.md) cutting a release.
 
 ## Documentation
 
+- [docs/features.md](docs/features.md): how each feature behaves, in detail
 - [docs/recording.md](docs/recording.md): the recording service, its settings and its API
 - [docs/releasing.md](docs/releasing.md): versions, packages, releases and the updater
 - [docs/windows.md](docs/windows.md): building and running on Windows

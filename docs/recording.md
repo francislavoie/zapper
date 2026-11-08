@@ -458,7 +458,7 @@ under the same rules, played as it is or converted, with the same subtitles; ano
 away because it holds the last connection is told which episode, as “A Show” S2 E4.
 
 **Up next.** Near an episode's end the page counts down into the next one, as the app does (see
-the [README](../README.md#playback)). Moving on marks the episode watched and asks for the next
+[features.md](features.md#up-next)). Moving on marks the episode watched and asks for the next
 with `replaces` naming the episode's viewer, so the next one takes over its connection rather
 than asking for another; the sound and the subtitles are chosen in the languages the episode
 before was heard and read in, where the next one has them (only text subtitles can be shown).
