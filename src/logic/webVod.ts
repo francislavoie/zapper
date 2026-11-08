@@ -259,6 +259,24 @@ export function cueTimes(cue: VodCue, start: number): { start: number; end: numb
   return { start: Math.max(0, cue.start - start), end };
 }
 
+/** How far behind the picture a downloaded file's cues are still put on. */
+export const FILE_CUES_BEHIND_SECONDS = 30;
+
+/** The cues of a downloaded file to put on the element now: those that end
+ *  after the stream's start (and not long behind the picture) and begin
+ *  before `ahead` seconds past it. The element holds a window, not a
+ *  film's thousand-odd cues at once, widened as the picture moves. */
+export function fileCueWindow(
+  cues: readonly VodCue[],
+  start: number,
+  position: number,
+  ahead = 600,
+): VodCue[] {
+  const from = Math.max(start, position - FILE_CUES_BEHIND_SECONDS);
+  const to = position + ahead;
+  return cues.filter((c) => c.end > from && c.start < to);
+}
+
 const TIME = /^(?:(\d+):)?(\d{1,2}):(\d{2})\.(\d{3})$/;
 
 function seconds(t: string): number | null {
