@@ -151,7 +151,7 @@ export function App() {
   // Up next counts and moves on from here, whichever view is up; the cards
   // and the keys are handed where it stands.
   const resume = useResumePrompt();
-  const upNext = useUpNext(resume.shown);
+  const upNext = useUpNext(resume.held);
   useGlobalKeys(state, dispatch, upNext, stacked, resume.shown);
   useMenuCommands(dispatch);
   // The desktop's media keys, when Settings › Playback turns them on.
@@ -370,12 +370,13 @@ export function App() {
   // looked up. Only on that transition: the store learns of a movie it
   // starts before the player reports it. Its place, and whether it now
   // counts as watched, were written as it played, so the lists and the
-  // rail's counts are read again, once for the stop.
+  // rail's counts are read again, once for the stop or for another movie
+  // played in its place.
   const hadMovie = useRef<number | null>(null);
   useEffect(() => {
     const was = hadMovie.current;
-    if (openMovie === null && was !== null) {
-      dispatch({ type: "movies/playing", movie: null });
+    if (was !== null && was !== openMovie) {
+      if (openMovie === null) dispatch({ type: "movies/playing", movie: null });
       dispatch({ type: "movies/catalogue" });
       dispatch({ type: "continue/changed" });
       void refreshMovieMarks(dispatch, was);
@@ -490,11 +491,16 @@ export function App() {
       const at = hiddenAt;
       hiddenAt = null;
       if (!freshOnReturn(at, Date.now())) return;
-      const { movies, shows } = latest.current;
+      const { movies, shows, continue: cont } = latest.current;
       dispatch({ type: "continue/changed" });
       dispatch({ type: "movies/catalogue" });
       if (movies.selected) void refreshMovieMarks(dispatch, movies.selected.movieId);
       if (shows.selected) dispatch({ type: "shows/played", seriesId: shows.selected.seriesId });
+      // The band over a Continue watching entry tells of its show's details.
+      const entry = cont.selected;
+      if (entry?.kind === "episode" && entry.series.seriesId !== shows.selected?.seriesId) {
+        dispatch({ type: "shows/played", seriesId: entry.series.seriesId });
+      }
     };
     const onVisibility = () => (document.visibilityState === "hidden" ? leave() : back());
     document.addEventListener("visibilitychange", onVisibility);

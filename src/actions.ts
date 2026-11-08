@@ -950,6 +950,20 @@ export async function resumeHeld(dispatch: Dispatch<Action>): Promise<void> {
   await run(dispatch, "resume", backend.setPaused(false));
 }
 
+/** Goes to `seconds` into what plays. A seek is not an answer to the Resume
+ *  question, but it closes it: a title held for it stays paused where it was
+ *  sought. */
+export function seekTo(dispatch: Dispatch<Action>, seconds: number): Promise<boolean> {
+  dispatch({ type: "continue/prompt", prompt: null });
+  return run(dispatch, "seek", backend.seekTo(seconds));
+}
+
+/** Skips `by` seconds, back or on; it closes the question as `seekTo` does. */
+export function seekBy(dispatch: Dispatch<Action>, by: number): Promise<boolean> {
+  dispatch({ type: "continue/prompt", prompt: null });
+  return run(dispatch, "seek", backend.seekRelative(by));
+}
+
 /** Answers it with Start over: back to 0:00, playing. */
 export async function startOverHeld(dispatch: Dispatch<Action>): Promise<void> {
   dispatch({ type: "continue/prompt", prompt: null });

@@ -6,6 +6,7 @@
 
 import { calendarDate, clock, hhmm, runtime } from "./format.ts";
 import type { MarksDto } from "../types.ts";
+import { progressDue } from "./webVod.ts";
 
 export const STARTED_FRACTION = 0.01;
 export const WATCHED_FRACTION = 0.92;
@@ -155,4 +156,78 @@ export function promptLine(p: ResumePrompt, now: number): string {
   return p.playedAt === null
     ? `You stopped at ${at}.`
     : `You stopped at ${at}, ${watchedWhen(p.playedAt, now)} at ${hhmm(p.playedAt)}.`;
+}
+
+/** What happens to a title opened held: Play (Resume, Space, a media key),
+ *  its picture playing, a pause, a seek, its stream read again. */
+export type HeldEvent = "play" | "playing" | "pause" | "seek" | "reopen";
+
+/** Whether a title opened held for the question still is: until it plays.
+ *  A seek closes the question but is not an answer: the title stays paused,
+ *  and held, where it was sought. */
+export function heldAfter(held: boolean, event: HeldEvent): boolean {
+  return held && event !== "play" && event !== "playing";
+}
+
+/** Whether the browser's player reports the place reached now (`final`: as
+ *  the title is left, whatever the timing). Never while the title is held:
+ *  looking at the question is not watching, and a report would date the
+ *  place today and move it to the top of Continue watching. As the app's
+ *  player, which saves nothing while it holds a title. Otherwise the first
+ *  time after a second, then as `progressDue` says, and once as it is left
+ *  unless that place was said already. */
+export function placeReportDue(r: {
+  held: boolean;
+  final: boolean;
+  last: { at: number; position: number } | null;
+  now: number;
+  position: number;
+  paused: boolean;
+}): boolean {
+  if (r.held) return false;
+  if (!r.final && !progressDue(r.last, r.now, r.position, r.paused)) return false;
+  if (r.position < 1 && r.last === null) return false;
+  return !(r.final && r.last?.position === r.position);
+}
+
+/** Up next standing aside for a title opened held: `by` is the question
+ *  that held it, `seen` once the player has reported the title, `on` until
+ *  it has played. */
+export interface Hold {
+  by: ResumePrompt;
+  seen: boolean;
+  on: boolean;
+}
+
+/** The hold for the player's state. Escape or a seek closes the question,
+ *  not the hold: a title paused near its end behind it neither shows Up
+ *  next's card nor moves on until it has played. It is over once the player
+ *  reports the title playing, or anything else once it has reported it at
+ *  all; a question gone before the title was ever reported (a failed open)
+ *  leaves none. Another question holds anew, even for the same title. */
+export function holdStep(
+  hold: Hold | null,
+  prompt: ResumePrompt | null,
+  p: { state: string; onDemand: { kind: string; id: number } | null },
+): Hold | null {
+  let h = hold;
+  if (prompt !== null && h?.by !== prompt) h = { by: prompt, seen: false, on: true };
+  if (h === null || !h.on) return h;
+  const item = h.by.item;
+  const open = p.onDemand?.kind === item.kind && p.onDemand.id === item.id;
+  if (open && (p.state === "opening" || p.state === "paused")) return h.seen ? h : { ...h, seen: true };
+  // Until the title has been reported opening or paused, whatever the player
+  // says is from before the open (the same title playing, opened again).
+  if (h.seen || prompt === null) return { ...h, on: false };
+  return h;
+}
+
+export const holding = (h: Hold | null): boolean => h?.on === true;
+
+/** How a show's ▶ Play opens its episode: Resume when its details say it is
+ *  in progress; else asking, so a place another device gave it since they
+ *  were read is read as it opens and asked about rather than played over
+ *  from the beginning. */
+export function showPlayStart(resume: boolean): StartAt {
+  return resume ? "resume" : "ask";
 }

@@ -51,7 +51,6 @@ import {
   openDue,
   parseVtt,
   positionOf,
-  progressDue,
   progressPath,
   releaseDue,
   reopenDue,
@@ -68,7 +67,7 @@ import {
   type VodItemRef,
   type VodMode,
 } from "./logic/webVod";
-import { nextStart, playsOnReopen } from "./logic/resume";
+import { heldAfter, nextStart, placeReportDue, playsOnReopen } from "./logic/resume";
 import type {
   MarksDto,
   OnDemandDto,
@@ -156,6 +155,9 @@ interface Session {
   started: boolean;
   /** Played once ready; a reading opened while paused stays paused. */
   wantPlay: boolean;
+  /** Opened held for the Resume question and not played since: its place
+   *  is not reported (logic/resume.ts `placeReportDue`). */
+  held: boolean;
   openedAt: number;
   /** Where in the film the picture is, in seconds. */
   position: number;
@@ -314,6 +316,7 @@ function playItem(item: VodItemRef, start: number | null, held: boolean): Promis
     preferred: true,
     duration: null,
     wantPlay: !held,
+    held,
   });
 }
 
@@ -327,6 +330,8 @@ interface Keep {
   preferred?: boolean;
   duration: number | null;
   wantPlay: boolean;
+  /** Opened held for the Resume question (paused, `wantPlay` false). */
+  held?: boolean;
   /** Another title's language, whose sound is chosen once this one's
    *  tracks are known (Up next), in place of `audio`. */
   carry?: Languages;
@@ -413,6 +418,7 @@ async function watch(item: VodItemRef, from: number, keep: Keep): Promise<void> 
     events: null,
     started: false,
     wantPlay: keep.wantPlay,
+    held: keep.held === true && !keep.wantPlay,
     openedAt: Date.now(),
     position: from,
     pausedAt: null,
@@ -434,6 +440,7 @@ async function watch(item: VodItemRef, from: number, keep: Keep): Promise<void> 
         shown: s.subtitlesShown,
         duration: s.duration,
         wantPlay: keep.wantPlay,
+        held: keep.held,
       });
       return;
     }
@@ -485,6 +492,7 @@ async function openReading(s: Session, from: number, wantPlay: boolean) {
     el.addEventListener(type, f, { signal: events.signal, once });
   on("playing", () => {
     if (!current()) return;
+    s.held = heldAfter(s.held, "playing");
     s.pausedAt = null;
     patch({ state: "playing" });
   });
@@ -869,6 +877,7 @@ async function rewatch(s: Session) {
     shown: s.subtitlesShown,
     duration: s.duration,
     wantPlay: playsAgain(s, el),
+    held: s.held,
   });
 }
 
@@ -890,9 +899,15 @@ async function viewerStatus(viewer: string): Promise<ViewerStatus | null> {
  *  from, and past most of the film marks it watched. `final`: whatever the
  *  timing, as the film is left; `keepalive`: sent even as the page goes. */
 function report(s: Session, final = false, keepalive = false) {
-  if (!final && !progressDue(s.lastProgress, Date.now(), s.position, s.pausedAt !== null)) return;
-  if (s.position < 1 && s.lastProgress === null) return;
-  if (final && s.lastProgress?.position === s.position) return;
+  const due = placeReportDue({
+    held: s.held,
+    final,
+    last: s.lastProgress,
+    now: Date.now(),
+    position: s.position,
+    paused: s.pausedAt !== null,
+  });
+  if (!due) return;
   s.lastProgress = { at: Date.now(), position: s.position };
   const body = { position: s.position, duration: durationOf(s) };
   void fetch(progressPath(s.item), {
@@ -1032,6 +1047,7 @@ export async function setPaused(paused: boolean): Promise<void> {
   const s = session;
   const el = currentVideo();
   if (!s || !el) return;
+  if (!paused) s.held = heldAfter(s.held, "play");
   if (s.released) {
     if (paused) return;
     await watch(s.item, s.position, {
@@ -1142,6 +1158,7 @@ export async function setAudioTrack(id: number): Promise<PlayerOptionsDto> {
       shown: s.subtitlesShown,
       duration: s.duration,
       wantPlay: playing || s.released,
+      held: s.held,
     });
     return optionsFeed.last;
   }
