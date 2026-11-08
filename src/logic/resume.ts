@@ -113,8 +113,15 @@ export function promptStep(
   if (prompt === null) return { shown: false, seen: false, clear: false };
   const open = p.onDemand?.kind === prompt.item.kind && p.onDemand.id === prompt.item.id;
   if (open && (p.state === "opening" || p.state === "paused")) return { shown: true, seen: true, clear: false };
-  const ended = p.state === "playing" || p.state === "failed" || p.state === "stopped";
-  return { shown: false, seen, clear: open ? ended : seen };
+  // Until the title has been reported opening or paused, whatever the player
+  // says is from before the open: nothing clears it.
+  return { shown: false, seen, clear: seen };
+}
+
+/** Whether the question is seen, for the prompt now asked: a new prompt (or
+ *  another item) starts unseen, whatever the last one was. */
+export function seenFor(last: ResumePrompt | null, seen: boolean, now: ResumePrompt | null): boolean {
+  return last !== null && last === now ? seen : false;
 }
 
 /** "You stopped at 46:10, yesterday at 22:40." */

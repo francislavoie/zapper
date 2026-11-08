@@ -771,7 +771,7 @@ export function App() {
         {stacked ? (
           <div className="stacked">
             <div className="stacked-video" ref={dockRef}>
-              <PlayerChrome upNext={upNext} />
+              <PlayerChrome upNext={upNext} compactCards />
             </div>
             <div className="stacked-guide">
               {moviesOn ? (
