@@ -8,6 +8,7 @@ import {
   progressOf,
   promptLine,
   promptStep,
+  seenFor,
   resumeLabel,
   resumePoint,
   startPlan,
@@ -105,4 +106,26 @@ test("the question shows while its title is held, and goes with it", () => {
   assert.equal(promptStep(pr, true, at("stopped", null)).clear, true);     // Stop
   assert.equal(promptStep(pr, true, at("playing", "episode", 2)).clear, true); // episode 2 is another title
   assert.deepEqual(promptStep(null, false, at("paused")), { shown: false, seen: false, clear: false });
+});
+
+test("nothing clears a question until it has been seen", () => {
+  const pr = { item: { kind: "movie", id: 2 }, title: "A Film", position: 2770, playedAt: null };
+  const at = (state, kind = "movie", id = 2) => ({ state, onDemand: kind ? { kind, id, position: 2770, duration: 7260, bufferedTo: null } : null });
+  // The same title already playing, or its failed open retried: stale state.
+  assert.equal(promptStep(pr, false, at("playing")).clear, false);
+  assert.equal(promptStep(pr, false, at("failed")).clear, false);
+  assert.equal(promptStep(pr, false, at("stopped", null)).clear, false);
+});
+
+test("a question is seen for its own prompt only", () => {
+  const a = { item: { kind: "movie", id: 1 }, title: "A", position: 100, playedAt: null };
+  const c = { item: { kind: "movie", id: 3 }, title: "C", position: 100, playedAt: null };
+  const at = (state, id) => ({ state, onDemand: { kind: "movie", id, position: 100, duration: 7200, bufferedTo: null } });
+  assert.equal(seenFor(a, true, a), true);
+  assert.equal(seenFor(a, true, c), false);
+  assert.equal(seenFor(a, true, { ...a }), false);
+  // A seen, then C asked while the player still reports A paused: not cleared, not shown; then C opening shows.
+  const seen = seenFor(a, true, c);
+  assert.deepEqual(promptStep(c, seen, at("paused", 1)), { shown: false, seen: false, clear: false });
+  assert.deepEqual(promptStep(c, seen, at("opening", 3)), { shown: true, seen: true, clear: false });
 });
