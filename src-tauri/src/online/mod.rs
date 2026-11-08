@@ -11,7 +11,8 @@
 //!   and no sign-in; downloads with the user's own OpenSubtitles sign-in,
 //!   which is kept in the settings file (readable by this user alone) and
 //!   sent to OpenSubtitles alone. Fetched files are SubRip ([`srt`]),
-//!   turned into WebVTT.
+//!   turned into WebVTT. [`subtitles`] finds a title's, downloads them and
+//!   keeps them with it.
 //!
 //! Every service is asked through [`http`]: one client shape (zapper's
 //! `User-Agent`, short timeouts, redirects only where they are expected),
@@ -29,3 +30,4 @@ pub mod config;
 pub mod http;
 pub mod opensubtitles;
 pub mod srt;
+pub mod subtitles;
