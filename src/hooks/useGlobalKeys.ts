@@ -35,7 +35,8 @@ import { useSubtitles } from "./useSubtitles";
 import { blocksPlainKey, shortcutModifier } from "../logic/keys";
 import { moviesAvailable, playingKind } from "../logic/movies";
 import { showsAvailable } from "../logic/shows";
-import { ALL_CATEGORIES, CONTINUE, railItemKind } from "../logic/railItems";
+import { ALL_CATEGORIES, railItemKind } from "../logic/railItems";
+import { continueShown } from "../logic/continueWatching";
 import { playerRecord } from "../logic/recordings";
 import { upNextTakesEnter, type UpNext } from "../logic/upNext";
 import { VOD_SKIP_SECONDS, isOnDemandKind } from "../logic/vodTransport";
@@ -195,7 +196,7 @@ export function useGlobalKeys(
           state.shows.selected !== null &&
           showsAvailable(state.shows.summary) &&
           // Continue watching's list opens no pane (ShowsList).
-          !(state.shows.selection === CONTINUE && state.shows.query.trim() === ""),
+          !continueShown(state.shows.selection, state.shows.query),
         // Only in the full player: docked, Escape is the list's.
         resumePrompt: promptShown && state.mode === "watch" && !stacked,
         upNextCard: card !== null,

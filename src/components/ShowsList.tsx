@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { backend } from "../backend";
 import { useSettledSearch } from "../hooks/useSettledSearch";
-import { CONTINUE } from "../logic/continueWatching";
+import { continueShown } from "../logic/continueWatching";
 import { playingKind } from "../logic/movies";
 import { paneKey } from "../logic/showPane";
 import type { MoviesView, YearRange } from "../logic/movies";
@@ -76,7 +76,7 @@ export function ShowsList({ besideRail = true }: { besideRail?: boolean }) {
   const searching = isTitleSearch(searched);
   // Continue watching, until a search there makes it the tab's results. Its
   // entries open no episode pane: the band shows the one selected.
-  const continuing = shows.selection === CONTINUE && !searching;
+  const continuing = continueShown(shows.selection, searched);
   const categories = shows.categories.status === "ready" ? shows.categories.data : [];
   const heading = searching ? "Search results" : showTitle(shows.selection, categories);
 

@@ -29,7 +29,10 @@ const NO_MARKS = {};
 const NO_MENU = () => {};
 /** The entries carry their own marks. */
 const withMarks = (i: ContinueItemDto) => i;
-/** Never answers: the list is still being read (the head says loading). */
+/** Never answers: the list is still being read (the head says loading).
+ *  It is never settled on purpose: the read's answer changes the list's key
+ *  (`cw:loading` to `cw` or `cw:error`), which resets the page book and
+ *  drops this ask with it. */
 const pending = () => new Promise<never>(() => {});
 
 /** A number for each list read: the same entries read again (a place moved
@@ -64,26 +67,24 @@ export function ContinueList({ tab, besideRail, shown, children }: ContinueListP
   const own = tab === "movies" ? app.movies : app.shows;
 
   const read = cw.items;
-  const items = read.status === "ready" ? read.data : NO_ITEMS;
-  const listKey =
-    read.status === "ready"
-      ? `cw:${items.map(continueKey).join(",")}`
-      : read.status === "error"
-        ? `cw:error:${read.message}`
-        : "cw:loading";
+  // One key while there is a list: a removal or a place moved on is the
+  // same list read again (`revision`), so it keeps its scroll, and the
+  // selection moves to the entry now in its place (continueState.ts).
+  const listKey = read.status === "ready" ? "cw" : read.status === "error" ? "cw:error" : "cw:loading";
   const revision = read.status === "ready" ? versionOf(read.data) : 0;
 
-  // A failed read is shown with "try again"; the second ask for the same
-  // failed list is that, and reads the list again.
-  const failed = useRef<string | null>(null);
+  // A failed read is shown with "try again"; a second ask for the same
+  // failed answer is that press, and reads the list again, once. The read
+  // that follows is a new answer, so it does not ask again by itself.
+  const failed = useRef<typeof read | null>(null);
   const fetchPage = useCallback(
     (offset: number, limit: number): Promise<{ total: number; items: ContinueItemDto[] }> => {
       if (read.status === "ready") {
         return Promise.resolve({ total: read.data.length, items: read.data.slice(offset, offset + limit) });
       }
       if (read.status === "error") {
-        if (failed.current === read.message) dispatch({ type: "continue/changed" });
-        failed.current = read.message;
+        if (failed.current === read) dispatch({ type: "continue/changed" });
+        failed.current = read;
         return Promise.reject(new Error(read.message));
       }
       return pending();

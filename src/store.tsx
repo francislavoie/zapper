@@ -722,6 +722,8 @@ function reduce(state: State, action: Action): State {
         menuOpen: false,
         // The guide is Live TV's alone.
         mode: modeForSection(state.mode, action.section) as Mode,
+        // An entry's menu belongs to the tab it was opened on (M, N, W).
+        continue: state.continue.menu ? { ...state.continue, menu: null } : state.continue,
       };
     case "recordings":
       return {

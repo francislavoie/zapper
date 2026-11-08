@@ -9,6 +9,7 @@ import type { PosterCard } from "./movies.ts";
 import { CONTINUE } from "./railItems.ts";
 import { progressOf, timeLeft, watchedWhen, type Place } from "./resume.ts";
 import { episodeCode, episodeTitle } from "./shows.ts";
+import { isTitleSearch } from "./titleMatch.ts";
 
 export { CONTINUE };
 
@@ -36,6 +37,12 @@ export function firstSelection(
   items: number,
 ): string | null {
   return !chosen && selection === recent && items > 0 ? CONTINUE : null;
+}
+
+/** Whether a tab shows the Continue pane: chosen in its rail, and no title
+ *  search typed there (a search is the whole tab's results instead). */
+export function continueShown(selection: string, search: string): boolean {
+  return selection === CONTINUE && !isTitleSearch(search);
 }
 
 /** "movie:7", "show:12": a show is one entry whichever episode it is at. */

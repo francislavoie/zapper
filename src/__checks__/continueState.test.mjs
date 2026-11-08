@@ -46,11 +46,33 @@ test("a fresh list replaces the selection with its new copy, by key", () => {
   assert.equal(s.selected.movie.position, 900);
   assert.equal(s.selected.movie.movieId, 1);
 });
-test("a fresh list without the selection's key drops it", () => {
-  let s = continueReducer(initialContinue(), { type: "continue/items", value: ready([movie(1)]) });
-  s = continueReducer(s, { type: "continue/select", item: s.items.data[0] });
+test("a fresh list without the selection's key selects the entry now at its place", () => {
+  // The middle one removed: the one after it moves up into its place.
+  let s = continueReducer(initialContinue(), {
+    type: "continue/items",
+    value: ready([movie(1), movie(2), movie(3)]),
+  });
+  s = continueReducer(s, { type: "continue/select", item: s.items.data[1] });
+  s = continueReducer(s, { type: "continue/items", value: ready([movie(1), movie(3)]) });
+  assert.equal(s.selected.movie.movieId, 3);
+  // The last one removed: the place is clamped to the new end.
+  s = continueReducer(s, { type: "continue/items", value: ready([movie(1)]) });
+  assert.equal(s.selected.movie.movieId, 1);
+  // Nothing left: nothing selected.
+  s = continueReducer(s, { type: "continue/items", value: ready([]) });
+  assert.equal(s.selected, null);
+  // Nothing was selected: nothing is.
+  s = continueReducer(initialContinue(), { type: "continue/items", value: ready([movie(1)]) });
   s = continueReducer(s, { type: "continue/items", value: ready([movie(2)]) });
   assert.equal(s.selected, null);
+});
+test("a fresh list keeps an entry's menu while the entry is there, and closes it once it is gone", () => {
+  let s = continueReducer(initialContinue(), { type: "continue/items", value: ready([movie(1), movie(2)]) });
+  s = continueReducer(s, { type: "continue/menu", menu: { key: key(2), x: 1, y: 2, takeFocus: false } });
+  s = continueReducer(s, { type: "continue/items", value: ready([movie(2), movie(1)]) });
+  assert.equal(s.menu.key, key(2));
+  s = continueReducer(s, { type: "continue/items", value: ready([movie(1)]) });
+  assert.equal(s.menu, null);
 });
 test("the menu opens and closes", () => {
   let s = continueReducer(initialContinue(), {
