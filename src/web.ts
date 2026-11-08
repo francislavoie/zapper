@@ -125,6 +125,8 @@ const put = <T>(url: string, body?: unknown) => request<T>("PUT", url, body);
 const del = <T>(url: string) => request<T>("DELETE", url);
 
 const notHere = (): Promise<never> => Promise.reject(new Error(NOT_HERE));
+/** What the service answers no route for yet. */
+const notYet = (): Promise<never> => Promise.reject(new Error("not available yet"));
 const nothing = (): Promise<void> => Promise.resolve();
 
 // ----------------------------------------------------------------- session
@@ -352,6 +354,14 @@ export const webBackend: typeof api = {
     del<unknown>(`/api/vod/continue/${kind}/${id}`).then(() => undefined),
   movieMarks: (movieId) => get<MarksDto>(`/api/vod/movies/${movieId}/marks`),
   episodeMarks: (episodeId) => get<MarksDto>(`/api/vod/episodes/${episodeId}/marks`),
+  onlineServices: notYet,
+  setOpenSubtitles: notYet,
+  signInOpenSubtitles: notYet,
+  signOutOpenSubtitles: notYet,
+  findSubtitles: notYet,
+  downloadSubtitle: notYet,
+  keptSubtitles: notYet,
+  addSubtitleFile: notYet,
 
   activityRows: notHere,
   importActivity: notHere,

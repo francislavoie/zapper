@@ -40,6 +40,7 @@ pub mod ipc;
 pub mod localtime;
 pub mod logfile;
 pub mod m3u;
+pub mod online;
 pub mod paths;
 pub mod recording;
 pub mod source;

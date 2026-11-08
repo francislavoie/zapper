@@ -832,6 +832,77 @@ export interface NetworkDto extends NetworkSettingsDto {
   devices: DeviceDto[];
 }
 
+// --------------------------------------------------------- online services
+// Mirrors the online-services DTOs at the end of `src-tauri/src/ipc/types.rs`.
+// None of these carries a password, a token or a download link.
+
+export interface OnlineServicesDto {
+  openSubtitles: OpenSubtitlesStatusDto;
+}
+
+export interface OpenSubtitlesStatusDto {
+  enabled: boolean;
+  /** Language codes searched for; empty means the interface's preference. */
+  languages: string[];
+  /** The OpenSubtitles username, when signed in. */
+  signedInAs: string | null;
+  /** OpenSubtitles refused the sign-in kept: ask for it again. */
+  signInRefused: boolean;
+  downloadsLeft: number | null;
+  /** Unix seconds. */
+  downloadsResetAt: number | null;
+}
+
+/** One subtitle file found. */
+export interface SubtitleResultDto {
+  fileId: number;
+  language: string;
+  /** The release it was made for, as its uploader named it. */
+  release: string;
+  hearingImpaired: boolean;
+  /** Only the parts in another language. */
+  forced: boolean;
+  /** From an uploader OpenSubtitles trusts. */
+  trusted: boolean;
+  downloads: number;
+  /** Already downloaded and kept for this title. */
+  kept: boolean;
+}
+
+/** How the title was found: by its TMDB id, or by its name (and year). */
+export type MatchedBy = "id" | "name";
+
+/** What "Find subtitles…" found. `retryAt` is Unix seconds. */
+export type SubtitleSearchDto =
+  | {
+      kind: "results";
+      results: SubtitleResultDto[];
+      /** The languages searched for. */
+      languages: string[];
+      matchedBy: MatchedBy | null;
+    }
+  | { kind: "off" }
+  | { kind: "unknownTitle" }
+  | { kind: "busy"; retryAt: number };
+
+/** A subtitle file downloaded and kept with its title. */
+export interface KeptSubtitleDto {
+  fileId: number;
+  language: string;
+  release: string;
+  hearingImpaired: boolean;
+  /** Unix seconds. */
+  downloadedAt: number;
+}
+
+/** What downloading a subtitle did. Times are Unix seconds. */
+export type SubtitleDownloadDto =
+  | { kind: "downloaded"; subtitle: KeptSubtitleDto; downloadsLeft: number | null }
+  | { kind: "signIn"; refused: boolean; email: boolean }
+  | { kind: "quota"; resetAt: number | null }
+  | { kind: "busy"; retryAt: number }
+  | { kind: "off" };
+
 // ------------------------------------------------------------------ movies
 // Mirrors the movie DTOs at the end of `src-tauri/src/ipc/types.rs`.
 

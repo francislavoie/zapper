@@ -1406,3 +1406,137 @@ mod show_tests {
         assert_eq!(q.year_from, Some(1990));
     }
 }
+
+// ------------------------------------------------------- online services
+// Settings › Online services, and subtitles found on OpenSubtitles. None of
+// these carries a password, a token or a download link.
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OnlineServicesDto {
+    pub open_subtitles: OpenSubtitlesStatusDto,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenSubtitlesStatusDto {
+    pub enabled: bool,
+    /// Language codes searched for; empty means the interface's preference.
+    pub languages: Vec<String>,
+    /// The OpenSubtitles username, when signed in.
+    pub signed_in_as: Option<String>,
+    /// OpenSubtitles refused the sign-in kept: ask for it again.
+    pub sign_in_refused: bool,
+    pub downloads_left: Option<u32>,
+    /// Unix seconds.
+    pub downloads_reset_at: Option<i64>,
+}
+
+/// One subtitle file found.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubtitleResultDto {
+    pub file_id: i64,
+    pub language: String,
+    /// The release it was made for, as its uploader named it.
+    pub release: String,
+    pub hearing_impaired: bool,
+    /// Only the parts in another language.
+    pub forced: bool,
+    /// From an uploader OpenSubtitles trusts.
+    pub trusted: bool,
+    pub downloads: u64,
+    /// Already downloaded and kept for this title.
+    pub kept: bool,
+}
+
+/// How the title was found on OpenSubtitles: by its TMDB id, or by its name
+/// (and year).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MatchedBy {
+    Id,
+    Name,
+}
+
+/// What "Find subtitles…" found.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum SubtitleSearchDto {
+    Results {
+        results: Vec<SubtitleResultDto>,
+        /// The languages searched for.
+        languages: Vec<String>,
+        matched_by: Option<MatchedBy>,
+    },
+    /// OpenSubtitles is turned off.
+    Off,
+    /// Nothing to search by: no TMDB id and no usable name.
+    UnknownTitle,
+    /// Asked too often; Unix seconds.
+    Busy { retry_at: i64 },
+}
+
+/// A subtitle file downloaded and kept with its title.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeptSubtitleDto {
+    pub file_id: i64,
+    pub language: String,
+    pub release: String,
+    pub hearing_impaired: bool,
+    /// Unix seconds.
+    pub downloaded_at: i64,
+}
+
+/// What downloading a subtitle did.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum SubtitleDownloadDto {
+    Downloaded {
+        subtitle: KeptSubtitleDto,
+        downloads_left: Option<u32>,
+    },
+    /// Sign in to OpenSubtitles first; `refused` when the sign-in kept was
+    /// refused, `email` when it was an email address rather than a username.
+    SignIn { refused: bool, email: bool },
+    /// Out of downloads until `reset_at` (Unix seconds), when known.
+    Quota { reset_at: Option<i64> },
+    Busy { retry_at: i64 },
+    Off,
+}
+
+#[cfg(test)]
+mod online_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn subtitle_answers_use_the_mirrored_wire_names() {
+        assert_eq!(
+            serde_json::to_value(SubtitleSearchDto::Results {
+                results: vec![],
+                languages: vec!["en".into()],
+                matched_by: Some(MatchedBy::Id),
+            })
+            .unwrap(),
+            json!({"kind": "results", "results": [], "languages": ["en"], "matchedBy": "id"})
+        );
+        assert_eq!(
+            serde_json::to_value(SubtitleSearchDto::UnknownTitle).unwrap(),
+            json!({"kind": "unknownTitle"})
+        );
+        assert_eq!(
+            serde_json::to_value(SubtitleDownloadDto::SignIn {
+                refused: true,
+                email: false
+            })
+            .unwrap(),
+            json!({"kind": "signIn", "refused": true, "email": false})
+        );
+        assert_eq!(
+            serde_json::to_value(SubtitleDownloadDto::Busy { retry_at: 5 }).unwrap(),
+            json!({"kind": "busy", "retryAt": 5})
+        );
+    }
+}
