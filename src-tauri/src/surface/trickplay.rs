@@ -28,6 +28,18 @@
 //! happens on one thread and the lookup answers an IPC command on another.
 //! The data is bytes, so it can simply move; a write every few seconds
 //! contends with nothing.
+//!
+//! **A movie or an episode** keeps its frames differently, because its bar is
+//! the whole title rather than a window behind a live edge. The store is told
+//! which title it is holding ([`open_title`]); frames are then filed by the
+//! title's own time into slots a fixed spacing apart ([`title_spacing`]), at
+//! most one per slot, and kept for as long as that title is open: reopening
+//! the same title keeps them, anything else clears them. Two things fill the
+//! slots: the frames drawn while it plays, exactly as for a channel, and
+//! `surface::title_thumbs`, which reads what mpv has already buffered ahead
+//! and behind and decodes one picture per empty slot. That second path is the
+//! one place a frame is decoded twice, which is why it is paced, one at a
+//! time, and gives way whenever playback needs the machine.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -62,8 +74,24 @@ struct Thumb {
     /// mpv's `playback-time` when it was taken. Stream time, not wall clock:
     /// it is the only clock that means the same thing to a later seek.
     at: f64,
-    /// RGBA, top-down, `THUMB_W * THUMB_H * 4` bytes.
-    rgba: Vec<u8>,
+    img: Img,
+}
+
+/// A thumbnail's pixels, as they were taken or as they are kept.
+enum Img {
+    /// RGBA, top-down, `THUMB_W * THUMB_H * 4` bytes: a frame as it was
+    /// drawn. A channel's stay like this (there are at most [`MAX_THUMBS`]).
+    Rgba(Vec<u8>),
+    /// A JPEG of the same picture. A title can hold up to
+    /// [`TITLE_MAX_SLOTS`], so its frames are compressed off the main thread
+    /// (`surface::title_thumbs`): a few kilobytes each instead of 57KB.
+    Jpeg(Vec<u8>),
+}
+
+/// The title the store is holding frames for, and how far apart they are.
+struct Title {
+    key: String,
+    spacing: f64,
 }
 
 #[derive(Default)]
@@ -71,6 +99,94 @@ struct Store {
     /// Sorted by `at`, because that is how it is searched and how it is
     /// pruned, and keeping it sorted on insert is cheaper than either.
     thumbs: Vec<Thumb>,
+    /// `Some` while a movie or an episode is open: the frames are then the
+    /// title's, filed by slot ([`Store::insert_title`]), and never pruned.
+    title: Option<Title>,
+}
+
+// ---------------------------------------------------------------------------
+// On-demand titles: slots and the plan for filling them. Pure, so tested.
+// ---------------------------------------------------------------------------
+
+/// Seconds of a title between two slots. Ten is fine enough to find a scene
+/// on a bar a few hundred pixels wide and coarse enough that filling what is
+/// buffered stays a few dozen decodes.
+pub const TITLE_SPACING_S: f64 = 10.0;
+
+/// The most slots a title gets: a three-hour film at [`TITLE_SPACING_S`] is
+/// 1080. A longer one is spaced further apart instead (see
+/// [`title_spacing`]). At a few kilobytes a JPEG, about 6MB at most.
+pub const TITLE_MAX_SLOTS: usize = 1100;
+
+/// How much of the cache one slot asks for. mpv writes whole groups of
+/// pictures, from the keyframe at or before the start, so a tenth of a
+/// second is one group (two at a keyframe): the keyframe the preview is.
+pub const DUMP_SPAN_S: f64 = 0.1;
+
+/// The spacing for a title of `duration` seconds: [`TITLE_SPACING_S`], or a
+/// multiple of five seconds wide enough to stay within [`TITLE_MAX_SLOTS`].
+pub fn title_spacing(duration: Option<f64>) -> f64 {
+    match duration {
+        Some(d) if d.is_finite() && d > TITLE_SPACING_S * TITLE_MAX_SLOTS as f64 => {
+            (d / TITLE_MAX_SLOTS as f64 / 5.0).ceil() * 5.0
+        }
+        _ => TITLE_SPACING_S,
+    }
+}
+
+/// The slot a moment of a title belongs to: the nearest multiple of
+/// `spacing`.
+pub fn slot_of(at: f64, spacing: f64) -> i64 {
+    (at / spacing).round() as i64
+}
+
+/// The next slot to fill from what mpv holds: `ranges` are its seekable
+/// ranges, in the title's time. Ahead of the playhead first, nearest first,
+/// because that is where the viewer is about to be; then behind it, nearest
+/// first. Only a slot whose excerpt lies wholly inside a range, and not past
+/// the title's end; `skip` says which already have a frame or were tried.
+pub fn next_slot(
+    ranges: &[(f64, f64)],
+    playhead: f64,
+    spacing: f64,
+    duration: Option<f64>,
+    skip: impl Fn(i64) -> bool,
+) -> Option<i64> {
+    if !spacing.is_finite() || spacing <= 0.0 || !playhead.is_finite() {
+        return None;
+    }
+    let end_of_title = duration.filter(|d| d.is_finite() && *d > 0.0);
+    // A slot is readable when its excerpt is inside the range and the
+    // moment is inside the title.
+    let readable = |k: i64, (start, end): (f64, f64)| {
+        let t = k as f64 * spacing;
+        k >= 0 && t >= start && t + DUMP_SPAN_S <= end && end_of_title.is_none_or(|d| t <= d)
+    };
+    let mut sorted: Vec<(f64, f64)> = ranges
+        .iter()
+        .copied()
+        .filter(|(s, e)| s.is_finite() && e.is_finite() && e > s)
+        .collect();
+    sorted.sort_by(|a, b| a.0.total_cmp(&b.0));
+
+    // Ahead: from the first slot at or after the playhead, range by range.
+    for &r in &sorted {
+        let from = (r.0.max(playhead) / spacing).ceil() as i64;
+        let to = ((r.1 - DUMP_SPAN_S) / spacing).floor() as i64;
+        if let Some(k) = (from..=to).find(|&k| readable(k, r) && !skip(k)) {
+            return Some(k);
+        }
+    }
+    // Behind: from the last slot before the playhead, ranges latest first.
+    for &r in sorted.iter().rev() {
+        let below = (playhead / spacing).ceil() as i64 - 1;
+        let to = (((r.1 - DUMP_SPAN_S) / spacing).floor() as i64).min(below);
+        let from = (r.0 / spacing).ceil() as i64;
+        if let Some(k) = (from..=to).rev().find(|&k| readable(k, r) && !skip(k)) {
+            return Some(k);
+        }
+    }
+    None
 }
 
 static STORE: Mutex<Option<Store>> = Mutex::new(None);
@@ -122,7 +238,7 @@ pub fn record_for(generation: u64, at: f64, rgba: Vec<u8>) {
     if !at.is_finite() || rgba.len() != (THUMB_W * THUMB_H * 4) as usize {
         return;
     }
-    insert(generation, Thumb { at, rgba });
+    insert(generation, Thumb { at, img: Img::Rgba(rgba) });
 }
 
 fn insert(generation: u64, thumb: Thumb) {
@@ -130,28 +246,122 @@ fn insert(generation: u64, thumb: Thumb) {
     if GENERATION.load(Ordering::Acquire) != generation {
         return;
     }
-    let store = guard.get_or_insert_with(Store::default);
+    guard.get_or_insert_with(Store::default).insert(thumb);
+}
 
-    // Rewatching a stretch that is already covered must not stack duplicates
-    // on top of it, and a seek backwards arrives out of order.
-    let pos = store
-        .thumbs
-        .partition_point(|t| t.at < thumb.at);
-    let near = |i: usize| {
-        store
-            .thumbs
-            .get(i)
-            .is_some_and(|t| (t.at - thumb.at).abs() < INTERVAL_S / 2.0)
-    };
-    if (pos > 0 && near(pos - 1)) || near(pos) {
-        return;
+impl Store {
+    fn insert(&mut self, thumb: Thumb) {
+        if self.title.is_some() {
+            self.insert_title(thumb);
+            return;
+        }
+        // Rewatching a stretch that is already covered must not stack duplicates
+        // on top of it, and a seek backwards arrives out of order.
+        let pos = self.thumbs.partition_point(|t| t.at < thumb.at);
+        let near = |i: usize| {
+            self.thumbs
+                .get(i)
+                .is_some_and(|t| (t.at - thumb.at).abs() < INTERVAL_S / 2.0)
+        };
+        if (pos > 0 && near(pos - 1)) || near(pos) {
+            return;
+        }
+        self.thumbs.insert(pos, thumb);
+
+        // Oldest first: the buffer they describe is pruned from that end too.
+        if self.thumbs.len() > MAX_THUMBS {
+            let excess = self.thumbs.len() - MAX_THUMBS;
+            self.thumbs.drain(..excess);
+        }
     }
-    store.thumbs.insert(pos, thumb);
 
-    // Oldest first: the buffer they describe is pruned from that end too.
-    if store.thumbs.len() > MAX_THUMBS {
-        let excess = store.thumbs.len() - MAX_THUMBS;
-        store.thumbs.drain(..excess);
+    /// The thumbnail nearest `at` within [`TOLERANCE_S`]: a channel's.
+    fn nearest(&self, at: f64) -> Option<&Thumb> {
+        if self.thumbs.is_empty() || !at.is_finite() {
+            return None;
+        }
+        let pos = self.thumbs.partition_point(|t| t.at < at);
+        let best = [pos.checked_sub(1), Some(pos)]
+            .into_iter()
+            .flatten()
+            .filter_map(|i| self.thumbs.get(i))
+            .min_by(|a, b| {
+                (a.at - at)
+                    .abs()
+                    .partial_cmp(&(b.at - at).abs())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })?;
+        ((best.at - at).abs() <= TOLERANCE_S).then_some(best)
+    }
+
+    /// Files a title's frame in its slot unless the slot has one already:
+    /// the first frame of a slot stays, whichever path brought it. Nothing
+    /// is pruned, since the slots are bounded by the title's length; the cap
+    /// is for a title whose length was never known.
+    fn insert_title(&mut self, thumb: Thumb) -> bool {
+        let Some(spacing) = self.title.as_ref().map(|t| t.spacing) else {
+            return false;
+        };
+        if !thumb.at.is_finite() || thumb.at < 0.0 || self.thumbs.len() >= TITLE_MAX_SLOTS {
+            return false;
+        }
+        let slot = slot_of(thumb.at, spacing);
+        let pos = self.thumbs.partition_point(|t| t.at < thumb.at);
+        // A slot is one stretch of time, so a frame already in it is a
+        // neighbour of where this one would go.
+        let taken = |i: usize| {
+            self.thumbs
+                .get(i)
+                .is_some_and(|t| slot_of(t.at, spacing) == slot)
+        };
+        if (pos > 0 && taken(pos - 1)) || taken(pos) {
+            return false;
+        }
+        self.thumbs.insert(pos, thumb);
+        true
+    }
+
+    /// The frame filed in the slot nearest `at`, if any: within half a
+    /// spacing of it, counted in slots.
+    fn title_lookup(&self, at: f64) -> Option<&Thumb> {
+        let spacing = self.title.as_ref()?.spacing;
+        if !at.is_finite() {
+            return None;
+        }
+        let slot = slot_of(at, spacing);
+        let from = self
+            .thumbs
+            .partition_point(|t| slot_of(t.at, spacing) < slot);
+        self.thumbs
+            .get(from)
+            .filter(|t| slot_of(t.at, spacing) == slot)
+    }
+
+    /// Changes a title's spacing once its length is known, keeping the
+    /// first frame of each new slot.
+    fn set_spacing(&mut self, spacing: f64) {
+        let Some(title) = self.title.as_mut() else {
+            return;
+        };
+        if !spacing.is_finite() || spacing <= 0.0 || title.spacing == spacing {
+            return;
+        }
+        title.spacing = spacing;
+        let mut last: Option<i64> = None;
+        self.thumbs.retain(|t| {
+            let slot = slot_of(t.at, spacing);
+            let keep = last != Some(slot);
+            last = Some(slot);
+            keep
+        });
+    }
+
+    /// The slots that have a frame.
+    fn filled(&self) -> std::collections::HashSet<i64> {
+        let Some(spacing) = self.title.as_ref().map(|t| t.spacing) else {
+            return Default::default();
+        };
+        self.thumbs.iter().map(|t| slot_of(t.at, spacing)).collect()
     }
 }
 
@@ -159,28 +369,126 @@ fn insert(generation: u64, thumb: Thumb) {
 /// nothing was captured close enough to be honest about.
 pub fn nearest_png(at: f64) -> Option<(f64, Vec<u8>)> {
     let guard = STORE.lock().ok()?;
+    let best = guard.as_ref()?.nearest(at)?;
+    Some((best.at, encoded(&best.img).1))
+}
+
+/// A thumbnail as an image file's bytes, with its media type.
+fn encoded(img: &Img) -> (&'static str, Vec<u8>) {
+    match img {
+        Img::Rgba(rgba) => (
+            "image/png",
+            crate::surface::png::png_bytes(THUMB_W as u32, THUMB_H as u32, rgba),
+        ),
+        Img::Jpeg(jpeg) => ("image/jpeg", jpeg.clone()),
+    }
+}
+
+/// Starts holding frames for an on-demand title, `key` naming it. The same
+/// title again (a reopen, a reconnect, a change of sound) keeps what it has
+/// and returns `true`; anything else starts empty, like [`clear`].
+pub fn open_title(key: &str) -> bool {
+    let Ok(mut guard) = STORE.lock() else { return false };
+    if guard
+        .as_ref()
+        .and_then(|s| s.title.as_ref())
+        .is_some_and(|t| t.key == key)
+    {
+        return true;
+    }
+    GENERATION.fetch_add(1, Ordering::AcqRel);
+    *guard = Some(Store {
+        thumbs: Vec::new(),
+        title: Some(Title {
+            key: key.to_owned(),
+            spacing: TITLE_SPACING_S,
+        }),
+    });
+    drop(guard);
+    LAST.with(|l| l.set(None));
+    false
+}
+
+/// The open title's spacing, now that its length is known; `None` when no
+/// title is open.
+pub fn settle_title_spacing(duration: Option<f64>) -> Option<f64> {
+    let mut guard = STORE.lock().ok()?;
+    let store = guard.as_mut()?;
+    store.title.as_ref()?;
+    store.set_spacing(title_spacing(duration));
+    store.title.as_ref().map(|t| t.spacing)
+}
+
+/// The open title's filled slots, for planning; `None` when no title is
+/// open or the store has moved on from `generation`.
+pub fn title_slots(generation: u64) -> Option<std::collections::HashSet<i64>> {
+    let guard = STORE.lock().ok()?;
+    if GENERATION.load(Ordering::Acquire) != generation {
+        return None;
+    }
     let store = guard.as_ref()?;
-    if store.thumbs.is_empty() || !at.is_finite() {
-        return None;
+    store.title.as_ref()?;
+    Some(store.filled())
+}
+
+/// Files a decoded frame of the open title, as a JPEG, unless the store has
+/// moved on from `generation`. `false` when it was not kept.
+pub fn record_title(generation: u64, at: f64, jpeg: Vec<u8>) -> bool {
+    let Ok(mut guard) = STORE.lock() else { return false };
+    if GENERATION.load(Ordering::Acquire) != generation || !at.is_finite() || jpeg.is_empty() {
+        return false;
     }
-    let pos = store.thumbs.partition_point(|t| t.at < at);
-    let best = [pos.checked_sub(1), Some(pos)]
-        .into_iter()
-        .flatten()
-        .filter_map(|i| store.thumbs.get(i))
-        .min_by(|a, b| {
-            (a.at - at)
-                .abs()
-                .partial_cmp(&(b.at - at).abs())
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })?;
-    if (best.at - at).abs() > TOLERANCE_S {
-        return None;
+    guard.as_mut().is_some_and(|s| {
+        s.title.is_some() && s.insert_title(Thumb { at, img: Img::Jpeg(jpeg) })
+    })
+}
+
+/// A drawn frame of the open title still kept as RGBA, for compressing.
+pub fn raw_title_frame() -> Option<(u64, f64, Vec<u8>)> {
+    let guard = STORE.lock().ok()?;
+    let store = guard.as_ref()?;
+    store.title.as_ref()?;
+    store.thumbs.iter().find_map(|t| match &t.img {
+        Img::Rgba(rgba) => Some((generation(), t.at, rgba.clone())),
+        Img::Jpeg(_) => None,
+    })
+}
+
+/// Swaps the RGBA frame at `at` for its JPEG ([`raw_title_frame`]).
+pub fn compress_title_frame(generation: u64, at: f64, jpeg: Vec<u8>) {
+    let Ok(mut guard) = STORE.lock() else { return };
+    if GENERATION.load(Ordering::Acquire) != generation || jpeg.is_empty() {
+        return;
     }
-    Some((
-        best.at,
-        crate::surface::png::png_bytes(THUMB_W as u32, THUMB_H as u32, &best.rgba),
-    ))
+    if let Some(t) = guard
+        .as_mut()
+        .and_then(|s| s.thumbs.iter_mut().find(|t| t.at == at))
+    {
+        t.img = Img::Jpeg(jpeg);
+    }
+}
+
+/// The open title's frame for the slot nearest `at`, as an image file's
+/// bytes with its media type, and the moment it shows. `None` when no title
+/// is open or that slot has no frame.
+pub fn title_frame(at: f64) -> Option<(f64, &'static str, Vec<u8>)> {
+    let guard = STORE.lock().ok()?;
+    let thumb = guard.as_ref()?.title_lookup(at)?;
+    let (mime, bytes) = encoded(&thumb.img);
+    Some((thumb.at, mime, bytes))
+}
+
+/// The moments the open title has frames for, in order. For the harness.
+pub fn title_times() -> Vec<f64> {
+    STORE
+        .lock()
+        .ok()
+        .and_then(|g| {
+            g.as_ref()
+                .filter(|s| s.title.is_some())
+                .map(|s| s.thumbs.iter().map(|t| t.at).collect())
+        })
+        .unwrap_or_default()
 }
 
 /// Drops everything. Called when the stream changes: the thumbnails describe
@@ -347,5 +655,171 @@ mod tests {
         // Wrong size: silently dropped, never filed under a time.
         record(1.0e9, vec![0u8; 4]);
         assert!(nearest_png(1.0e9).is_none());
+    }
+
+    // ----- on-demand titles
+
+    fn title_store(spacing: f64) -> Store {
+        Store {
+            thumbs: Vec::new(),
+            title: Some(Title {
+                key: "t".into(),
+                spacing,
+            }),
+        }
+    }
+
+    fn jpeg(at: f64) -> Thumb {
+        Thumb {
+            at,
+            img: Img::Jpeg(vec![1]),
+        }
+    }
+
+    fn times(s: &Store) -> Vec<f64> {
+        s.thumbs.iter().map(|t| t.at).collect()
+    }
+
+    #[test]
+    fn a_title_is_ten_seconds_a_slot_unless_that_is_too_many() {
+        assert_eq!(title_spacing(None), 10.0);
+        assert_eq!(title_spacing(Some(f64::NAN)), 10.0);
+        assert_eq!(title_spacing(Some(90.0 * 60.0)), 10.0);
+        // Three hours is 1080 slots: still ten.
+        assert_eq!(title_spacing(Some(3.0 * 3600.0)), 10.0);
+        // Four hours would be 1440: spaced out to a multiple of five.
+        let four = title_spacing(Some(4.0 * 3600.0));
+        assert_eq!(four, 15.0);
+        assert!(4.0 * 3600.0 / four <= TITLE_MAX_SLOTS as f64);
+        // Ten hours stays inside the cap too.
+        let ten = title_spacing(Some(10.0 * 3600.0));
+        assert_eq!(ten % 5.0, 0.0);
+        assert!(10.0 * 3600.0 / ten <= TITLE_MAX_SLOTS as f64);
+    }
+
+    #[test]
+    fn a_moment_belongs_to_the_nearest_slot() {
+        assert_eq!(slot_of(0.0, 10.0), 0);
+        assert_eq!(slot_of(4.9, 10.0), 0);
+        assert_eq!(slot_of(5.1, 10.0), 1);
+        assert_eq!(slot_of(48.1, 10.0), 5);
+        assert_eq!(slot_of(54.0, 10.0), 5);
+    }
+
+    #[test]
+    fn filling_starts_just_ahead_of_the_playhead_and_walks_forward() {
+        let ranges = [(0.0, 95.0)];
+        let none = |_| false;
+        assert_eq!(next_slot(&ranges, 33.0, 10.0, Some(600.0), none), Some(4));
+        // The ones it has are skipped.
+        let have = |k| k == 4 || k == 5;
+        assert_eq!(next_slot(&ranges, 33.0, 10.0, Some(600.0), have), Some(6));
+    }
+
+    #[test]
+    fn behind_the_playhead_comes_after_everything_ahead() {
+        let ranges = [(0.0, 52.0)];
+        // Ahead: 40 and 50 (50.1 is inside 52). Then behind, nearest first.
+        let have = |k| k == 4 || k == 5;
+        assert_eq!(next_slot(&ranges, 33.0, 10.0, None, have), Some(3));
+        let have = |k| (3..=5).contains(&k);
+        assert_eq!(next_slot(&ranges, 33.0, 10.0, None, have), Some(2));
+        let have = |k| (0..=5).contains(&k);
+        assert_eq!(next_slot(&ranges, 33.0, 10.0, None, have), None);
+    }
+
+    #[test]
+    fn nothing_is_planned_past_the_buffered_end() {
+        // 50.0 + the excerpt would end past 50.05: not yet readable.
+        let ranges = [(20.0, 50.05)];
+        let have = |k| (2..=4).contains(&k);
+        assert_eq!(next_slot(&ranges, 21.0, 10.0, None, have), None);
+        // Nor before a range's start, which mpv cannot read from either.
+        let ranges = [(25.0, 50.0)];
+        let have = |k| (3..=4).contains(&k);
+        assert_eq!(next_slot(&ranges, 26.0, 10.0, None, have), None);
+    }
+
+    #[test]
+    fn nothing_is_planned_past_the_titles_end() {
+        let ranges = [(0.0, 125.0)];
+        let have = |k| k <= 11;
+        assert_eq!(next_slot(&ranges, 100.0, 10.0, Some(118.0), have), None);
+    }
+
+    #[test]
+    fn every_buffered_range_is_walked_ahead_first() {
+        // After a seek: what was read before it, and a range from the seek.
+        let ranges = [(0.0, 31.0), (200.0, 241.0)];
+        let mut have = std::collections::HashSet::new();
+        let mut order = Vec::new();
+        while let Some(k) = next_slot(&ranges, 205.0, 10.0, None, |k| have.contains(&k)) {
+            order.push(k);
+            have.insert(k);
+        }
+        assert_eq!(order, vec![21, 22, 23, 24, 20, 3, 2, 1, 0]);
+    }
+
+    #[test]
+    fn a_title_keeps_one_frame_per_slot_whichever_comes_first() {
+        let mut s = title_store(10.0);
+        assert!(s.insert_title(jpeg(48.1)));
+        assert!(!s.insert_title(jpeg(50.0)), "slot 5 already has one");
+        assert!(!s.insert_title(jpeg(54.9)), "slot 5 already has one");
+        assert!(s.insert_title(jpeg(55.1)), "slot 6 is free");
+        assert!(s.insert_title(jpeg(20.0)), "out of order is fine");
+        assert_eq!(times(&s), vec![20.0, 48.1, 55.1]);
+    }
+
+    #[test]
+    fn a_title_answers_from_the_slot_under_the_pointer_only() {
+        let mut s = title_store(10.0);
+        s.insert_title(jpeg(48.1));
+        assert_eq!(s.title_lookup(54.0).map(|t| t.at), Some(48.1));
+        assert_eq!(s.title_lookup(45.0).map(|t| t.at), Some(48.1));
+        assert!(s.title_lookup(55.5).is_none(), "slot 6 has nothing");
+        assert!(s.title_lookup(40.0).is_none(), "slot 4 has nothing");
+        assert!(s.title_lookup(f64::NAN).is_none());
+        assert!(title_store(10.0).title_lookup(0.0).is_none());
+    }
+
+    #[test]
+    fn a_titles_frames_are_capped() {
+        let mut s = title_store(10.0);
+        for k in 0..TITLE_MAX_SLOTS + 50 {
+            s.insert_title(jpeg(k as f64 * 10.0));
+        }
+        assert_eq!(s.thumbs.len(), TITLE_MAX_SLOTS);
+    }
+
+    #[test]
+    fn a_wider_spacing_keeps_the_first_frame_of_each_new_slot() {
+        let mut s = title_store(10.0);
+        for at in [0.0, 10.0, 20.0, 30.0, 40.0] {
+            s.insert_title(jpeg(at));
+        }
+        s.set_spacing(20.0);
+        // Slots of 20: 0 ← 0, 10 (round 0.5 = 1) …: one each.
+        let slots: Vec<i64> = s.thumbs.iter().map(|t| slot_of(t.at, 20.0)).collect();
+        let mut dedup = slots.clone();
+        dedup.dedup();
+        assert_eq!(slots, dedup, "one frame per slot");
+        assert_eq!(s.filled(), slots.into_iter().collect());
+    }
+
+    #[test]
+    fn a_channel_store_is_not_slotted() {
+        // The live store dedups at half its interval and nothing else.
+        let mut s = Store::default();
+        s.insert(Thumb {
+            at: 48.1,
+            img: Img::Rgba(vec![]),
+        });
+        s.insert(Thumb {
+            at: 52.0,
+            img: Img::Rgba(vec![]),
+        });
+        assert_eq!(times(&s), vec![48.1, 52.0]);
+        assert!(s.title_lookup(50.0).is_none());
     }
 }

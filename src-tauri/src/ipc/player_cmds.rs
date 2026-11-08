@@ -2950,7 +2950,15 @@ async fn open_as(
     ensure_ticker(app);
     // The scrollback previews describe a buffer that is about to be closed.
     // Keeping them would put the previous channel's picture under the cursor.
-    crate::surface::trickplay::clear();
+    // A title's are its own, by its own time: the same title opened again
+    // keeps them, and the previews of what it buffers start filling.
+    if what.is_on_demand() {
+        crate::surface::trickplay::open_title(&format!("{what:?}"));
+        crate::surface::title_thumbs::start();
+    } else {
+        crate::surface::title_thumbs::stop();
+        crate::surface::trickplay::clear();
+    }
     // Same reasoning, for the same reason: the graphs describe one stream.
     crate::ipc::health::clear();
     let mode = live_start_mode();
@@ -3035,6 +3043,7 @@ async fn open_as(
 
 #[tauri::command]
 pub async fn stop(app: AppHandle) -> Result<(), String> {
+    crate::surface::title_thumbs::stop();
     crate::surface::trickplay::clear();
     // Where a movie or an episode got to, before the title is forgotten.
     let place = PROGRESS.lock().ok().and_then(|mut p| p.flush());
@@ -3420,6 +3429,27 @@ pub async fn thumbnail_at(
         )
     })
     .await
+}
+
+/// The preview for a moment of the open movie or episode, `at` seconds in.
+///
+/// The frame of the slot nearest `at` (a slot every ten seconds of a title,
+/// more for a very long one): drawn while it played, or decoded from what
+/// mpv has buffered. `None` where there is neither, which the seek bar shows
+/// as the time alone. Answered from the store, so it never waits on mpv.
+#[tauri::command]
+pub async fn thumbnail_for_title(
+    at: f64,
+) -> Result<Option<crate::ipc::types::TitleThumbnailDto>, String> {
+    Ok(crate::surface::trickplay::title_frame(at).map(|(at, mime, bytes)| {
+        crate::ipc::types::TitleThumbnailDto {
+            data_url: format!(
+                "data:{mime};base64,{}",
+                crate::surface::trickplay::base64(&bytes)
+            ),
+            at,
+        }
+    }))
 }
 
 /// Everything the diagnostics panel shows: one reading, and the history.

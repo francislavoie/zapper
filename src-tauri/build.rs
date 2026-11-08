@@ -185,10 +185,39 @@ fn without_bundle(what: &str) {
 }
 
 /// libmpv for the app: libmpv2-sys asks for `mpv`, which [`bundle`] has put on the link path.
+///
+/// And the seek bar's previews of a title (`src/surface/thumbframe.c`, one picture decoded
+/// from an excerpt of mpv's buffer), compiled against the FFmpeg that libmpv already loads:
+/// the bundle's libavformat, libavcodec, libswscale and libavutil, its headers in `include/`,
+/// or with none fetched whatever pkg-config finds. Nothing is added to what ships.
 #[cfg(feature = "gui")]
 fn libmpv(bundle: Option<&Path>) {
-    if bundle.is_none() {
-        without_bundle("zapper's libmpv");
+    let src = "src/surface/thumbframe.c";
+    println!("cargo:rerun-if-changed={src}");
+    let mut build = cc::Build::new();
+    build.file(src).warnings(true).flag_if_supported("-std=c11");
+    let libs = ["avformat", "avcodec", "swscale", "avutil"];
+    match bundle {
+        Some(dir) => {
+            build.include(dir.join("include"));
+            build.compile("zapper_thumbframe");
+            for lib in libs {
+                println!("cargo:rustc-link-lib=dylib={lib}");
+            }
+        }
+        None => {
+            without_bundle("zapper's libmpv");
+            println!("cargo:rerun-if-env-changed=PKG_CONFIG_PATH");
+            for lib in libs {
+                let found = pkg_config::Config::new()
+                    .probe(&format!("lib{lib}"))
+                    .unwrap_or_else(|e| panic!("zapper needs lib{lib}'s development files: {e}"));
+                for dir in found.include_paths {
+                    build.include(dir);
+                }
+            }
+            build.compile("zapper_thumbframe");
+        }
     }
 }
 

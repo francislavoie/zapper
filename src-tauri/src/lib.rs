@@ -145,6 +145,7 @@ pub fn run() {
             ipc::player_cmds::play_episode,
             ipc::player_cmds::play_next_episode,
             ipc::player_cmds::thumbnail_at,
+            ipc::player_cmds::thumbnail_for_title,
             ipc::player_cmds::seek_live,
             ipc::player_cmds::set_volume,
             ipc::player_cmds::set_muted,

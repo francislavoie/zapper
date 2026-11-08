@@ -799,6 +799,18 @@ pub struct ThumbnailDto {
     pub behind_live: f64,
 }
 
+/// A preview of a moment of a movie or an episode, for its seek bar.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TitleThumbnailDto {
+    /// A `data:image/jpeg;base64,...` URL (`data:image/png` for a frame not
+    /// compressed yet), inlined as [`ThumbnailDto`]'s is.
+    pub data_url: String,
+    /// The moment of the title it shows, in seconds: within the slot asked
+    /// about, not exactly the moment asked for.
+    pub at: f64,
+}
+
 /// One reading for the diagnostics panel — "stats for nerds".
 ///
 /// Deliberately not part of `PlayerStateDto`. That one is pushed to every
