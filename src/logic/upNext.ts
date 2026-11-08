@@ -56,7 +56,9 @@ export function upNextState(
   next: EpisodeDto | null,
   cancelledFor: number | null,
   sleeping: boolean,
-  /** The Resume question is up: no card behind it. */
+  /** A title held for the Resume question, until it has played: no card
+   *  behind the question, and none over it paused near its end once the
+   *  question is closed (logic/resume.ts `holdStep`). */
   held = false,
 ): UpNext {
   if (current === null || next === null || sleeping || held) return NONE;

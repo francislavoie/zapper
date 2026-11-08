@@ -6,6 +6,8 @@ import { test } from "node:test";
 import { setTimeFormat } from "../logic/format.ts";
 import {
   heldAfter,
+  holdStep,
+  holding,
   nextStart,
   placeReportDue,
   playsOnReopen,
@@ -185,6 +187,50 @@ test("a held title stays held until it plays", () => {
   assert.equal(heldAfter(true, "reopen"), true);    // read again after a break
   assert.equal(heldAfter(false, "seek"), false);
   assert.equal(heldAfter(false, "pause"), false);
+});
+
+test("Up next stands aside for a held title until it has played", () => {
+  const pr = { item: { kind: "episode", id: 7 }, title: "A Show · S1 E3", position: 109, playedAt: null };
+  const at = (state, id = 7, kind = "episode") => ({ state, onDemand: id === null ? null : { kind, id, position: 109, duration: 120, bufferedTo: null } });
+  // Asked: held from the open, before the player says anything of it.
+  let h = holdStep(null, pr, at("playing", 4));
+  assert.equal(holding(h), true);
+  h = holdStep(h, pr, at("opening"));
+  assert.equal(holding(h), true);
+  h = holdStep(h, pr, at("paused"));
+  assert.equal(holding(h), true);
+  // Escape or a seek closes the question: still held, paused behind it.
+  h = holdStep(h, null, at("paused"));
+  assert.equal(holding(h), true);
+  h = holdStep(h, null, at("opening"));                 // a seek read again
+  assert.equal(holding(h), true);
+  // It plays: the hold is over, and stays over.
+  h = holdStep(h, null, at("playing"));
+  assert.equal(holding(h), false);
+  h = holdStep(h, null, at("paused"));
+  assert.equal(holding(h), false);
+  // The same prompt still in the store as it plays (cleared a render later) does not hold again.
+  assert.equal(holding(holdStep(holdStep(holdStep(null, pr, at("paused")), pr, at("playing")), pr, at("paused"))), false);
+});
+
+test("a hold ends with its title, and a new question holds anew", () => {
+  const pr = { item: { kind: "episode", id: 7 }, title: "A Show · S1 E3", position: 109, playedAt: null };
+  const at = (state, id = 7, kind = "episode") => ({ state, onDemand: id === null ? null : { kind, id, position: 109, duration: 120, bufferedTo: null } });
+  const seen = holdStep(null, pr, at("paused"));
+  assert.equal(holding(holdStep(seen, null, at("stopped", null))), false);   // Stop
+  assert.equal(holding(holdStep(seen, null, at("failed"))), false);          // refused
+  assert.equal(holding(holdStep(seen, null, at("opening", 8))), false);      // another episode
+  assert.equal(holding(holdStep(seen, null, at("playing", 7, "movie"))), false);
+  // The question gone before it was ever seen (a failed open): no hold left behind.
+  assert.equal(holding(holdStep(holdStep(null, pr, at("playing", 4)), null, at("failed", 4))), false);
+  // Another question, even for the same title: held again, the title
+  // reported playing from before the open changing nothing.
+  const ended = holdStep(seen, null, at("playing"));
+  const again = holdStep(ended, { ...pr }, at("playing"));
+  assert.equal(holding(again), true);
+  assert.equal(holding(holdStep(again, null, at("paused"))), true);
+  assert.equal(holding(holdStep(ended, null, at("paused"))), false);
+  assert.equal(holding(null), false);
 });
 
 test("a show's Play asks about a place it may have been given elsewhere", () => {
