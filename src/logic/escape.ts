@@ -33,6 +33,8 @@ export interface EscapeContext {
   fullscreen: boolean;
   /** The search box of the tab showing has something in it. */
   query: boolean;
+  /** And has focus: Escape there clears it before closing the pane. */
+  queryFocused: boolean;
   mode: "browse" | "watch" | "guide";
   /** Something is open in the player (playing, paused, opening). */
   playing: boolean;
@@ -92,8 +94,12 @@ export function escapeStep(c: EscapeContext, via: "key" | "mouse"): EscapeStep {
   if (c.paletteOpen) return "palette";
   if (c.movieSheet) return "movieSheet";
   if (c.showSheet) return "showSheet";
-  if (c.showPane) return "showPane";
+  // The countdown first: stacked, it runs over the list the pane is in.
   if (c.upNextCard && via === "key") return "upNextCard";
+  if (c.showPane) {
+    if (c.query && c.queryFocused && via === "key") return "query";
+    return "showPane";
+  }
   if (c.fullscreen) return "fullscreen";
   if (c.query && via === "key") return "query";
   if (c.mode === "guide" || c.mode === "watch") return "browse";
