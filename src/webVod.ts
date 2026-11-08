@@ -53,6 +53,7 @@ import {
   progressDue,
   progressPath,
   releaseDue,
+  reopenDue,
   seekPlan,
   stallDue,
   stuckAfterPlay,
@@ -613,8 +614,9 @@ async function broke(s: Session, reading: number) {
     return;
   }
   const now = Date.now();
-  s.reopens = s.reopens.filter((t) => now - t < 60_000);
-  if (st === null || s.reopens.length >= 3) {
+  const due = reopenDue(s.reopens, now);
+  s.reopens = due.keep;
+  if (st === null || due.fail) {
     fail(s.item, s.position, s.duration, endedBy("network"),
       `The ${noun(s.item)} from the recording service broke off.`);
     return;

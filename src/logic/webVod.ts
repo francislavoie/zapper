@@ -145,6 +145,21 @@ export function openDue(openedAt: number, now: number): boolean {
   return now - openedAt >= OPEN_LIMIT_MS;
 }
 
+/** How many times a minute a stream that broke off is opened again where it
+ *  was, before the picture says it stopped. */
+export const REOPEN_LIMIT = 2;
+
+/** How long a reopen counts against `REOPEN_LIMIT`. */
+const REOPEN_WINDOW_MS = 60_000;
+
+/** After the stream broke off at `now`, given the times it was reopened:
+ *  those within the last minute (`keep`), and whether to give up (`fail`)
+ *  rather than reopen it once more. */
+export function reopenDue(reopens: number[], now: number): { keep: number[]; fail: boolean } {
+  const keep = reopens.filter((t) => now - t < REOPEN_WINDOW_MS);
+  return { keep, fail: keep.length >= REOPEN_LIMIT };
+}
+
 /** How long a playing film's place may stand still. */
 export const STALL_LIMIT_MS = 30_000;
 

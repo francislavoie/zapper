@@ -17,7 +17,9 @@ import {
   parseVtt,
   positionOf,
   progressDue,
+  REOPEN_LIMIT,
   releaseDue,
+  reopenDue,
   seekPlan,
   stallDue,
   stuckAfterPlay,
@@ -203,4 +205,30 @@ test("the next episode keeps the sound and subtitles by language", () => {
   assert.equal(carriedIndex("deu", list), null);
   assert.equal(carriedIndex(null, list), null);
   assert.equal(carriedIndex("eng", [{ lang: null }, { lang: "eng" }]), 1);
+});
+
+test("a stream that breaks off is reopened twice in a minute, then given up", () => {
+  assert.equal(REOPEN_LIMIT, 2);
+  let reopens = [];
+  // First drop: reopened.
+  let r = reopenDue(reopens, 1_000);
+  assert.equal(r.fail, false);
+  reopens = [...r.keep, 1_000];
+  // Second drop: reopened.
+  r = reopenDue(reopens, 5_000);
+  assert.equal(r.fail, false);
+  reopens = [...r.keep, 5_000];
+  // Third drop within the minute: given up.
+  r = reopenDue(reopens, 9_000);
+  assert.equal(r.fail, true);
+  assert.deepEqual(r.keep, [1_000, 5_000]);
+});
+
+test("drops more than a minute apart start the count over", () => {
+  let reopens = [1_000, 5_000];
+  const r = reopenDue(reopens, 66_000);
+  assert.deepEqual(r.keep, [], "both are older than 60 s");
+  assert.equal(r.fail, false);
+  // One still inside the minute, one out: reopened.
+  assert.deepEqual(reopenDue([1_000, 30_000], 62_000), { keep: [30_000], fail: false });
 });
