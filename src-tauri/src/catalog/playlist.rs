@@ -814,7 +814,11 @@ mod tests {
         );
     }
 
-    fn episode_rows(c: &Connection) -> Vec<(String, i32, i32, Option<i32>, Option<String>)> {
+    /// An episode as stored: its show's name, season, episode, last episode
+    /// and title.
+    type EpisodeRow = (String, i32, i32, Option<i32>, Option<String>);
+
+    fn episode_rows(c: &Connection) -> Vec<EpisodeRow> {
         c.prepare(
             "SELECT s.name, e.season, e.episode, e.episode_end, e.title
                FROM episodes e JOIN series s USING (series_id)

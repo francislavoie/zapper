@@ -56,19 +56,22 @@ Download the package for your system from the
 ### Sources
 
 - Xtream Codes: server URL, username and password. Live channels, categories, guide, catch-up on
-  channels that have an archive, and the provider's movies.
+  channels that have an archive, and the provider's movies and shows.
 - M3U playlists from a URL or a file, with one or more XMLTV guides. Catch-up from the playlist's
   `catchup` attributes. Entries whose address is on demand are movies: a `/movie/` address, a
   video file (`.mp4`, `.mkv`, `.avi`, `.m4v`, `.mov`, `.wmv`, `.webm`), or a `/series/` one.
-  A video file or `/series/` entry whose name has a season and episode (`S01E02`) is an episode,
-  not a movie, and stays a channel for now. A `.ts`, `.m3u8` or `/live/` address is always a
-  channel.
+  An on-demand entry whose name has an episode number (`S01E02`, `s01.e02`, `1x02`,
+  `Season 1 Episode 2`, or a range such as `S01E01-E02`) is an episode instead, and is no longer
+  a channel: entries in the same group whose names match before the number make one show
+  (`A Show S01E01` and `A Show S01E02`), and an entry whose name starts with the number belongs
+  to a show named after its group. A `.ts`, `.m3u8` or `/live/` address is always a channel.
 - HDHomeRun tuners by address. Channels from the tuner's lineup, guide from SiliconDust or your
   own XMLTV; subchannels shown as `5.1`.
 - Tvheadend servers, with or without a login. Categories from its channel tags, guide from its
   XMLTV export.
-- Movies come from Xtream accounts and from playlists with movie entries. HDHomeRun, Tvheadend
-  and playlists without any have no Movies tab: it appears only when there are movies to show.
+- Movies come from Xtream accounts and from playlists with movie entries, shows from Xtream
+  accounts and from playlists with episode entries. HDHomeRun, Tvheadend and playlists without
+  any have no Movies or Shows tab: each appears only when there is something to show in it.
 - Settings, favourites and category choices can be exported to a file and imported again.
 
 ### Browsing
@@ -97,6 +100,18 @@ Download the package for your system from the
   of years. Mark a movie as a favourite or as watched. Search by name; a movie's details (plot,
   cast, rating, pictures, movies like it) open in a sheet. Browsing never starts or stops what is
   playing: only Play does.
+- Shows has a tab of its own too (`N`), laid out as Movies is: a rail with Favourites, Recently
+  added, Watched and the show categories, and a list or posters (remembered per computer, a list
+  at first) with each show's years, seasons and rating, sorted by recently added, name, year or
+  rating, limited to a range of years, and searchable by name. A show is a favourite as a whole;
+  watched goes by episode: marking a show watched marks all its episodes (specials aside), and a
+  show counts as watched once all its episodes are. Selecting a show puts its plot, people and
+  genres beside the picture, with Play for the next episode: one you are partway through, else
+  the one after the last you watched. Details (or `Enter`) opens its sheet: the backdrop and
+  poster, the seasons as tabs, and each season's episodes with their stills, titles, plots and
+  lengths, the next one highlighted, each with its own watched mark. As with movies, browsing a show plays
+  nothing: Play, or `Enter` on an episode, does. An Xtream show's seasons and episodes are
+  asked of the provider when it is first selected, then kept for a week.
 - Command palette (`Ctrl+P`; `⌘P` on a Mac) with every action. Shortcuts are listed in
   Settings › Keyboard, with ⌘ for Ctrl on a Mac.
 
@@ -112,6 +127,15 @@ Download the package for your system from the
   picture gets a seek bar with the time played and left, `←`/`→` skip 10 seconds, Space or a click
   pauses. How far you got is kept, and a movie played past 92 % counts as watched. A movie that
   stops or can't start says why and can be played again from where it stopped.
+- Episodes play as movies do, from their beginning, with the show as the title and the episode
+  beneath (`S2 E4 · Night Shift · 52m`). An episode played past 92 % counts as watched.
+- Up next: 20 seconds before an episode ends, a card names the next one and counts 10 seconds
+  down to playing it, in the full player or the docked picture. **Play now** starts it at once,
+  even from pause; **Cancel** lets the episode play to its end and stop there. In the full
+  player `Enter` and `Esc` do the same. Pausing holds the count, a skip into the last seconds starts the
+  next one at once, and a skip through the credits to the end counts as reaching it. The next
+  episode keeps the sound and subtitle languages you had, and plays on the same connection. A
+  Stop, a sleep timer, or a stream the provider cut short never moves on.
 - `P` switches to the previous channel; typing a channel number tunes it.
 - Volume up to 200%, on a perceptual scale, remembered between launches.
 - A compressor that evens out loud and quiet audio.

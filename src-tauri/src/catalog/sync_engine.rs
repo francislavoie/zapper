@@ -1745,7 +1745,7 @@ mod tests {
         let from = origin::of_xtream(&creds);
         let client = XtreamClient::new(creds).unwrap();
         // Forget any origin an earlier test left in the shared mirror.
-        let before = db::with_write_db(|c| origin::recorded(c)).unwrap();
+        let before = db::with_write_db(origin::recorded).unwrap();
         db::with_write_db(|c| {
             c.execute("DELETE FROM meta WHERE key = 'catalogue_origin'", [])?;
             Ok(())
@@ -1765,8 +1765,8 @@ mod tests {
             ],
         )
         .await;
-        let landed = db::with_write_db(|c| series_sync::series_landed_from(c)).unwrap();
-        let marks_key = db::with_write_db(|c| crate::catalog::vod_store::origin(c)).unwrap();
+        let landed = db::with_write_db(series_sync::series_landed_from).unwrap();
+        let marks_key = db::with_write_db(crate::catalog::vod_store::origin).unwrap();
         // The steps built the process-wide indexes over this test's rows.
         index::forget_vod();
         db::with_write_db(|c| {
@@ -1824,7 +1824,7 @@ mod tests {
             password: "p".into(),
         })
         .unwrap();
-        let before = db::with_write_db(|c| origin::recorded(c)).unwrap();
+        let before = db::with_write_db(origin::recorded).unwrap();
         db::with_write_db(|c| origin::record(c, "xtream:00000000000000aa")).unwrap();
         let err = step_shows(&client, "xtream:00000000000000bb").await;
         if let Some(b) = before {
