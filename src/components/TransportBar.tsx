@@ -38,7 +38,9 @@
 // them. The subtitles toggle is there when the stream has subtitles that can
 // be shown, and is lit while they show: a press turns them off, or on in the
 // language last chosen (hooks/useSubtitles.ts), and the choice holds for
-// every channel and title opened after. They sit right of the spring, with
+// every channel and title opened after. On a movie or an episode with none
+// to show it is there anyway, and opens the Subtitles part of the menu,
+// where "Find subtitles…" is. They sit right of the spring, with
 // the things that are about this stream rather than about where in it you
 // are.
 
@@ -52,6 +54,7 @@ import { hasAudioChoice, selectedLabel } from "../logic/tracks";
 import { VOD_SKIP_SECONDS, isOnDemandKind, vodLabel } from "../logic/vodTransport";
 import { run, useApp, useDispatch } from "../store";
 import { useSleepLeft } from "../hooks/useSleep";
+import { useOnDemandTitle } from "../hooks/useOnDemandTitle";
 import { useSubtitles } from "../hooks/useSubtitles";
 import { subtitleTip } from "../logic/subtitles";
 import {
@@ -108,10 +111,11 @@ export function TransportBar({
   const dispatch = useDispatch();
   const sleepLeft = useSleepLeft();
   const subtitles = useSubtitles();
+  const onDemandTitle = useOnDemandTitle() !== null;
 
   /** Opens one part of the picture's menu above a control, or closes it if
    *  that control's menu is the one open. */
-  const openMenu = (only: "audio" | "sleep") => (e: MouseEvent<HTMLButtonElement>) => {
+  const openMenu = (only: "audio" | "sleep" | "subtitles") => (e: MouseEvent<HTMLButtonElement>) => {
     onActivity();
     if (videoMenu?.only === only) {
       dispatch({ type: "videoMenu", at: null });
@@ -301,6 +305,17 @@ export function TransportBar({
               onActivity();
               subtitles.toggle();
             }}
+          >
+            <Subtitles className="i" />
+          </button>
+        ) : onDemandTitle ? (
+          <button
+            className={`ctl icon ${videoMenu?.only === "subtitles" ? "on" : ""}`}
+            data-tip="Find subtitles"
+            aria-label="Subtitles"
+            aria-haspopup="menu"
+            aria-expanded={videoMenu?.only === "subtitles"}
+            onClick={openMenu("subtitles")}
           >
             <Subtitles className="i" />
           </button>

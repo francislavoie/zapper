@@ -33,6 +33,7 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
 - Recordings shows the free space on the recordings disk.
 - Radio channels (sound, no picture) play.
 - A subtitles button on the player, remembered across channels and restarts (`C`).
+- **Find subtitles…** for movies and episodes, from OpenSubtitles.com, added to the player at once.
 - The mouse's back and forward buttons move between screens, and sheets have a Back button.
 
 ### Changed
