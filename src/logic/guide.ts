@@ -38,6 +38,19 @@ export function splitNowNext(
   return { now: live, next };
 }
 
+/** The next `count` programmes to start after `nowSeconds`, in order: the
+ *  band's "Later on" column. Unsorted input, as splitNowNext's. */
+export function laterOn(
+  programmes: readonly ProgrammeDto[],
+  nowSeconds: number,
+  count: number,
+): ProgrammeDto[] {
+  return programmes
+    .filter((p) => p.start > nowSeconds)
+    .sort((a, b) => a.start - b.start)
+    .slice(0, count);
+}
+
 /** What a list row shows for a channel: the guide's answer when it has one,
  *  else the channel's own current programme, but only while it is still on. A
  *  page fetched an hour ago can carry one that has since ended. */

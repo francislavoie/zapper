@@ -11,8 +11,9 @@
 // several to a row of the grid, windowed by grid rows.
 //
 // Choosing a title selects it (the band's details follow); double-click or
-// Enter opens its sheet. Neither plays anything: browsing never touches the
-// picture that is on.
+// Enter opens its sheet, or, where the model has one, what is beside the list
+// (the Shows tab's episode pane). Neither plays anything: browsing never
+// touches the picture that is on.
 
 import {
   useCallback,
@@ -38,7 +39,7 @@ import {
   type PosterCard,
   type YearRange,
 } from "../logic/movies";
-import type { PageBook } from "../logic/pagedRows";
+import { neighbourRows, selectionGone, type GoneCheck, type PageBook } from "../logic/pagedRows";
 import { LIST_ROW_HEIGHT, OVERSCAN, computeWindow } from "../logic/virtual";
 import type { MoviesMenu } from "../moviesState";
 import type { MovieSort } from "../types";
@@ -56,6 +57,8 @@ export interface VodRowProps<T> {
   /** Unique to the list showing it, so two lists on one page share no ids. */
   idPrefix: string;
   selected: boolean;
+  /** The player has this title open (or one of its episodes). */
+  playing?: boolean;
   /** Unix seconds, for the NEW badge; moves on slowly, so rows keep their
    *  memoised render between its ticks. */
   now: number;
@@ -93,6 +96,8 @@ export interface OnDemandListProps<T> {
     menu: MoviesMenu | null;
     revision: number;
     selectedId: number | null;
+    /** The title the player has open, marked in its row. */
+    playingId?: number | null;
   };
   /** The latest marks the service reported, by id, over what a page holds. */
   marks: Readonly<Record<number, Marks>>;
@@ -110,9 +115,19 @@ export interface OnDemandListProps<T> {
   card: (t: T, now: number) => PosterCard;
   on: {
     select(t: T): void;
+    /** A click on a title, where it does more than the keys' selection
+     *  (the Shows tab opens its pane); `select` where absent. */
+    pick?(t: T): void;
     open(t: T): void;
-    /** Enter: open the selected title's sheet, wherever it was selected
-     *  from (a sheet's shelf picks titles this list may not hold). */
+    /** → in the list view: into what is beside the list, when there is
+     *  something; whether it went. */
+    into?(): boolean;
+    /** The selected title is not in the list once it has been read again
+     *  (a mark, a sync). */
+    gone?(): void;
+    /** Enter: open the selected title (a movie's sheet, a show's episode pane),
+     *  wherever it was selected from (a sheet's shelf picks titles this list
+     *  may not hold). */
     openSelected(): void;
     query(text: string): void;
     menu(m: MoviesMenu | null): void;
@@ -236,7 +251,8 @@ export function OnDemandList<T extends object>(p: OnDemandListProps<T>) {
   onRef.current = on;
   const onSelect = useCallback((t: T, index: number) => {
     cursor.current = index;
-    onRef.current.select(t);
+    const on = onRef.current;
+    (on.pick ?? on.select)(t);
   }, []);
   const onOpen = useCallback((t: T, index: number) => {
     cursor.current = index;
@@ -262,6 +278,37 @@ export function OnDemandList<T extends object>(p: OnDemandListProps<T>) {
     return -1;
   };
 
+  // The selected title gone from the list once it is read again: a mark
+  // that takes it out (unfavourited under Favourites), a sync that dropped
+  // it. Where it was is taken when the refresh starts, from the rows still
+  // shown; the pages around it are read again, and the answer waits for
+  // them (logic/pagedRows.ts `selectionGone`).
+  const goneCheck = useRef<GoneCheck | null>(null);
+  const seenRevision = useRef(state.revision);
+  useEffect(() => {
+    if (seenRevision.current === state.revision) return;
+    seenRevision.current = state.revision;
+    const at = selectedId === null || !on.gone ? -1 : currentIndex();
+    goneCheck.current = at >= 0 && selectedId !== null ? { at, id: selectedId, key: listKey } : null;
+    if (goneCheck.current) {
+      const around = neighbourRows(at);
+      paged.ensure(around[0], around[around.length - 1] + 1);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.revision]);
+  useEffect(() => {
+    const g = goneCheck.current;
+    if (!g) return;
+    const verdict = selectionGone(
+      g,
+      { selectedId, key: listKey, loading: paged.loading, error: paged.error, total, fresh: paged.fresh, freshRows: paged.freshRows },
+      idOf,
+    );
+    if (verdict === "wait") return;
+    goneCheck.current = null;
+    if (verdict === "gone") on.gone?.();
+  });
+
   // A key may land on a row whose page is still coming; the selection waits
   // for it here, after the render that brings it.
   const waitingFor = useRef<number | null>(null);
@@ -281,6 +328,11 @@ export function OnDemandList<T extends object>(p: OnDemandListProps<T>) {
         e.preventDefault();
         on.openSelected();
       }
+      return;
+    }
+    if (e.key === "ArrowRight" && !posters && on.into?.()) {
+      e.preventDefault();
+      e.stopPropagation();
       return;
     }
     const el = viewportRef.current;
@@ -398,6 +450,7 @@ export function OnDemandList<T extends object>(p: OnDemandListProps<T>) {
           index={i}
           idPrefix={idPrefix}
           selected={id === selectedId}
+          playing={id === state.playingId}
           now={now}
           onSelect={onSelect}
           onOpen={onOpen}
@@ -415,7 +468,7 @@ export function OnDemandList<T extends object>(p: OnDemandListProps<T>) {
         <span className="list-title" data-tip-overflow="">
           {heading}
         </span>
-        <span className="list-count">{p.countLabel(total)}</span>
+        <span className="list-count list-total">{p.countLabel(total)}</span>
         {loading ? <span className="list-count">loading…</span> : null}
         <SearchField
           className="list-search"
@@ -440,7 +493,7 @@ export function OnDemandList<T extends object>(p: OnDemandListProps<T>) {
           <ChevronDown className="movies-menu-i" />
         </button>
         <button
-          className={`movies-menu-btn ${state.menu?.kind === "years" ? "on" : ""}`}
+          className={`movies-menu-btn years-menu ${state.years ? "set" : ""} ${state.menu?.kind === "years" ? "on" : ""}`}
           ref={yearsRef}
           aria-haspopup="menu"
           aria-expanded={state.menu?.kind === "years"}
@@ -448,7 +501,11 @@ export function OnDemandList<T extends object>(p: OnDemandListProps<T>) {
           data-tip="Years"
           onClick={() => openMenu("years", yearsRef.current)}
         >
-          {yearLabel}
+          {/* In a narrowed list, "Years" stands in for "All years". */}
+          <span className="years-label">{yearLabel}</span>
+          <span className="years-short" aria-hidden>
+            Years
+          </span>
           <ChevronDown className="movies-menu-i" />
         </button>
         <div className="view-switch" role="tablist" aria-label="View">

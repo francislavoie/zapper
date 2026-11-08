@@ -19,6 +19,7 @@
 
 import { useEffect, useState } from "react";
 import { backend } from "../backend";
+import { useApp } from "../store";
 import { errorMessage, failed, loading, ready, type Async } from "../logic/async";
 import { detailsShown, showDetailsCache, type DetailsAnswer } from "../logic/shows";
 import type { SeriesDetailsDto, SeriesDto } from "../types";
@@ -77,4 +78,12 @@ export function useShowDetails(
   }, [id, delayMs, revision]);
 
   return detailsShown(id, revision, cache.generation(), id === null ? undefined : cache.peek(id), result);
+}
+
+/** A show's details at the revision the store has for it: the band, the
+ *  pane and the sheet ask with the same arguments, so they share one
+ *  question. */
+export function useShowDetailsOf(show: SeriesDto | null, delayMs: number): Async<SeriesDetailsDto> {
+  const { shows } = useApp();
+  return useShowDetails(show, delayMs, show ? (shows.detailsRevision[show.seriesId] ?? 0) : 0);
 }

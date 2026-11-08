@@ -8,14 +8,20 @@
 
 import { useEffect, useState } from "react";
 import { backend } from "../backend";
-import { HOUR, splitNowNext, type NowNext } from "../logic/guide";
+import { HOUR, laterOn, splitNowNext, type NowNext } from "../logic/guide";
 import type { ChannelDto, ProgrammeDto } from "../types";
 
 /** An hour back, so a programme already in progress is included. */
 const LOOKBACK = HOUR;
 const LOOKAHEAD = 8 * HOUR;
 
-export function useNowNext(channel: ChannelDto | null, nowSeconds: number): NowNext {
+/** How many programmes after the one on air `later` holds. */
+const LATER_COUNT = 3;
+
+export function useNowNext(
+  channel: ChannelDto | null,
+  nowSeconds: number,
+): NowNext & { later: ProgrammeDto[] } {
   const streamId = channel?.streamId ?? null;
   const [programmes, setProgrammes] = useState<ProgrammeDto[]>([]);
 
@@ -42,5 +48,9 @@ export function useNowNext(channel: ChannelDto | null, nowSeconds: number): NowN
   }, [streamId]);
 
   const split = splitNowNext(programmes, nowSeconds);
-  return { now: split.now ?? channel?.nowPlaying ?? null, next: split.next };
+  return {
+    now: split.now ?? channel?.nowPlaying ?? null,
+    next: split.next,
+    later: laterOn(programmes, nowSeconds, LATER_COUNT),
+  };
 }

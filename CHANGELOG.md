@@ -14,8 +14,8 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
 - **Movies**: a tab (`M`) for an Xtream account's or a playlist's movies. Browse by category as a
   list or posters, sort, filter by year, search, mark favourites and watched, and open a details
   sheet.
-- **Shows**: a tab (`N`) for series. Seasons and episodes are in a sheet, with watched marks per
-  episode or for a whole show.
+- **Shows**: a tab (`N`) for series. Seasons and episodes are in a pane beside the list, with
+  watched marks per episode or for a whole show.
 - Movies and episodes play with a seek bar and 10-second skips, resume where you stopped, and count
   as watched past 92 %.
 - **Up next**: near an episode's end, a 10-second countdown into the next one, with Play now and
@@ -42,6 +42,8 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
   listed under Shows instead of Live TV.
 - Search boxes have dimmer hints, with `/` shown as a key.
 - Search in Movies and Shows keeps the list's sort, and matches the start of words (`EN -`).
+- The top band shows what you selected and what's playing side by side.
+- Selecting a show opens its episodes in a pane beside the list.
 
 ### Fixed
 

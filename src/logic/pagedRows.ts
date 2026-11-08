@@ -128,9 +128,63 @@ export class PageBook<T> {
     this.error = null;
   }
 
+  /** Whether row `index`'s page has been read since the last refresh, not
+   *  only kept from before it. */
+  fresh(index: number): boolean {
+    return this.pages.has(pageOf(index, PAGE_SIZE));
+  }
+
+  /** The rows read since the last refresh. */
+  freshRows(): T[] {
+    return [...this.pages.values()].flat();
+  }
+
   rowAt(index: number): T | undefined {
     if (index < 0 || index >= this.total) return undefined;
     const p = pageOf(index, PAGE_SIZE);
     return (this.pages.get(p) ?? this.stale.get(p))?.[index % PAGE_SIZE];
   }
+}
+
+/** Whether the selected row is still in a list read again: taken when the
+ *  refresh starts, from the rows still shown. */
+export interface GoneCheck {
+  /** Where the selection was. */
+  at: number;
+  id: number;
+  /** The list it was in (its query, as the list keys it). */
+  key: string;
+}
+
+/** What a list read again says of a selection that was at `check.at`:
+ *  `wait` until nothing is loading and page 0 and the pages either side of
+ *  where it was have been read since the refresh (a row moves across a page
+ *  edge as easily as within one); `drop` the question when the selection or
+ *  the list has changed meanwhile, or the reading failed; then `present` or
+ *  `gone`. */
+export function selectionGone<T>(
+  check: GoneCheck,
+  now: {
+    selectedId: number | null;
+    key: string;
+    loading: boolean;
+    error: string | null;
+    total: number;
+    fresh: (index: number) => boolean;
+    freshRows: () => readonly T[];
+  },
+  idOf: (t: T) => number,
+): "wait" | "drop" | "present" | "gone" {
+  if (now.selectedId !== check.id || now.key !== check.key || now.error) return "drop";
+  if (now.loading || !now.fresh(0)) return "wait";
+  for (const i of neighbourRows(check.at)) {
+    if (i < now.total && !now.fresh(i)) return "wait";
+  }
+  return now.freshRows().some((t) => idOf(t) === check.id) ? "present" : "gone";
+}
+
+/** A row in the page before `at`'s, one in its page, one in the page after:
+ *  the pages a gone check reads again. */
+export function neighbourRows(at: number): number[] {
+  return [at - PAGE_SIZE, at, at + PAGE_SIZE].filter((i) => i >= 0);
 }

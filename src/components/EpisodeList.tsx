@@ -1,15 +1,15 @@
-// A season's episodes in the Show sheet: number, still, title, plot, length
-// and a ✓ to mark one watched, the next-up one highlighted. A listbox, one
-// focus stop: ↑/↓ (and Page, Home, End) move inside it, Enter or a
-// double-click plays, as does a click on a still's ▶.
+// A season's episodes in the Shows tab's episode pane (ShowPane): number,
+// still, title, a line of plot, length and a ✓ to mark one watched, the
+// next-up and the playing one tagged. A listbox, one focus stop: ↑/↓ (and
+// Page, Home, End) move inside it, Enter or a double-click plays, as does a
+// click on a still's ▶; the pane takes the keys that leave it (`onKeys`).
 //
 // Windowed: a season can run to hundreds of episodes, so only the rows in
 // sight and a few either side are in the page. The list does not scroll by
-// itself — the sheet around it does, the show's facts and the seasons above
-// it — so what is in sight is worked out from that scroller: how far it has
-// scrolled past the list's top, and how tall it is. A sticky bar over its
-// top edge (the seasons) is its `scroll-padding-top`, which the keys keep
-// the chosen row clear of.
+// itself — the box around it does — so what is in sight is worked out from
+// that scroller: how far it has scrolled past the list's top, and how tall
+// it is. A sticky bar over its top edge is its `scroll-padding-top`, which
+// the keys keep the chosen row clear of.
 
 import {
   memo,
@@ -22,6 +22,7 @@ import {
   type MouseEvent,
 } from "react";
 import { movieCursorKey, scrollToShow } from "../logic/movieKeys";
+import { clock } from "../logic/format";
 import { runtime } from "../logic/movies";
 import { EPISODE_ROW_HEIGHT, episodeProgress, episodeTitle, episodeWindow } from "../logic/shows";
 import type { EpisodeDto } from "../types";
@@ -29,13 +30,17 @@ import { Poster } from "./Poster";
 
 export interface EpisodeListProps {
   episodes: readonly EpisodeDto[];
-  /** The episode the show's main action plays, highlighted. */
+  /** The episode the show's main action plays, tagged Next. */
   nextUp: number | null;
+  /** The episode the player has open, tagged Playing. */
+  playingId?: number | null;
   onPlay: (e: EpisodeDto) => void;
   onWatched: (e: EpisodeDto, watched: boolean) => void;
+  /** Keys the list leaves to whatever holds it (the pane's `[`, `]`, ← and
+   *  Escape): `true` when one was taken, and the list does no more with it. */
+  onKeys?: (key: string) => boolean;
   /** Scroll the next-up episode (or the list's top) into sight when the
-   *  list appears. Off for a list that has just opened with its sheet,
-   *  which starts at the sheet's top. */
+   *  list appears. Off for a list whose scroller should start at its top. */
   revealOnMount?: boolean;
 }
 
@@ -73,12 +78,21 @@ interface Geometry {
 
 const H = EPISODE_ROW_HEIGHT;
 
-export function EpisodeList({ episodes, nextUp, onPlay, onWatched, revealOnMount = true }: EpisodeListProps) {
+export function EpisodeList({
+  episodes,
+  nextUp,
+  playingId = null,
+  onPlay,
+  onWatched,
+  onKeys,
+  revealOnMount = true,
+}: EpisodeListProps) {
   const listRef = useRef<HTMLDivElement | null>(null);
   const count = episodes.length;
   const nextIndex = episodes.findIndex((e) => e.episodeId === nextUp);
-  // The row the keys move from: the next-up one to begin with.
-  const [cursor, setCursor] = useState(nextIndex);
+  // The row the keys move from: the next-up one to begin with, else the
+  // first, so Enter on arriving always has one to play.
+  const [cursor, setCursor] = useState(nextIndex >= 0 ? nextIndex : 0);
   const [win, setWin] = useState(() => episodeWindow(0, 0, count));
 
   const geometry = useCallback((): Geometry | null => {
@@ -108,12 +122,10 @@ export function EpisodeList({ episodes, nextUp, onPlay, onWatched, revealOnMount
     [geometry],
   );
 
-  // A season chosen: what is next in sight if it is in this one, else its
+  // A season shown: what is next in sight if it is in this one, else its
   // first episode, wherever the last one was left. Once per season: the
-  // sheet keys the list by it. Not when the sheet has just opened: its
-  // scroller is the sheet itself, and scrolling to the next-up episode
-  // scrolled the poster and the facts out of sight before they were seen.
-  // The cursor is still on that episode, and the first key brings it in.
+  // pane keys the list by it. The pane's own box scrolls, so nothing else
+  // on the page moves with it.
   useLayoutEffect(() => {
     if (!revealOnMount) return;
     const g = geometry();
@@ -153,6 +165,12 @@ export function EpisodeList({ episodes, nextUp, onPlay, onWatched, revealOnMount
     // must mark that episode rather than play the row the cursor is on.
     if (e.target !== e.currentTarget) return;
     if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (onKeys?.(e.key)) {
+      // Nor the player's keys, nor Escape's chain, as well.
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
     if (e.key === "Enter") {
       const ep = at >= 0 ? episodes[at] : undefined;
       if (ep) {
@@ -188,6 +206,7 @@ export function EpisodeList({ episodes, nextUp, onPlay, onWatched, revealOnMount
         index={i}
         id={`${idPrefix}-${ep.episodeId}`}
         next={ep.episodeId === nextUp}
+        playing={ep.episodeId === playingId}
         selected={i === at}
         onChoose={choose}
         onPlay={play}
@@ -220,6 +239,7 @@ const EpisodeRow = memo(function EpisodeRow({
   index,
   id,
   next,
+  playing,
   selected,
   onChoose,
   onPlay,
@@ -229,6 +249,7 @@ const EpisodeRow = memo(function EpisodeRow({
   index: number;
   id: string;
   next: boolean;
+  playing: boolean;
   selected: boolean;
   onChoose: (i: number) => void;
   onPlay: (e: EpisodeDto) => void;
@@ -238,9 +259,15 @@ const EpisodeRow = memo(function EpisodeRow({
   const number = e.episodeEnd !== null && e.episodeEnd > e.episode ? `${e.episode}–${e.episodeEnd}` : String(e.episode);
   const progress = episodeProgress(e);
   const length = runtime(e.durationSecs ?? e.duration);
+  // How far in, before the plot: "12:40 of 44:00".
+  const where =
+    progress !== null && e.position !== null
+      ? `${clock(e.position)} of ${clock(e.duration ?? e.durationSecs ?? 0)}`
+      : "";
+  const line = [where, e.plot ?? ""].filter(Boolean).join(" · ");
   return (
     <div
-      className={`ep ${next ? "next" : ""} ${selected ? "sel" : ""}`}
+      className={`ep ${next ? "next" : ""} ${playing ? "playing" : ""} ${selected ? "sel" : ""}`}
       id={id}
       role="option"
       aria-selected={selected}
@@ -273,12 +300,19 @@ const EpisodeRow = memo(function EpisodeRow({
         </span>
       </span>
       <span className="ep-text">
-        <span className="ep-title" data-tip-overflow="">
-          {title}
+        <span className="ep-head">
+          <span className="ep-title" data-tip-overflow="">
+            {title}
+          </span>
+          {playing ? (
+            <span className="ep-tag">Playing</span>
+          ) : next ? (
+            <span className="ep-tag">Next</span>
+          ) : null}
         </span>
-        {e.plot ? (
+        {line ? (
           <span className="ep-plot" data-tip-overflow="">
-            {e.plot}
+            {line}
           </span>
         ) : null}
       </span>

@@ -115,16 +115,17 @@ test("with nothing next, the sheet opens on a season rather than the specials", 
   assert.equal(firstSeason(details({ seasons: [specials], episodes: [ep(1, 0, 1)], nextUp: null })), 0);
 });
 test("the episode list is windowed: a long season draws only what is in sight", () => {
-  assert.equal(EPISODE_ROW_HEIGHT, 84);
-  const top = episodeWindow(0, 840, 400);
+  const H = EPISODE_ROW_HEIGHT;
+  assert.equal(H, 56);
+  const top = episodeWindow(0, H * 10, 400);
   assert.equal(top.start, 0);
   assert.ok(top.end <= 10 + 2 * OVERSCAN, `end ${top.end}`);
-  assert.equal(top.totalHeight, 33600);
-  assert.ok(episodeWindow(84 * 200, 840, 400).start >= 200 - OVERSCAN);
-  assert.equal(episodeWindow(0, 840, 0).end, 0);
-  assert.equal(episodeWindow(0, 840, 0).totalHeight, 0);
+  assert.equal(top.totalHeight, H * 400);
+  assert.ok(episodeWindow(H * 200, H * 10, 400).start >= 200 - OVERSCAN);
+  assert.equal(episodeWindow(0, H * 10, 0).end, 0);
+  assert.equal(episodeWindow(0, H * 10, 0).totalHeight, 0);
   // Scrolled to the end, the last episode is drawn.
-  assert.equal(episodeWindow(84 * 400 - 840, 840, 400).end, 400);
+  assert.equal(episodeWindow(H * 400 - H * 10, H * 10, 400).end, 400);
 });
 test("a selection becomes the query the backend reads", () => {
   assert.deepEqual(showQuery(SHOW_RECENT, "added", null), { list: "recent", categoryId: null, sort: "added", yearFrom: null, yearTo: null, search: null });

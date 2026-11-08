@@ -15,6 +15,7 @@
 // measurement.
 
 import {
+  Fragment,
   useMemo,
   useRef,
   type PointerEvent as ReactPointerEvent,
@@ -49,11 +50,13 @@ import { useRecordingChannels } from "../hooks/useRecordingChannels";
 import { listedFor, railItemKind } from "../logic/railItems";
 import { categoryNames } from "../logic/searchGroups";
 import { RecordingBand } from "./RecordingBand";
+import { bandLayout, type BandItem } from "../logic/band";
 import { moviesAvailable, playingKind } from "../logic/movies";
 import { showsAvailable } from "../logic/shows";
 import { run, useApp, useDispatch } from "../store";
-import { MovieBand, PlayingEnd } from "./MovieBand";
-import { ShowBand } from "./ShowBand";
+import { MovieBand, MovieNowSide, MovieSelectedSide, PlayingEnd } from "./MovieBand";
+import { EpisodeBand, EpisodeNowSide, ShowBand, ShowSelectedSide } from "./ShowBand";
+import { BandLogo, BandMain, BandSide, Kicker, ProgressLine, SwapButton } from "./BandParts";
 import { Fullscreen, ResizeHandle, Stop } from "./icons";
 import { MiniControls } from "./MiniControls";
 import { StreamEnded } from "./StreamEnded";
@@ -81,7 +84,7 @@ export function WatchBand({ videoRef, picture, upNext }: WatchBandProps) {
   const videoWidthRem = fittedVideoWidth(app.videoWidthRem, app.videoRoomRem);
   const dispatch = useDispatch();
   const now = useClock();
-  const { now: onNow, next } = useNowNext(nowChannel, now);
+  const { now: onNow, next, later } = useNowNext(nowChannel, now);
 
   // While Recordings is chosen the band is about the recording picked in
   // the list; with none picked it shows the channel as usual.
@@ -92,12 +95,10 @@ export function WatchBand({ videoRef, picture, upNext }: WatchBandProps) {
   const recordingList = useMemo(() => (recording ? [recording] : null), [recording]);
   const recordingChannel = useRecordingChannels(recordingList).get(recording?.streamId ?? -1) ?? null;
 
-  // Which body the band has, first match: the picked recording; in the
-  // Movies tab the selected movie; in the Shows tab the selected show; a
-  // movie that is playing; an episode that is playing (its show's band);
-  // the channel.
-  // Choosing a movie or a show to look at changes this and nothing else —
-  // the picture beside it is whatever was already on.
+  // What the band tells of (logic/band.ts): what is selected in the Movies
+  // or Shows tab, what is playing, or both side by side. Choosing a movie or
+  // a show to look at changes this and nothing else — the picture beside it
+  // is whatever was already on.
   const inMovies = app.section === "movies" && moviesAvailable(app.movies.summary);
   const selectedMovie = inMovies ? app.movies.selected : null;
   const inShows = app.section === "shows" && showsAvailable(app.shows.summary);
@@ -106,6 +107,8 @@ export function WatchBand({ videoRef, picture, upNext }: WatchBandProps) {
   const openMovieId = player.onDemand?.kind === "movie" ? player.onDemand.id : null;
   const episodeOpen = playingKind(player) === "episode";
   const playingEpisode = episodeOpen ? app.shows.playing : null;
+  const sheetOpen =
+    (inMovies && app.movies.sheetId !== null) || (inShows && app.shows.sheetId !== null);
 
   const live = player.state !== "stopped";
   const toWatch = () => dispatch({ type: "mode", mode: "watch" });
@@ -135,6 +138,91 @@ export function WatchBand({ videoRef, picture, upNext }: WatchBandProps) {
         resume();
         break;
     }
+  };
+
+  // The two the band can tell of, and how it lays them out.
+  const playingItem: BandItem | null = movieOpen
+    ? { kind: "movie", key: `movie:${openMovieId ?? "?"}` }
+    : episodeOpen
+      ? { kind: "episode", key: `show:${playingEpisode?.series.seriesId ?? "?"}` }
+      : live && nowChannel
+        ? { kind: "channel", key: `channel:${nowChannel.streamId}` }
+        : null;
+  const selectedItem: BandItem | null = selectedMovie
+    ? { kind: "movie", key: `movie:${selectedMovie.movieId}` }
+    : selectedShow
+      ? { kind: "show", key: `show:${selectedShow.seriesId}` }
+      : null;
+  const layout = bandLayout({
+    playing: playingItem,
+    selected: selectedItem,
+    sheetOpen,
+    lead: app.bandLead,
+  });
+  const dual = layout.side === "playing" || layout.side === "selection";
+
+  // The side column when it is the other of the two; left to the main
+  // account (its context) otherwise.
+  const playingSide = () =>
+    movieOpen ? (
+      <MovieNowSide movie={app.movies.playing} />
+    ) : episodeOpen ? (
+      <EpisodeNowSide playing={playingEpisode} />
+    ) : nowChannel ? (
+      <ChannelNowSide channel={nowChannel} onNow={onNow} now={now} />
+    ) : null;
+  const selectedSide = () =>
+    selectedMovie ? (
+      <MovieSelectedSide movie={selectedMovie} />
+    ) : selectedShow ? (
+      <ShowSelectedSide show={selectedShow} />
+    ) : null;
+  const side =
+    layout.side === "playing" ? playingSide() : layout.side === "selection" ? selectedSide() : undefined;
+
+  const selectionBand = () =>
+    selectedMovie ? (
+      <MovieBand key={selectedMovie.movieId} movie={selectedMovie} playing={false} dual={dual} side={side} />
+    ) : selectedShow ? (
+      <ShowBand key={selectedShow.seriesId} show={selectedShow} dual={dual} side={side} />
+    ) : null;
+
+  const playingBand = () => {
+    if (movieOpen) {
+      const movie =
+        app.movies.playing ?? (selectedMovie?.movieId === openMovieId ? selectedMovie : null);
+      return movie ? (
+        <MovieBand key={movie.movieId} movie={movie} playing dual={dual} side={side} />
+      ) : (
+        // Open, but the title could not be looked up: still stoppable.
+        <Unnamed what="Playing a movie" side={side} />
+      );
+    }
+    if (episodeOpen) {
+      return playingEpisode ? (
+        <EpisodeBand key={playingEpisode.series.seriesId} playing={playingEpisode} dual={dual} side={side} />
+      ) : (
+        // Open, but not looked up yet: still stoppable.
+        <Unnamed what="Playing an episode" side={side} />
+      );
+    }
+    if (!nowChannel) return null;
+    return (
+      <ChannelBand
+        mode="playing"
+        channel={nowChannel}
+        onNow={onNow}
+        next={next}
+        later={later}
+        now={now}
+        dual={dual}
+        side={side}
+        onFullScreen={toWatch}
+        onStop={() => {
+          void run(dispatch, "stop", backend.stop());
+        }}
+      />
+    );
   };
 
   // Resizing the picture. The slot is pinned right, so dragging its left
@@ -190,71 +278,26 @@ export function WatchBand({ videoRef, picture, upNext }: WatchBandProps) {
       <div className="watch-info">
         {recording ? (
           <RecordingBand key={recording.id} rec={recording} channel={recordingChannel} />
-        ) : selectedMovie ? (
-          <MovieBand
-            key={selectedMovie.movieId}
-            movie={selectedMovie}
-            playing={movieOpen && openMovieId === selectedMovie.movieId}
-          />
-        ) : selectedShow ? (
-          <ShowBand
-            key={selectedShow.seriesId}
-            show={selectedShow}
-            playing={playingEpisode?.series.seriesId === selectedShow.seriesId ? playingEpisode : null}
-          />
-        ) : movieOpen ? (
-          app.movies.playing ? (
-            <MovieBand key={app.movies.playing.movieId} movie={app.movies.playing} playing />
+        ) : layout.main === null ? (
+          ready && nowChannel ? (
+            <div className="band one">
+              <ChannelBand
+                mode="ready"
+                channel={nowChannel}
+                onNow={onNow}
+                next={next}
+                later={later}
+                now={now}
+                onPlay={resume}
+              />
+            </div>
           ) : (
-            // Open, but the title could not be looked up: still stoppable.
-            <>
-              <div className="watch-body">
-                <h2 className="watch-title-h">Playing a movie</h2>
-              </div>
-              <div className="watch-actions">
-                <PlayingEnd />
-              </div>
-            </>
+            <Idle picture={picture} movies={inMovies} shows={inShows} />
           )
-        ) : episodeOpen ? (
-          playingEpisode ? (
-            <ShowBand
-              key={playingEpisode.series.seriesId}
-              show={playingEpisode.series}
-              playing={playingEpisode}
-            />
-          ) : (
-            // Open, but not looked up yet: still stoppable.
-            <>
-              <div className="watch-body">
-                <h2 className="watch-title-h">Playing an episode</h2>
-              </div>
-              <div className="watch-actions">
-                <PlayingEnd />
-              </div>
-            </>
-          )
-        ) : live && nowChannel ? (
-          <Playing
-            channel={nowChannel}
-            onNow={onNow}
-            next={next}
-            now={now}
-            onFullScreen={toWatch}
-            onStop={() => {
-              void run(dispatch, "stop", backend.stop());
-            }}
-          />
-        ) : ready && nowChannel ? (
-          <Ready
-            channel={nowChannel}
-            onNow={onNow}
-            next={next}
-            now={now}
-            onPlay={() => void playChannel(dispatch, nowChannel)}
-          />
         ) : (
-          <Idle picture={picture} movies={inMovies} shows={inShows} />
+          <div className={`band ${dual ? "two" : "one"}`}>
+            {layout.main === "selection" ? selectionBand() : playingBand()}
+          </div>
         )}
       </div>
 
@@ -392,10 +435,21 @@ function Idle({
   );
 }
 
-/** The programme first, as the mockup has it: its title, the channel's
- *  category, the channel with the programme's times, how far along it is, what
- *  it is about, and what follows. Without guide data the channel's name takes
- *  the title's place. Shared by the playing and the restored channel. */
+/** The name of the category a channel is in, once the categories are here. */
+function useCategoryName(channel: ChannelDto): string | undefined {
+  const { categories } = useApp();
+  return channel.categoryId !== null && categories.status === "ready"
+    ? categoryNames(categories.data).get(channel.categoryId)
+    : undefined;
+}
+
+/** The programme first, as the mockup has it: its title, the channel with
+ *  the programme's times, how far along it is, and what it is about. The
+ *  category and what follows are the side column's while it shows them
+ *  ("Later on"); they stay here (`chan-extra`) where it does not: beside a
+ *  selection, or in a band too narrow for it. Without guide data the
+ *  channel's name takes the title's place. Shared by the playing and the
+ *  restored channel. */
 function ChannelProgramme({
   channel,
   onNow,
@@ -413,22 +467,19 @@ function ChannelProgramme({
    *  details: what must be in view without scrolling the column. */
   notice?: ReactNode;
 }) {
-  const { categories, qualityNews } = useApp();
+  const { qualityNews } = useApp();
   // What playing it has since added to its record, over what the channel
   // was fetched with: found off air a moment ago, say.
   const quality = channel.streamId in qualityNews ? qualityNews[channel.streamId] : channel.quality;
   const off = offAirLabel(quality, now);
-  const category =
-    channel.categoryId !== null && categories.status === "ready"
-      ? categoryNames(categories.data).get(channel.categoryId)
-      : undefined;
+  const category = useCategoryName(channel);
   return (
     <>
       <h2 className="watch-title-h" data-tip-overflow={onNow ? onNow.title : channel.name}>
         {onNow ? onNow.title : channel.cleanName}
       </h2>
       {category ? (
-        <p className="watch-cat" data-tip-overflow="">
+        <p className="watch-cat chan-extra" data-tip-overflow="">
           {category}
         </p>
       ) : null}
@@ -453,14 +504,12 @@ function ChannelProgramme({
       {notice}
       {onNow ? (
         <>
-          <div className="watch-prog-line">
-            <div className="watch-progress">
-              <span style={{ width: `${programmeProgress(onNow.start, onNow.stop, now) * 100}%` }} />
-            </div>
-            <span className="watch-left">{duration(Math.max(0, onNow.stop - now))} left</span>
-          </div>
+          <ProgressLine
+            fraction={programmeProgress(onNow.start, onNow.stop, now)}
+            label={`${duration(Math.max(0, onNow.stop - now))} left`}
+          />
           {onNow.description ? (
-            <p className="watch-desc" data-tip-overflow="">
+            <p className="watch-desc band-plot" data-tip-overflow="">
               {onNow.description}
             </p>
           ) : null}
@@ -470,7 +519,7 @@ function ChannelProgramme({
         <p className="watch-none">no guide data for this channel</p>
       )}
       {next ? (
-        <p className="watch-next" data-tip-overflow="">
+        <p className="watch-next chan-extra" data-tip-overflow="">
           Next {hhmm(next.start)} {next.title}
         </p>
       ) : null}
@@ -511,37 +560,139 @@ function ChannelLinks({ channel }: { channel: ChannelDto }) {
   );
 }
 
-/** Where you left off: the channel is restored, the picture is not.
+/** The channel in the band's main column: playing, or restored from last
+ *  time and not started (`ready`), whose one action is Resume.
  *
  *  It says "Resume" rather than starting by itself on purpose. Opening a
- *  stream may cost the only connection the provider allows, and an app that starts
- *  playing the moment it is launched is an app that makes noise when you
- *  opened it to look something up. */
-function Ready({
-  channel,
-  onNow,
-  next,
-  now,
-  onPlay,
-}: {
-  channel: ChannelDto;
-  onNow: ProgrammeDto | null;
-  next: ProgrammeDto | null;
-  now: number;
-  onPlay: () => void;
-}) {
+ *  stream may cost the only connection the provider allows, and an app that
+ *  starts playing the moment it is launched is an app that makes noise when
+ *  you opened it to look something up. */
+function ChannelBand(
+  props: {
+    channel: ChannelDto;
+    onNow: ProgrammeDto | null;
+    next: ProgrammeDto | null;
+    later: readonly ProgrammeDto[];
+    now: number;
+    dual?: boolean;
+    /** The side column, when WatchBand fills it; else what is on later. */
+    side?: ReactNode;
+  } & (
+    | { mode: "ready"; onPlay: () => void }
+    | { mode: "playing"; onFullScreen: () => void; onStop: () => void }
+  ),
+) {
+  const { channel, onNow, next, later, now, dual = false, side } = props;
   return (
     <>
-      <div className="watch-body">
-        <p className="watch-state">Where you left off</p>
-        <ChannelProgramme channel={channel} onNow={onNow} next={next} now={now} />
-      </div>
-      <div className="watch-actions">
-        <button className="ctl" onClick={onPlay}>
-          Resume
-        </button>
-        <ChannelLinks channel={channel} />
-      </div>
+      {props.mode === "ready" ? (
+        <BandMain
+          className="channel-band"
+          thumb={<BandLogo url={channel.logoUrl} name={channel.cleanName} />}
+          actions={
+            <>
+              <button className="ctl primary" onClick={props.onPlay}>
+                Resume
+              </button>
+              <ChannelLinks channel={channel} />
+            </>
+          }
+        >
+          <p className="watch-state">Where you left off</p>
+          <ChannelProgramme channel={channel} onNow={onNow} next={next} now={now} />
+        </BandMain>
+      ) : (
+        <Playing
+          channel={channel}
+          onNow={onNow}
+          next={next}
+          now={now}
+          dual={dual}
+          onFullScreen={props.onFullScreen}
+          onStop={props.onStop}
+        />
+      )}
+      {side !== undefined ? side : <LaterOn channel={channel} later={later} />}
+    </>
+  );
+}
+
+/** With the channel alone in the band: what is on after this, and the
+ *  category it is in. */
+function LaterOn({ channel, later }: { channel: ChannelDto; later: readonly ProgrammeDto[] }) {
+  const category = useCategoryName(channel);
+  if (later.length === 0 && !category) return null;
+  return (
+    <BandSide kind="context" label={`Later on ${channel.cleanName}`}>
+      <p className="band-kicker" data-tip-overflow="">
+        Later on {channel.cleanName}
+      </p>
+      {later.length > 0 ? (
+        <div className="band-sched">
+          {later.map((p) => (
+            <Fragment key={`${p.start}:${p.title}`}>
+              <span className="band-sched-time">{hhmm(p.start)}</span>
+              <span className="band-sched-name" data-tip-overflow="">
+                {p.title}
+              </span>
+            </Fragment>
+          ))}
+        </div>
+      ) : (
+        <p className="watch-none">no guide data for later</p>
+      )}
+      <span className="band-grow" />
+      {category ? (
+        <p className="band-side-foot" data-tip-overflow="">
+          {category}
+        </p>
+      ) : null}
+    </BandSide>
+  );
+}
+
+/** The channel playing, beside a selection: its name and number, the
+ *  programme and its times, how far along; ↩ Show, Full screen and Stop. */
+function ChannelNowSide({ channel, onNow, now }: { channel: ChannelDto; onNow: ProgrammeDto | null; now: number }) {
+  return (
+    <BandSide
+      kind="now"
+      label="Now playing"
+      swap
+      actions={
+        <>
+          <SwapButton label="Show what is playing" />
+          <PlayingEnd />
+        </>
+      }
+    >
+      <Kicker what="live" />
+      <p className="band-side-t" data-tip-overflow={channel.name}>
+        {channel.cleanName}
+        {channel.num != null ? <span className="watch-num"> #{channel.numLabel ?? channel.num}</span> : null}
+      </p>
+      <p className="band-side-s" data-tip-overflow="">
+        {onNow ? `${onNow.title} · ${timeRange(onNow.start, onNow.stop)}` : "no guide data"}
+      </p>
+      {onNow ? (
+        <ProgressLine
+          fraction={programmeProgress(onNow.start, onNow.stop, now)}
+          label={`${duration(Math.max(0, onNow.stop - now))} left`}
+        />
+      ) : null}
+    </BandSide>
+  );
+}
+
+/** Something is open in the player that could not be looked up: its kind,
+ *  and still a way to stop it. */
+function Unnamed({ what, side }: { what: string; side?: ReactNode }) {
+  return (
+    <>
+      <BandMain actions={<PlayingEnd />}>
+        <h2 className="watch-title-h">{what}</h2>
+      </BandMain>
+      {side}
     </>
   );
 }
@@ -551,6 +702,7 @@ function Playing({
   onNow,
   next,
   now,
+  dual,
   onFullScreen,
   onStop,
 }: {
@@ -558,6 +710,7 @@ function Playing({
   onNow: ProgrammeDto | null;
   next: ProgrammeDto | null;
   now: number;
+  dual: boolean;
   onFullScreen: () => void;
   onStop: () => void;
 }) {
@@ -585,38 +738,42 @@ function Playing({
   const upFront = !starting && ended?.alternatives === true;
 
   return (
-    <>
-      <div className="watch-body">
-        <ChannelProgramme
-          channel={channel}
-          onNow={onNow}
-          next={next}
-          now={now}
-          badge={playerBadge(player) ?? undefined}
-          notice={upFront ? <div className="watch-notice">{endedBlock}</div> : undefined}
-        />
-        {upFront ? null : <p className="watch-facts">{facts.join(" · ")}</p>}
-        {starting ? <p className="watch-state">{starting}</p> : upFront ? null : endedBlock}
-      </div>
-      <div className="watch-actions">
-        {record ? <PlayerRecordLine record={record} /> : null}
-        <ChannelLinks channel={channel} />
-        {/* Icons at the end: shapes everybody recognises, out of the way of
-            the actions that are about this programme. */}
-        <span className="watch-actions-end">
-          <button
-            className="ctl icon"
-            aria-label="Full screen"
-            data-tip="Full screen (F)"
-            onClick={onFullScreen}
-          >
-            <Fullscreen className="i" />
-          </button>
-          <button className="ctl icon" aria-label="Stop" data-tip="Stop" onClick={onStop}>
-            <Stop className="i" />
-          </button>
-        </span>
-      </div>
-    </>
+    <BandMain
+      className="channel-band"
+      thumb={<BandLogo url={channel.logoUrl} name={channel.cleanName} />}
+      kicker={dual ? <Kicker what="live" /> : null}
+      actions={
+        <>
+          {record ? <PlayerRecordLine record={record} /> : null}
+          <ChannelLinks channel={channel} />
+          {/* Icons at the end: shapes everybody recognises, out of the way of
+              the actions that are about this programme. */}
+          <span className="watch-actions-end">
+            <button
+              className="ctl icon"
+              aria-label="Full screen"
+              data-tip="Full screen (F)"
+              onClick={onFullScreen}
+            >
+              <Fullscreen className="i" />
+            </button>
+            <button className="ctl icon" aria-label="Stop" data-tip="Stop" onClick={onStop}>
+              <Stop className="i" />
+            </button>
+          </span>
+        </>
+      }
+    >
+      <ChannelProgramme
+        channel={channel}
+        onNow={onNow}
+        next={next}
+        now={now}
+        badge={playerBadge(player) ?? undefined}
+        notice={upFront ? <div className="watch-notice">{endedBlock}</div> : undefined}
+      />
+      {upFront ? null : <p className="watch-facts">{facts.join(" · ")}</p>}
+      {starting ? <p className="watch-state">{starting}</p> : upFront ? null : endedBlock}
+    </BandMain>
   );
 }

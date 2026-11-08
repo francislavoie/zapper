@@ -48,6 +48,10 @@ interface have their own page: [recording.md](recording.md).
 - Each channel's last measured resolution, frame rate and codec is shown in the list; channels
   that failed to load are dimmed, with the reason.
 - The playing channel stays in a docked picture with its own controls while you browse.
+- The band above the list tells of what is playing, with what is on later on its channel beside
+  it. Select a movie or a show and the band shows it and, beside it, what is playing; `↩ Show`
+  brings what is playing to the front until the next selection. A large picture or a small window
+  folds the second one into a line underneath.
 - Command palette (`Ctrl+P`; `⌘P` on a Mac) with every action. Shortcuts are listed in
   Settings › Keyboard, with ⌘ for Ctrl on a Mac.
 
@@ -70,11 +74,16 @@ interface have their own page: [recording.md](recording.md).
   recently added, name, year or rating, limited to a range of years, and searchable by name.
 - A show is a favourite as a whole. Watched goes by episode: marking a show watched marks all its
   episodes (specials aside), and a show counts as watched once all its episodes are.
-- Selecting a show puts its plot, people and genres beside the picture, with Play for the next
+- Selecting a show puts its plot, people and genres in the band above, with Play for the next
   episode: one you are partway through, else the one after the last you watched.
-- Details (or `Enter`) opens its sheet: the backdrop and poster, the seasons as tabs, and each
-  season's episodes with their stills, titles, plots and lengths, the next one highlighted, each
-  with its own watched mark.
+- A click on a show opens its episodes in a pane beside the list: Play for the next episode, the
+  seasons as tabs, and each episode with its still, title, plot, length and watched mark, the next
+  one and the one playing tagged. `↑`/`↓` in the list and the pane follows; `Enter` or `→` go into
+  the episodes (in Posters, `←`/`→` move along the row and `Enter` goes in), `Enter` plays,
+  `[`/`]` change season, `←` or `Esc` go back to the list, and `Esc` again (or the mouse's back
+  button) closes the pane. Stacked under the picture, the pane opens in the list's place.
+- Details (or a double-click) opens the show's sheet: the backdrop and poster, the plot and cast,
+  its seasons in a line, and the same actions.
 - As with movies, browsing a show plays nothing: Play, or `Enter` on an episode, does.
 - An Xtream show's seasons and episodes are asked of the provider when it is first selected, then
   kept for a week.
@@ -101,8 +110,8 @@ interface have their own page: [recording.md](recording.md).
   language you last picked, across launches too.
 - Subtitle font, size, colour and backdrop.
 - Mouse: wheel for volume, double-click for fullscreen, double-click the edges to skip. Theater
-  mode (`T`). The back button steps back like `Esc` (a menu, a sheet, the player), then to the
-  tab or category before; forward goes ahead again.
+  mode (`T`). The back button steps back like `Esc` (a menu, a sheet, the Shows pane, the
+  player), then to the tab or category before; forward goes ahead again.
 - Stats (`S`): bitrate, buffer, resolution, codec, dropped frames and stalls.
 - When a provider ends or refuses a stream (for example because another device took the
   connection), zapper says so and doesn't reconnect on its own.

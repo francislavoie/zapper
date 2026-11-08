@@ -34,9 +34,11 @@ const nothing = {
   paletteOpen: false,
   movieSheet: false,
   showSheet: false,
+  showPane: false,
   upNextCard: false,
   fullscreen: false,
   query: false,
+  queryFocused: false,
   mode: "browse",
   playing: false,
 };
@@ -161,6 +163,7 @@ test("Escape unwinds everything, one press each, in the order it was stacked", (
     ["movieSheet", "movieSheet"],
     ["showSheet", "showSheet"],
     ["upNextCard", "upNextCard"],
+    ["showPane", "showPane"],
     ["fullscreen", "fullscreen"],
     ["query", "query"],
   ];
@@ -192,4 +195,17 @@ test("a step back over a tab the account no longer has goes past it", () => {
   assert.deepEqual(b.place, live());
   assert.deepEqual(goForward(b.history, noMovies).place, shows());
   assert.equal(goBack(startHistory(movies()), noMovies), null);
+});
+
+test("the Shows pane: after the countdown, and a focused search is cleared first", () => {
+  const c = { ...nothing, showPane: true, upNextCard: true, mode: "watch", playing: true };
+  assert.equal(escapeStep(c, "key"), "upNextCard");
+  assert.equal(escapeStep({ ...c, upNextCard: false }, "key"), "showPane");
+  assert.equal(escapeStep({ ...c, upNextCard: false }, "mouse"), "showPane");
+  const typed = { ...nothing, showPane: true, query: true, mode: "browse", playing: true };
+  assert.equal(escapeStep(typed, "key"), "showPane", "a search not being typed in waits");
+  assert.equal(escapeStep({ ...typed, queryFocused: true }, "key"), "query");
+  assert.equal(escapeStep({ ...typed, queryFocused: true }, "mouse"), "showPane");
+  // With something playing, Esc from the list closes the pane, not into the player.
+  assert.equal(escapeStep({ ...nothing, showPane: true, playing: true }, "key"), "showPane");
 });
