@@ -51,6 +51,13 @@
 //! the next; turned off, they stay off on the next; and the settings'
 //! choice, applied as the interface applies it, is what the next shows.
 //!
+//! `--captions` plays a channel with closed captions (CEA-608 in the
+//! picture, on 16:9 video) that shows one caption top left, one centred at
+//! the bottom and one on the right, chooses the captions, and checks that
+//! mpv draws each where the caption's grid says, not where mpv's own
+//! rescaling would put it; then that choosing no subtitles puts mpv's own
+//! placement back. `ZAPPER_CAPTION_SHOTS=<dir>` saves each frame there.
+//!
 //! `--ending <kind>` plays a channel that is expected to stop by itself, and
 //! checks it stops the way the app explains it (`offAir`, `dropped`, …), as
 //! the ending kinds are spelled to the interface. Against
@@ -164,6 +171,8 @@ fn main() {
                 } else if args.iter().any(|a| a == "--up-next") {
                     let has = |flag: &str| args.iter().any(|a| a == flag);
                     run_up_next(&handle, has("--drop"), has("--past-end")).await
+                } else if args.iter().any(|a| a == "--captions") {
+                    run_captions(&handle).await
                 } else if args.iter().any(|a| a == "--subtitles") {
                     run_subtitles(&handle).await
                 } else if args.iter().any(|a| a == "--episode") {
@@ -830,6 +839,109 @@ async fn run_subtitles(app: &tauri::AppHandle) -> Result<String, String> {
     Ok("off by default though a track is flagged default; French chosen showed French on the next \
         title; off chosen stayed off on the next; the settings' English showed English"
         .into())
+}
+
+/// The `--captions` run; see the top of the file.
+#[cfg(target_os = "linux")]
+async fn run_captions(app: &tauri::AppHandle) -> Result<String, String> {
+    use std::time::{Duration, Instant};
+    use zapper_lib::ipc::player_cmds as cmds;
+    use zapper_lib::ipc::types::PlaybackState;
+
+    /// mpv's caption text and the placement properties, read on the main
+    /// thread; with `shot`, the frame and its subtitles saved there too.
+    async fn read(app: &tauri::AppHandle, shot: Option<String>) -> Option<[String; 5]> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.run_on_main_thread(move || {
+            let v = zapper_lib::surface::mpv::with_player(|p| {
+                if let Some(path) = &shot {
+                    if let Err(e) = p.command("screenshot-to-file", &[path, "subtitles"]) {
+                        eprintln!("could not save {path}: {e}");
+                    }
+                }
+                ["sub-text/ass", "sub-ass-override", "sub-pos", "sub-align-x", "sub-margin-x"]
+                    .map(|k| p.get_string(k).unwrap_or_default())
+            });
+            let _ = tx.send(v);
+        })
+        .ok()?;
+        rx.recv_timeout(Duration::from_secs(5)).ok().flatten()
+    }
+
+    let id = resolve_stream_id().await?;
+    cmds::play(app.clone(), id).await?;
+    let opened = await_state(Duration::from_secs(25), |s| s.state == PlaybackState::Playing).await;
+    if opened.state != PlaybackState::Playing {
+        return Err(format!("the captioned channel ended in {:?}", opened.state));
+    }
+    // mpv lists the captions once it has met some in the picture.
+    let mut caption_track = None;
+    for _ in 0..100 {
+        let o = cmds::player_options().await?;
+        caption_track = o.subtitles.iter().find(|t| t.codec.as_deref() == Some("eia_608")).map(|t| t.id);
+        if caption_track.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    let track = caption_track.ok_or("no caption track was listed")?;
+    cmds::set_subtitle_track(app.clone(), Some(track)).await?;
+
+    // The fixture loops three captions: top left, centred at the bottom, and
+    // on the right. Each one's placement, once mpv draws it.
+    let shots = std::env::var("ZAPPER_CAPTION_SHOTS").ok();
+    let want = [
+        ("TOP LEFT", "21", "left", "top-left"),
+        ("THE BOTTOM", "90", "center", "bottom-centre"),
+        ("RIGHT SIDE", "90", "right", "right"),
+    ];
+    let mut seen = Vec::new();
+    // Every distinct reading, for a run that fails to say what mpv did.
+    let mut readings: Vec<[String; 5]> = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(45);
+    for (text, pos, align, name) in want {
+        loop {
+            if Instant::now() > deadline {
+                return Err(format!(
+                    "the {name} caption was not seen placed (seen: {seen:?}; mpv said {readings:?})"
+                ));
+            }
+            let Some(v) = read(app, None).await else {
+                return Err("could not read mpv's properties".into());
+            };
+            if readings.last() != Some(&v) && readings.len() < 40 {
+                readings.push(v.clone());
+            }
+            // mpv reads `sub-pos` back as a decimal.
+            let at = v[2].parse::<f64>().ok() == pos.parse::<f64>().ok();
+            if v[0].contains(text) && at && v[3] == align {
+                if v[1] != "strip" {
+                    return Err(format!("the {name} caption was drawn with sub-ass-override={}", v[1]));
+                }
+                // A moment for the frame to carry it, then the picture.
+                tokio::time::sleep(Duration::from_millis(300)).await;
+                let shot = shots.as_ref().map(|d| format!("{d}/caption-{name}.png"));
+                read(app, shot).await;
+                seen.push(format!("{name}: sub-pos {} {} margin {}", v[2], v[3], v[4]));
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    // Another track, or none: everything back as mpv has it.
+    cmds::set_subtitle_track(app.clone(), None).await?;
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    let v = read(app, None).await.ok_or("could not read mpv's properties")?;
+    let defaults = v[1] == "scale"
+        && v[2].parse::<f64>().ok() == Some(100.0)
+        && v[3] == "center"
+        && v[4] == "19";
+    if !defaults {
+        return Err(format!("with captions off, mpv was left with {:?}", &v[1..]));
+    }
+    cmds::stop(app.clone()).await?;
+    Ok(format!("{}; with captions off, mpv's own placement again", seen.join("; ")))
 }
 
 /// The `--up-next` run; see the top of the file.

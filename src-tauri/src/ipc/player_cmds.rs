@@ -26,7 +26,7 @@ use crate::catalog::vod_store::{self, ItemKind, VodItem};
 use crate::connections::{self, Limit, Verdict};
 use crate::ipc::ending::{self, Clues, Ending, EndingKind, Flow, How};
 use crate::ipc::live_start::{Join, Settle};
-use crate::ipc::tracks;
+use crate::ipc::{captions, tracks};
 use crate::ipc::types::{
     events, AspectMode, ChannelQualityDto, ConnectionsDto, DeinterlaceMode, LiveJumpDto,
     LiveStart, OnDemandDto, OnDemandKind, PlaybackState, PlayerOptionsDto, PlayerStateDto,
@@ -1830,6 +1830,15 @@ fn tick(app: &AppHandle, p: &Player) {
             o.subtitles = subtitles.clone();
         });
     }
+    // Closed captions where the broadcaster put them: see `ipc::captions`.
+    let caption_text = signals.iter().rev().find_map(|s| match s {
+        Signal::SubText(text) => Some(text.as_str()),
+        _ => None,
+    });
+    let captions_shown = track_lists.as_ref().map(|(_, subtitles)| captions::captions_selected(subtitles));
+    if captions_shown.is_some() || caption_text.is_some() {
+        place_captions(p, captions_shown, caption_text);
+    }
     let mut finished = None;
     // Whether the file mpv has is the one the current open loaded: its
     // `path` against the address. Read before the state lock, and kept out
@@ -1883,7 +1892,7 @@ fn tick(app: &AppHandle, p: &Player) {
                 // `Machine::heard`.
                 Signal::Log(text) => m.heard(text),
                 Signal::StartFile => m.file_started(),
-                Signal::FileLoaded | Signal::Tracks(_) => {}
+                Signal::FileLoaded | Signal::Tracks(_) | Signal::SubText(_) => {}
             }
         }
         // This open's tracks, once known: the last episode's language looked
@@ -3319,6 +3328,26 @@ fn open_subtitles(p: &Player, pref: &SubtitlePref) {
     for (key, value) in subtitle_open_properties(pref) {
         if let Err(e) = p.set_property(key, &value) {
             tracing::warn!("could not set {key} for the subtitles chosen: {e}");
+        }
+    }
+}
+
+/// Closed captions placed where the broadcaster put them, as
+/// `ipc::captions` works out from the caption's grid position: mpv does not
+/// rescale those positions on wide video, so they are drawn without them and
+/// placed again from the grid. `selected` when the track list said whether
+/// captions are the track shown; `text` when the caption on screen changed.
+static CAPTIONS: Mutex<captions::Captions> = Mutex::new(captions::Captions::new());
+
+fn place_captions(p: &Player, selected: Option<bool>, text: Option<&str>) {
+    let Ok(mut c) = CAPTIONS.lock() else {
+        return;
+    };
+    let aspect = text.and_then(|_| p.get_f64("video-params/aspect"));
+    for (key, value) in c.update(selected, text, aspect) {
+        if let Err(e) = p.set_property(key, &value) {
+            tracing::warn!("could not set {key} for the captions: {e}");
+            c.forget(key);
         }
     }
 }
