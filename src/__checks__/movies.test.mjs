@@ -13,6 +13,7 @@ import {
   languagesLine,
   moviesAvailable,
   movieBadges,
+  movieCard,
   movieCount,
   movieFacts,
   movieQuery,
@@ -56,6 +57,19 @@ test("runtimes and facts read as the mockups do", () => {
   assert.equal(movieFacts({ year: 2025, durationSecs: 109 * 60, rating: 7.6 }), "2025 · 1h 49m · ★ 7.6");
   assert.equal(movieFacts({ year: null, durationSecs: null, rating: 7 }), "★ 7.0");
   assert.equal(movieFacts({ year: null, durationSecs: null, rating: null }), "");
+});
+test("a movie as a poster card: the clean name drawn, the full name for its tip", () => {
+  const now = 1_800_000_000;
+  const m = {
+    movieId: 3, name: "Film 4K", cleanName: "Film", year: 2025, durationSecs: 109 * 60, rating: 7.6,
+    posterUrl: null, added: now - 86400, categoryId: "c1", favourite: true, watched: false,
+  };
+  assert.deepEqual(movieCard(m, now), {
+    id: 3, title: "Film", name: "Film 4K", posterUrl: null, badges: ["NEW", "4K"],
+    meta: "2025 · 1h 49m · ★ 7.6", watched: false, favourite: true,
+  });
+  assert.equal(movieCard({ ...m, year: null, durationSecs: null, rating: null, added: null, name: "Film" }, now).meta, "");
+  assert.deepEqual(movieCard({ ...m, added: null, name: "Film" }, now).badges, []);
 });
 test("year ranges: all, the last two years, decades, before 1980", () => {
   const r = yearRanges(2026);

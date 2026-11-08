@@ -6,24 +6,11 @@ import { memo } from "react";
 import { movieBadges, runtime } from "../logic/movies";
 import { LIST_ROW_HEIGHT } from "../logic/virtual";
 import type { MovieDto } from "../types";
+import type { VodRowProps } from "./OnDemandList";
 import { Poster } from "./Poster";
 
-export interface MovieRowProps {
-  movie: MovieDto;
-  top: number;
-  index: number;
-  /** Unique to the list showing it, so two lists on one page share no ids. */
-  idPrefix: string;
-  selected: boolean;
-  /** Unix seconds, for the NEW badge; moves on slowly, so rows keep their
-   *  memoised render between its ticks. */
-  now: number;
-  onSelect: (m: MovieDto, index: number) => void;
-  onOpen: (m: MovieDto, index: number) => void;
-}
-
 export const MovieRow = memo(function MovieRow({
-  movie,
+  item: movie,
   top,
   index,
   idPrefix,
@@ -31,7 +18,7 @@ export const MovieRow = memo(function MovieRow({
   now,
   onSelect,
   onOpen,
-}: MovieRowProps) {
+}: VodRowProps<MovieDto>) {
   const badges = movieBadges(movie, now);
   return (
     // Not a button: the list is one focus stop and the arrow keys move the

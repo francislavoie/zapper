@@ -164,6 +164,35 @@ export function movieBadges(
   return out;
 }
 
+/** What a poster card draws, whatever kind of title it is: the clean name
+ *  on the art, the full one for its tip, and one line of facts under it. */
+export interface PosterCard {
+  id: number;
+  /** The clean name, drawn. */
+  title: string;
+  /** The full name, for data-tip-overflow. */
+  name: string;
+  posterUrl: string | null;
+  badges: string[];
+  meta: string;
+  watched: boolean;
+  favourite: boolean;
+}
+
+/** A movie as a poster card: "2025 · 1h 49m · ★ 7.6" under it. */
+export function movieCard(m: MovieDto, now: number): PosterCard {
+  return {
+    id: m.movieId,
+    title: m.cleanName,
+    name: m.name,
+    posterUrl: m.posterUrl,
+    badges: movieBadges(m, now),
+    meta: movieFacts(m),
+    watched: m.watched,
+    favourite: m.favourite,
+  };
+}
+
 /** "Director X · With A, B, C, D": the first four of the cast. */
 export function peopleLine(d: Pick<MovieDetailsDto, "director" | "cast">): string {
   const parts: string[] = [];
