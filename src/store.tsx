@@ -49,29 +49,18 @@ import { modeForSection } from "./logic/toolbar";
 import type { Section } from "./logic/toolbar";
 import {
   initialMovies,
-  isMoviesAction,
-  moviesReducer,
   type MoviesAction,
   type MoviesState,
 } from "./moviesState";
 import { loadMoviesView, loadVodView } from "./moviesView";
-import {
-  continueReducer,
-  initialContinue,
-  isContinueAction,
-  type ContinueAction,
-  type ContinueState,
-} from "./continueState";
-import { CONTINUE, firstSelection } from "./logic/continueWatching";
-import { MOVIE_RECENT, moviesOriginChanged } from "./logic/movies";
+import { initialContinue, type ContinueAction, type ContinueState } from "./continueState";
+import { isSliceAction, reduceSlices, syncedSlices } from "./continueRoot";
 import {
   initialShows,
-  isShowsAction,
-  showsReducer,
   type ShowsAction,
   type ShowsState,
 } from "./showsState";
-import { SHOWS_VIEW_STORAGE_KEY, SHOW_RECENT, showsOriginChanged } from "./logic/shows";
+import { SHOWS_VIEW_STORAGE_KEY } from "./logic/shows";
 import { bandLeadAfter, type BandLead } from "./logic/band";
 
 import { ALL_CATEGORIES, RECORDINGS, modeSelection } from "./logic/railItems";
@@ -551,41 +540,11 @@ export function reducer(state: State, action: Action): State {
 }
 
 function reduce(state: State, action: Action): State {
-  if (isMoviesAction(action)) {
-    const movies = moviesReducer(state.movies, action);
-    // Another account's movies: its Continue watching is not this one's.
-    return action.type === "movies/summary" &&
-      moviesOriginChanged(state.movies.summary, action.value)
-      ? { ...state, movies, continue: continueReducer(state.continue, { type: "continue/reset" }) }
-      : { ...state, movies };
-  }
-  if (isShowsAction(action)) {
-    const shows = showsReducer(state.shows, action);
-    return action.type === "shows/summary" && showsOriginChanged(state.shows.summary, action.value)
-      ? { ...state, shows, continue: continueReducer(state.continue, { type: "continue/reset" }) }
-      : { ...state, shows };
-  }
-  if (isContinueAction(action)) {
-    const next = continueReducer(state.continue, action);
-    if (action.type !== "continue/items" || action.value.status !== "ready") {
-      return { ...state, continue: next };
-    }
-    // The first list to arrive opens each tab on it, unless something was
-    // chosen already.
-    const n = action.value.data.length;
-    const { movies, shows } = state;
-    return {
-      ...state,
-      continue: next,
-      movies:
-        firstSelection(movies.chosen, movies.selection, MOVIE_RECENT, n) === CONTINUE
-          ? { ...movies, selection: CONTINUE, selected: null }
-          : movies,
-      shows:
-        firstSelection(shows.chosen, shows.selection, SHOW_RECENT, n) === CONTINUE
-          ? { ...shows, selection: CONTINUE, selected: null }
-          : shows,
-    };
+  if (isSliceAction(action)) {
+    const next = reduceSlices(state, action);
+    return next.movies === state.movies && next.shows === state.shows && next.continue === state.continue
+      ? state
+      : { ...state, ...next };
   }
   switch (action.type) {
     case "bandSwap":
@@ -807,11 +766,7 @@ function reduce(state: State, action: Action): State {
         ...state,
         sync: action.value,
         catalogueRev: changed ? state.catalogueRev + 1 : state.catalogueRev,
-        movies: changed ? moviesReducer(state.movies, { type: "movies/catalogue" }) : state.movies,
-        shows: changed ? showsReducer(state.shows, { type: "shows/catalogue" }) : state.shows,
-        continue: changed
-          ? continueReducer(state.continue, { type: "continue/changed" })
-          : state.continue,
+        ...(changed ? syncedSlices(state) : {}),
       };
     }
     case "channelQuality":
