@@ -352,6 +352,9 @@ impl<'c> PlaylistWriter<'c> {
         let (movies, categories) = self.movies.finish(at)?;
         self.stats.movies = movies;
         self.stats.movie_categories = categories;
+        // After the origin, as the movies: the show list compares its own
+        // record of where it came from with this write's, and judges what
+        // the shows keep (episodes, watched marks) by it.
         let shows = self.series.finish(at)?;
         self.stats.series = shows.stats;
         self.stats.series_categories = shows.categories;
@@ -974,6 +977,48 @@ mod tests {
         assert_eq!(
             count(&c, "SELECT COUNT(*) FROM episodes WHERE deleted_at IS NULL"),
             0
+        );
+    }
+
+    /// The show lands knowing which catalogue it is from: switching to
+    /// another playlist that has a show of the same group and name (and so
+    /// the same id) is seen as a switch in that very write, so nothing of
+    /// the old catalogue's is carried over onto the new one's show.
+    #[test]
+    fn a_switch_to_a_playlist_with_the_same_show_is_seen_in_that_write() {
+        let c = open_in_memory().unwrap();
+        let with = |location: &str, text: &str| {
+            let mut w = PlaylistWriter::begin(&c).unwrap();
+            w.set_origin(origin::of_playlist(location));
+            let header = parse::parse(text.as_bytes(), |e| w.push(e)).unwrap();
+            w.finish(&header).unwrap()
+        };
+        let show_id = |c: &Connection| -> i64 {
+            c.query_row("SELECT series_id FROM series WHERE deleted_at IS NULL", [], |r| r.get(0))
+                .unwrap()
+        };
+        with(
+            "http://a.example/list.m3u",
+            "#EXTM3U\n#EXTINF:-1 group-title=\"Shows\",A Show S01E01\nhttp://a.example/vod/1.mkv\n\
+             #EXTINF:-1 group-title=\"Shows\",A Show S01E02\nhttp://a.example/vod/2.mkv\n",
+        );
+        let before = show_id(&c);
+        let s = with(
+            "http://b.example/list.m3u",
+            "#EXTM3U\n#EXTINF:-1 group-title=\"Shows\",A Show S01E01 Other\nhttp://b.example/vod/9.mkv\n",
+        );
+        assert_eq!(show_id(&c), before, "the same group and name is the same id");
+        assert_eq!(s.series.updated, 1);
+        // A write that saw the switch removes the old catalogue's episodes
+        // outright rather than keeping them soft-deleted.
+        assert_eq!(count(&c, "SELECT COUNT(*) FROM episodes"), 1);
+        // And it saw it as this catalogue's: shows landed before the origin
+        // was recorded would be filed under the old one, and judged by its
+        // marks.
+        assert_eq!(
+            crate::catalog::series_sync::series_origin(&c).unwrap(),
+            vod_sync::movies_origin(&c).unwrap(),
+            "the shows were landed under the new catalogue"
         );
     }
 
