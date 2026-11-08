@@ -2,8 +2,8 @@
 //!
 //! Every list is a page: the catalogue is ~160k titles and nothing here
 //! returns them all. The page queries are shaped to be served by the
-//! `movies_by_*` indexes (see the `vod` migration), and a test holds them to
-//! it.
+//! `movies_live_by_*` and `movies_by_category` indexes (see the `vod`
+//! migration), and a test holds them to it.
 
 use anyhow::Result;
 use rusqlite::types::Value;
@@ -717,7 +717,7 @@ mod tests {
         assert!(!p.contains("SCAN m"), "{p}");
         assert!(!p.contains("TEMP B-TREE"), "{p}");
         let p = plan(&q(MovieList::Recent, MovieSort::Added));
-        assert!(p.contains("movies_by_added"), "{p}");
+        assert!(p.contains("movies_live_by_added"), "{p}");
         assert!(!p.contains("SCAN m"), "{p}");
         assert!(!p.contains("TEMP B-TREE"), "{p}");
         let p = plan(&q(MovieList::Favourites, MovieSort::Az));
