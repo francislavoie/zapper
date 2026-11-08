@@ -11,7 +11,7 @@ use anyhow::Result;
 use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::catalog::origin::current_origin_sql;
-use crate::catalog::vod_store::{ItemKind, VodItem};
+use crate::catalog::vod_store::{self, ItemKind, VodItem};
 use crate::ipc::types::KeptSubtitleDto;
 
 /// What OpenSubtitles is asked about a title: the film, or for an episode
@@ -105,18 +105,26 @@ pub fn subject(conn: &Connection, item: VodItem) -> Result<Option<Subject>> {
 /// Notes that `item` offers the downloaded file `s`, under the current
 /// catalogue. Downloaded again, it keeps its first date.
 pub fn keep(conn: &Connection, item: VodItem, s: &KeptSubtitleDto) -> Result<()> {
+    keep_under(conn, &vod_store::origin(conn)?, item, s)
+}
+
+/// [`keep`], under the catalogue `origin`: the one the download was asked
+/// in, which may no longer be current when it ends.
+pub fn keep_under(
+    conn: &Connection,
+    origin: &str,
+    item: VodItem,
+    s: &KeptSubtitleDto,
+) -> Result<()> {
     conn.execute(
-        concat!(
-            "INSERT INTO subtitle_downloads
-               (origin, kind, item_id, file_id, language, release, hearing_impaired, downloaded_at)
-             VALUES (",
-            current_origin_sql!(),
-            ", ?1, ?2, ?3, ?4, ?5, ?6, ?7)
-             ON CONFLICT (origin, kind, item_id, file_id) DO UPDATE SET
-               language = excluded.language, release = excluded.release,
-               hearing_impaired = excluded.hearing_impaired"
-        ),
+        "INSERT INTO subtitle_downloads
+           (origin, kind, item_id, file_id, language, release, hearing_impaired, downloaded_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+         ON CONFLICT (origin, kind, item_id, file_id) DO UPDATE SET
+           language = excluded.language, release = excluded.release,
+           hearing_impaired = excluded.hearing_impaired",
         params![
+            origin,
             item.kind.as_str(),
             item.id,
             s.file_id,
@@ -160,15 +168,24 @@ pub fn kept_file(
     item: VodItem,
     file_id: i64,
 ) -> Result<Option<KeptSubtitleDto>> {
+    kept_file_under(conn, &vod_store::origin(conn)?, item, file_id)
+}
+
+/// [`kept_file`], under the catalogue `origin`.
+pub fn kept_file_under(
+    conn: &Connection,
+    origin: &str,
+    item: VodItem,
+    file_id: i64,
+) -> Result<Option<KeptSubtitleDto>> {
     let sql = format!(
         "SELECT {KEPT_COLUMNS} FROM subtitle_downloads
-         WHERE origin = {} AND kind = ?1 AND item_id = ?2 AND file_id = ?3",
-        current_origin_sql!()
+         WHERE origin = ?1 AND kind = ?2 AND item_id = ?3 AND file_id = ?4"
     );
     Ok(conn
         .query_row(
             &sql,
-            params![item.kind.as_str(), item.id, file_id],
+            params![origin, item.kind.as_str(), item.id, file_id],
             kept_row,
         )
         .optional()?)

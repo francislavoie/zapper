@@ -120,13 +120,15 @@ fn year_word(w: &str) -> Option<i32> {
     (1900..=2100).contains(&y).then_some(y)
 }
 
-/// Whether `code` is a provider's language label: upper-case codes of two
-/// or three letters (`EN`, `PT-BR`), alone or joined with `/` (`FR/EN`).
-fn language_label(code: &str) -> bool {
+/// Whether `code` is a provider's language label: upper-case codes
+/// (`EN`, `PT-BR`), alone or joined with `/` (`FR/EN`). Three letters
+/// (`ENG`) only when `three` is allowed.
+fn language_label(code: &str, three: bool) -> bool {
     let upper = |s: &str| s.bytes().all(|b| b.is_ascii_uppercase());
+    let longest = if three { 3 } else { 2 };
     !code.is_empty()
         && code.split('/').all(|part| match part.split_once('-') {
-            None => (2..=3).contains(&part.len()) && upper(part),
+            None => (2..=longest).contains(&part.len()) && upper(part),
             Some((lang, region)) => {
                 lang.len() == 2 && region.len() == 2 && upper(lang) && upper(region)
             }
@@ -135,17 +137,22 @@ fn language_label(code: &str) -> bool {
 
 /// `name` without the language label a provider puts before it
 /// (`EN - Film 0001`, `FR/EN: Film 0001`), which [`crate::catalog::clean_name`]
-/// keeps; unchanged when there is no label, or nothing after it.
+/// keeps; unchanged when there is no label, or nothing after it. Before a
+/// colon only two-letter codes count: a title's own short first word is
+/// often followed by one (`ABC: …`), and seldom by a spaced dash.
 fn without_language_label(name: &str) -> &str {
     let name = name.trim_start();
     let end = name
         .find(|c: char| !(c.is_ascii_alphabetic() || c == '/' || c == '-'))
         .unwrap_or(name.len());
     let (code, rest) = name.split_at(end);
-    if !language_label(code) {
+    if !language_label(code, true) {
         return name;
     }
     let after = if let Some(r) = rest.strip_prefix(':') {
+        if !language_label(code, false) {
+            return name;
+        }
         r
     } else {
         let r = rest.trim_start();
@@ -375,10 +382,12 @@ struct Account {
     last_login: Mutex<Option<Instant>>,
     /// The files being downloaded, each with the lock its download holds.
     in_flight: Mutex<HashMap<i64, Arc<tokio::sync::Mutex<()>>>>,
-    /// Links had from `/download` whose file is not kept yet, and when: each
-    /// cost one of the day's downloads, so a failed fetch tries the link
-    /// again rather than paying for another (for [`LINK_KEEP`]).
-    links: Mutex<HashMap<i64, (Instant, Link)>>,
+    /// Links had from `/download` whose file is not kept yet: when, and for
+    /// which OpenSubtitles user. Each cost one of that user's downloads, so
+    /// a failed fetch tries the link again rather than paying for another
+    /// (for [`LINK_KEEP`]); a sign-in, a sign-out or turning the service off
+    /// forgets them.
+    links: Mutex<HashMap<i64, PaidLink>>,
     /// Held while the token is renewed, so that downloads waiting on a
     /// renewal share it rather than each signing in.
     renewing: tokio::sync::Mutex<()>,
@@ -411,16 +420,28 @@ impl Account {
         }
     }
 
-    /// The link paid for `file_id` and not used up, while it is fresh.
-    fn take_link(&self, file_id: i64) -> Option<(Instant, Link)> {
+    /// The link `username` paid for `file_id` and did not use up, while it
+    /// is fresh at `now`. Another user's is forgotten, never handed out.
+    fn take_link(&self, file_id: i64, username: &str, now: Instant) -> Option<PaidLink> {
         let mut links = lock(&self.links);
-        links.retain(|_, (at, _)| at.elapsed() < LINK_KEEP);
-        links.remove(&file_id)
+        links.retain(|_, p| now.saturating_duration_since(p.at) < LINK_KEEP);
+        links.remove(&file_id).filter(|p| p.username == username)
     }
 
-    fn put_link(&self, file_id: i64, at: Instant, link: Link) {
-        lock(&self.links).insert(file_id, (at, link));
+    fn put_link(&self, file_id: i64, paid: PaidLink) {
+        lock(&self.links).insert(file_id, paid);
     }
+
+    fn forget_links(&self) {
+        lock(&self.links).clear();
+    }
+}
+
+/// A download link, when it was had and by whom.
+struct PaidLink {
+    at: Instant,
+    username: String,
+    link: Link,
 }
 
 /// Everything a search or a download uses: OpenSubtitles' client (with its
@@ -639,7 +660,15 @@ async fn renew(
     if os.password.is_empty() {
         return Err(OnlineError::SignInNeeded);
     }
-    let same_sign_in = |c: &OpenSubtitlesConfig| c.username == os.username && c.signed_in();
+    // The sign-in this renewal started from, unchanged: a sign-in made
+    // meanwhile (even the same user's, with a new password) is not marked
+    // refused or given a stale token.
+    let same_sign_in = |c: &OpenSubtitlesConfig| {
+        c.username == os.username
+            && c.signed_in()
+            && c.token == os.token
+            && c.password == os.password
+    };
     match login_with(ctx, &os.username, &os.password, true).await {
         Ok(login) => {
             let saved = ctx
@@ -747,9 +776,15 @@ fn describe(ctx: &Context, file_id: i64) -> Result<KeptSubtitleDto, String> {
     })
 }
 
-fn keep(ctx: &Context, item: VodItem, file_id: i64) -> Result<KeptSubtitleDto, String> {
+/// Keeps `file_id` for `item` under the catalogue `origin`.
+fn keep(
+    ctx: &Context,
+    origin: &str,
+    item: VodItem,
+    file_id: i64,
+) -> Result<KeptSubtitleDto, String> {
     let s = describe(ctx, file_id)?;
-    db::with_db(|c| subtitle_store::keep(c, item, &s)).map_err(failed)?;
+    db::with_db(|c| subtitle_store::keep_under(c, origin, item, &s)).map_err(failed)?;
     Ok(s)
 }
 
@@ -789,11 +824,16 @@ async fn download_with(
     file_id: i64,
 ) -> Result<SubtitleDownloadDto, String> {
     if !ctx.settings().enabled {
+        // Turned off, perhaps by the other process sharing the settings.
+        ctx.account.forget_links();
         return Ok(SubtitleDownloadDto::Off);
     }
     if file_id <= 0 {
         return Err("That is not an OpenSubtitles file.".to_owned());
     }
+    // The catalogue it is asked in: the row is kept under it, even if
+    // another account's catalogue replaces it before the file arrives.
+    let origin = db::with_db(vod_store::origin).map_err(failed)?;
     let ctx = Arc::clone(ctx);
     // A task of its own, so that a caller that goes away (a page closed, a
     // command cancelled) does not abandon a download already paid for.
@@ -803,7 +843,7 @@ async fn download_with(
         let held = ctx.account.file_lock(file_id);
         let r = {
             let _turn = held.lock().await;
-            download_locked(&ctx, item, file_id).await
+            download_locked(&ctx, &origin, item, file_id).await
         };
         ctx.account.release(file_id, held);
         r
@@ -823,19 +863,22 @@ struct NotKept {
 }
 
 /// The file behind `url`, asked for again once when it could not be
-/// reached or the host failed.
+/// reached or the host failed (a 502 or 503 is already asked again by
+/// [`super::http::send`]).
 async fn fetch(ctx: &Context, url: &str) -> Result<Vec<u8>, OnlineError> {
     match ctx.client.fetch_file(url).await {
-        Err(OnlineError::Unreachable(_) | OnlineError::Refused(500..=599)) => {
+        Err(OnlineError::Unreachable(_) | OnlineError::Refused(500 | 504)) => {
             ctx.client.fetch_file(url).await
         }
         r => r,
     }
 }
 
-/// Fetches `url`, checks it, writes it and keeps it for `item`.
+/// Fetches `url`, checks it, writes it and keeps it for `item` under the
+/// catalogue `origin`.
 async fn fetch_and_keep(
     ctx: &Context,
+    origin: &str,
     item: VodItem,
     file_id: i64,
     url: &str,
@@ -857,48 +900,51 @@ async fn fetch_and_keep(
         link_failed: false,
     };
     write_file(&ctx.files_dir, file_id, &text).map_err(on_disk)?;
-    keep(ctx, item, file_id).map_err(on_disk)
+    keep(ctx, origin, item, file_id).map_err(on_disk)
 }
 
 async fn download_locked(
     ctx: &Context,
+    origin: &str,
     item: VodItem,
     file_id: i64,
 ) -> Result<SubtitleDownloadDto, String> {
     if file_in(&ctx.files_dir, file_id).is_file() {
-        let kept = db::with_db(|c| subtitle_store::kept_file(c, item, file_id)).map_err(failed)?;
+        let kept = db::with_db(|c| subtitle_store::kept_file_under(c, origin, item, file_id))
+            .map_err(failed)?;
         let subtitle = match kept {
             Some(k) => k,
-            None => keep(ctx, item, file_id)?,
+            None => keep(ctx, origin, item, file_id)?,
         };
         return Ok(SubtitleDownloadDto::Downloaded {
             subtitle,
             downloads_left: ctx.account.quota().map(|(left, _)| left),
         });
     }
-    // A link already paid for is used before another is asked for.
-    let (issued, link, reused) = match ctx.account.take_link(file_id) {
-        Some((at, link)) => (at, link, true),
+    let os = ctx.settings();
+    if os.username.trim().is_empty() {
+        return Ok(SubtitleDownloadDto::SignIn {
+            refused: false,
+            email: false,
+        });
+    }
+    if os.refused {
+        return Ok(SubtitleDownloadDto::SignIn {
+            refused: true,
+            email: os.username.contains('@'),
+        });
+    }
+    if !os.signed_in() {
+        return Ok(SubtitleDownloadDto::SignIn {
+            refused: false,
+            email: false,
+        });
+    }
+    // A link this user already paid for is used before another is asked for.
+    let username = os.username.clone();
+    let (paid, reused) = match ctx.account.take_link(file_id, &username, Instant::now()) {
+        Some(paid) => (paid, true),
         None => {
-            let os = ctx.settings();
-            if os.username.trim().is_empty() {
-                return Ok(SubtitleDownloadDto::SignIn {
-                    refused: false,
-                    email: false,
-                });
-            }
-            if os.refused {
-                return Ok(SubtitleDownloadDto::SignIn {
-                    refused: true,
-                    email: os.username.contains('@'),
-                });
-            }
-            if !os.signed_in() {
-                return Ok(SubtitleDownloadDto::SignIn {
-                    refused: false,
-                    email: false,
-                });
-            }
             let link = match link_for(ctx, os, file_id).await {
                 Ok(link) => link,
                 Err(e) => return answer(ctx, e),
@@ -906,10 +952,16 @@ async fn download_locked(
             if let Some(left) = link.remaining {
                 ctx.account.set_quota(Some((left, link.reset_at)));
             }
-            (Instant::now(), link, false)
+            let paid = PaidLink {
+                at: Instant::now(),
+                username,
+                link,
+            };
+            (paid, false)
         }
     };
-    match fetch_and_keep(ctx, item, file_id, &link.url).await {
+    let link = &paid.link;
+    match fetch_and_keep(ctx, origin, item, file_id, &link.url).await {
         Ok(subtitle) => {
             tracing::info!("OpenSubtitles: downloaded file {file_id}");
             Ok(SubtitleDownloadDto::Downloaded {
@@ -920,7 +972,7 @@ async fn download_locked(
         Err(not) => {
             // Tried again next time, unless it has failed twice itself.
             if !(reused && not.link_failed) {
-                ctx.account.put_link(file_id, issued, link);
+                ctx.account.put_link(file_id, paid);
             }
             not.answer
         }
@@ -1006,6 +1058,8 @@ async fn sign_in_with(
         c.refused = false;
     })?;
     ctx.account.set_quota(None);
+    // Links paid for by the sign-in before are its own.
+    ctx.account.forget_links();
     tracing::info!("OpenSubtitles: signed in");
     Ok(status_with(ctx))
 }
@@ -1030,6 +1084,7 @@ async fn sign_out_with(ctx: &Context) -> Result<OnlineServicesDto, String> {
         c.refused = false;
     })?;
     ctx.account.set_quota(None);
+    ctx.account.forget_links();
     tracing::info!("OpenSubtitles: signed out");
     Ok(status_with(ctx))
 }
@@ -1056,6 +1111,9 @@ fn set_opensubtitles_with(
             c.languages = clean_languages(&l);
         }
     })?;
+    if enabled == Some(false) {
+        ctx.account.forget_links();
+    }
     Ok(status_with(ctx))
 }
 
@@ -1345,6 +1403,11 @@ mod tests {
         assert_eq!(query("FR/EN - Film 0001"), "film 0001");
         assert_eq!(query("PT-BR - Film 0001"), "film 0001");
         assert_eq!(query("EN: Film 0001"), "film 0001");
+        assert_eq!(query("UK: Film 0001"), "film 0001");
+        assert_eq!(query("ENG - Film 0001"), "film 0001");
+        // Before a colon, three letters are a title's own word.
+        assert_eq!(query("ABC: Show 0001"), "abc: show 0001");
+        assert_eq!(query("ENG: Film 0001"), "eng: film 0001");
         assert_eq!(query("Garden - Lantern"), "garden - lantern");
         assert_eq!(
             query("Up - Film 0001"),
@@ -2056,6 +2119,11 @@ mod tests {
         )
         .await;
         assert!(gone.is_err(), "the caller gave up first");
+        assert_eq!(
+            count(&server, "/files/7000001.srt"),
+            1,
+            "the file was on its way"
+        );
         let path = ctx.files_dir.join("7000001.srt");
         for _ in 0..100 {
             if path.exists() && !kept(film).unwrap().is_empty() {
@@ -2143,6 +2211,244 @@ mod tests {
             assert_eq!(saved.username, ctx.settings().username);
             assert_eq!(routes(&server), ["/api/v1/login"], "{case}");
         }
+    }
+
+    /// A stand-in whose every link is `/files/a.srt`, which answers
+    /// `statuses` in turn and then the file.
+    fn file_host(statuses: &'static [u16]) -> Server {
+        let n = AtomicUsize::new(0);
+        serve(move |req, base| match req.route() {
+            "/api/v1/login" => login_ok(base),
+            "/api/v1/logout" => Reply::ok("{}"),
+            "/api/v1/download" => link_to(base, "a.srt"),
+            "/files/a.srt" => match statuses.get(n.fetch_add(1, Ordering::SeqCst)) {
+                Some(status) => Reply::new(*status, ""),
+                None => Reply::ok(srt(7000001, 2)),
+            },
+            _ => Reply::new(404, ""),
+        })
+    }
+
+    #[test]
+    fn paid_links_expire_and_belong_to_their_user() {
+        let paid = |at| PaidLink {
+            at,
+            username: "tester".into(),
+            link: Link {
+                url: "http://127.0.0.1:9/files/a.srt".into(),
+                remaining: Some(4),
+                reset_at: None,
+            },
+        };
+        let a = Account::default();
+        let t0 = Instant::now();
+        a.put_link(1, paid(t0));
+        assert!(
+            a.take_link(1, "tester", t0 + LINK_KEEP).is_none(),
+            "expired"
+        );
+        a.put_link(1, paid(t0));
+        assert!(a.take_link(1, "someone-else", t0).is_none());
+        assert!(
+            a.take_link(1, "tester", t0).is_none(),
+            "another's is forgotten"
+        );
+        a.put_link(1, paid(t0));
+        a.put_link(2, paid(t0));
+        assert!(a.take_link(1, "tester", t0).is_some());
+        a.forget_links();
+        assert!(a.take_link(2, "tester", t0).is_none());
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn a_kept_link_is_not_used_after_a_sign_out() {
+        let _catalogue = db::movie_catalogue();
+        seed();
+        let server = file_host(&[500, 500, 500, 500]);
+        let (ctx, _scratch) = context(&server, "link-sign-out");
+        signed_in(&ctx, unix_now());
+        let film = VodItem::movie(FILM_1);
+        assert!(download_with(&ctx, film, 7000001).await.is_err());
+        sign_out_with(&ctx).await.unwrap();
+        assert_eq!(
+            download_with(&ctx, film, 7000001).await.unwrap(),
+            SubtitleDownloadDto::SignIn {
+                refused: false,
+                email: false
+            }
+        );
+        assert_eq!(count(&server, "/api/v1/download"), 1);
+        assert_eq!(count(&server, "/files/a.srt"), 2, "the link was not used");
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn a_kept_link_is_not_used_by_another_user() {
+        let _catalogue = db::movie_catalogue();
+        seed();
+        let server = file_host(&[500, 500]);
+        let (ctx, _scratch) = context(&server, "link-other-user");
+        signed_in(&ctx, unix_now());
+        let film = VodItem::movie(FILM_1);
+        assert!(download_with(&ctx, film, 7000001).await.is_err());
+        sign_in_with(&ctx, "someone-else".into(), "other-pass".into())
+            .await
+            .unwrap();
+        assert!(matches!(
+            download_with(&ctx, film, 7000001).await.unwrap(),
+            SubtitleDownloadDto::Downloaded { .. }
+        ));
+        assert_eq!(count(&server, "/api/v1/download"), 2, "paid for again");
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn a_reused_link_refused_is_dropped() {
+        let _catalogue = db::movie_catalogue();
+        seed();
+        // Failed twice, then refused when used again, then fine.
+        let server = file_host(&[500, 500, 410]);
+        let (ctx, _scratch) = context(&server, "link-refused");
+        signed_in(&ctx, unix_now());
+        let film = VodItem::movie(FILM_1);
+        assert!(download_with(&ctx, film, 7000001).await.is_err());
+        assert!(download_with(&ctx, film, 7000001).await.is_err());
+        assert_eq!(count(&server, "/api/v1/download"), 1, "used again once");
+        assert!(matches!(
+            download_with(&ctx, film, 7000001).await.unwrap(),
+            SubtitleDownloadDto::Downloaded { .. }
+        ));
+        assert_eq!(count(&server, "/api/v1/download"), 2, "then paid for again");
+        assert_eq!(count(&server, "/files/a.srt"), 4);
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn a_new_sign_in_survives_a_second_401() {
+        let _catalogue = db::movie_catalogue();
+        seed();
+        let dir = std::env::temp_dir().join(format!(
+            "zapper-subtitles-second-401-{}",
+            std::process::id()
+        ));
+        let path = dir.join(config::FILE);
+        let during = path.clone();
+        let n = AtomicUsize::new(0);
+        // The second refusal comes as the user signs in again elsewhere.
+        let server = serve(move |req, base| match req.route() {
+            "/api/v1/login" => login_ok(base),
+            _ => {
+                if n.fetch_add(1, Ordering::SeqCst) == 1 {
+                    config::update_in(&during, |c| {
+                        c.opensubtitles.token = Some("fake-os-token-9".into());
+                        c.opensubtitles.token_at = Some(unix_now());
+                    })
+                    .unwrap();
+                }
+                Reply::new(401, "")
+            }
+        });
+        let ctx = Arc::new(Context::new(
+            Client::at_with(
+                &format!("{}/api/v1", server.base),
+                Pacer::new(4, 30, Duration::from_secs(10)),
+            ),
+            path.clone(),
+            dir.join("subtitles"),
+        ));
+        let _scratch = Scratch(dir);
+        signed_in(&ctx, unix_now());
+        assert_eq!(
+            download_with(&ctx, VodItem::movie(FILM_1), 7000001)
+                .await
+                .unwrap(),
+            SubtitleDownloadDto::SignIn {
+                refused: false,
+                email: false
+            }
+        );
+        assert_eq!(
+            config::load_from(&path).opensubtitles.token.as_deref(),
+            Some("fake-os-token-9"),
+            "the new sign-in's token stays"
+        );
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn a_stale_renewal_does_not_refuse_a_new_sign_in() {
+        let _catalogue = db::movie_catalogue();
+        seed();
+        let dir = std::env::temp_dir().join(format!(
+            "zapper-subtitles-stale-renewal-{}",
+            std::process::id()
+        ));
+        let path = dir.join(config::FILE);
+        let during = path.clone();
+        // While the old password is refused, the user signs in again with
+        // the right one.
+        let server = serve(move |req, _| {
+            if req.route() == "/api/v1/login" {
+                config::update_in(&during, |c| {
+                    let os = &mut c.opensubtitles;
+                    os.password = "new-pass".into();
+                    os.token = Some("fake-os-token-9".into());
+                    os.token_at = Some(unix_now());
+                })
+                .unwrap();
+            }
+            Reply::new(401, "")
+        });
+        let ctx = Arc::new(Context::new(
+            Client::at_with(
+                &format!("{}/api/v1", server.base),
+                Pacer::new(4, 30, Duration::from_secs(10)),
+            ),
+            path.clone(),
+            dir.join("subtitles"),
+        ));
+        let _scratch = Scratch(dir);
+        signed_in(&ctx, unix_now() - TOKEN_RENEW_SECS - 1);
+        let _ = download_with(&ctx, VodItem::movie(FILM_1), 7000001).await;
+        let saved = config::load_from(&path).opensubtitles;
+        assert!(!saved.refused, "the new sign-in is not marked refused");
+        assert_eq!(saved.token.as_deref(), Some("fake-os-token-9"));
+        assert_eq!(routes(&server), ["/api/v1/login"]);
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn a_download_is_kept_under_the_account_it_was_asked_in() {
+        let _catalogue = db::movie_catalogue();
+        seed();
+        // Another account's catalogue lands while the file is on its way.
+        let server = serve(|req, base| match req.route() {
+            "/api/v1/download" => link_to(base, "7000001.srt"),
+            "/files/7000001.srt" => {
+                db::with_db(|c| origin::record(c, ORIGIN_B)).unwrap();
+                Reply::ok(srt(7000001, 2))
+            }
+            _ => Reply::new(404, ""),
+        });
+        let (ctx, _scratch) = context(&server, "origin-switch");
+        signed_in(&ctx, unix_now());
+        let film = VodItem::movie(FILM_1);
+        assert!(matches!(
+            download_with(&ctx, film, 7000001).await.unwrap(),
+            SubtitleDownloadDto::Downloaded { .. }
+        ));
+        assert!(
+            kept(film).unwrap().is_empty(),
+            "nothing under the new account"
+        );
+        db::with_db(|c| origin::record(c, ORIGIN_A)).unwrap();
+        assert_eq!(
+            kept(film).unwrap().len(),
+            1,
+            "kept under the one it was asked in"
+        );
+        assert!(ctx.files_dir.join("7000001.srt").exists());
     }
 
     #[test]
