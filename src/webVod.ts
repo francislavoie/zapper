@@ -48,6 +48,7 @@ import {
   SUBTITLE_POLL_MS,
   bufferedEnd,
   carriedIndex,
+  FILE_READ_TRIES,
   cueTimes,
   fileCueWindow,
   movedAt,
@@ -57,6 +58,7 @@ import {
   positionOf,
   progressPath,
   releaseDue,
+  remapSubtitle,
   reopenDue,
   seekPlan,
   stallDue,
@@ -185,6 +187,8 @@ interface Session {
   cues: { lastEnd: number | null; held: Set<string>; askedAt: number; asking: boolean };
   /** The downloaded files' cues, read once each, in the film's time. */
   fileCues: Map<number, VodCue[]>;
+  /** How often each file was asked for and not kept by the service. */
+  fileMisses: Map<number, number>;
 }
 
 let session: Session | null = null;
@@ -426,11 +430,11 @@ async function watch(item: VodItemRef, from: number, keep: Keep): Promise<void> 
     : null;
   // A title opened anew shows the subtitles the settings say (only text
   // subtitles can be shown); one watched again keeps what it had.
-  let subtitle = keep.preferred ? preferredSubtitle(subtitles) : keep.subtitle;
-  // A file chosen stays chosen, after however many tracks the stream has.
-  if (files && subtitle !== null && subtitle >= files.own) {
-    subtitle = own.length + (subtitle - files.own);
-  }
+  const subtitle = keep.preferred
+    ? preferredSubtitle(subtitles)
+    : files
+      ? remapSubtitle(keep.subtitle, files.own, own.length)
+      : keep.subtitle;
   const subtitlesShown = keep.preferred ? subtitlePref.subtitlesOn : (keep.shown ?? true);
   const s: Session = {
     item,
@@ -462,6 +466,7 @@ async function watch(item: VodItemRef, from: number, keep: Keep): Promise<void> 
     stuck: NOT_STUCK,
     cues: { lastEnd: null, held: new Set(), askedAt: 0, asking: false },
     fileCues: files?.cues ?? new Map(),
+    fileMisses: new Map(),
   };
   session = s;
   if (carried?.audio != null && carried.audio !== s.audioIndex) {
@@ -998,7 +1003,9 @@ function tick() {
     release(s);
     return;
   }
-  if (s.pausedAt === null && now - s.cues.askedAt >= SUBTITLE_POLL_MS) void askCues(s);
+  // A file's cues are read once, so they are put on while paused too.
+  const asks = s.pausedAt === null || fileChosen(s);
+  if (asks && now - s.cues.askedAt >= SUBTITLE_POLL_MS) void askCues(s);
 }
 
 /** The film would not start, or stood still while playing: asked about and
@@ -1225,7 +1232,7 @@ export async function setSubtitleTrack(id: number | null): Promise<PlayerOptions
   if (index !== null && index !== s.subtitle) {
     s.subtitle = index;
     resetCues(s);
-    if (s.started && s.pausedAt === null) void askCues(s);
+    if (s.started && (s.pausedAt === null || fileChosen(s))) void askCues(s);
   } else {
     showCues(s);
   }
@@ -1291,6 +1298,10 @@ function showCues(s: Session) {
   if (el && s.subtitle !== null) textTrack(el).mode = s.subtitlesShown ? "showing" : "hidden";
 }
 
+/** Whether the track chosen is a downloaded file. */
+const fileChosen = (s: Session): boolean =>
+  s.subtitle !== null && (s.subtitles[s.subtitle]?.file ?? null) !== null;
+
 /** Asks for the chosen track's cues that end after those held, and puts
  *  them on the element's clock. */
 async function askCues(s: Session) {
@@ -1345,24 +1356,25 @@ async function fileCues(s: Session, el: HTMLVideoElement, index: number, file: n
   cues.askedAt = Date.now();
   let all = s.fileCues.get(file);
   if (!all) {
+    if ((s.fileMisses.get(file) ?? 0) >= FILE_READ_TRIES) return;
     cues.asking = true;
     let doc: string | null = null;
-    let gone = false;
     try {
       const r = await fetch(
         subtitlesPath(s.item.kind, s.item.id, "file", file),
         requestInit("GET"),
       );
       if (r.status === 401) signedOutNow();
-      // Not kept (any more): nothing to show, not asked again.
-      gone = r.status === 404;
+      // Not kept (yet, or any more): asked again on the next poll, a few
+      // times at most this session; nothing is kept for it.
+      if (r.status === 404) s.fileMisses.set(file, (s.fileMisses.get(file) ?? 0) + 1);
       if (r.ok) doc = await r.text();
     } catch {
       // Asked again in a moment.
     }
     cues.asking = false;
-    if (doc === null && !gone) return;
-    all = doc === null ? [] : parseVtt(doc);
+    if (doc === null) return;
+    all = parseVtt(doc);
     if (session === s) s.fileCues.set(file, all);
   }
   const start = s.start;

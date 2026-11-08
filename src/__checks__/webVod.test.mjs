@@ -20,6 +20,7 @@ import {
   progressDue,
   REOPEN_LIMIT,
   releaseDue,
+  remapSubtitle,
   reopenDue,
   seekPlan,
   stallDue,
@@ -166,6 +167,18 @@ test("a downloaded file's cues go on the element a window at a time, on the pict
   // A direct file, from its start.
   assert.deepEqual(fileCueWindow(cues, 0, 0).map((c) => c.start), [10, 590]);
   assert.deepEqual(fileCueWindow([], 0, 0), []);
+});
+
+test("a downloaded file chosen stays chosen when the title is watched again", () => {
+  // Two own tracks then, two now: the file at 2 stays at 2.
+  assert.equal(remapSubtitle(2, 2, 2), 2);
+  // Three then, two now: the second file moves from 4 to 3.
+  assert.equal(remapSubtitle(4, 3, 2), 3);
+  // None then, one now.
+  assert.equal(remapSubtitle(0, 0, 1), 1);
+  // One of the stream's own, or none chosen: as it was.
+  assert.equal(remapSubtitle(1, 2, 3), 1);
+  assert.equal(remapSubtitle(null, 2, 3), null);
 });
 
 test("the service's WebVTT is read into cues", () => {

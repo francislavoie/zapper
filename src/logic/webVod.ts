@@ -259,6 +259,18 @@ export function cueTimes(cue: VodCue, start: number): { start: number; end: numb
   return { start: Math.max(0, cue.start - start), end };
 }
 
+/** The place of the subtitle chosen when the same title is watched again:
+ *  a downloaded file, listed after the stream's own tracks, follows however
+ *  many of those there are now (`ownBefore` then, `ownNow` now). */
+export function remapSubtitle(subtitle: number | null, ownBefore: number, ownNow: number): number | null {
+  if (subtitle === null || subtitle < ownBefore) return subtitle;
+  return ownNow + (subtitle - ownBefore);
+}
+
+/** How many times a session asks for a file the service says it doesn't
+ *  keep before it stops asking (a later watch asks again). */
+export const FILE_READ_TRIES = 2;
+
 /** How far behind the picture a downloaded file's cues are still put on. */
 export const FILE_CUES_BEHIND_SECONDS = 30;
 

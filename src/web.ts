@@ -131,7 +131,7 @@ const put = <T>(url: string, body?: unknown) => request<T>("PUT", url, body);
 const del = <T>(url: string) => request<T>("DELETE", url);
 
 const notHere = (): Promise<never> => Promise.reject(new Error(NOT_HERE));
-/** What the service answers no route for yet. */
+/** What has nothing to do in a browser. */
 const nothing = (): Promise<void> => Promise.resolve();
 
 // ----------------------------------------------------------------- session
