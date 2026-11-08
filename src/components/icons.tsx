@@ -443,6 +443,20 @@ export function AudioTracks({ className, title }: IconProps) {
   );
 }
 
+/** Subtitles: the "CC" box, outlined like the audio-track bubble beside
+ *  it. One drawing for both states; the toggle's own "on" face says which. */
+export function Subtitles({ className, title }: IconProps) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" aria-hidden={!title} focusable="false">
+      {title ? <title>{title}</title> : null}
+      <rect x="2.5" y="5" width="19" height="14" rx="2.5" fill="none" stroke="currentColor"
+            strokeWidth="1.7" />
+      <path d="M10.9 10.1A2.7 2.7 0 1 0 10.9 13.9M17.7 10.1A2.7 2.7 0 1 0 17.7 13.9" fill="none"
+            stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 /** Points at the submenu a menu row opens. */
 export function ChevronRight({ className, title }: IconProps) {
   return (

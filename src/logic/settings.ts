@@ -38,6 +38,9 @@ export const DEFAULT_SETTINGS: SettingsDto = {
   // jump to live once the connect burst is in.
   liveStart: "catchUp",
   simultaneousStreams: 1,
+  // Off until someone turns them on; then in the language last chosen.
+  subtitlesOn: false,
+  subtitleLanguage: null,
 };
 
 /** "When a channel opens", in Settings → Playback: each choice and what it
@@ -196,6 +199,12 @@ export function clampSettings(s: SettingsDto): SettingsDto {
     // Anything unknown, or a config from before the setting, catches up.
     liveStart: LIVE_START_CHOICES.some((c) => c.value === s.liveStart) ? s.liveStart : "catchUp",
     simultaneousStreams: round(s.simultaneousStreams ?? 1, STREAMS_MIN, STREAMS_MAX),
+    // Only an explicit `true`: a config from before the setting reads as off.
+    subtitlesOn: s.subtitlesOn === true,
+    subtitleLanguage:
+      typeof s.subtitleLanguage === "string" && s.subtitleLanguage.trim() !== ""
+        ? s.subtitleLanguage.trim()
+        : null,
   };
 }
 
@@ -314,6 +323,9 @@ const PLAYBACK_KEYS = [
   "toneMapHdr",
   "liveStart",
   "simultaneousStreams",
+  // The player applies them on every open, so it has to hear of a change.
+  "subtitlesOn",
+  "subtitleLanguage",
 ] as const;
 
 export function planSave(before: SettingsDto, after: SettingsDto): SavePlan {

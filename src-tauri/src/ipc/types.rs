@@ -450,6 +450,14 @@ pub struct SettingsDto {
     /// cannot say (a playlist, a Tvheadend server). Reconnecting by itself
     /// after a network failure is only safe with one to spare. Default 1.
     pub simultaneous_streams: u32,
+    /// Subtitles on, on every open: the first subtitle track in
+    /// `subtitle_language`, else the first. Off by default. Choosing a
+    /// subtitle track, or Off, in the player is what changes it.
+    pub subtitles_on: bool,
+    /// The language of the subtitle track last chosen, as the stream named
+    /// it (`fra`, `eng`). Kept while subtitles are off, for the next time
+    /// they are turned on; `None` until a track that names one is chosen.
+    pub subtitle_language: Option<String>,
 }
 
 impl Default for SettingsDto {
@@ -467,6 +475,8 @@ impl Default for SettingsDto {
             time_format: "auto".to_owned(),
             live_start: LiveStart::default(),
             simultaneous_streams: 1,
+            subtitles_on: false,
+            subtitle_language: None,
         }
     }
 }

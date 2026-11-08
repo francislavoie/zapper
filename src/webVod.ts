@@ -28,6 +28,7 @@
 // The pure half is src/logic/webVod.ts.
 
 import type MpegtsType from "mpegts.js";
+import { afterChoosing, preferredIndex, type SubtitlePreference } from "./logic/subtitles";
 import { requestInit } from "./logic/web";
 import {
   UNSUPPORTED,
@@ -175,16 +176,34 @@ let poller: ReturnType<typeof setInterval> | undefined;
 let finished: VodItemRef | null = null;
 let finishedLanguages: Languages | null = null;
 
-/** The sound's and the subtitles' languages, carried to the next episode. */
+/** The sound's language, carried to the next episode. Its subtitles are
+ *  the standing choice, as every title's are. */
 interface Languages {
   audio: string | null;
-  subtitle: string | null;
 }
 
 function languagesOf(s: Session): Languages {
-  const audio = s.audioIndex === null ? null : (s.tracks[s.audioIndex]?.lang ?? null);
-  const subtitle = s.subtitle === null ? null : (s.subtitles[s.subtitle]?.language ?? null);
-  return { audio, subtitle };
+  return { audio: s.audioIndex === null ? null : (s.tracks[s.audioIndex]?.lang ?? null) };
+}
+
+/** Subtitles on or off, and in what language: the settings' standing choice
+ *  (src/logic/subtitles.ts), which every title opened applies. Set from the
+ *  settings (src/web.ts), and by a choice of subtitles at once. */
+let subtitlePref: SubtitlePreference = { subtitlesOn: false, subtitleLanguage: null };
+
+export function setSubtitlePreference(p: SubtitlePreference) {
+  subtitlePref = { subtitlesOn: p.subtitlesOn, subtitleLanguage: p.subtitleLanguage };
+}
+
+/** The place in `subtitles` the standing choice shows: text only, since
+ *  pictures can't be shown here. */
+function preferredSubtitle(subtitles: readonly Subtitle[]): number | null {
+  if (!subtitlePref.subtitlesOn) return null;
+  return preferredIndex(
+    subtitles.map((t) => ({ lang: t.language, text: t.text })),
+    subtitlePref.subtitleLanguage,
+    (t) => t.text,
+  );
 }
 
 /** Whether a title is open (playing, paused or opening). */
@@ -281,6 +300,7 @@ function playItem(item: VodItemRef, start: number | null): Promise<void> {
   return watch(item, Math.max(0, start ?? 0), {
     audio: null,
     subtitle: null,
+    preferred: true,
     duration: null,
     wantPlay: true,
   });
@@ -289,10 +309,13 @@ function playItem(item: VodItemRef, start: number | null): Promise<void> {
 interface Keep {
   audio: number | null;
   subtitle: number | null;
+  /** A title opened anew: the standing subtitle choice, in place of
+   *  `subtitle`, once its tracks are known. */
+  preferred?: boolean;
   duration: number | null;
   wantPlay: boolean;
-  /** Another title's languages, whose tracks are chosen once this one's
-   *  are known (Up next), in place of `audio` and `subtitle`. */
+  /** Another title's language, whose sound is chosen once this one's
+   *  tracks are known (Up next), in place of `audio`. */
   carry?: Languages;
 }
 
@@ -344,18 +367,13 @@ async function watch(item: VodItemRef, from: number, keep: Keep): Promise<void> 
   }
   const a = body as VodAnswer;
   const subtitles = a.subtitles ?? [];
-  // Up next: the sound and subtitles in the languages of the episode before
-  // (only text subtitles can be shown).
+  // Up next: the sound in the language of the episode before.
   const carried = keep.carry
-    ? {
-        audio: carriedIndex(keep.carry.audio, (a.audio ?? []).map((t) => ({ lang: t.lang }))),
-        subtitle: carriedIndex(
-          keep.carry.subtitle,
-          subtitles.map((t) => ({ lang: t.text ? t.language : null })),
-        ),
-      }
+    ? { audio: carriedIndex(keep.carry.audio, (a.audio ?? []).map((t) => ({ lang: t.lang }))) }
     : null;
-  const subtitle = carried ? carried.subtitle : keep.subtitle;
+  // A title opened anew shows the subtitles the settings say (only text
+  // subtitles can be shown); one watched again keeps what it had.
+  const subtitle = keep.preferred ? preferredSubtitle(subtitles) : keep.subtitle;
   const s: Session = {
     item,
     viewer: a.viewer,
@@ -720,7 +738,7 @@ export async function playNextEpisode(from: number, next: number): Promise<void>
         : null;
   const refused = new Error("That episode is no longer the one playing.");
   if (!upNextAllowed(subject(), from)) throw refused;
-  const carry = s ? languagesOf(s) : (finishedLanguages ?? { audio: null, subtitle: null });
+  const carry = s ? languagesOf(s) : (finishedLanguages ?? { audio: null });
   try {
     const r = await fetch(`/api/vod/episodes/${from}/marks`, requestInit("PUT", { watched: true }));
     if (r.status === 401) signedOutNow();
@@ -737,6 +755,7 @@ export async function playNextEpisode(from: number, next: number): Promise<void>
   await watch({ kind: "episode", id: next }, 0, {
     audio: null,
     subtitle: null,
+    preferred: true,
     duration: null,
     wantPlay: true,
     carry,
@@ -1048,12 +1067,17 @@ export async function setAudioTrack(id: number): Promise<PlayerOptionsDto> {
   return optionsFeed.last;
 }
 
-/** Shows subtitle track `id`, or none with `null`. Pictures can't be. */
+/** Shows subtitle track `id`, or none with `null`. Pictures can't be. The
+ *  viewer's choice is the standing one from now (the settings follow). */
 export async function setSubtitleTrack(id: number | null): Promise<PlayerOptionsDto> {
   const s = session;
   if (!s) return optionsFeed.last;
   const index = id === null ? null : id - 1;
   if (index !== null && !s.subtitles[index]?.text) return optionsFeed.last;
+  subtitlePref = afterChoosing(
+    index === null ? null : { lang: s.subtitles[index].language },
+    subtitlePref,
+  );
   s.subtitle = index;
   resetCues(s);
   const o = optionsOf(s);

@@ -93,6 +93,9 @@ interface have their own page: [recording.md](recording.md).
 - A compressor that evens out loud and quiet audio.
 - Right-click menu on the picture: audio track, subtitles, aspect ratio, deinterlacing, sleep
   timer.
+- A subtitles button (`C`) beside the other controls, shown when a stream has subtitles, turns
+  them on or off. Every channel, movie or episode you open afterwards keeps that choice and the
+  language you last picked, across launches too.
 - Subtitle font, size, colour and backdrop.
 - Mouse: wheel for volume, double-click for fullscreen, double-click the edges to skip. Theater
   mode (`T`).

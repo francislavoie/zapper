@@ -28,6 +28,7 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
 - Recently watched channels, in the rail.
 - Recordings shows the free space on the recordings disk.
 - Radio channels (sound, no picture) play.
+- A subtitles button on the player, remembered across channels and restarts (`C`).
 
 ### Changed
 

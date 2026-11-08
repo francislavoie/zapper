@@ -306,6 +306,13 @@ export interface SettingsDto {
    *  (a playlist, a Tvheadend server). Reconnecting by itself after a
    *  network failure is only safe with one to spare. Default 1. */
   simultaneousStreams: number;
+  /** Subtitles on, on every open: the first track in `subtitleLanguage`,
+   *  else the first. Off by default. Choosing a subtitle track, or Off, in
+   *  the player changes it. */
+  subtitlesOn: boolean;
+  /** The language of the subtitle track last chosen, as the stream named it
+   *  (`fra`, `eng`); `null` until one that names a language is chosen. */
+  subtitleLanguage: string | null;
 }
 
 /** Mirrors `LiveStart`: play from where the stream starts and stay there;

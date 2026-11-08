@@ -34,6 +34,7 @@ import { ContextMenu } from "./ContextMenu";
 import { usePlayerRecord } from "../hooks/usePlayerRecord";
 import { PlayerRecordItems } from "./PlayerRecord";
 import { useSleepLeft } from "../hooks/useSleep";
+import { useSubtitles } from "../hooks/useSubtitles";
 import { SleepItems, SleepSubMenu } from "./SleepMenu";
 import { CheckItem, RadioItem, SubMenu } from "./SubMenu";
 
@@ -50,6 +51,8 @@ export function VideoMenu({ menu, onClose }: VideoMenuProps) {
   const { options, player } = state;
   const playing = player.state !== "stopped";
   const record = usePlayerRecord();
+  // A choice here is the standing one: every open after shows the same.
+  const subtitles = useSubtitles();
 
   /** Every choice closes the menu: it has been answered. The new state comes
    *  back from the command and is applied at once, rather than a heartbeat
@@ -116,7 +119,7 @@ export function VideoMenu({ menu, onClose }: VideoMenuProps) {
           <RadioItem
             checked={!options.subtitles.some((t) => t.selected)}
             label="Off"
-            onSelect={() => choose("subtitles", backend.setSubtitleTrack(null))}
+            onSelect={() => choose("subtitles", subtitles.choose(null))}
           />
           {options.subtitles.map((t, i) => {
             const l = trackLabel(t, i);
@@ -127,7 +130,7 @@ export function VideoMenu({ menu, onClose }: VideoMenuProps) {
                 label={l.label}
                 detail={l.detail}
                 disabled={!capabilities.pictureSubtitles && isPictureSubtitle(t)}
-                onSelect={() => choose("subtitles", backend.setSubtitleTrack(t.id))}
+                onSelect={() => choose("subtitles", subtitles.choose(t.id))}
               />
             );
           })}

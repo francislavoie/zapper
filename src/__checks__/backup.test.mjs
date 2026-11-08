@@ -110,6 +110,33 @@ test("a wrongly typed setting is skipped and said, the rest still imported", () 
   );
 });
 
+test("subtitles on, and their language, travel in a backup", () => {
+  const doc = buildBackup(
+    {
+      settings: { ...DEFAULT_SETTINGS, subtitlesOn: true, subtitleLanguage: "fra" },
+      categories,
+      favourites: [],
+    },
+    new Date("2026-11-01T12:00:00Z"),
+  );
+  const { backup, warnings } = ok(JSON.parse(JSON.stringify(doc)));
+  assert.deepEqual(warnings, []);
+  const plan = planImport(here(), backup);
+  assert.deepEqual(
+    plan.settings.changes.map((c) => [c.label, c.from, c.to]),
+    [
+      ["Subtitles", "off", "on"],
+      ["Subtitle language", "none", "French"],
+    ],
+  );
+  // No language yet is a language like any other, not a wrong type.
+  const none = ok({ format: BACKUP_FORMAT, version: 1, settings: { subtitleLanguage: null } });
+  assert.deepEqual(none.warnings, []);
+  assert.equal(planImport(here(), none.backup).settings.next.subtitleLanguage, null);
+  const bad = ok({ format: BACKUP_FORMAT, version: 1, settings: { subtitleLanguage: 4 } });
+  assert.deepEqual(bad.warnings, ["Skipped subtitleLanguage: not a string or null."]);
+});
+
 test("the clock travels in a backup, named as Settings names it", () => {
   const doc = buildBackup(
     { settings: { ...DEFAULT_SETTINGS, timeFormat: "12h" }, categories, favourites: [] },

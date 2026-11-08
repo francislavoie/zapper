@@ -84,9 +84,10 @@ export function passwordInClear(protocol: string, hostname: string): boolean {
 }
 
 /** The settings a browser keeps for itself, in its own storage: how the
- *  guide looks here. Everything else in `SettingsDto` belongs to the app on
- *  the service's computer, and is left as the defaults. */
-export const BROWSER_SETTINGS = ["guideHours", "timeFormat"] as const;
+ *  guide looks here, and whether subtitles are on and in what language.
+ *  Everything else in `SettingsDto` belongs to the app on the service's
+ *  computer, and is left as the defaults. */
+export const BROWSER_SETTINGS = ["guideHours", "timeFormat", "subtitlesOn", "subtitleLanguage"] as const;
 
 export type BrowserSettings = Partial<Pick<SettingsDto, (typeof BROWSER_SETTINGS)[number]>>;
 
@@ -104,12 +105,21 @@ export function withBrowserSettings(base: SettingsDto, stored: unknown): Setting
   if (s.timeFormat === "auto" || s.timeFormat === "12h" || s.timeFormat === "24h") {
     out.timeFormat = s.timeFormat;
   }
+  if (typeof s.subtitlesOn === "boolean") out.subtitlesOn = s.subtitlesOn;
+  if (s.subtitleLanguage === null || typeof s.subtitleLanguage === "string") {
+    out.subtitleLanguage = s.subtitleLanguage;
+  }
   return out;
 }
 
 /** The part of `s` this browser keeps. */
 export function browserSettings(s: SettingsDto): BrowserSettings {
-  return { guideHours: s.guideHours, timeFormat: s.timeFormat };
+  return {
+    guideHours: s.guideHours,
+    timeFormat: s.timeFormat,
+    subtitlesOn: s.subtitlesOn,
+    subtitleLanguage: s.subtitleLanguage,
+  };
 }
 
 /** What a feature this page cannot offer says, when something asks anyway. */

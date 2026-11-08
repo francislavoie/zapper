@@ -12,6 +12,7 @@ import { alternatives } from "./logic/searchQuery";
 import { rankAlternatives } from "./logic/alternatives";
 import { patternFor, place, validatePattern } from "./logic/naming";
 import { parsePort, passwordProblem } from "./logic/network";
+import { afterChoosing, openChoice, type SubtitlePreference } from "./logic/subtitles";
 import { createMockMovies } from "./mockMovies";
 import { createMockShows } from "./mockShows";
 import type {
@@ -693,6 +694,21 @@ function mockTracks(streamId: number): Pick<PlayerOptionsDto, "audio" | "subtitl
   }
 }
 
+/** Subtitles on or off, and in what language: the app's standing choice,
+ *  as the backend's player keeps it. Set from the settings, and at once by a
+ *  choice of subtitles; applied to every stream opened. */
+let mockSubtitles: SubtitlePreference = { subtitlesOn: false, subtitleLanguage: null };
+
+/** A stream's tracks with the standing subtitle choice applied, as the
+ *  backend applies it once a stream's tracks are known. */
+function withStandingSubtitles(
+  t: Pick<PlayerOptionsDto, "audio" | "subtitles">,
+): Pick<PlayerOptionsDto, "audio" | "subtitles"> {
+  const id = openChoice(mockSubtitles, t.subtitles, true);
+  if (id === undefined) return t;
+  return { ...t, subtitles: t.subtitles.map((s) => ({ ...s, selected: s.id === id })) };
+}
+
 function patchOptions(p: Partial<PlayerOptionsDto>): PlayerOptionsDto {
   optionsEmitter.emit({ ...optionsEmitter.last, ...p });
   return optionsEmitter.last;
@@ -748,6 +764,9 @@ if (NO_ACCOUNT) {
 const mockRedact = (u: string) => u.replace(/((?:username|password|token|key)=)[^&]*/gi, "$1<redacted>");
 let bufferTimer: number | undefined;
 
+/** Where the standing subtitle choice is kept across a reload of the tab. */
+const MOCK_SUBTITLES_KEY = "zapper.mock.subtitles";
+
 /** Settings survive for the life of the page, so a save can be read back and
  *  a reload of the pane shows what was stored rather than the defaults. Not
  *  the contract's defaults on purpose: if the UI ever ignored what the backend
@@ -773,7 +792,31 @@ let storedSettings: SettingsDto = {
   timeFormat: "auto",
   liveStart: "catchUp",
   simultaneousStreams: 1,
+  subtitlesOn: false,
+  subtitleLanguage: null,
+  // The standing subtitle choice outlives a reload of the tab, as the
+  // app's outlives a restart: a driver checks that it does.
+  ...storedSubtitles(),
 };
+mockSubtitles = {
+  subtitlesOn: storedSettings.subtitlesOn,
+  subtitleLanguage: storedSettings.subtitleLanguage,
+};
+
+function storedSubtitles(): Partial<SubtitlePreference> {
+  try {
+    const raw = sessionStorage.getItem(MOCK_SUBTITLES_KEY);
+    const v = raw ? (JSON.parse(raw) as Partial<SubtitlePreference>) : {};
+    return {
+      ...(typeof v.subtitlesOn === "boolean" ? { subtitlesOn: v.subtitlesOn } : {}),
+      ...(v.subtitleLanguage === null || typeof v.subtitleLanguage === "string"
+        ? { subtitleLanguage: v.subtitleLanguage }
+        : {}),
+    };
+  } catch {
+    return {};
+  }
+}
 
 // ----------------------------------------------------------------- updates
 
@@ -993,7 +1036,7 @@ async function openStream(
     // The backend's Join: the first frame held while the burst arrives,
     // then started at live, with nothing to jump.
     patchPlayer({ ...quality, joiningLive: true });
-    patchOptions(mockTracks(streamId));
+    patchOptions(withStandingSubtitles(mockTracks(streamId)));
     await delay(1500);
     if (openSeq !== mine || playerEmitter.last.state !== "opening") return;
     patchPlayer({ state: "playing", joiningLive: false, behindLive: 4, bufferedBack: 4, atLiveEdge: true });
@@ -1005,7 +1048,7 @@ async function openStream(
   // reported as a jump, which is what the picture's corner announces.
   const behind = 14 + Math.round(Math.random() * 100) / 10;
   patchPlayer({ state: "playing", ...quality, behindLive: behind, bufferedBack: behind, atLiveEdge: false });
-  patchOptions(mockTracks(streamId));
+  patchOptions(withStandingSubtitles(mockTracks(streamId)));
   startBufferClock();
   if (live) {
     // Measured a few seconds in, as the backend does.
@@ -1855,10 +1898,14 @@ export const mockApi = {
   playerOptions: async () => optionsEmitter.last,
   setAudioTrack: async (id: number) =>
     patchOptions({ audio: optionsEmitter.last.audio.map((t) => ({ ...t, selected: t.id === id })) }),
-  setSubtitleTrack: async (id: number | null) =>
-    patchOptions({
+  setSubtitleTrack: async (id: number | null) => {
+    // The viewer's choice is the standing one from now, as the backend's.
+    const chosen = id === null ? null : (optionsEmitter.last.subtitles.find((t) => t.id === id) ?? null);
+    mockSubtitles = afterChoosing(chosen, mockSubtitles);
+    return patchOptions({
       subtitles: optionsEmitter.last.subtitles.map((t) => ({ ...t, selected: t.id === id })),
-    }),
+    });
+  },
   setAspect: async (aspect: AspectMode) => patchOptions({ aspect }),
   setDeinterlace: async (deinterlace: DeinterlaceMode) => patchOptions({ deinterlace }),
 
@@ -2089,6 +2136,14 @@ export const mockApi = {
   setSettings: async (next: SettingsDto) => {
     await delay(30);
     storedSettings = structuredClone(next);
+    try {
+      sessionStorage.setItem(
+        MOCK_SUBTITLES_KEY,
+        JSON.stringify({ subtitlesOn: next.subtitlesOn, subtitleLanguage: next.subtitleLanguage }),
+      );
+    } catch {
+      // No storage: the choice lasts as long as the page.
+    }
     // Exposed so a driver can prove a change actually reached the backend
     // rather than only moving the control.
     (globalThis as Record<string, unknown>).__mockSettings = storedSettings;
@@ -2269,6 +2324,7 @@ export const mockApi = {
       liveStart: next.liveStart,
     };
     mockLiveStart = next.liveStart;
+    mockSubtitles = { subtitlesOn: next.subtitlesOn, subtitleLanguage: next.subtitleLanguage };
   },
 
   setMediaSession: async (session: MediaSessionDto | null) => {
