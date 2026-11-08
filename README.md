@@ -85,6 +85,7 @@ The short list; [docs/features.md](docs/features.md) has how each part behaves.
 - Movies and episodes with a seek bar, resume, and watched past 92 %.
 - **Continue watching** (`W`): resume movies and shows where you left off, in the app and the browser.
 - **Up next**: a countdown into the next episode, keeping your audio and subtitle languages.
+- **Find subtitles** online (OpenSubtitles) for movies and episodes, in the app and the browser.
 - `P` for the previous channel; type a number to tune.
 - Volume to 200 %, a compressor, track choice, aspect ratio, deinterlacing and a sleep timer.
 - A subtitles button (`C`), remembered across channels and restarts.

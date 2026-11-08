@@ -169,6 +169,36 @@ interface have their own page: [recording.md](recording.md).
   connection. One you had already started plays on from where you left it, without asking.
 - A Stop, a sleep timer, or a stream the provider cut short never moves on.
 
+### Subtitles from OpenSubtitles
+
+- **Find subtitles…** is in the Subtitles menu of a movie or an episode (and behind the
+  subtitles button when the title has none). It searches in your subtitle languages and lists
+  the matches: language, release name, how often it was downloaded, and marks for hearing-impaired,
+  forced-only and trusted-uploader files.
+- Matches are found by the title's TMDB id when the provider gives one, and otherwise by name
+  (with the year, or the season and episode); the dialog says which.
+- Choosing one downloads it, adds it to the player at once and keeps it. The title goes on playing
+  where it was, and subtitles stay on, in that language, for what you open next.
+- OpenSubtitles allows a number of downloads per day on a free account (the Online services page
+  shows what is left). When they run out, the dialog says so, and files you already kept still work.
+- Files kept for a title are listed first in Find subtitles… and in the Subtitles menu the next
+  time it plays, with no download.
+- In the browser the recording service does the searching and keeps the files; they stay in time
+  with the picture after a seek.
+
+## Online services
+
+Settings › Online services has one switch for each service, on by default. Off means zapper
+makes no request to it at all. Today there is one, OpenSubtitles.
+
+- **What it sends**: a title's ids, or its name and year, the season and episode, and the
+  languages you want. Never your stream address, your provider or its account.
+- **Languages**: the subtitle languages to search in, in the order you want them.
+- **Sign in**: your own free OpenSubtitles account. Searching needs no sign-in; the first download
+  does. The password is kept in your config directory, readable only by you, and shown nowhere.
+  Signing out forgets it.
+- The page shows who is signed in and how many downloads are left today.
+
 ## Other
 
 - Restores the last channel, window size and volume on launch.
