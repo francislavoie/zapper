@@ -51,6 +51,7 @@ import {
   FILE_READ_TRIES,
   cueTimes,
   fileCueWindow,
+  fileReadCounts,
   movedAt,
   needsData,
   openDue,
@@ -93,6 +94,7 @@ import {
   patch,
   playableHere,
   playerFeed,
+  sayFeed,
   signedOutNow,
   stop as stopPlayer,
   takeLive,
@@ -1298,6 +1300,9 @@ function showCues(s: Session) {
   if (el && s.subtitle !== null) textTrack(el).mode = s.subtitlesShown ? "showing" : "hidden";
 }
 
+/** Said once when a downloaded file's cues can't be had this session. */
+const FILE_UNREADABLE = "Couldn't read the downloaded subtitles.";
+
 /** Whether the track chosen is a downloaded file. */
 const fileChosen = (s: Session): boolean =>
   s.subtitle !== null && (s.subtitles[s.subtitle]?.file ?? null) !== null;
@@ -1365,9 +1370,14 @@ async function fileCues(s: Session, el: HTMLVideoElement, index: number, file: n
         requestInit("GET"),
       );
       if (r.status === 401) signedOutNow();
-      // Not kept (yet, or any more): asked again on the next poll, a few
-      // times at most this session; nothing is kept for it.
-      if (r.status === 404) s.fileMisses.set(file, (s.fileMisses.get(file) ?? 0) + 1);
+      // Not kept (yet, or any more), or the service failing to read it:
+      // asked again on the next poll, a few times at most this session,
+      // then said once; nothing is kept for it.
+      if (fileReadCounts(r.status)) {
+        const misses = (s.fileMisses.get(file) ?? 0) + 1;
+        s.fileMisses.set(file, misses);
+        if (misses >= FILE_READ_TRIES && session === s) sayFeed.set({ text: FILE_UNREADABLE });
+      }
       if (r.ok) doc = await r.text();
     } catch {
       // Asked again in a moment.

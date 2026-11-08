@@ -110,6 +110,10 @@ export interface WebNotice {
 }
 export const noticeFeed = new Feed<WebNotice>({ recording: null, silent: null });
 
+/** Something gone wrong beside the picture with no control of its own to
+ *  say it: shown once, as a toast (components/WebVideo.tsx). */
+export const sayFeed = new Feed<{ text: string } | null>(null);
+
 /** Changes what the player reports, telling listeners only when something
  *  did change. Shared with a movie (src/webVod.ts). */
 export function patch(p: Partial<PlayerStateDto>) {
