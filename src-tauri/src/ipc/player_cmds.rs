@@ -2789,6 +2789,9 @@ async fn open_as(
     let r = on_player(app, move |p| {
         apply_http_headers(p, &target, &via);
         apply_start(p, start);
+        if let Err(e) = p.set_property("stream-lavf-o", &stream_options(kind)) {
+            tracing::warn!("could not set the stream's HTTP options: {e}");
+        }
         match &tracks {
             TrackChoice::Keep(aid, sid) => {
                 for (key, value) in [("aid", aid), ("sid", sid)] {
@@ -3275,6 +3278,26 @@ fn commit_options(app: &AppHandle, f: impl FnOnce(&mut PlayerOptionsDto)) -> Pla
         let _ = app.emit(events::PLAYER_OPTIONS, now.clone());
     }
     now
+}
+
+/// FFmpeg's HTTP options for an open of `kind`: never reconnecting by
+/// itself ([`mpv::NO_RECONNECT`]), and for a movie or an episode, asking to
+/// keep the connection for another request.
+///
+/// A title is seekable, and mpv seeks it below its cache whenever a track
+/// is switched while it plays (it goes back for the new track's packets, and
+/// a Matroska file reads its index from the end first). Once the whole of a
+/// small file has arrived, FFmpeg (8.1) makes that seek on the connection
+/// that carried it, which it had asked the server to close: the request
+/// meets the end of the connection, the seek fails, and the title ends as
+/// if dropped. Keeping the connection open makes that request work. Live
+/// channels never seek below the cache, and are left as they were. Set by
+/// every open, since the option outlives the file.
+fn stream_options(kind: OpenKind) -> String {
+    match kind {
+        OpenKind::OnDemand => format!("{},multiple_requests=1", mpv::NO_RECONNECT),
+        OpenKind::Live | OpenKind::CatchUp(_) => mpv::NO_RECONNECT.to_owned(),
+    }
 }
 
 /// Where mpv starts the file it is about to open. Set by every open, since
@@ -4371,6 +4394,16 @@ mod tests {
             let keep = TrackChoice::Keep("1".into(), "no".into());
             assert_eq!(pause_on_open(&keep, false, false), None);
         }
+    }
+
+    #[test]
+    fn only_a_title_keeps_its_connection_for_another_request() {
+        let title = stream_options(OpenKind::OnDemand);
+        assert!(title.starts_with(mpv::NO_RECONNECT));
+        assert!(title.ends_with(",multiple_requests=1"));
+        assert_eq!(stream_options(OpenKind::Live), mpv::NO_RECONNECT);
+        let catch_up = OpenKind::CatchUp(CatchUp { near_edge: false });
+        assert_eq!(stream_options(catch_up), mpv::NO_RECONNECT);
     }
 
     #[test]
