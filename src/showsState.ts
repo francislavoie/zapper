@@ -63,6 +63,9 @@ export interface ShowsState {
   /** The episode whose Up next card was cancelled: it plays on to its end
    *  without one. Any episode played forgets it. */
   upNextCancelled: number | null;
+  /** Whether the owner has chosen a rail item, as opposed to the tab's own
+   *  first one: Continue watching takes over only the latter. */
+  chosen: boolean;
 }
 
 export function initialShows(view: MoviesView): ShowsState {
@@ -87,6 +90,7 @@ export function initialShows(view: MoviesView): ShowsState {
     revision: 0,
     detailsRevision: {},
     upNextCancelled: null,
+    chosen: false,
   };
 }
 
@@ -147,6 +151,7 @@ export function showsReducer(s: ShowsState, a: ShowsAction): ShowsState {
         sheetId: null,
         season: null,
         menu: null,
+        chosen: true,
       };
     case "shows/sort":
       return { ...s, sort: a.sort, menu: null };
@@ -172,6 +177,7 @@ export function showsReducer(s: ShowsState, a: ShowsAction): ShowsState {
           ...s,
           summary: a.value,
           selection: SHOW_RECENT,
+          chosen: false,
           query: "",
           selected: null,
           paneOpen: false,

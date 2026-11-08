@@ -56,13 +56,22 @@ import {
 } from "./moviesState";
 import { loadMoviesView, loadVodView } from "./moviesView";
 import {
+  continueReducer,
+  initialContinue,
+  isContinueAction,
+  type ContinueAction,
+  type ContinueState,
+} from "./continueState";
+import { CONTINUE, firstSelection } from "./logic/continueWatching";
+import { MOVIE_RECENT, moviesOriginChanged } from "./logic/movies";
+import {
   initialShows,
   isShowsAction,
   showsReducer,
   type ShowsAction,
   type ShowsState,
 } from "./showsState";
-import { SHOWS_VIEW_STORAGE_KEY } from "./logic/shows";
+import { SHOWS_VIEW_STORAGE_KEY, SHOW_RECENT, showsOriginChanged } from "./logic/shows";
 import { bandLeadAfter, type BandLead } from "./logic/band";
 
 import { ALL_CATEGORIES, RECORDINGS, modeSelection } from "./logic/railItems";
@@ -311,6 +320,8 @@ export interface State {
   movies: MoviesState;
   /** The Shows tab, likewise: see showsState.ts. */
   shows: ShowsState;
+  /** Continue watching, which both tabs show: see continueState.ts. */
+  continue: ContinueState;
 }
 
 /** An open context menu over a programme: record it, or cancel its
@@ -430,11 +441,13 @@ export const initialState: State = {
   // The List/Posters choice is read before the first render, like zoom.
   movies: initialMovies(loadMoviesView()),
   shows: initialShows(loadVodView(SHOWS_VIEW_STORAGE_KEY)),
+  continue: initialContinue(),
 };
 
 export type Action =
   | MoviesAction
   | ShowsAction
+  | ContinueAction
   /** ↩ Show in the band: what plays and the selection change places. */
   | { type: "bandSwap" }
   /** A fetch of the recordings: the list, or why there is none. */
@@ -538,8 +551,42 @@ export function reducer(state: State, action: Action): State {
 }
 
 function reduce(state: State, action: Action): State {
-  if (isMoviesAction(action)) return { ...state, movies: moviesReducer(state.movies, action) };
-  if (isShowsAction(action)) return { ...state, shows: showsReducer(state.shows, action) };
+  if (isMoviesAction(action)) {
+    const movies = moviesReducer(state.movies, action);
+    // Another account's movies: its Continue watching is not this one's.
+    return action.type === "movies/summary" &&
+      moviesOriginChanged(state.movies.summary, action.value)
+      ? { ...state, movies, continue: continueReducer(state.continue, { type: "continue/reset" }) }
+      : { ...state, movies };
+  }
+  if (isShowsAction(action)) {
+    const shows = showsReducer(state.shows, action);
+    return action.type === "shows/summary" && showsOriginChanged(state.shows.summary, action.value)
+      ? { ...state, shows, continue: continueReducer(state.continue, { type: "continue/reset" }) }
+      : { ...state, shows };
+  }
+  if (isContinueAction(action)) {
+    const next = continueReducer(state.continue, action);
+    if (action.type !== "continue/items" || action.value.status !== "ready") {
+      return { ...state, continue: next };
+    }
+    // The first list to arrive opens each tab on it, unless something was
+    // chosen already.
+    const n = action.value.data.length;
+    const { movies, shows } = state;
+    return {
+      ...state,
+      continue: next,
+      movies:
+        firstSelection(movies.chosen, movies.selection, MOVIE_RECENT, n) === CONTINUE
+          ? { ...movies, selection: CONTINUE, selected: null }
+          : movies,
+      shows:
+        firstSelection(shows.chosen, shows.selection, SHOW_RECENT, n) === CONTINUE
+          ? { ...shows, selection: CONTINUE, selected: null }
+          : shows,
+    };
+  }
   switch (action.type) {
     case "bandSwap":
       // `reducer` answers it.
@@ -762,6 +809,9 @@ function reduce(state: State, action: Action): State {
         catalogueRev: changed ? state.catalogueRev + 1 : state.catalogueRev,
         movies: changed ? moviesReducer(state.movies, { type: "movies/catalogue" }) : state.movies,
         shows: changed ? showsReducer(state.shows, { type: "shows/catalogue" }) : state.shows,
+        continue: changed
+          ? continueReducer(state.continue, { type: "continue/changed" })
+          : state.continue,
       };
     }
     case "channelQuality":

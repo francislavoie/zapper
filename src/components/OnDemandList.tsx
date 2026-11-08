@@ -66,7 +66,21 @@ export interface VodRowProps<T> {
   onOpen: (t: T, i: number) => void;
 }
 
-type Marks = { favourite: boolean; watched: boolean };
+/** What a title's marks say: Movies also take the place left. */
+export type Marks = {
+  favourite: boolean;
+  watched: boolean;
+  position?: number | null;
+  duration?: number | null;
+  playedAt?: number | null;
+};
+
+const sameMarks = (a: Marks, b: Marks) =>
+  a.favourite === b.favourite &&
+  a.watched === b.watched &&
+  a.position === b.position &&
+  a.duration === b.duration &&
+  a.playedAt === b.playedAt;
 
 export interface OnDemandListProps<T> {
   /** This list shares the browse grid with the rail, so the heading carries
@@ -190,11 +204,11 @@ export function OnDemandList<T extends object>(p: OnDemandListProps<T>) {
       const k = marks[id];
       if (!k) return m;
       const had = patched.current.get(id);
-      if (had && had.marks.favourite === k.favourite && had.marks.watched === k.watched && sameRow(had.from, m)) {
+      if (had && sameMarks(had.marks, k) && sameRow(had.from, m)) {
         return had.row;
       }
       const row = withMarks(m, k);
-      patched.current.set(id, { from: m, marks: { favourite: k.favourite, watched: k.watched }, row });
+      patched.current.set(id, { from: m, marks: { ...k }, row });
       return row;
     },
     [paged.rowAt, marks, idOf, withMarks],
