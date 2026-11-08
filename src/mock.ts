@@ -635,6 +635,7 @@ const playerEmitter = new Emitter<PlayerStateDto>({
   ending: null,
   reconnect: null,
   onDemand: null,
+  finished: null,
 });
 
 const optionsEmitter = new Emitter<PlayerOptionsDto>({
@@ -968,6 +969,7 @@ async function openStream(
     joiningLive: false,
     reconnect: null,
     onDemand: null,
+    finished: null,
   });
   patchOptions({ audio: [], subtitles: [] });
   await delay(700);
@@ -1785,6 +1787,7 @@ export const mockApi = {
       joiningLive: false,
       reconnect: null,
       onDemand: null,
+      finished: null,
     });
     patchOptions({ audio: [], subtitles: [] });
   },

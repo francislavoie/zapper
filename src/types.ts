@@ -131,6 +131,11 @@ export interface PlayerStateDto {
   /** The movie that is open, with how far in it is; `null` for a live
    *  channel and when nothing is open. A title has no `streamId`. */
   onDemand: OnDemandDto | null;
+  /** The title as it stood when it played to its end and stopped there: the
+   *  one signal that a title was finished rather than stopped or dropped.
+   *  `null` after any open, a stop, a failure, and a drop. Up next reads it
+   *  and nothing else does. */
+  finished: OnDemandDto | null;
 }
 
 /** Mirrors `ReconnectDto`. */

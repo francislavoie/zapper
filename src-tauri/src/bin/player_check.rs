@@ -31,6 +31,19 @@
 //! `series/<user>/<pass>/100111.mkv`) and checks it reports itself as an
 //! episode with its length, then `seek_to`, pause and stop.
 //!
+//! `--up-next` plays episodes the way Up next moves through them (every id
+//! plays `ZAPPER_FIXTURE_EPISODE`, so give it the 120 s episode): one
+//! played to its end reports itself as `finished`; moving on from it opens
+//! the next and marks it watched in the scratch catalogue; moving on from
+//! one still playing does the same, once however often it is asked; and no
+//! second stream lingers on the fixture server (it sends a title as fast as
+//! it is read, so this catches a stream left open, not a brief overlap).
+//! With `--past-end` the first episode is ended by a skip past its end
+//! (`seek_relative`) rather than a seek near it, which must still count as
+//! finished. With `--drop`, against `fake_stream.py --vod-cut-at 0.8`, an
+//! episode cut short fails with no finished title, and moving on from it is
+//! refused.
+//!
 //! `--ending <kind>` plays a channel that is expected to stop by itself, and
 //! checks it stops the way the app explains it (`offAir`, `dropped`, …), as
 //! the ending kinds are spelled to the interface. Against
@@ -141,6 +154,9 @@ fn main() {
                     run_keeps_playing(&handle, secs, args.iter().any(|a| a == "--after-movie")).await
                 } else if args.iter().any(|a| a == "--movie") {
                     run_movie(&handle).await
+                } else if args.iter().any(|a| a == "--up-next") {
+                    let has = |flag: &str| args.iter().any(|a| a == flag);
+                    run_up_next(&handle, has("--drop"), has("--past-end")).await
                 } else if args.iter().any(|a| a == "--episode") {
                     run_episode(&handle).await
                 } else {
@@ -704,6 +720,250 @@ async fn run_episode(app: &tauri::AppHandle) -> Result<String, String> {
         "a {length}s episode played as an episode, seek_to(60) landed at {:.1}s, paused and stopped",
         at(&there)
     ))
+}
+
+/// The `--up-next` run; see the top of the file.
+#[cfg(target_os = "linux")]
+async fn run_up_next(app: &tauri::AppHandle, drop: bool, past_end: bool) -> Result<String, String> {
+    use std::time::Duration;
+    use zapper_lib::ipc::player_cmds as cmds;
+    use zapper_lib::ipc::types::{OnDemandKind, PlaybackState, PlayerStateDto};
+
+    const A: i64 = 100_111;
+    const B: i64 = 100_112;
+    const C: i64 = 100_113;
+
+    fn episode(o: Option<zapper_lib::ipc::types::OnDemandDto>) -> Option<i64> {
+        o.filter(|o| o.kind == OnDemandKind::Episode).map(|o| o.id)
+    }
+    fn at(s: &PlayerStateDto) -> f64 {
+        s.on_demand.map_or(-1.0, |o| o.position)
+    }
+    let playing = |id: i64| {
+        move |s: &PlayerStateDto| {
+            s.state == PlaybackState::Playing
+                && episode(s.on_demand) == Some(id)
+                && s.on_demand.is_some_and(|o| o.duration.is_some())
+        }
+    };
+    let failure = |what: &str, s: &PlayerStateDto| {
+        format!("{what} ended in {:?}: {}", s.state, s.error.as_deref().unwrap_or("no reason given"))
+    };
+
+    cmds::play_episode(app.clone(), A, None).await?;
+    let opened = await_state(Duration::from_secs(25), playing(A)).await;
+    if !playing(A)(&opened) {
+        return Err(failure("play_episode(A)", &opened));
+    }
+
+    if drop {
+        // Past what the server sends before it cuts the file short.
+        cmds::seek_to(app.clone(), 90.0).await?;
+        let ended = await_state(Duration::from_secs(60), |s| {
+            matches!(s.state, PlaybackState::Failed | PlaybackState::Stopped)
+        })
+        .await;
+        if ended.state != PlaybackState::Failed {
+            return Err(format!(
+                "an episode cut short at {:.0}s ended in {:?}, not as a failure",
+                at(&ended),
+                ended.state
+            ));
+        }
+        if ended.finished.is_some() {
+            return Err("an episode cut short was reported as finished".into());
+        }
+        if cmds::play_next_episode(app.clone(), A, B).await.is_ok() {
+            return Err("moving on from an episode cut short was not refused".into());
+        }
+        let after = cmds::player_state().await?;
+        if after.state != PlaybackState::Failed || episode(after.on_demand) != Some(A) {
+            return Err(format!("a refused move on left the player in {:?}", after.state));
+        }
+        cmds::stop(app.clone()).await?;
+        return Ok(format!(
+            "an episode cut short failed ({}), with no finished title, and moving on was refused",
+            ended.error.as_deref().unwrap_or("no reason")
+        ));
+    }
+
+    let port = fixture_port()?;
+    let streams = StreamWatch::start(port);
+
+    // Played to its end: from near it, or by skipping past it (the
+    // credits), which ends the file before a heartbeat reads the new place.
+    if past_end {
+        cmds::seek_to(app.clone(), 85.0).await?;
+        let there = await_state(Duration::from_secs(8), |s| (84.0..=90.0).contains(&at(s))).await;
+        if !(84.0..=90.0).contains(&at(&there)) {
+            return Err(format!("seek_to(85) left A at {:.1}s", at(&there)));
+        }
+        cmds::seek_relative(app.clone(), 60.0).await?;
+    } else {
+        cmds::seek_to(app.clone(), 115.0).await?;
+    }
+    let ended = await_state(Duration::from_secs(30), |s| s.state != PlaybackState::Playing).await;
+    if ended.state != PlaybackState::Stopped {
+        return Err(failure("an episode played to its end", &ended));
+    }
+    if episode(ended.finished) != Some(A) {
+        return Err(format!("an episode played to its end reported {:?} as finished", ended.finished));
+    }
+
+    // Moving on from it.
+    cmds::play_next_episode(app.clone(), A, B).await?;
+    let next = await_state(Duration::from_secs(25), playing(B)).await;
+    if !playing(B)(&next) {
+        return Err(failure("play_next_episode(A, B)", &next));
+    }
+    if next.finished.is_some() {
+        return Err("the next episode opened with a finished title still reported".into());
+    }
+    if !watched_soon(A).await? {
+        return Err("the episode moved on from was not marked watched".into());
+    }
+
+    // Moving on from one still playing, asked twice: opened once.
+    cmds::set_subtitle_track(app.clone(), Some(1)).await?;
+    cmds::seek_to(app.clone(), 105.0).await?;
+    let near = await_state(Duration::from_secs(8), |s| at(s) >= 104.0).await;
+    if at(&near) < 104.0 || near.state != PlaybackState::Playing {
+        return Err(format!("seek_to(105) left B at {:.1}s, {:?}", at(&near), near.state));
+    }
+    // At once, as a countdown running out under a press would.
+    let (first, second) = tokio::join!(
+        cmds::play_next_episode(app.clone(), B, C),
+        cmds::play_next_episode(app.clone(), B, C)
+    );
+    match (first, second) {
+        (Ok(()), Err(_)) | (Err(_), Ok(())) => {}
+        (Ok(()), Ok(())) => return Err("moving on twice from the same episode opened it twice".into()),
+        (Err(e), Err(_)) => return Err(format!("play_next_episode(B, C) was refused: {e}")),
+    }
+    let last = await_state(Duration::from_secs(25), playing(C)).await;
+    if !playing(C)(&last) {
+        return Err(failure("play_next_episode(B, C)", &last));
+    }
+    if !watched_soon(B).await? {
+        return Err("the episode moved on from while playing was not marked watched".into());
+    }
+    // The subtitles chosen on B are shown on C, once its tracks are known.
+    let mut subtitles = None;
+    for _ in 0..25 {
+        let o = cmds::player_options().await?;
+        if let Some(t) = o.subtitles.iter().find(|t| t.selected) {
+            subtitles = t.lang.clone();
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    if subtitles.as_deref() != Some("eng") {
+        return Err(format!("the next episode's subtitles were {subtitles:?}, not the English chosen"));
+    }
+
+    cmds::stop(app.clone()).await?;
+    let most = streams.stop()?;
+    if most >= 2 {
+        return Err(format!("a second stream lingered on the fixture server ({most} open)"));
+    }
+    Ok(format!(
+        "A {} as finished; A to B opened B and marked A watched; B to C at {:.0}s \
+         opened C once, marked B watched and kept the subtitles; no second stream lingered",
+        if past_end { "skipped past its end" } else { "played to its end" },
+        at(&near)
+    ))
+}
+
+/// Whether episode `id` is marked watched in the scratch catalogue within a
+/// few seconds: the mark is written off the main thread.
+#[cfg(target_os = "linux")]
+async fn watched_soon(id: i64) -> Result<bool, String> {
+    use rusqlite::OptionalExtension;
+    for _ in 0..25 {
+        let watched = zapper_lib::catalog::db::with_db(|c| {
+            Ok(c.query_row(
+                "SELECT watched_at IS NOT NULL FROM vod_marks WHERE kind = 'episode' AND item_id = ?1",
+                [id],
+                |r| r.get::<_, bool>(0),
+            )
+            .optional()?)
+        })
+        .map_err(|e| format!("reading the scratch catalogue: {e}"))?;
+        if watched == Some(true) {
+            return Ok(true);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+    Ok(false)
+}
+
+/// The fixture server's port, from `ZAPPER_FIXTURE_BASE`.
+#[cfg(target_os = "linux")]
+fn fixture_port() -> Result<u16, String> {
+    let base = std::env::var("ZAPPER_FIXTURE_BASE").map_err(|_| "no ZAPPER_FIXTURE_BASE")?;
+    base.trim_end_matches('/')
+        .rsplit(':')
+        .next()
+        .and_then(|p| p.parse().ok())
+        .ok_or_else(|| format!("no port in ZAPPER_FIXTURE_BASE ({base})"))
+}
+
+/// Watches the fixture server's account API for a second stream left open,
+/// until stopped. Only a lingering one: the server sends a title as fast as
+/// it is read, so a stream is open for moments and a brief overlap between
+/// two would pass unseen. Two are believed only when two readings a third
+/// of a second apart agree, since the server's thread sending a stream that
+/// was just closed notices a moment later (as `fake_stream.py` allows for).
+#[cfg(target_os = "linux")]
+struct StreamWatch {
+    running: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    thread: std::thread::JoinHandle<Result<i64, String>>,
+}
+
+#[cfg(target_os = "linux")]
+impl StreamWatch {
+    fn start(port: u16) -> Self {
+        use std::sync::atomic::Ordering;
+        let running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let still = running.clone();
+        let thread = std::thread::spawn(move || {
+            let mut most = 0;
+            let mut last = 0;
+            while still.load(Ordering::Acquire) {
+                // A reading that failed is not a reading of none.
+                let now = active_streams(port)
+                    .ok_or("the fixture server's account API could not be read")?;
+                most = most.max(now.min(last));
+                last = now;
+                std::thread::sleep(std::time::Duration::from_millis(350));
+            }
+            Ok(most)
+        });
+        Self { running, thread }
+    }
+
+    /// The most streams it saw open at once, by two readings; an error if
+    /// the server could not be asked.
+    fn stop(self) -> Result<i64, String> {
+        self.running.store(false, std::sync::atomic::Ordering::Release);
+        self.thread
+            .join()
+            .map_err(|_| "the stream watch panicked".to_owned())?
+    }
+}
+
+/// `active_cons` from the fixture server's account API, over a plain socket.
+#[cfg(target_os = "linux")]
+fn active_streams(port: u16) -> Option<i64> {
+    use std::io::{Read, Write};
+    let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).ok()?;
+    s.set_read_timeout(Some(std::time::Duration::from_secs(5))).ok()?;
+    s.write_all(b"GET /player_api.php?username=u&password=p HTTP/1.0\r\nHost: x\r\n\r\n").ok()?;
+    let mut body = String::new();
+    s.read_to_string(&mut body).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&body[body.find("\r\n\r\n")? + 4..]).ok()?;
+    let n = v.get("user_info")?.get("active_cons")?;
+    n.as_i64().or_else(|| n.as_str()?.parse().ok())
 }
 
 /// Prints mpv's raw transport properties for one stage of the run.

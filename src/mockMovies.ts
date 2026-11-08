@@ -473,6 +473,7 @@ export function createMockMovies(host: MoviePlayerHost) {
         joiningLive: false,
         reconnect: null,
         onDemand: onDemand(movieId, from, false),
+        finished: null,
       });
       await delay(700);
       if (host.current() !== mine) return;
