@@ -5,7 +5,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { setTimeFormat } from "../logic/format.ts";
 import {
+  heldAfter,
   nextStart,
+  placeReportDue,
   playsOnReopen,
   progressOf,
   promptLine,
@@ -153,4 +155,33 @@ test("a reading opened again plays as the picture did, and a held title stays pa
   assert.equal(playsOnReopen(at({ paused: true, wantPlay: true })), false);        // paused
   assert.equal(playsOnReopen(at({ paused: true, ended: true, wantPlay: false })), true); // ran out
   assert.equal(playsOnReopen(at({ paused: null, wantPlay: false })), true);        // no element
+});
+
+test("a held title's place is not reported while it is held, even as it is left", () => {
+  const due = (o) =>
+    placeReportDue({ held: false, final: false, last: null, now: 0, position: 2770, paused: true, ...o });
+  // Looking at the question is not watching: no report, timed or final.
+  assert.equal(due({ held: true }), false);
+  assert.equal(due({ held: true, final: true }), false);
+  assert.equal(due({ held: true, final: true, last: { at: 0, position: 12 } }), false);
+  // Not held: as before.
+  assert.equal(due({}), true);                                                   // first, past a second
+  assert.equal(due({ position: 0.5 }), false);                                   // under a second, never reported
+  assert.equal(due({ final: true, position: 0.5 }), false);
+  assert.equal(due({ last: { at: 0, position: 2770 } }), false);                 // paused, not moved
+  assert.equal(due({ last: { at: 0, position: 2700 } }), true);                  // paused after moving
+  assert.equal(due({ final: true, last: { at: 0, position: 2770 } }), false);    // said already
+  assert.equal(due({ final: true, last: { at: 0, position: 2700 } }), true);
+  assert.equal(due({ paused: false, last: { at: 0, position: 2700 }, now: 9_000 }), false);
+  assert.equal(due({ paused: false, last: { at: 0, position: 2700 }, now: 10_000 }), true);
+});
+
+test("a held title stays held until it plays", () => {
+  assert.equal(heldAfter(true, "play"), false);     // Play, Resume, Space
+  assert.equal(heldAfter(true, "playing"), false);  // its picture playing
+  assert.equal(heldAfter(true, "seek"), true);      // a seek is not an answer
+  assert.equal(heldAfter(true, "pause"), true);
+  assert.equal(heldAfter(true, "reopen"), true);    // read again after a break
+  assert.equal(heldAfter(false, "seek"), false);
+  assert.equal(heldAfter(false, "pause"), false);
 });
