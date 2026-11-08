@@ -43,6 +43,22 @@ export function nextStart(marks: MarksDto | null, listedSecs: number | null): nu
   return resumePoint({ ...marks, durationSecs: listedSecs }) ?? 0;
 }
 
+/** Whether a film read again (after a break, a seek, another sound, its
+ *  viewer let go) plays once it is ready. Started, as the picture was:
+ *  playing, or run out of what it had (`ended`, which the element also calls
+ *  paused); with no element (`paused: null`), playing. Not started yet, as it
+ *  was asked to (`wantPlay`): a title held for the Resume question stays
+ *  paused behind it. */
+export function playsOnReopen(p: {
+  started: boolean;
+  paused: boolean | null;
+  ended: boolean;
+  wantPlay: boolean;
+}): boolean {
+  if (!p.started) return p.wantPlay;
+  return p.paused === null || !p.paused || p.ended;
+}
+
 /** "14m left", at least "1m left"; nothing when not in progress. */
 export function timeLeft(t: Place): string {
   if (progressOf(t) === null) return "";
