@@ -33,6 +33,7 @@ import type {
 import { episodeCode } from "./logic/shows";
 import { moviesAvailable } from "./logic/movies";
 import { CONTINUE, CONTINUE_MAX, continueTarget } from "./logic/continueWatching";
+import { createPending } from "./logic/pending";
 import { startPlan, type Place, type StartAt } from "./logic/resume";
 import { createAdvanceGuard } from "./logic/upNext";
 import {
@@ -399,6 +400,20 @@ export async function playMovie(
     dispatch({ type: "toast", text: NO_PLAYBACK, kind: "info" });
     return;
   }
+  // A second Play while this one is still being set up is ignored.
+  const key = `movie:${movie.movieId}`;
+  if (!openings.claim(key)) return;
+  try {
+    await openMovie(dispatch, movie, start);
+  } finally {
+    openings.release(key);
+  }
+}
+
+/** The opens being set up, by title. */
+const openings = createPending();
+
+async function openMovie(dispatch: Dispatch<Action>, movie: MovieDto, start: StartAt): Promise<void> {
   let plan = startPlan(start, null);
   let playedAt: number | null = null;
   if (start === "ask" || start === "resume") {
@@ -486,12 +501,15 @@ export function openShowSheet(dispatch: Dispatch<Action>, show: SeriesDto): void
 
 /** Reads Continue watching. One already showing stays while the fresh one
  *  loads, and a failed read does not replace it (the reducer sees to both). */
-export async function loadContinue(dispatch: Dispatch<Action>): Promise<void> {
-  dispatch({ type: "continue/items", value: loading() });
+export async function loadContinue(dispatch: Dispatch<Action>, revision: number): Promise<void> {
+  // Tagged with the revision it began at: an answer that arrives after
+  // another account's reset (or a newer change) is dropped by the reducer.
+  dispatch({ type: "continue/items", value: loading(), revision });
   try {
-    dispatch({ type: "continue/items", value: ready(await backend.continueWatching(CONTINUE_MAX)) });
+    const list = await backend.continueWatching(CONTINUE_MAX);
+    dispatch({ type: "continue/items", value: ready(list), revision });
   } catch (e) {
-    dispatch({ type: "continue/items", value: failed(errorMessage(e)) });
+    dispatch({ type: "continue/items", value: failed(errorMessage(e)), revision });
   }
 }
 
@@ -598,6 +616,20 @@ export async function playEpisode(
     dispatch({ type: "toast", text: NO_PLAYBACK, kind: "info" });
     return;
   }
+  const key = `episode:${playing.episode.episodeId}`;
+  if (!openings.claim(key)) return;
+  try {
+    await openEpisode(dispatch, playing, start);
+  } finally {
+    openings.release(key);
+  }
+}
+
+async function openEpisode(
+  dispatch: Dispatch<Action>,
+  playing: PlayingEpisodeDto,
+  start: StartAt,
+): Promise<void> {
   const e = playing.episode;
   const code = `${playing.series.cleanName} · ${episodeCode(e.season, e.episode, e.episodeEnd)}`;
   let plan = startPlan(start, null);

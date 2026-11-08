@@ -35,7 +35,9 @@ export function initialContinue(): ContinueState {
 }
 
 export type ContinueAction =
-  | { type: "continue/items"; value: Async<ContinueItemDto[]> }
+  /** `revision`: the state's revision when the read began; an answer that
+   *  finds it moved on (another account, a mark) is out of date and dropped. */
+  | { type: "continue/items"; value: Async<ContinueItemDto[]>; revision?: number }
   | { type: "continue/select"; item: ContinueItemDto | null }
   | { type: "continue/menu"; menu: ContinueMenuAt | null }
   | { type: "continue/prompt"; prompt: ResumePrompt | null }
@@ -50,6 +52,7 @@ export function isContinueAction(a: { type: string }): a is ContinueAction {
 export function continueReducer(s: ContinueState, a: ContinueAction): ContinueState {
   switch (a.type) {
     case "continue/items": {
+      if (a.revision !== undefined && a.revision !== s.revision) return s;
       // A list already showing is neither blanked by the fetch that refreshes
       // it nor replaced by one that failed.
       if (a.value.status !== "ready" && s.items.status === "ready") return s;

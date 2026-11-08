@@ -468,14 +468,16 @@ export function App() {
     moviesAvailable(state.movies.summary) || showsAvailable(state.shows.summary);
   const continueRevision = state.continue.revision;
   useEffect(() => {
-    if (continueOn) void loadContinue(dispatch);
+    if (continueOn) void loadContinue(dispatch, continueRevision);
   }, [continueOn, continueRevision, dispatch]);
 
   // Coming back to the window after a while away (another device may have
   // watched something meanwhile): the list, the catalogue and what is open
   // are read again.
   const latest = useRef(state);
-  latest.current = state;
+  useEffect(() => {
+    latest.current = state;
+  });
   useEffect(() => {
     let hiddenAt: number | null = null;
     const leave = () => {
