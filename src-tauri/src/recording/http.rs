@@ -4182,6 +4182,22 @@ pub(crate) mod tests {
         assert!(s.own_conns().is_empty());
     }
 
+    #[tokio::test]
+    async fn an_id_no_catalogue_holds_is_not_looked_for() {
+        let s = server("vod-out-of-range");
+        enable(&s, true).await;
+        let cookie = browser_login(&s).await;
+        let base = crate::recording::vodwatch::EPISODE_FEED_BASE;
+        for id in [0, -1, base] {
+            let body = serde_json::json!({"episodeId": id});
+            let (st, said) =
+                call(&s, from_page("POST", "/api/vod/watch", Some(&cookie), Some(body.clone()))).await;
+            assert_eq!(st, StatusCode::NOT_FOUND, "{body}: {said}");
+            assert_eq!(said["error"], "That episode is not in the catalogue any more.", "{body}");
+            assert!(s.own_conns().is_empty(), "{body}");
+        }
+    }
+
     // ------------------------------------------------- the app's own player
 
     fn player_body(stream_id: i64, only_shared: bool) -> Option<serde_json::Value> {

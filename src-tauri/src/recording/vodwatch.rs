@@ -115,6 +115,11 @@ pub const EPISODE_FEED_BASE: i64 = 1 << 54;
 /// movie's is `-id`; an episode's `-(EPISODE_FEED_BASE + id)`, never a
 /// movie's.
 pub fn vod_feed(item: VodItem) -> i64 {
+    // A show is never played itself: only a watch's movie or episode makes
+    // a viewer (`VodWatchRequest::item`). Should one ever reach here, its
+    // feed would be in the movies' space, so a debug build says so at once;
+    // a release build is not stopped over it.
+    debug_assert_ne!(item.kind, ItemKind::Series, "a show has no feed of its own");
     match item.kind {
         ItemKind::Episode => -(EPISODE_FEED_BASE.saturating_add(item.id)),
         ItemKind::Movie | ItemKind::Series => -item.id,
