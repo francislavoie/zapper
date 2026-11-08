@@ -156,6 +156,29 @@ const BACKUP_INDEXES: &str = r#"
 CREATE INDEX IF NOT EXISTS epg_by_start ON epg(start);
 "#;
 
+/// Migration step `online_subtitles`: which subtitle files downloaded from
+/// OpenSubtitles each title offers (`catalog::subtitle_store`).
+///
+/// Keyed on the catalogue's `origin`, like `vod_marks`, because a provider's
+/// movie 7 is not the next one's: a subtitle kept for one film must not be
+/// offered with another that took its id. `kind` is `movie` or `episode`,
+/// each with its own ids. The files themselves are shared by `file_id`
+/// (`data_dir()/subtitles/<file_id>.srt`): a file on disk is never
+/// downloaded again, whichever title or account asks for it.
+const SUBTITLE_TABLES: &str = r#"
+CREATE TABLE IF NOT EXISTS subtitle_downloads (
+    origin           TEXT NOT NULL,
+    kind             TEXT NOT NULL,
+    item_id          INTEGER NOT NULL,
+    file_id          INTEGER NOT NULL,
+    language         TEXT NOT NULL,
+    release          TEXT NOT NULL,
+    hearing_impaired INTEGER NOT NULL,
+    downloaded_at    INTEGER NOT NULL,
+    PRIMARY KEY (origin, kind, item_id, file_id)
+);
+"#;
+
 /// Migration step `vod`: the provider's movies, and who marked which.
 ///
 /// `movies` is the mirror of `get_vod_streams` and, like `channels`, is only
@@ -368,6 +391,8 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     add_missing_columns(conn, EPG_EPISODE_COLUMNS).context("migrating epg_episode")?;
     conn.execute_batch(BACKUP_INDEXES)
         .context("migrating backup_lookup")?;
+    conn.execute_batch(SUBTITLE_TABLES)
+        .context("migrating online_subtitles")?;
     conn.execute_batch(VOD_TABLES).context("migrating vod")?;
     conn.execute_batch(SERIES_TABLES)
         .context("migrating series")?;
@@ -444,6 +469,7 @@ mod tests {
             "series",
             "series_details",
             "episodes",
+            "subtitle_downloads",
         ] {
             assert!(
                 tables.contains(&t.to_string()),

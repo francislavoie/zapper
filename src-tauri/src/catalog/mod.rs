@@ -28,6 +28,7 @@ pub mod series_sync;
 pub mod settings;
 pub mod status;
 pub mod store;
+pub mod subtitle_store;
 pub mod sync;
 pub mod sync_devices;
 pub mod sync_engine;
