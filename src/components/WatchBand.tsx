@@ -22,7 +22,7 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import { playChannel, showChannelCategory, showChannelInGuide } from "../actions";
+import { playChannel, removeFromContinue, showChannelCategory, showChannelInGuide } from "../actions";
 import { endedMessage, startingLine } from "../logic/ending";
 import { chordLabel } from "../logic/keys";
 import { IS_MAC } from "../platform";
@@ -47,7 +47,7 @@ import {
   widthAfterDrag,
 } from "../logic/videoSize";
 import { useRecordingChannels } from "../hooks/useRecordingChannels";
-import { listedFor, railItemKind } from "../logic/railItems";
+import { CONTINUE, listedFor, railItemKind } from "../logic/railItems";
 import { categoryNames } from "../logic/searchGroups";
 import { RecordingBand } from "./RecordingBand";
 import { bandLayout, type BandItem } from "../logic/band";
@@ -100,9 +100,32 @@ export function WatchBand({ videoRef, picture, upNext }: WatchBandProps) {
   // a show to look at changes this and nothing else — the picture beside it
   // is whatever was already on.
   const inMovies = app.section === "movies" && moviesAvailable(app.movies.summary);
-  const selectedMovie = inMovies ? app.movies.selected : null;
   const inShows = app.section === "shows" && showsAvailable(app.shows.summary);
-  const selectedShow = inShows ? app.shows.selected : null;
+  // With Continue watching chosen and nothing typed, the band is about its
+  // selected entry: the movie, or an episode's show.
+  const tab = inMovies ? app.movies : inShows ? app.shows : null;
+  const continueEntry =
+    tab !== null && tab.selection === CONTINUE && tab.query === "" ? app.continue.selected : null;
+  const inContinue = tab !== null && tab.selection === CONTINUE && tab.query === "";
+  const selectedMovie = inContinue
+    ? continueEntry?.kind === "movie"
+      ? continueEntry.movie
+      : null
+    : inMovies
+      ? app.movies.selected
+      : null;
+  const selectedShow = inContinue
+    ? continueEntry?.kind === "episode"
+      ? continueEntry.series
+      : null
+    : inShows
+      ? app.shows.selected
+      : null;
+  const removeEntry = continueEntry ? (
+    <button className="ctl watch-actions-end" onClick={() => void removeFromContinue(dispatch, continueEntry)}>
+      Remove from Continue watching
+    </button>
+  ) : undefined;
   const movieOpen = playingKind(player) === "movie";
   const openMovieId = player.onDemand?.kind === "movie" ? player.onDemand.id : null;
   const episodeOpen = playingKind(player) === "episode";
@@ -182,9 +205,9 @@ export function WatchBand({ videoRef, picture, upNext }: WatchBandProps) {
 
   const selectionBand = () =>
     selectedMovie ? (
-      <MovieBand key={selectedMovie.movieId} movie={selectedMovie} playing={false} dual={dual} side={side} />
+      <MovieBand key={selectedMovie.movieId} movie={selectedMovie} playing={false} dual={dual} side={side} extra={removeEntry} />
     ) : selectedShow ? (
-      <ShowBand key={selectedShow.seriesId} show={selectedShow} dual={dual} side={side} />
+      <ShowBand key={selectedShow.seriesId} show={selectedShow} dual={dual} side={side} extra={removeEntry} />
     ) : null;
 
   const playingBand = () => {
