@@ -36,8 +36,10 @@ import { StreamEnded } from "./StreamEnded";
 import { TransportBar } from "./TransportBar";
 import { VideoFeedback } from "./VideoFeedback";
 import { PictureCorner } from "./PictureCorner";
+import { UpNextCard } from "./UpNextCard";
+import type { UpNext } from "../logic/upNext";
 
-export function PlayerChrome() {
+export function PlayerChrome({ upNext }: { upNext: UpNext }) {
   const { player, nowChannel, stacked, zoom, movies, shows } = useApp();
   const kind = playingKind(player);
   // A movie or an episode: the title's transport, steps and click.
@@ -139,6 +141,8 @@ export function PlayerChrome() {
       {/* Why the picture went away, and the way back. Dismissing leaves the
           player, as stopping does. */}
       <StreamEnded onDismissed={() => dispatch({ type: "mode", mode: "browse" })} />
+      {/* Near an episode's end: what plays next, and when (App's useUpNext). */}
+      <UpNextCard upNext={upNext} />
       <div className="chrome-top">
         {/* Top-left, where the way out of a full-screen thing lives on every
             device anybody owns. It leaves the player without stopping the

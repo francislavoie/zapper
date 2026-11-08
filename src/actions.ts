@@ -29,6 +29,7 @@ import type {
   SeriesDto,
 } from "./types";
 import { episodeCode } from "./logic/shows";
+import { createAdvanceGuard } from "./logic/upNext";
 import {
   conflictLosesProgramme,
   conflictText,
@@ -468,6 +469,8 @@ export async function playEpisode(
     return;
   }
   const e = playing.episode;
+  // Another playing of it, which Up next may move on from again.
+  advanceGuard.reset(e.episodeId);
   dispatch({ type: "shows/playing", playing });
   dispatch({ type: "shows/sheet", id: null });
   dispatch({ type: "mode", mode: "watch" });
@@ -479,6 +482,79 @@ export async function playEpisode(
   if (!ok) {
     dispatch({ type: "shows/playing", playing: null });
     dispatch({ type: "mode", mode: "browse" });
+  }
+}
+
+/** The one claim on moving on from an episode, shared by the countdown,
+ *  Play now and Enter: whichever asks first moves on, and the rest find it
+ *  taken. */
+const advanceGuard = createAdvanceGuard();
+
+/** Up next: moves on from the episode playing, or the one that has just
+ *  played to its end (`from`), to `next`, from its start, `from` marked
+ *  watched by the backend. Once per playing of `from`, however many ask.
+ *  Where the picture is (docked or full) stays as it is. A paused episode
+ *  moved on from leaves the player paused (mpv's pause outlives the file),
+ *  so it is resumed: the next one plays. A refusal is shown as Play's is. */
+export async function playNextEpisode(
+  dispatch: Dispatch<Action>,
+  from: PlayingEpisodeDto,
+  next: EpisodeDto,
+): Promise<void> {
+  if (!advanceGuard.claim(from.episode.episodeId)) return;
+  advanceGuard.reset(next.episodeId);
+  dispatch({ type: "shows/playing", playing: { series: from.series, episode: next } });
+  // Asked before moving on, which makes the player's state "opening".
+  const wasPaused = await backend
+    .playerState()
+    .then((p) => p.state === "paused")
+    .catch(() => false);
+  const ok = await run(
+    dispatch,
+    `play ${from.series.cleanName} ${episodeCode(next.season, next.episode, next.episodeEnd)}`,
+    backend.playNextEpisode(from.episode.episodeId, next.episodeId),
+  );
+  if (!ok) {
+    // Refused with `from` still open (playing or paused): it plays on,
+    // as it was, where it was. Anything else failed as Play's open does.
+    const still = await backend.playerState().catch(() => null);
+    if (still && isOpenEpisode(still, from.episode.episodeId)) {
+      dispatch({ type: "shows/playing", playing: from });
+    } else {
+      dispatch({ type: "shows/playing", playing: null });
+      dispatch({ type: "mode", mode: "browse" });
+    }
+    return;
+  }
+  dispatch({ type: "shows/played", seriesId: from.series.seriesId });
+  if (wasPaused) await resumeOnceOpen(dispatch, next.episodeId);
+}
+
+/** Whether the player has episode `id` open, playing or paused. */
+const isOpenEpisode = (p: PlayerStateDto, id: number) =>
+  (p.state === "playing" || p.state === "paused") &&
+  p.onDemand?.kind === "episode" &&
+  p.onDemand.id === id;
+
+/** How long a paused move on waits for the next episode to open before it
+ *  leaves it as it is. */
+const RESUME_WAIT_MS = 15_000;
+
+/** Plays episode `id` once it has opened, if it opened paused (the player
+ *  has no resume of its own, only a toggle). Asked again just before the
+ *  toggle, so a pause or a play pressed meanwhile, or another title, is
+ *  left alone. */
+async function resumeOnceOpen(dispatch: Dispatch<Action>, id: number): Promise<void> {
+  const until = Date.now() + RESUME_WAIT_MS;
+  for (;;) {
+    const p = await backend.playerState().catch(() => null);
+    if (!p || p.onDemand?.kind !== "episode" || p.onDemand.id !== id) return;
+    if (p.state !== "opening") {
+      if (p.state === "paused") await run(dispatch, "resume", backend.togglePause());
+      return;
+    }
+    if (Date.now() > until) return;
+    await new Promise((r) => setTimeout(r, 200));
   }
 }
 

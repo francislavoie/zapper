@@ -56,6 +56,9 @@ export interface ShowsState {
   /** Per show, bumped when its episodes' marks or places may have changed,
    *  so its details are read again rather than recalled. */
   detailsRevision: Readonly<Record<number, number>>;
+  /** The episode whose Up next card was cancelled: it plays on to its end
+   *  without one. Any episode played forgets it. */
+  upNextCancelled: number | null;
 }
 
 export function initialShows(view: MoviesView): ShowsState {
@@ -78,6 +81,7 @@ export function initialShows(view: MoviesView): ShowsState {
     menu: null,
     revision: 0,
     detailsRevision: {},
+    upNextCancelled: null,
   };
 }
 
@@ -98,6 +102,9 @@ export type ShowsAction =
   | { type: "shows/sheet"; id: number | null }
   | { type: "shows/season"; number: number }
   | { type: "shows/playing"; playing: PlayingEpisodeDto | null }
+  /** Cancel on the Up next card: no card, and no moving on, for the rest of
+   *  this playing of the episode. */
+  | { type: "shows/upNextCancel"; episodeId: number }
   | { type: "shows/marked"; marks: MarksDto }
   | { type: "shows/episodeMarked"; seriesId: number; marks: MarksDto }
   /** An episode of the show was played, stopped or marked: its details and
@@ -177,7 +184,9 @@ export function showsReducer(s: ShowsState, a: ShowsAction): ShowsState {
     case "shows/season":
       return { ...s, sheetSeason: a.number };
     case "shows/playing":
-      return { ...s, playing: a.playing };
+      return { ...s, playing: a.playing, upNextCancelled: null };
+    case "shows/upNextCancel":
+      return { ...s, upNextCancelled: a.episodeId };
     case "shows/marked":
       return {
         ...s,

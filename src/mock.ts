@@ -2133,6 +2133,7 @@ export const mockApi = {
   setEpisodeMarks: mockShows.setEpisodeMarks,
   playingEpisode: mockShows.playingEpisode,
   playEpisode: mockShows.playEpisode,
+  playNextEpisode: mockShows.playNextEpisode,
 
   forgetActivity: async (streamId: number) => {
     await delay(20);

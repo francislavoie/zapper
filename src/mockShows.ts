@@ -19,14 +19,19 @@
 // An episode's id is (show id + 1) × 100,000 + season × 1,000 + number:
 // 201,001 and up, clear of every mock movie id.
 //
-// Flags in the URL: `?shows=none` is an account with no shows (a tuner), and
-// `?show=playing` boots the player already playing show 1's S2 E4.
+// Flags in the URL: `?shows=none` is an account with no shows (a tuner),
+// `?show=playing` boots the player already playing show 1's S2 E4, and
+// `?episode=ending` boots it playing S2 E4 eighteen seconds from its end,
+// where Up next counts down; `&drop=1` makes the stream fail twelve seconds
+// from an episode's end, as a connection broken off would (Retry). An
+// episode that plays to its end stops there, finished.
 
 import type { MoviePlayerHost } from "./mockMovies";
 import type {
   EpisodeDto,
   MarksDto,
   MovieSort,
+  OnDemandDto,
   PlayingEpisodeDto,
   SeasonDto,
   SeriesCategoryDto,
@@ -51,6 +56,10 @@ const WATCHED_FRACTION = 0.92;
 const flag = (re: RegExp) => typeof location !== "undefined" && re.test(location.search);
 const NONE = flag(/(^|[?&])shows=none(&|$)/);
 const BOOT_PLAYING = flag(/(^|[?&])show=playing(&|$)/);
+const BOOT_ENDING = flag(/(^|[?&])episode=ending(&|$)/);
+const DROP = flag(/(^|[?&])drop=1(&|$)/);
+/** How far from its end a `drop=1` episode fails. */
+const DROP_BEFORE_END_SECS = 12;
 
 const NOW = Math.floor(Date.now() / 1000);
 const NOW_YEAR = new Date(NOW * 1000).getFullYear();
@@ -517,15 +526,48 @@ export function createMockShows(host: MoviePlayerHost) {
     }
   }
 
-  /** The position follows the clock while an episode plays. */
+  /** The position follows the clock while an episode plays. At its end it
+   *  stops, finished; with `drop=1` the stream fails short of that. */
   function startClock() {
     if (clock !== undefined) return;
     clock = window.setInterval(() => {
       const p = host.state();
       const m = p.onDemand;
       if (p.state !== "playing" || m?.kind !== "episode") return;
-      const position = Math.min(m.duration ?? MOCK_EPISODE_SECS, m.position + 1);
+      const length = m.duration ?? MOCK_EPISODE_SECS;
+      const position = Math.min(length, m.position + 1);
+      if (DROP && position >= length - DROP_BEFORE_END_SECS) {
+        host.open();
+        host.patch({
+          state: "failed",
+          error: "the stream broke off",
+          ending: { kind: "network", status: null, limit: false, slots: null, clipSecs: null },
+          reconnect: null,
+          bufferedBack: 0,
+          behindLive: 0,
+          onDemand: onDemand(m.id, position, false),
+          finished: null,
+        });
+        return;
+      }
       record(m.id, position);
+      if (position >= length) {
+        host.open();
+        host.patch({
+          state: "stopped",
+          streamId: null,
+          width: null,
+          height: null,
+          fps: null,
+          codec: null,
+          error: null,
+          ending: null,
+          reconnect: null,
+          onDemand: null,
+          finished: onDemand(m.id, position, false),
+        });
+        return;
+      }
       host.patch({ onDemand: onDemand(m.id, position, true) });
     }, 1000);
   }
@@ -538,9 +580,9 @@ export function createMockShows(host: MoviePlayerHost) {
     host.patch({ onDemand: onDemand(m.id, position, true) });
   }
 
-  const playing = (id: number, position: number) =>
+  const playing = (id: number, position: number, paused = false) =>
     host.patch({
-      state: "playing",
+      state: paused ? "paused" : "playing",
       streamId: null,
       width: 1920,
       height: 1080,
@@ -553,21 +595,22 @@ export function createMockShows(host: MoviePlayerHost) {
       atLiveEdge: true,
       reconnect: null,
       onDemand: onDemand(id, position, true),
+      finished: null,
     });
 
-  if (BOOT_PLAYING) {
+  if (BOOT_PLAYING || BOOT_ENDING) {
     const id = episodeIdOf(1, 2, 4);
-    playing(id, positions.get(id) ?? 0);
+    const at = BOOT_ENDING ? lengthOf(1, id) - 18 : (positions.get(id) ?? 0);
+    playing(id, at);
     startClock();
   }
 
-  const playEpisode = async (episodeId: number, start: number | null): Promise<void> => {
-    const at = slotOf(episodeId);
-    if (!at) throw new Error("no such episode");
+  /** Opens an episode from `from`, paused when `paused` (mpv's pause
+   *  outlives the file it was set on). */
+  const open = async (episodeId: number, seriesId: number, from: number, paused: boolean) => {
     const mine = host.open();
-    const from = Math.max(0, Math.min(lengthOf(at.seriesId, episodeId), start ?? 0));
     playedAt.set(episodeId, ++tick);
-    touched.add(at.seriesId);
+    touched.add(seriesId);
     host.patch({
       state: "opening",
       streamId: null,
@@ -579,11 +622,42 @@ export function createMockShows(host: MoviePlayerHost) {
       joiningLive: false,
       reconnect: null,
       onDemand: onDemand(episodeId, from, false),
+      finished: null,
     });
     await delay(700);
     if (host.current() !== mine) return;
-    playing(episodeId, from);
+    playing(episodeId, from, paused);
     startClock();
+  };
+
+  /** Up next, as the app's player has it: only from the episode open or
+   *  the one that just played to its end, which is marked watched; the
+   *  next opens from its start. Each next episode asked for is noted in
+   *  `__mockNextAsked`, for a driver to see none was after a drop. */
+  const playNextEpisode = async (fromId: number, nextId: number): Promise<void> => {
+    const g = globalThis as Record<string, unknown>;
+    g.__mockNextAsked = [...((g.__mockNextAsked as number[] | undefined) ?? []), nextId];
+    if (fromId === nextId) throw new Error("that is the episode playing");
+    const p = host.state();
+    const is = (o: OnDemandDto | null) => o?.kind === "episode" && o.id === fromId;
+    const allowed =
+      p.state === "playing" || p.state === "paused"
+        ? is(p.onDemand)
+        : p.state === "stopped" && is(p.finished);
+    if (!allowed) throw new Error("that episode is not the one playing");
+    const from = slotOf(fromId);
+    const at = slotOf(nextId);
+    if (!from || !at) throw new Error("no such episode");
+    watch(fromId, from.seriesId);
+    marksVersion++;
+    await open(nextId, at.seriesId, 0, p.state === "paused");
+  };
+
+  const playEpisode = async (episodeId: number, start: number | null): Promise<void> => {
+    const at = slotOf(episodeId);
+    if (!at) throw new Error("no such episode");
+    const from = Math.max(0, Math.min(lengthOf(at.seriesId, episodeId), start ?? 0));
+    await open(episodeId, at.seriesId, from, false);
   };
 
   return {
@@ -699,6 +773,7 @@ export function createMockShows(host: MoviePlayerHost) {
 
     /** Opens the episode from `start`, or from the start, as the app does. */
     playEpisode,
+    playNextEpisode,
 
     seekTo: async (seconds: number): Promise<void> => seek(seconds),
     seekRelative: (seconds: number): void => {

@@ -33,14 +33,18 @@ import { run, useApp, useDispatch } from "../store";
 import { TransportBar } from "./TransportBar";
 import { VideoFeedback } from "./VideoFeedback";
 import { PictureCorner } from "./PictureCorner";
+import { UpNextCard } from "./UpNextCard";
+import type { UpNext } from "../logic/upNext";
 
 export interface MiniControlsProps {
   /** What a single click on the picture does. Owned by the band, which also
    *  answers Enter and the click on a picture that is not playing yet. */
   onActivate: () => void;
+  /** Up next, whose card is drawn small here (App's useUpNext). */
+  upNext: UpNext;
 }
 
-export function MiniControls({ onActivate }: MiniControlsProps) {
+export function MiniControls({ onActivate, upNext }: MiniControlsProps) {
   const { player, mode } = useApp();
   const isMovie = isOnDemandKind(playingKind(player));
   const dispatch = useDispatch();
@@ -139,6 +143,9 @@ export function MiniControls({ onActivate }: MiniControlsProps) {
     >
       <VideoFeedback feedback={gestures.feedback} />
       <PictureCorner docked />
+      {/* Up next stays while the bar comes and goes: its buttons are what
+          the count is about. */}
+      <UpNextCard upNext={upNext} compact />
 
       {/* Every click inside the bar belongs to the control it hit. Without
           stopping it here, pausing would also count as a click on the

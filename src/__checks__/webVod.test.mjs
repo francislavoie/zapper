@@ -9,6 +9,7 @@ import {
   UNSTUCK_AFTER_S,
   PROGRESS_EVERY_MS,
   bufferedEnd,
+  carriedIndex,
   cueTimes,
   movedAt,
   needsData,
@@ -24,6 +25,7 @@ import {
   stuckTooOften,
   subtitleAfter,
   progressPath,
+  upNextAllowed,
   vodStreamUrl,
   watchBody,
 } from "../logic/webVod.ts";
@@ -180,4 +182,25 @@ test("a watch names the title it asks for: an episode or a movie, not both", () 
 test("a title's place is reported to its own kind's address", () => {
   assert.equal(progressPath({ kind: "episode", id: 7 }), "/api/vod/episodes/7/progress");
   assert.equal(progressPath({ kind: "movie", id: 7 }), "/api/vod/movies/7/progress");
+});
+
+test("Up next moves on only from the episode open or just finished", () => {
+  const ep = (id) => ({ kind: "episode", id });
+  assert.equal(upNextAllowed({ item: ep(101), state: "playing", finished: false }, 101), true);
+  assert.equal(upNextAllowed({ item: ep(101), state: "paused", finished: false }, 101), true);
+  assert.equal(upNextAllowed({ item: ep(101), state: "playing", finished: false }, 102), false);
+  assert.equal(upNextAllowed({ item: ep(101), state: "stopped", finished: true }, 101), true);
+  assert.equal(upNextAllowed({ item: ep(101), state: "stopped", finished: false }, 101), false);
+  assert.equal(upNextAllowed({ item: ep(101), state: "failed", finished: false }, 101), false);
+  assert.equal(upNextAllowed({ item: ep(101), state: "opening", finished: false }, 101), false);
+  assert.equal(upNextAllowed({ item: { kind: "movie", id: 101 }, state: "playing", finished: false }, 101), false);
+  assert.equal(upNextAllowed(null, 101), false);
+});
+
+test("the next episode keeps the sound and subtitles by language", () => {
+  const list = [{ lang: "eng" }, { lang: "fra" }];
+  assert.equal(carriedIndex("fra", list), 1);
+  assert.equal(carriedIndex("deu", list), null);
+  assert.equal(carriedIndex(null, list), null);
+  assert.equal(carriedIndex("eng", [{ lang: null }, { lang: "eng" }]), 1);
 });
