@@ -3,12 +3,29 @@
 //  - a keystroke aimed at a text field is left alone, except Ctrl+P;
 //  - Escape unwinds exactly one thing per press, never two.
 //
+// The mouse's back button walks the same list (logic/escape.ts), and with
+// nothing left open goes back through the tabs and rail choices visited, as
+// its forward button goes forward again (logic/navHistory.ts).
+//
 // "Ctrl" is the shortcut modifier: Command on a Mac (logic/keys.ts), where a
 // plain-letter shortcut also stands aside while Command or Control is held,
 // so ⌘F or ⌃T is never mistaken for F or T.
 
 import { useEffect, useRef } from "react";
-import { backend, capabilities } from "../backend";
+import { backend, backendKind, capabilities } from "../backend";
+import { escapeStep, type EscapeContext } from "../logic/escape";
+import {
+  MOUSE_BACK,
+  MOUSE_FORWARD,
+  SAME_PRESS_MS,
+  buttonLatch,
+  goBack,
+  goForward,
+  startHistory,
+  visit,
+  type NavHistory,
+  type Place,
+} from "../logic/navHistory";
 import { playNextEpisode, playPrevious, recordFromPlayer, runAction } from "../actions";
 import { focusSearch, typingInto } from "../focus";
 import { exitFullscreen, toggleFullscreen } from "../fullscreen";
@@ -27,6 +44,10 @@ import type { State } from "../store";
 import type { Action } from "../store";
 import type { Dispatch } from "react";
 
+/** Every event a side button's press can arrive as. All are cancelled; the
+ *  latch picks the one that acts. */
+const BUTTON_EVENTS = ["pointerdown", "mousedown", "pointerup", "mouseup", "auxclick"] as const;
+
 export function useGlobalKeys(
   state: State,
   dispatch: Dispatch<Action>,
@@ -39,6 +60,61 @@ export function useGlobalKeys(
   // Read when C is pressed, rather than listened again for every change of
   // the tracks or the settings it depends on.
   const latestSubtitles = useSubtitles();
+
+  // The tabs and rail choices visited, for the mouse's back and forward
+  // buttons once nothing is open (logic/navHistory.ts). Each place the
+  // store moves to is a step; a step taken by those buttons arrives where
+  // the history already is, and is not one.
+  const place: Place = {
+    section: state.section,
+    rail:
+      state.section === "movies"
+        ? state.movies.selection
+        : state.section === "shows"
+          ? state.shows.selection
+          : state.categoryId,
+  };
+  const nav = useRef<NavHistory>(startHistory(place));
+  useEffect(() => {
+    nav.current = visit(nav.current, { section: place.section, rail: place.rail });
+  }, [place.section, place.rail]);
+  const latch = useRef(buttonLatch());
+  /** When a side button last acted, on performance.now()'s clock. */
+  const lastButton = useRef(-Infinity);
+  const unwindRef = useRef<(via: "key" | "mouse") => void>(() => {});
+
+  // A browser's own Back — its toolbar button, Alt+Left, or a side button
+  // it acts on before the page can cancel it — would leave the app: the
+  // page is one history entry. So outside the desktop app a second entry is
+  // kept on top of it (pushed at the first press of anything, because
+  // Chromium's Back skips entries a page adds unprompted), and when Back
+  // takes it away it is put straight back and the app goes back a step
+  // instead. A side button that has already acted has its pop absorbed
+  // rather than acted on twice. The desktop app's webview has no history to
+  // go through, and cancelling the button is enough there.
+  useEffect(() => {
+    if (backendKind === "tauri") return;
+    let pushed = false;
+    const push = () => {
+      if (pushed) return;
+      pushed = true;
+      window.history.pushState({ zapper: "back" }, "");
+    };
+    const onPop = () => {
+      pushed = false;
+      push();
+      if (performance.now() - lastButton.current < SAME_PRESS_MS) return;
+      unwindRef.current("mouse");
+    };
+    window.addEventListener("pointerdown", push, true);
+    window.addEventListener("keydown", push, true);
+    window.addEventListener("popstate", onPop);
+    return () => {
+      window.removeEventListener("pointerdown", push, true);
+      window.removeEventListener("keydown", push, true);
+      window.removeEventListener("popstate", onPop);
+    };
+  }, []);
   const subtitles = useRef(latestSubtitles);
   subtitles.current = latestSubtitles;
   useEffect(() => {
@@ -57,6 +133,165 @@ export function useGlobalKeys(
       !state.menuOpen &&
       !state.videoMenu;
 
+    // What is open, for the Escape chain (logic/escape.ts).
+    const context = (): EscapeContext => ({
+      programmeMenu: state.programmeMenu !== null,
+      favouriteMenu: state.favouriteMenu !== null,
+      categoryMenu: state.categoryMenu !== null,
+      categoryOptions: state.categoryOptions !== null,
+      moviesMenu: state.movies.menu !== null,
+      showsMenu: state.shows.menu !== null,
+      videoMenu: state.videoMenu !== null,
+      menuOpen: state.menuOpen,
+      aboutOpen: state.aboutOpen,
+      updateOpen: state.updateOpen,
+      settingsOpen: state.settingsOpen,
+      paletteOpen: state.paletteOpen,
+      // Only while it shows: not behind the player, nor for a tab gone.
+      movieSheet:
+        state.mode === "browse" &&
+        state.section === "movies" &&
+        state.movies.sheetId !== null &&
+        moviesAvailable(state.movies.summary),
+      showSheet:
+        state.mode === "browse" &&
+        state.section === "shows" &&
+        state.shows.sheetId !== null &&
+        showsAvailable(state.shows.summary),
+      upNextCard: card !== null,
+      fullscreen: fullscreenNow(),
+      // A search belongs to the tab it was typed on.
+      query:
+        state.section === "movies"
+          ? state.movies.query !== ""
+          : state.section === "shows"
+            ? state.shows.query !== ""
+            : state.query !== "",
+      mode: state.mode,
+      playing: state.player.state !== "stopped",
+    });
+
+    /** Undoes the top-most thing, as Escape (`key`) or the mouse's back
+     *  button (`mouse`) does. */
+    const unwind = (via: "key" | "mouse") => {
+      const step = escapeStep(context(), via);
+      switch (step) {
+        case "programmeMenu":
+          dispatch({ type: "programmeMenu", menu: null });
+          break;
+        case "favouriteMenu":
+          dispatch({ type: "favouriteMenu", menu: null });
+          break;
+        case "categoryMenu":
+          dispatch({ type: "categoryMenu", menu: null });
+          break;
+        case "categoryOptions":
+          dispatch({ type: "categoryOptions", menu: null });
+          break;
+        case "moviesMenu":
+          dispatch({ type: "movies/menu", menu: null });
+          break;
+        case "showsMenu":
+          dispatch({ type: "shows/menu", menu: null });
+          break;
+        case "videoMenu":
+          // A submenu inside it that has focus closes itself first on
+          // Escape (see SubMenu).
+          dispatch({ type: "videoMenu", at: null });
+          break;
+        case "menu":
+          dispatch({ type: "menu", open: false });
+          break;
+        case "about":
+          dispatch({ type: "about", open: false });
+          break;
+        case "update":
+          dispatch({ type: "updateDialog", open: false });
+          break;
+        case "settings":
+          dispatch({ type: "settings", open: false });
+          break;
+        case "palette":
+          dispatch({ type: "palette", open: false });
+          break;
+        case "movieSheet":
+          dispatch({ type: "movies/sheet", id: null });
+          break;
+        case "showSheet":
+          dispatch({ type: "shows/sheet", id: null });
+          break;
+        case "upNextCard":
+          // Cancelled, and the player stays as it is. A second press goes
+          // on to the steps below.
+          if (card) dispatch({ type: "shows/upNextCancel", episodeId: card.episode.episodeId });
+          break;
+        case "fullscreen":
+          // Fullscreen is the one thing Escape means everywhere else on the
+          // desktop, so it is the whole meaning here: leave fullscreen and
+          // nothing more. Falling through to the mode steps made the first
+          // press swap the picture for the browse view while staying
+          // fullscreen. Overlays above still close first — they are on top.
+          void exitFullscreen()
+            .then(refreshFullscreen)
+            .catch((err: unknown) =>
+              dispatch({ type: "toast", text: `fullscreen: ${String(err)}` }),
+            );
+          break;
+        case "query":
+          if (state.section === "movies") dispatch({ type: "movies/query", text: "" });
+          else if (state.section === "shows") dispatch({ type: "shows/query", text: "" });
+          else dispatch({ type: "query", text: "" });
+          break;
+        case "browse":
+          dispatch({ type: "mode", mode: "browse" });
+          break;
+        case "watch":
+          dispatch({ type: "mode", mode: "watch" });
+          break;
+        case "history":
+          travel(goBack(nav.current));
+          break;
+        case "none":
+          break;
+      }
+    };
+
+    /** Goes to a place from the tab-and-rail history, or nowhere. */
+    const travel = (to: ReturnType<typeof goBack>) => {
+      if (!to) return;
+      nav.current = to.history;
+      const { section, rail } = to.place;
+      if (section !== state.section) dispatch({ type: "section", section });
+      if (section === "movies") {
+        if (rail !== state.movies.selection) dispatch({ type: "movies/select", id: rail });
+      } else if (section === "shows") {
+        if (rail !== state.shows.selection) dispatch({ type: "shows/select", id: rail });
+      } else if (rail !== state.categoryId) {
+        dispatch({ type: "selectCategory", id: rail });
+      }
+    };
+
+    // The mouse's back and forward buttons. A press can arrive as more than
+    // one event, and which ones differs between engines (see buttonLatch);
+    // each is cancelled whatever it is, so neither the webview nor a browser
+    // goes through its own history, and one of them acts.
+    const onButton = (e: MouseEvent) => {
+      if (e.button !== MOUSE_BACK && e.button !== MOUSE_FORWARD) return;
+      e.preventDefault();
+      const down = e.type === "mousedown" || e.type === "pointerdown";
+      if (!latch.current(down ? "down" : "up", e.button, e.timeStamp)) return;
+      lastButton.current = performance.now();
+      if (e.button === MOUSE_BACK) {
+        unwind("mouse");
+      } else if (escapeStep(context(), "mouse") === "history") {
+        // Forward re-takes the tab and rail steps Back undid. Not a sheet
+        // or the player: what Back closed stays closed, as a dismissed
+        // dialog does in a browser.
+        travel(goForward(nav.current));
+      }
+    };
+    unwindRef.current = unwind;
+
     const onKey = (e: KeyboardEvent) => {
       if (shortcutModifier(e, IS_MAC) && (e.key === "p" || e.key === "P")) {
         e.preventDefault();
@@ -74,90 +309,9 @@ export function useGlobalKeys(
       }
 
       if (e.key === "Escape") {
-        // One press, one dismissal, in the order things were stacked up. The
-        // toolbar's menu is the most recent thing anyone opened whenever it is
-        // open — it cannot be opened from behind a modal — so it unwinds first.
-        if (state.programmeMenu) {
-          // The guide's menu over a programme: a context menu, opened last.
-          dispatch({ type: "programmeMenu", menu: null });
-        } else if (state.favouriteMenu) {
-          // A context menu is always the most recent thing on screen: it
-          // cannot be opened from behind anything.
-          dispatch({ type: "favouriteMenu", menu: null });
-        } else if (state.categoryMenu) {
-          // The same, for the category rail's. Only one of the two can be
-          // open: each closes on any right-click outside itself.
-          dispatch({ type: "categoryMenu", menu: null });
-        } else if (state.categoryOptions) {
-          // The rail's options menu: also a menu, also opened last.
-          dispatch({ type: "categoryOptions", menu: null });
-        } else if (state.movies.menu) {
-          // The Movies list's sort or years menu.
-          dispatch({ type: "movies/menu", menu: null });
-        } else if (state.shows.menu) {
-          // The Shows list's.
-          dispatch({ type: "shows/menu", menu: null });
-        } else if (state.videoMenu) {
-          // The picture's menu: opened last, like the others. A submenu
-          // inside it that has focus closes itself first (see SubMenu).
-          dispatch({ type: "videoMenu", at: null });
-        } else if (state.menuOpen) {
-          dispatch({ type: "menu", open: false });
-        } else if (state.aboutOpen) {
-          dispatch({ type: "about", open: false });
-        } else if (state.updateOpen) {
-          // Above settings: the settings pane's "Check now" opens it there.
-          dispatch({ type: "updateDialog", open: false });
-        } else if (state.settingsOpen) {
-          dispatch({ type: "settings", open: false });
-        } else if (state.paletteOpen) {
-          dispatch({ type: "palette", open: false });
-        } else if (
-          state.mode === "browse" &&
-          state.section === "movies" &&
-          state.movies.sheetId !== null &&
-          moviesAvailable(state.movies.summary)
-        ) {
-          // A movie's Details, over the rail and the list: the first of the
-          // panes to go (and only while it shows, not behind the player).
-          dispatch({ type: "movies/sheet", id: null });
-        } else if (
-          state.mode === "browse" &&
-          state.section === "shows" &&
-          state.shows.sheetId !== null &&
-          showsAvailable(state.shows.summary)
-        ) {
-          // A show's sheet, the same way.
-          dispatch({ type: "shows/sheet", id: null });
-        } else if (card) {
-          // The Up next card, over the player: cancelled, and the player
-          // stays as it is. A second press goes on to the steps below.
-          dispatch({ type: "shows/upNextCancel", episodeId: card.episode.episodeId });
-        } else if (fullscreenNow()) {
-          // Fullscreen is the one thing Escape means everywhere else on the
-          // desktop, so it is the whole meaning here: leave fullscreen and
-          // nothing more. Falling through to the mode steps below made the
-          // first press swap the picture for the browse view while staying
-          // fullscreen. Overlays above still close first — they are on top.
-          void exitFullscreen()
-            .then(refreshFullscreen)
-            .catch((err: unknown) =>
-              dispatch({ type: "toast", text: `fullscreen: ${String(err)}` }),
-            );
-        } else if (state.section === "movies" && state.movies.query !== "") {
-          // A search belongs to the tab it was typed on.
-          dispatch({ type: "movies/query", text: "" });
-        } else if (state.section === "shows" && state.shows.query !== "") {
-          dispatch({ type: "shows/query", text: "" });
-        } else if (state.section !== "movies" && state.section !== "shows" && state.query !== "") {
-          dispatch({ type: "query", text: "" });
-        } else if (state.mode === "guide") {
-          dispatch({ type: "mode", mode: "browse" });
-        } else if (state.mode === "watch") {
-          dispatch({ type: "mode", mode: "browse" });
-        } else if (state.player.state !== "stopped") {
-          dispatch({ type: "mode", mode: "watch" });
-        }
+        // One press, one dismissal, in the order things were stacked up:
+        // logic/escape.ts, which the mouse's back button walks as well.
+        unwind("key");
         e.preventDefault();
         return;
       }
@@ -325,7 +479,13 @@ export function useGlobalKeys(
     };
 
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    // Captured, so a component that stops a click's propagation cannot
+    // keep the button from the window.
+    for (const type of BUTTON_EVENTS) window.addEventListener(type, onButton as EventListener, true);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      for (const type of BUTTON_EVENTS) window.removeEventListener(type, onButton as EventListener, true);
+    };
   }, [
     dispatch,
     state.mode,
@@ -338,6 +498,8 @@ export function useGlobalKeys(
     state.section,
     state.movies.menu,
     state.movies.sheetId,
+    state.movies.selection,
+    state.shows.selection,
     state.movies.query,
     state.movies.summary,
     state.shows.menu,

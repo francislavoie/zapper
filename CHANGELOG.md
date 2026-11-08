@@ -29,6 +29,7 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
 - Recordings shows the free space on the recordings disk.
 - Radio channels (sound, no picture) play.
 - A subtitles button on the player, remembered across channels and restarts (`C`).
+- The mouse's back and forward buttons move between screens, and sheets have a Back button.
 
 ### Changed
 
@@ -54,6 +55,8 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
 - Linux: quitting no longer triggers a crash report for `WebKitWebProcess`. Settings changed just
   before quitting are saved, and a playing movie resumes where it was.
 - Shows and watched marks work even while the channel list fails to sync.
+- Tooltips appear only on cut-off text, next to it; sheets open at the top and cover the rail's
+  resize handle.
 
 ## [0.3.0] - 2026-11-02
 
