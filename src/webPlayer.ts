@@ -94,6 +94,7 @@ const STOPPED: PlayerStateDto = {
 const NO_OPTIONS: PlayerOptionsDto = {
   audio: [],
   subtitles: [],
+  subtitlesVisible: false,
   aspect: "auto",
   deinterlace: "auto",
 };
@@ -748,7 +749,7 @@ function optionsOf(s: Session): PlayerOptionsDto {
     visualImpaired: t.described,
     selected: s.audioIndex === t.index,
   }));
-  return { audio, subtitles: [], aspect, deinterlace: "auto" };
+  return { audio, subtitles: [], subtitlesVisible: false, aspect, deinterlace: "auto" };
 }
 
 /** Another audio track: the service sends that one (converted if need be),

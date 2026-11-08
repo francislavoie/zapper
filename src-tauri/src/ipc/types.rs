@@ -349,6 +349,10 @@ pub enum DeinterlaceMode {
 pub struct PlayerOptionsDto {
     pub audio: Vec<TrackDto>,
     pub subtitles: Vec<TrackDto>,
+    /// Whether the subtitle track selected is shown (mpv's
+    /// `sub-visibility`). Subtitles turned off keep their track, hidden, so
+    /// turning them on again is never a switch of tracks.
+    pub subtitles_visible: bool,
     /// Kept for the session: mpv holds these across channel changes.
     pub aspect: AspectMode,
     pub deinterlace: DeinterlaceMode,

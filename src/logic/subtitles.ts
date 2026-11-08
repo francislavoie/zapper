@@ -2,16 +2,18 @@
 //
 // The settings keep whether subtitles are on (`subtitlesOn`) and the
 // language of the last track the viewer chose (`subtitleLanguage`). Every
-// open applies them once its tracks are known: off is none; on is the first
-// track in that language, else the first track. Choosing in the picture's
-// menu, the transport's toggle or with C is what changes them. The app's
-// player makes the same choice in Rust (`subtitle_choice` in
-// src-tauri/src/ipc/player_cmds.rs); the browser's and the mock's make it
-// here.
+// open applies them: it chooses the first track in that language, else the
+// first track, and shows it when subtitles are on and hides it when they are
+// off. Off is a hidden track, never no track: turning subtitles on again
+// must not switch tracks while a title plays, which makes the player go back
+// through the file. Choosing in the picture's menu, the transport's toggle
+// or with C is what changes them. The app's player makes the same choice in
+// Rust (`subtitle_choice` in src-tauri/src/ipc/player_cmds.rs); the
+// browser's and the mock's make it here.
 //
 // Pure. Checked in src/__checks__/subtitles.test.mjs.
 
-import type { SettingsDto, TrackDto } from "../types";
+import type { PlayerOptionsDto, SettingsDto, TrackDto } from "../types";
 import { isPictureSubtitle } from "./tracks.ts";
 
 export type SubtitlePreference = Pick<SettingsDto, "subtitlesOn" | "subtitleLanguage">;
@@ -52,31 +54,41 @@ export function preferredIndex<T extends SubtitleLike>(
 const showable = (pictures: boolean) => (t: Pick<TrackDto, "codec">) =>
   pictures || !isPictureSubtitle(t);
 
-/** The subtitle track an open shows under `pref`: its id, `null` for none,
- *  or `undefined` when it has nothing that could be shown (nothing to do). */
+/** The subtitle track an open chooses under `pref`, and whether it is
+ *  shown; `undefined` when it has nothing that could be shown (nothing to
+ *  do). */
 export function openChoice(
   pref: SubtitlePreference,
   tracks: readonly TrackDto[],
   pictures: boolean,
-): number | null | undefined {
-  if (!hasSubtitles(tracks, pictures)) return undefined;
-  if (!pref.subtitlesOn) return null;
+): { id: number; visible: boolean } | undefined {
   const i = preferredIndex(tracks, pref.subtitleLanguage, showable(pictures));
-  return i === null ? null : tracks[i].id;
+  return i === null ? undefined : { id: tracks[i].id, visible: pref.subtitlesOn };
 }
 
-/** What the toggle does: shown subtitles go off (`null`), hidden ones come
- *  on (the id to show, chosen as an open would). `undefined` when there is
- *  nothing to toggle. */
+/** What the toggle asks for, as `setSubtitleTrack` takes it: `null` hides
+ *  subtitles that show (the track is kept); the track chosen shows it again
+ *  (no switch); with none chosen, the one an open would choose. `undefined`
+ *  when there is nothing to toggle. */
 export function toggleChoice(
   tracks: readonly TrackDto[],
+  visible: boolean,
   language: string | null,
   pictures: boolean,
 ): number | null | undefined {
   if (!hasSubtitles(tracks, pictures)) return undefined;
-  if (subtitlesShowing(tracks)) return null;
+  const chosen = tracks.find((t) => t.selected);
+  if (chosen) return visible ? null : chosen.id;
   const i = preferredIndex(tracks, language, showable(pictures));
   return i === null ? undefined : tracks[i].id;
+}
+
+/** The subtitle track on screen: chosen and visible. `null` is what the
+ *  menu calls Off. */
+export function shownTrack(
+  o: Pick<PlayerOptionsDto, "subtitles" | "subtitlesVisible">,
+): TrackDto | null {
+  return o.subtitlesVisible ? (o.subtitles.find((t) => t.selected) ?? null) : null;
 }
 
 /** The standing choice after the viewer chose `track`, or Off with `null`:
@@ -97,8 +109,8 @@ export function hasSubtitles(tracks: readonly Pick<TrackDto, "codec">[], picture
 }
 
 /** Whether subtitles are showing: the toggle lit. */
-export function subtitlesShowing(tracks: readonly Pick<TrackDto, "selected">[]): boolean {
-  return tracks.some((t) => t.selected);
+export function subtitlesShowing(o: Pick<PlayerOptionsDto, "subtitles" | "subtitlesVisible">): boolean {
+  return shownTrack(o) !== null;
 }
 
 /** The toggle's tooltip: what pressing it does. */

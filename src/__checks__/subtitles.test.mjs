@@ -11,6 +11,7 @@ import {
   hasSubtitles,
   openChoice,
   preferredIndex,
+  shownTrack,
   subtitleTip,
   subtitlesShowing,
   toggleChoice,
@@ -74,28 +75,41 @@ test("turning subtitles on shows the language last chosen, else the first", () =
   assert.equal(preferredIndex([pictures[0]], "fra", (t) => t.codec !== "picture"), null);
 });
 
-test("every open applies the standing choice", () => {
+test("every open chooses a track, shown when subtitles are on and hidden when off", () => {
   const list = [track(1, { lang: "eng" }), track(2, { lang: "fra" })];
-  assert.equal(openChoice(on("fra"), list, true), 2);
-  assert.equal(openChoice(on("deu"), list, true), 1);
-  assert.equal(openChoice(off("fra"), list, true), null);
+  assert.deepEqual(openChoice(on("fra"), list, true), { id: 2, visible: true });
+  assert.deepEqual(openChoice(on("deu"), list, true), { id: 1, visible: true });
+  // Off: the track all the same, hidden, so on is never a switch of tracks.
+  assert.deepEqual(openChoice(off("fra"), list, true), { id: 2, visible: false });
   // No subtitles: nothing to do.
   assert.equal(openChoice(on("fra"), [], true), undefined);
   assert.equal(openChoice(off(), [], true), undefined);
   // Pictures where pictures cannot be shown: as good as none.
   const pictures = [track(1, { lang: "fra", codec: "dvb_subtitle" })];
   assert.equal(openChoice(on("fra"), pictures, false), undefined);
-  assert.equal(openChoice(on("fra"), pictures, true), 1);
+  assert.deepEqual(openChoice(on("fra"), pictures, true), { id: 1, visible: true });
 });
 
-test("the toggle turns shown subtitles off, and hidden ones on", () => {
-  const list = [track(1, { lang: "eng" }), track(2, { lang: "fra" })];
-  assert.equal(toggleChoice(list, "fra", true), 2);
-  assert.equal(toggleChoice(list, null, true), 1);
-  const showing = [track(1, { lang: "eng" }), track(2, { lang: "fra", selected: true })];
-  assert.equal(toggleChoice(showing, "fra", true), null);
-  assert.equal(toggleChoice([], "fra", true), undefined);
-  assert.equal(toggleChoice([track(1, { codec: "hdmv_pgs_subtitle" })], null, false), undefined);
+test("the toggle shows and hides the track chosen, and switches only when there is none", () => {
+  const chosen = [track(1, { lang: "eng" }), track(2, { lang: "fra", selected: true })];
+  // Shown: hidden (null is Off, which keeps the track).
+  assert.equal(toggleChoice(chosen, true, "eng", true), null);
+  // Hidden: the same track shown again, whatever the language now wanted.
+  assert.equal(toggleChoice(chosen, false, "eng", true), 2);
+  // None chosen (an open from before, say): the one an open would choose.
+  const none = [track(1, { lang: "eng" }), track(2, { lang: "fra" })];
+  assert.equal(toggleChoice(none, false, "fra", true), 2);
+  assert.equal(toggleChoice(none, true, null, true), 1);
+  assert.equal(toggleChoice([], false, "fra", true), undefined);
+  assert.equal(toggleChoice([track(1, { codec: "hdmv_pgs_subtitle" })], false, null, false), undefined);
+});
+
+test("the menu shows the track only while it is visible", () => {
+  const chosen = [track(1, { lang: "eng" }), track(2, { lang: "fra", selected: true })];
+  assert.equal(shownTrack({ subtitles: chosen, subtitlesVisible: true })?.id, 2);
+  // Off in the menu is a hidden track.
+  assert.equal(shownTrack({ subtitles: chosen, subtitlesVisible: false }), null);
+  assert.equal(shownTrack({ subtitles: [track(1, {})], subtitlesVisible: true }), null);
 });
 
 test("choosing in the menu, or with the toggle, is the new standing choice", () => {
@@ -112,8 +126,10 @@ test("the button is there only with subtitles to show, lit while they show", () 
   assert.equal(hasSubtitles([track(1, { lang: "eng" })], true), true);
   assert.equal(hasSubtitles([track(1, { codec: "dvb_subtitle" })], false), false);
   assert.equal(hasSubtitles([track(1, { codec: "dvb_subtitle" })], true), true);
-  assert.equal(subtitlesShowing([track(1, {})]), false);
-  assert.equal(subtitlesShowing([track(1, {}), track(2, { selected: true })]), true);
+  const chosen = [track(1, {}), track(2, { selected: true })];
+  assert.equal(subtitlesShowing({ subtitles: [track(1, {})], subtitlesVisible: true }), false);
+  assert.equal(subtitlesShowing({ subtitles: chosen, subtitlesVisible: true }), true);
+  assert.equal(subtitlesShowing({ subtitles: chosen, subtitlesVisible: false }), false);
   assert.match(subtitleTip(false), /^Subtitles \(C\)$/);
   assert.match(subtitleTip(true), /^Subtitles off \(C\)$/);
 });

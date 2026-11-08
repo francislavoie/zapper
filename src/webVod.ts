@@ -128,8 +128,11 @@ interface Session {
   tracks: Track[];
   audioIndex: number | null;
   subtitles: Subtitle[];
-  /** The subtitle track shown: its place in `subtitles`. */
+  /** The subtitle track chosen: its place in `subtitles`. */
   subtitle: number | null;
+  /** Whether it is shown. Subtitles turned off keep their track, hidden, so
+   *  turning them on is never a switch (which reads the cues afresh). */
+  subtitlesShown: boolean;
   /** The current reading of the stream, numbered so that a late event from
    *  an older one is ignored. */
   reading: number;
@@ -195,10 +198,9 @@ export function setSubtitlePreference(p: SubtitlePreference) {
   subtitlePref = { subtitlesOn: p.subtitlesOn, subtitleLanguage: p.subtitleLanguage };
 }
 
-/** The place in `subtitles` the standing choice shows: text only, since
- *  pictures can't be shown here. */
+/** The place in `subtitles` of the track the standing choice chooses, shown
+ *  or hidden as it says: text only, since pictures can't be shown here. */
 function preferredSubtitle(subtitles: readonly Subtitle[]): number | null {
-  if (!subtitlePref.subtitlesOn) return null;
   return preferredIndex(
     subtitles.map((t) => ({ lang: t.language, text: t.text })),
     subtitlePref.subtitleLanguage,
@@ -309,8 +311,10 @@ function playItem(item: VodItemRef, start: number | null): Promise<void> {
 interface Keep {
   audio: number | null;
   subtitle: number | null;
+  /** Whether `subtitle` is shown; shown when not said. */
+  shown?: boolean;
   /** A title opened anew: the standing subtitle choice, in place of
-   *  `subtitle`, once its tracks are known. */
+   *  `subtitle` and `shown`, once its tracks are known. */
   preferred?: boolean;
   duration: number | null;
   wantPlay: boolean;
@@ -333,7 +337,13 @@ async function watch(item: VodItemRef, from: number, keep: Keep): Promise<void> 
   const replaces = leave() ?? takeLive();
   const my = ++seq;
   noticeFeed.set({ recording: null, silent: null });
-  optionsFeed.set({ audio: [], subtitles: [], aspect: currentAspect(), deinterlace: "auto" });
+  optionsFeed.set({
+    audio: [],
+    subtitles: [],
+    subtitlesVisible: false,
+    aspect: currentAspect(),
+    deinterlace: "auto",
+  });
   patch({
     state: "opening",
     streamId: null,
@@ -374,6 +384,7 @@ async function watch(item: VodItemRef, from: number, keep: Keep): Promise<void> 
   // A title opened anew shows the subtitles the settings say (only text
   // subtitles can be shown); one watched again keeps what it had.
   const subtitle = keep.preferred ? preferredSubtitle(subtitles) : keep.subtitle;
+  const subtitlesShown = keep.preferred ? subtitlePref.subtitlesOn : (keep.shown ?? true);
   const s: Session = {
     item,
     viewer: a.viewer,
@@ -384,6 +395,7 @@ async function watch(item: VodItemRef, from: number, keep: Keep): Promise<void> 
     audioIndex: a.audioIndex ?? null,
     subtitles,
     subtitle: subtitle !== null && subtitles[subtitle]?.text ? subtitle : null,
+    subtitlesShown,
     reading: 0,
     from,
     start: null,
@@ -410,6 +422,7 @@ async function watch(item: VodItemRef, from: number, keep: Keep): Promise<void> 
       await watch(item, from, {
         audio: carried.audio,
         subtitle: s.subtitle,
+        shown: s.subtitlesShown,
         duration: s.duration,
         wantPlay: keep.wantPlay,
       });
@@ -804,6 +817,7 @@ async function rewatch(s: Session) {
   await watch(s.item, s.position, {
     audio: s.audioIndex,
     subtitle: s.subtitle,
+    shown: s.subtitlesShown,
     duration: s.duration,
     wantPlay: el ? !el.paused || !s.started : true,
   });
@@ -964,6 +978,7 @@ export async function togglePause(): Promise<void> {
     await watch(s.item, s.position, {
       audio: s.audioIndex,
       subtitle: s.subtitle,
+      shown: s.subtitlesShown,
       duration: s.duration,
       wantPlay: true,
     });
@@ -1039,7 +1054,13 @@ function optionsOf(s: Session): PlayerOptionsDto {
     visualImpaired: false,
     selected: s.subtitle === i,
   }));
-  return { audio, subtitles, aspect: currentAspect(), deinterlace: "auto" };
+  return {
+    audio,
+    subtitles,
+    subtitlesVisible: s.subtitlesShown,
+    aspect: currentAspect(),
+    deinterlace: "auto",
+  };
 }
 
 /** Another sound: a remux reads the film again from where it is, with that
@@ -1056,6 +1077,7 @@ export async function setAudioTrack(id: number): Promise<PlayerOptionsDto> {
     await watch(s.item, s.position, {
       audio: index,
       subtitle: s.subtitle,
+      shown: s.subtitlesShown,
       duration: s.duration,
       wantPlay: playing || s.released,
     });
@@ -1067,8 +1089,10 @@ export async function setAudioTrack(id: number): Promise<PlayerOptionsDto> {
   return optionsFeed.last;
 }
 
-/** Shows subtitle track `id`, or none with `null`. Pictures can't be. The
- *  viewer's choice is the standing one from now (the settings follow). */
+/** Shows subtitle track `id`, or hides subtitles with `null` (the track is
+ *  kept, its cues hidden rather than removed). Showing the track chosen is
+ *  not a switch. Pictures can't be shown. The viewer's choice is the
+ *  standing one from now (the settings follow). */
 export async function setSubtitleTrack(id: number | null): Promise<PlayerOptionsDto> {
   const s = session;
   if (!s) return optionsFeed.last;
@@ -1078,11 +1102,16 @@ export async function setSubtitleTrack(id: number | null): Promise<PlayerOptions
     index === null ? null : { lang: s.subtitles[index].language },
     subtitlePref,
   );
-  s.subtitle = index;
-  resetCues(s);
+  s.subtitlesShown = index !== null;
+  if (index !== null && index !== s.subtitle) {
+    s.subtitle = index;
+    resetCues(s);
+    if (s.started && s.pausedAt === null) void askCues(s);
+  } else {
+    showCues(s);
+  }
   const o = optionsOf(s);
   optionsFeed.set(o);
-  if (index !== null && s.started && s.pausedAt === null) void askCues(s);
   return o;
 }
 
@@ -1114,8 +1143,13 @@ function clearSubtitles() {
 function resetCues(s: Session) {
   clearSubtitles();
   s.cues = { lastEnd: null, held: new Set(), askedAt: 0, asking: false };
+  showCues(s);
+}
+
+/** The track's cues shown, or hidden (kept) while subtitles are off. */
+function showCues(s: Session) {
   const el = currentVideo();
-  if (el && s.subtitle !== null) textTrack(el).mode = "showing";
+  if (el && s.subtitle !== null) textTrack(el).mode = s.subtitlesShown ? "showing" : "hidden";
 }
 
 /** Asks for the chosen track's cues that end after those held, and puts
@@ -1145,7 +1179,7 @@ async function askCues(s: Session) {
   const still = session === s && s.reading === reading && s.subtitle === index && s.cues === cues;
   if (doc === null || !still || start === null) return;
   const track = textTrack(el);
-  track.mode = "showing";
+  track.mode = s.subtitlesShown ? "showing" : "hidden";
   for (const c of parseVtt(doc)) {
     const key = `${c.start}|${c.end}|${c.text}`;
     cues.lastEnd = Math.max(cues.lastEnd ?? c.end, c.end);

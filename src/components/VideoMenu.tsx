@@ -35,6 +35,7 @@ import { usePlayerRecord } from "../hooks/usePlayerRecord";
 import { PlayerRecordItems } from "./PlayerRecord";
 import { useSleepLeft } from "../hooks/useSleep";
 import { useSubtitles } from "../hooks/useSubtitles";
+import { shownTrack } from "../logic/subtitles";
 import { SleepItems, SleepSubMenu } from "./SleepMenu";
 import { CheckItem, RadioItem, SubMenu } from "./SubMenu";
 
@@ -53,6 +54,7 @@ export function VideoMenu({ menu, onClose }: VideoMenuProps) {
   const record = usePlayerRecord();
   // A choice here is the standing one: every open after shows the same.
   const subtitles = useSubtitles();
+  const shown = shownTrack(options);
 
   /** Every choice closes the menu: it has been answered. The new state comes
    *  back from the command and is applied at once, rather than a heartbeat
@@ -115,9 +117,11 @@ export function VideoMenu({ menu, onClose }: VideoMenuProps) {
       ) : null}
 
       {options.subtitles.length > 0 ? (
-        <SubMenu label="Subtitles" value={selectedLabel(options.subtitles) ?? "Off"}>
+        // Off is a hidden track (it stays chosen, so showing it again is not
+        // a switch): only the track on screen is ticked.
+        <SubMenu label="Subtitles" value={shown ? selectedLabel(options.subtitles) ?? "Off" : "Off"}>
           <RadioItem
-            checked={!options.subtitles.some((t) => t.selected)}
+            checked={!shown}
             label="Off"
             onSelect={() => choose("subtitles", subtitles.choose(null))}
           />
@@ -126,7 +130,7 @@ export function VideoMenu({ menu, onClose }: VideoMenuProps) {
             return (
               <RadioItem
                 key={t.id}
-                checked={t.selected}
+                checked={shown?.id === t.id}
                 label={l.label}
                 detail={l.detail}
                 disabled={!capabilities.pictureSubtitles && isPictureSubtitle(t)}
