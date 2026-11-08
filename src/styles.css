@@ -7373,10 +7373,15 @@ html[data-backend="web"] {
   gap: 0.875rem;
 }
 
+/* A poster is as tall as the band, but no wider than about a third of it and
+   never huge: a large picture makes the band tall and narrow, and an
+   uncapped poster would take the room its text and actions need. */
 .band-thumb {
   position: relative;
   flex: 0 0 auto;
   height: 100%;
+  max-height: min(16rem, 45cqw);
+  align-self: flex-start;
   aspect-ratio: 2 / 3;
   border-radius: 0.25rem;
   overflow: hidden;
