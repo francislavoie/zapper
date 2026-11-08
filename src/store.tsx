@@ -107,7 +107,7 @@ export interface CategoryMenu {
 export interface VideoMenu {
   x: number;
   y: number;
-  only?: "audio" | "sleep";
+  only?: "audio" | "sleep" | "subtitles";
   anchor?: HTMLElement | null;
   keyboard?: boolean;
   /** Opens upwards from `y`: from a control at the bottom of the picture. */
