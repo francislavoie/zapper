@@ -343,6 +343,11 @@ export const webBackend: typeof api = {
   playingEpisode: (episodeId) =>
     get<PlayingEpisodeDto>(`/api/vod/episodes/${episodeId}`),
 
+  continueWatching: notHere,
+  removeFromContinue: notHere,
+  movieMarks: notHere,
+  episodeMarks: notHere,
+
   activityRows: notHere,
   importActivity: notHere,
   exportBackup: notHere,

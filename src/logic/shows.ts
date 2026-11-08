@@ -26,11 +26,14 @@ import {
   type YearRange,
 } from "./movies.ts";
 import type { FixedRailItem } from "./railItems.ts";
+import { progressOf } from "./resume.ts";
 import { OVERSCAN, computeWindow } from "./virtual.ts";
 
 export const SHOW_FAVOURITES = "*favourites*";
 export const SHOW_RECENT = "*added*";
 export const SHOW_WATCHED = "*watched*";
+/** Continue watching's id on both tabs (continueWatching.ts's `CONTINUE`). */
+const CONTINUE_ID = "*continue*";
 
 export function showRailKind(id: string): MovieRailKind {
   switch (id) {
@@ -65,8 +68,16 @@ const countText = (n: number | null | undefined) => (n ? n.toLocaleString() : ""
 
 /** The rail's own items, in order. A count is blank until there is something
  *  to count. */
-export function fixedShowItems(s: ShowsSummaryDto | null): FixedRailItem[] {
+export function fixedShowItems(
+  s: ShowsSummaryDto | null,
+  continueCount?: number | null,
+): FixedRailItem[] {
+  const first: FixedRailItem[] =
+    continueCount === undefined || continueCount === null
+      ? []
+      : [{ id: CONTINUE_ID, name: "Continue watching", count: countText(continueCount) }];
   return [
+    ...first,
     { id: SHOW_FAVOURITES, name: "Favourites", count: countText(s?.favourites) },
     { id: SHOW_RECENT, name: "Recently added", count: countText(s?.recent) },
     { id: SHOW_WATCHED, name: "Watched", count: countText(s?.watched) },
@@ -148,6 +159,7 @@ export function showCard(s: SeriesDto, now: number): PosterCard {
     meta: showFacts(s),
     watched: s.watched,
     favourite: s.favourite,
+    progress: null,
   };
 }
 
@@ -252,16 +264,13 @@ export function firstSeason(d: SeriesDetailsDto): number | null {
   return next?.season ?? (d.seasons.find((s) => s.number !== 0) ?? d.seasons[0])?.number ?? null;
 }
 
-/** How far into an episode it was left, 0–1, while it is in progress
- *  (1 %–92 %, as catalog/vod_progress.rs has it); `null` otherwise: not
- *  started, watched, or of no known length. */
+/** How far into an episode it was left, 0-1, while it is in progress
+ *  (1 %-92 %, see resume.ts); `null` otherwise: not started, watched, or of
+ *  no known length. */
 export function episodeProgress(
   e: Pick<EpisodeDto, "watched" | "position" | "duration" | "durationSecs">,
 ): number | null {
-  const length = e.duration ?? e.durationSecs;
-  if (e.watched || e.position === null || !length || length <= 0) return null;
-  const f = e.position / length;
-  return f >= 0.01 && f < 0.92 ? f : null;
+  return progressOf({ ...e });
 }
 
 /** An episode row's height in the episode pane, in pixels: a 40-pixel

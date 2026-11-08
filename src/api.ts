@@ -18,6 +18,8 @@ import {
   type PlayerOptionsDto,
   type AspectMode,
   type ConnectionsDto,
+  type ContinueItemDto,
+  type ContinueKind,
   type MarksDto,
   type MovieDetailsDto,
   type MovieDto,
@@ -102,12 +104,14 @@ export const api = {
   togglePause: () => invoke<void>("toggle_pause"),
   seekRelative: (seconds: number) => invoke<void>("seek_relative", { seconds }),
   seekLive: () => invoke<void>("seek_live"),
-  /** Plays a movie, from `start` seconds or, with `null`, from the start. */
-  playMovie: (movieId: number, start: number | null) =>
-    invoke<void>("play_movie", { movieId, start }),
-  /** Plays an episode, from `start` seconds or, with `null`, from the start. */
-  playEpisode: (episodeId: number, start: number | null) =>
-    invoke<void>("play_episode", { episodeId, start }),
+  /** Plays a movie, from `start` seconds or, with `null`, from the start.
+   *  `held` opens it paused there, for a question to be asked. */
+  playMovie: (movieId: number, start: number | null, held = false) =>
+    invoke<void>("play_movie", { movieId, start, held }),
+  /** Plays an episode, from `start` seconds or, with `null`, from the start.
+   *  `held` opens it paused there, for a question to be asked. */
+  playEpisode: (episodeId: number, start: number | null, held = false) =>
+    invoke<void>("play_episode", { episodeId, start, held }),
   /** Up next: moves on from the episode playing, or the one that just played
    *  to its end, to the next, from its start, marking the first watched.
    *  Refused once anything else is open, after a drop, or after a stop. */
@@ -207,6 +211,16 @@ export const api = {
     }),
   setEpisodeMarks: (episodeId: number, watched: boolean) =>
     invoke<MarksDto>("set_episode_marks", { episodeId, watched }),
+  /** Continue watching, newest first: movies and episodes in progress and the
+   *  next episode of shows being followed, one entry per movie and show. */
+  continueWatching: (limit: number) => invoke<ContinueItemDto[]>("continue_watching", { limit }),
+  /** Takes a movie or a show out of Continue watching. */
+  removeFromContinue: (kind: ContinueKind, id: number) =>
+    invoke<void>("remove_from_continue", { kind, id }),
+  /** A movie's marks and where it was left, as the catalogue has them now. */
+  movieMarks: (movieId: number) => invoke<MarksDto>("movie_marks", { movieId }),
+  /** An episode's marks and where it was left, as the catalogue has them now. */
+  episodeMarks: (episodeId: number) => invoke<MarksDto>("episode_marks", { episodeId }),
   playingEpisode: (episodeId: number) =>
     invoke<PlayingEpisodeDto>("playing_episode", { episodeId }),
 
