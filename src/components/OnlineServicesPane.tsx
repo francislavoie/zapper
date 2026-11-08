@@ -1,7 +1,7 @@
 // Settings › Online services: one group per service, each with its switch and
 // a line on what it sends. Off means no request to that service at all.
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { backend } from "../backend";
 import { errorMessage } from "../logic/async";
 import {
@@ -54,6 +54,9 @@ export function OnlineServicesPane({ standing = null }: { standing?: string | nu
   const { status, reload, set } = useOnlineServices();
   const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState(false);
+  // Read afresh each time the pane opens: the account's downloads left
+  // change with every download, here or on another device.
+  useEffect(() => reload(), [reload]);
 
   if (status.status !== "ready") {
     return status.status === "error" ? (

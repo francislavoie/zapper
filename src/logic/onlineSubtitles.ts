@@ -14,6 +14,7 @@
 
 import type {
   KeptSubtitleDto,
+  OnlineServicesDto,
   OpenSubtitlesStatusDto,
   SubtitleDownloadDto,
   SubtitleResultDto,
@@ -149,6 +150,48 @@ export function offeredDownloads(
   tracks: readonly Pick<TrackDto, "title" | "lang">[],
 ): KeptSubtitleDto[] {
   return kept.filter((k) => keptTrack(k, tracks) === undefined);
+}
+
+/** The online-services state after a download's answer: the downloads left,
+ *  and whether the sign-in still works. The same object when nothing
+ *  changes. */
+export function servicesAfterDownload(
+  s: OnlineServicesDto,
+  d: SubtitleDownloadDto,
+): OnlineServicesDto {
+  const os = s.openSubtitles;
+  let next: OpenSubtitlesStatusDto = os;
+  switch (d.kind) {
+    case "downloaded":
+      if (d.downloadsLeft !== null) {
+        next = { ...os, downloadsLeft: d.downloadsLeft, downloadsResetAt: null, signInRefused: false };
+      } else if (os.signInRefused) {
+        next = { ...os, signInRefused: false };
+      }
+      break;
+    case "quota":
+      next = { ...os, downloadsLeft: 0, downloadsResetAt: d.resetAt };
+      break;
+    case "signIn":
+      next = d.refused
+        ? { ...os, signInRefused: true }
+        : { ...os, signedInAs: null, signInRefused: false, downloadsLeft: null, downloadsResetAt: null };
+      break;
+    case "busy":
+    case "off":
+      break;
+  }
+  return next === os ? s : { ...s, openSubtitles: next };
+}
+
+/** What the finder says when a download needs a sign-in. `email` when the
+ *  one refused was an email address, which OpenSubtitles doesn't take. */
+export function signInPrompt(refused: boolean, email: boolean): string {
+  if (!refused) return "Downloads need your OpenSubtitles account. Searching doesn't.";
+  const lost = "OpenSubtitles no longer accepts the account signed in here.";
+  return email
+    ? `${lost} It signs in with your username, not your email address.`
+    : `${lost} Sign in again to download.`;
 }
 
 function downloadCount(n: number): string {
