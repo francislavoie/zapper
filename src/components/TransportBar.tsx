@@ -6,7 +6,8 @@
 // The order of the row is not arbitrary:
 //
 //   play/pause · stop · volume + slider · compressor ·· skip back ·
-//   skip forward · live · buffered ··· sleep · audio · browse … fullscreen
+//   skip forward · live · buffered ··· sleep · audio · subtitles · browse …
+//   fullscreen
 //
 // Play and stop lead, because they are the two things anybody reaches for
 // without looking, and both sit left of the volume control. Volume and the
@@ -30,12 +31,16 @@
 // Browse is the caller's to offer (`onBrowse`) and the docked picture does
 // not: "browse without stopping" is where you already are.
 //
-// Two controls come and go. The moon is there only while a sleep timer is
-// set, and says how long is left; the audio button only when the stream has
-// more than one audio track. Both open the matching part of the picture's
-// right-click menu, so there is one set of choices and two ways to them.
-// They sit right of the spring, with the things that are about this
-// stream rather than about where in it you are.
+// Three controls come and go. The moon is there only while a sleep timer
+// is set, and says how long is left; the audio button only when the stream
+// has more than one audio track. Both open the matching part of the
+// picture's right-click menu, so there is one set of choices and two ways to
+// them. The subtitles toggle is there when the stream has subtitles that can
+// be shown, and is lit while they show: a press turns them off, or on in the
+// language last chosen (hooks/useSubtitles.ts), and the choice holds for
+// every channel and title opened after. They sit right of the spring, with
+// the things that are about this stream rather than about where in it you
+// are.
 
 import type { MouseEvent, RefObject } from "react";
 import { backend } from "../backend";
@@ -46,6 +51,8 @@ import { hasAudioChoice, selectedLabel } from "../logic/tracks";
 import { VOD_SKIP_SECONDS, isOnDemandKind, vodLabel } from "../logic/vodTransport";
 import { run, useApp, useDispatch } from "../store";
 import { useSleepLeft } from "../hooks/useSleep";
+import { useSubtitles } from "../hooks/useSubtitles";
+import { subtitleTip } from "../logic/subtitles";
 import {
   AudioTracks,
   CompressorOff,
@@ -58,6 +65,7 @@ import {
   SkipBack,
   SkipForward,
   Stop,
+  Subtitles,
 } from "./icons";
 import { Scrubber } from "./Scrubber";
 import { VodScrubber } from "./VodScrubber";
@@ -98,6 +106,7 @@ export function TransportBar({
   const { player, nowChannel, options, videoMenu } = useApp();
   const dispatch = useDispatch();
   const sleepLeft = useSleepLeft();
+  const subtitles = useSubtitles();
 
   /** Opens one part of the picture's menu above a control, or closes it if
    *  that control's menu is the one open. */
@@ -278,6 +287,21 @@ export function TransportBar({
             onClick={openMenu("audio")}
           >
             <AudioTracks className="i" />
+          </button>
+        ) : null}
+
+        {subtitles.available ? (
+          <button
+            className={`ctl icon subtitles-toggle ${subtitles.showing ? "on" : ""}`}
+            data-tip={subtitleTip(subtitles.showing)}
+            aria-label="Subtitles"
+            aria-pressed={subtitles.showing}
+            onClick={() => {
+              onActivity();
+              subtitles.toggle();
+            }}
+          >
+            <Subtitles className="i" />
           </button>
         ) : null}
 

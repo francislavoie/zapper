@@ -31,6 +31,7 @@ import {
   type CategorySort,
 } from "./categoryOrder.ts";
 import { LIVE_START_CHOICES, TIME_FORMAT_LABEL, clampSettings } from "./settings.ts";
+import { languageName } from "./tracks.ts";
 
 export const BACKUP_FORMAT = "zapper-backup";
 export const BACKUP_VERSION = 1;
@@ -91,7 +92,8 @@ export type ParseResult =
   | { ok: true; backup: ParsedBackup; warnings: string[] }
   | { ok: false; error: string };
 
-type Kind = "number" | "boolean" | "string";
+/** `"language"` is a string, or null for none. */
+type Kind = "number" | "boolean" | "string" | "language";
 
 /** Every setting and its type. A `Record` over the DTO's keys, so a setting
  *  added to the contract and not here is a compile error, not a field that
@@ -108,6 +110,8 @@ const SETTING_KINDS: Record<Exclude<keyof SettingsDto, "subtitle">, Kind> = {
   timeFormat: "string",
   liveStart: "string",
   simultaneousStreams: "number",
+  subtitlesOn: "boolean",
+  subtitleLanguage: "language",
 };
 
 const SUBTITLE_KINDS: Record<keyof SubtitleStyleDto, Kind> = {
@@ -126,7 +130,18 @@ const isObject = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
 
 const fits = (v: unknown, kind: Kind) =>
-  kind === "number" ? typeof v === "number" && Number.isFinite(v) : typeof v === kind;
+  kind === "number"
+    ? typeof v === "number" && Number.isFinite(v)
+    : kind === "language"
+      ? v === null || typeof v === "string"
+      : typeof v === kind;
+
+const KIND_WORDS: Record<Kind, string> = {
+  number: "a number",
+  boolean: "a boolean",
+  string: "a string",
+  language: "a string or null",
+};
 
 function readFields<K extends string>(
   raw: Record<string, unknown>,
@@ -138,7 +153,7 @@ function readFields<K extends string>(
   for (const key of Object.keys(kinds) as K[]) {
     if (!(key in raw)) continue;
     if (fits(raw[key], kinds[key])) out[key] = raw[key];
-    else warnings.push(`Skipped ${prefix}${key}: not a ${kinds[key]}.`);
+    else warnings.push(`Skipped ${prefix}${key}: not ${KIND_WORDS[kinds[key]]}.`);
   }
   return out;
 }
@@ -327,6 +342,8 @@ const SETTING_LABELS: Record<Exclude<keyof SettingsDto, "subtitle">, [string, (v
     (v: string) => LIVE_START_CHOICES.find((c) => c.value === v)?.label ?? v,
   ],
   simultaneousStreams: ["Simultaneous streams", (v: number) => String(v)],
+  subtitlesOn: ["Subtitles", onOff],
+  subtitleLanguage: ["Subtitle language", (v: string | null) => languageName(v) ?? "none"],
 };
 
 const SUBTITLE_LABELS: Record<keyof SubtitleStyleDto, [string, (v: never) => string]> = {

@@ -152,6 +152,12 @@ impl Player {
         if let Err(e) = mpv.observe_property("track-list", libmpv2::Format::String, 0) {
             tracing::warn!("could not observe the track list: {e}");
         }
+        // The subtitle on screen with its ASS tags: where a closed caption
+        // sits on its grid (`ipc::captions`). Not fatal: captions are then
+        // drawn at the bottom, centred.
+        if let Err(e) = mpv.observe_property("sub-text/ass", libmpv2::Format::String, 1) {
+            tracing::warn!("could not observe the subtitle text: {e}");
+        }
 
         let mpv: &'static Mpv = Box::leak(Box::new(mpv));
         MPV.set(mpv)
@@ -329,6 +335,9 @@ pub enum Signal {
     },
     /// mpv's `track-list`, as JSON, after it changed.
     Tracks(String),
+    /// mpv's `sub-text/ass`: the subtitle on screen, with its ASS tags,
+    /// after it changed. Never logged: it is what is being said.
+    SubText(String),
     /// A warning or error mpv logged. Only ever read for the clues in
     /// `ipc::ending`, and never logged or shown: the text can carry the
     /// stream URL, and with it the account.
@@ -359,6 +368,11 @@ pub fn signal_of(ev: libmpv2::Result<libmpv2::events::Event<'_>>) -> Option<Sign
             change: libmpv2::events::PropertyData::Str(json),
             ..
         }) => Some(Signal::Tracks(json.to_owned())),
+        Ok(Event::PropertyChange {
+            name: "sub-text/ass",
+            change: libmpv2::events::PropertyData::Str(text),
+            ..
+        }) => Some(Signal::SubText(text.to_owned())),
         Ok(Event::LogMessage { text, .. }) => Some(Signal::Log(text.to_owned())),
         Ok(Event::QueueOverflow) => {
             tracing::warn!("mpv event queue overflowed; some state changes were lost");

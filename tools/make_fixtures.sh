@@ -22,6 +22,10 @@
 #                                            some providers send instead of a channel that is
 #                                            off the air (fake_stream.py --placeholder)
 #   radio.ts        no video,          aac   a radio channel: sound alone
+#   captions169.ts  mpeg2 1280x720 16:9, aac   30 s with closed captions (CEA-608): one top
+#                                            left, one centred at the bottom, one on the right
+#                                            (tools/cc608.py); all the text is made up
+#   captions43.ts   mpeg2 720x540 4:3,  aac   the same on a 4:3 picture
 set -euo pipefail
 
 dir=${ZAPPER_FIXTURES:-$HOME/.cache/zapper/fixtures}
@@ -124,6 +128,35 @@ placeholder() {
 }
 
 placeholder
+
+# captioned <name> <size> <aspect>
+# A channel with closed captions in the picture, as a North American broadcast
+# carries them: MPEG-2 with no B-frames, the captions put in by tools/cc608.py,
+# then MPEG-TS with a silent sound track. The captions are all in the first
+# 12 s of 30: fake_stream.py loops a channel with its timestamps starting
+# over, and a caption still up across that can be drawn twice, which
+# player_check --captions fails on; a check sees all three well before then.
+captioned() {
+  local out="$dir/$1" size=$2 aspect=$3
+  if [[ -e "$out" && $force -eq 0 ]]; then
+    echo "exists: $out (--force regenerates)"
+    return
+  fi
+  local tmp; tmp=$(mktemp -d)
+  ffmpeg -hide_banner -loglevel error -y \
+    -f lavfi -i "testsrc2=size=$size:rate=30000/1001" -t 30 \
+    -c:v mpeg2video -bf 0 -g 15 -b:v 3M -aspect "$aspect" -f mpeg2video "$tmp/plain.m2v"
+  python3 -I "$(dirname "$0")/cc608.py" "$tmp/plain.m2v" "$tmp/captioned.m2v"
+  ffmpeg -hide_banner -loglevel error -y \
+    -fflags +genpts -r 30000/1001 -i "$tmp/captioned.m2v" \
+    -f lavfi -i "anullsrc=channel_layout=stereo:sample_rate=48000" \
+    -t 30 -map 0:v -map 1:a -c:v copy -c:a aac -b:a 32k -f mpegts "$out"
+  rm -rf "$tmp"
+  echo "wrote $out"
+}
+
+captioned captions169.ts 1280x720 16:9
+captioned captions43.ts  720x540  4:3
 
 # A radio channel: AAC in MPEG-TS with no video track at all.
 radio="$dir/radio.ts"

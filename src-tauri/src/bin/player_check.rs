@@ -45,6 +45,27 @@
 //! episode cut short fails with no finished title, and moving on from it is
 //! refused.
 //!
+//! `--subtitles` opens episodes (`ZAPPER_FIXTURE_EPISODE`, default
+//! `movie.mkv`, which has English and French subtitles) one after another,
+//! each opened afresh: subtitles start off (a track chosen, hidden); turned
+//! on, off and on again mid-play, and switched from English to French, the
+//! episode plays on; French chosen on one shows on the next; turned off,
+//! they stay off on the next; and the settings' choice, applied as the
+//! interface applies it, is what the next shows. Against `fake_stream.py
+//! --keep-alive-timeout 5` the switch comes after the server has closed the
+//! connection the episode arrived on.
+//!
+//! `--captions` plays a channel with closed captions (CEA-608 in the
+//! picture) that shows one caption top left, one centred at the bottom and
+//! one on the right: `ZAPPER_FIXTURE_NAME=captions169.ts` (16:9) or
+//! `captions43.ts` (4:3, with bands either side in a wider window), which
+//! `tools/make_fixtures.sh` makes. It chooses the captions and checks that
+//! mpv draws each on its side and rows of the picture, a side caption's edge
+//! inside the picture rather than in a band; that turning them off hides
+//! them and keeps the track; and that with no captions track mpv's own
+//! placement is back. A caption drawn twice fails it.
+//! `ZAPPER_CAPTION_SHOTS=<dir>` saves the window at each caption there.
+//!
 //! `--ending <kind>` plays a channel that is expected to stop by itself, and
 //! checks it stops the way the app explains it (`offAir`, `dropped`, …), as
 //! the ending kinds are spelled to the interface. Against
@@ -113,6 +134,7 @@ fn main() {
         .setup(move |app| {
             let window = app.get_webview_window("main").unwrap();
             let ov = zapper_lib::surface::linux::overlay::install(&window)?;
+            OVERLAY.with(|o| *o.borrow_mut() = Some(ov.clone()));
             let player = zapper_lib::surface::linux::render::new_player(&ov.gl_area)?;
             // Kill the audio path entirely before anything is loaded. Muting
             // or zeroing the volume still opens the device and still leaks
@@ -158,6 +180,10 @@ fn main() {
                 } else if args.iter().any(|a| a == "--up-next") {
                     let has = |flag: &str| args.iter().any(|a| a == flag);
                     run_up_next(&handle, has("--drop"), has("--past-end")).await
+                } else if args.iter().any(|a| a == "--captions") {
+                    run_captions(&handle).await
+                } else if args.iter().any(|a| a == "--subtitles") {
+                    run_subtitles(&handle).await
                 } else if args.iter().any(|a| a == "--episode") {
                     run_episode(&handle).await
                 } else {
@@ -720,6 +746,386 @@ async fn run_episode(app: &tauri::AppHandle) -> Result<String, String> {
     Ok(format!(
         "a {length}s episode played as an episode, seek_to(60) landed at {:.1}s, paused and stopped",
         at(&there)
+    ))
+}
+
+/// The `--subtitles` run: subtitles chosen on one title are the standing
+/// choice for the next ones opened (not Up next: a title opened afresh),
+/// in the language chosen; turned off, they stay off across an open, even
+/// on a file whose first subtitle track is flagged default, with the track
+/// chosen and hidden; and the settings' choice, applied as the interface
+/// applies it, is what an open shows. Mid-play, turning them off and on
+/// again (the toggle) and switching from English to French (the menu) keep
+/// the title playing.
+#[cfg(target_os = "linux")]
+async fn run_subtitles(app: &tauri::AppHandle) -> Result<String, String> {
+    use std::time::Duration;
+    use zapper_lib::ipc::player_cmds as cmds;
+    use zapper_lib::ipc::types::{
+        OnDemandKind, PlaybackState, PlayerOptionsDto, PlayerStateDto, SettingsDto,
+    };
+
+    /// Opens episode `id` (the fixture's `movie.mkv`: English and French
+    /// subtitles) and returns its options once its tracks are known and
+    /// have had a moment to be chosen.
+    async fn open(app: &tauri::AppHandle, id: i64) -> Result<PlayerOptionsDto, String> {
+        // Stopped first, until the last title's tracks are gone: every id
+        // plays the same file, so its tracks cannot tell the two apart. A
+        // Stop changes nothing about the subtitles chosen.
+        cmds::stop(app.clone()).await?;
+        for _ in 0..50 {
+            if cmds::player_options().await?.subtitles.is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+        cmds::play_episode(app.clone(), id, None).await?;
+        let playing = |s: &PlayerStateDto| {
+            s.state == PlaybackState::Playing
+                && s.on_demand.is_some_and(|o| o.kind == OnDemandKind::Episode && o.id == id)
+        };
+        let s = await_state(Duration::from_secs(25), playing).await;
+        if !playing(&s) {
+            return Err(format!(
+                "episode {id} ended in {:?}: {}",
+                s.state,
+                s.error.as_deref().unwrap_or("no reason given")
+            ));
+        }
+        for _ in 0..75 {
+            if !cmds::player_options().await?.subtitles.is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+        // The choice is made on the heartbeat after the tracks are known.
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        let o = cmds::player_options().await?;
+        if o.subtitles.len() < 2 {
+            return Err(format!("episode {id} listed {} subtitle tracks, not 2", o.subtitles.len()));
+        }
+        Ok(o)
+    }
+    /// The language of the track chosen.
+    fn chosen(o: &PlayerOptionsDto) -> Option<String> {
+        o.subtitles.iter().find(|t| t.selected).map(|t| t.lang.clone().unwrap_or_else(|| "?".into()))
+    }
+    /// The language on screen: chosen and visible.
+    fn shown(o: &PlayerOptionsDto) -> Option<String> {
+        chosen(o).filter(|_| o.subtitles_visible)
+    }
+    /// Whether the title is still playing a few seconds on, its place
+    /// moving: what a change of subtitles must not end.
+    async fn plays_on(what: &str) -> Result<(), String> {
+        let at = |s: &PlayerStateDto| s.on_demand.map_or(-1.0, |o| o.position);
+        let before = cmds::player_state().await?;
+        tokio::time::sleep(Duration::from_secs(4)).await;
+        let after = cmds::player_state().await?;
+        if after.state != PlaybackState::Playing || after.ending.is_some() || at(&after) < at(&before) + 2.0 {
+            return Err(format!(
+                "after {what}, the title was {:?} at {:.1}s (from {:.1}s): {}",
+                after.state,
+                at(&after),
+                at(&before),
+                after.error.as_deref().unwrap_or("no reason given")
+            ));
+        }
+        Ok(())
+    }
+
+    // Off, as a fresh install has them: none shown, though a track is
+    // chosen (hidden), so turning them on is never a switch.
+    let first = open(app, 100_111).await?;
+    if let Some(lang) = shown(&first) {
+        return Err(format!("subtitles were off, but the first title showed {lang}"));
+    }
+    let hidden = first
+        .subtitles
+        .iter()
+        .find(|t| t.selected)
+        .ok_or("subtitles were off, and no track was chosen to show later")?
+        .id;
+
+    // Mid-play, the toggle: on (the track chosen, shown), then off.
+    cmds::set_subtitle_track(app.clone(), Some(hidden)).await?;
+    plays_on("turning subtitles on").await?;
+    let on = cmds::player_options().await?;
+    if shown(&on).is_none() {
+        return Err("turning subtitles on did not show them".into());
+    }
+    cmds::set_subtitle_track(app.clone(), None).await?;
+    plays_on("turning subtitles off").await?;
+    let off = cmds::player_options().await?;
+    if shown(&off).is_some() || chosen(&off).is_none() {
+        return Err(format!("turning subtitles off left {:?} shown, {:?} chosen", shown(&off), chosen(&off)));
+    }
+    cmds::set_subtitle_track(app.clone(), Some(hidden)).await?;
+    plays_on("turning subtitles on again").await?;
+    if shown(&cmds::player_options().await?).is_none() {
+        return Err("turning subtitles on again did not show them".into());
+    }
+
+    // Mid-play, the menu: another track, English to French, plays on and
+    // shows French. The next title shows French too.
+    let french = first
+        .subtitles
+        .iter()
+        .find(|t| t.lang.as_deref() == Some("fra"))
+        .ok_or("the fixture has no French subtitles")?
+        .id;
+    if chosen(&cmds::player_options().await?).as_deref() == Some("fra") {
+        return Err("the switch to French had nothing to switch from".into());
+    }
+    // Past the server's keep-alive timeout (`fake_stream.py
+    // --keep-alive-timeout 5`), so the connection the episode arrived on is
+    // closed when the switch goes back for the new track; and the server
+    // says it closed it.
+    tokio::time::sleep(IDLE_BEFORE_SWITCH).await;
+    let port = fixture_port()?;
+    match keep_alive(port) {
+        Some((timeout, closed)) if timeout > 0.0 && timeout < IDLE_BEFORE_SWITCH.as_secs_f64() && closed == 0 => {
+            return Err(format!("the server kept the idle connection past its {timeout}s timeout"));
+        }
+        Some(_) => {}
+        None => return Err("the fixture server did not say what it does with idle connections".into()),
+    }
+    cmds::set_subtitle_track(app.clone(), Some(french)).await?;
+    plays_on("switching from English to French").await?;
+    let switched = cmds::player_options().await?;
+    if shown(&switched).as_deref() != Some("fra") {
+        return Err(format!("switched to French, the title showed {:?}", shown(&switched)));
+    }
+    let second = open(app, 100_112).await?;
+    if shown(&second).as_deref() != Some("fra") {
+        return Err(format!("French was chosen, but the next title showed {:?}", shown(&second)));
+    }
+
+    // Off, chosen by hand: the next stays off, with French chosen, hidden.
+    cmds::set_subtitle_track(app.clone(), None).await?;
+    let third = open(app, 100_113).await?;
+    if let Some(lang) = shown(&third) {
+        return Err(format!("subtitles were turned off, but the next title showed {lang}"));
+    }
+    if chosen(&third).as_deref() != Some("fra") {
+        return Err(format!("off, the next title chose {:?}, not French hidden", chosen(&third)));
+    }
+
+    // The settings' choice, as saved settings reach the player.
+    let settings = SettingsDto {
+        subtitles_on: true,
+        subtitle_language: Some("eng".into()),
+        ..SettingsDto::default()
+    };
+    cmds::apply_playback_settings(app.clone(), settings).await?;
+    let fourth = open(app, 100_114).await?;
+    if shown(&fourth).as_deref() != Some("eng") {
+        return Err(format!("the settings said English, but the title showed {:?}", shown(&fourth)));
+    }
+
+    cmds::stop(app.clone()).await?;
+    Ok("off by default (a track chosen, hidden) though a track is flagged default; mid-play on, \
+        off and on again played on; a mid-play switch from English to French played on and showed \
+        French, as did the next title; off chosen stayed off on the next, French hidden; the \
+        settings' English showed English"
+        .into())
+}
+
+#[cfg(target_os = "linux")]
+thread_local! {
+    /// The window's layers, for a picture of what it shows (`grab`).
+    static OVERLAY: std::cell::RefCell<Option<zapper_lib::surface::linux::overlay::Overlay>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Saves what the window shows to `path`: the video layer as mpv drew it
+/// into the window (bands, subtitles and all), read back from GL, under the
+/// interface.
+#[cfg(target_os = "linux")]
+async fn grab(app: &tauri::AppHandle, path: String) -> Result<(), String> {
+    use zapper_lib::surface::linux::capture;
+    app.run_on_main_thread(move || capture::request(path)).map_err(|e| e.to_string())?;
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.run_on_main_thread(move || {
+        let r = OVERLAY.with(|o| match o.borrow().as_ref() {
+            Some(ov) => capture::finish(ov).map(|_| ()).map_err(|e| e.to_string()),
+            None => Err("no window to picture".to_owned()),
+        });
+        let _ = tx.send(r);
+    })
+    .map_err(|e| e.to_string())?;
+    rx.recv_timeout(std::time::Duration::from_secs(10)).map_err(|e| e.to_string())?
+}
+
+/// How long `--subtitles` lets the episode's connection sit idle before the
+/// mid-play switch: past `fake_stream.py --keep-alive-timeout 5`.
+#[cfg(target_os = "linux")]
+const IDLE_BEFORE_SWITCH: std::time::Duration = std::time::Duration::from_secs(8);
+
+/// The fixture server's keep-alive timeout (0: none) and how many idle
+/// connections it has closed, from its /keepalive.
+#[cfg(target_os = "linux")]
+fn keep_alive(port: u16) -> Option<(f64, i64)> {
+    use std::io::{Read, Write};
+    let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).ok()?;
+    s.set_read_timeout(Some(std::time::Duration::from_secs(5))).ok()?;
+    s.write_all(b"GET /keepalive HTTP/1.0\r\nHost: x\r\n\r\n").ok()?;
+    let mut body = String::new();
+    s.read_to_string(&mut body).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&body[body.find("\r\n\r\n")? + 4..]).ok()?;
+    Some((v.get("timeout")?.as_f64()?, v.get("idleClosed")?.as_i64()?))
+}
+
+/// The `--captions` run; see the top of the file.
+#[cfg(target_os = "linux")]
+async fn run_captions(app: &tauri::AppHandle) -> Result<String, String> {
+    use std::time::{Duration, Instant};
+    use zapper_lib::ipc::player_cmds as cmds;
+    use zapper_lib::ipc::types::PlaybackState;
+
+    /// What mpv says, read on the main thread: the caption text and the
+    /// placement properties, then the window and the picture's bands in it
+    /// (`osd-dimensions`).
+    const KEYS: [&str; 9] = [
+        "sub-text/ass",
+        "sub-ass-override",
+        "sub-pos",
+        "sub-align-x",
+        "sub-margin-x",
+        "osd-dimensions/w",
+        "osd-dimensions/ml",
+        "osd-dimensions/mr",
+        "sub-visibility",
+    ];
+    async fn read(app: &tauri::AppHandle) -> Option<[String; 9]> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.run_on_main_thread(move || {
+            let v = zapper_lib::surface::mpv::with_player(|p| KEYS.map(|k| p.get_string(k).unwrap_or_default()));
+            let _ = tx.send(v);
+        })
+        .ok()?;
+        rx.recv_timeout(Duration::from_secs(5)).ok().flatten()
+    }
+    let num = |s: &str| s.parse::<f64>().unwrap_or(f64::NAN);
+
+    // mpv's own values, before anything is played.
+    let before = read(app).await.ok_or("could not read mpv's properties")?;
+    let id = resolve_stream_id().await?;
+    cmds::play(app.clone(), id).await?;
+    let opened = await_state(Duration::from_secs(25), |s| s.state == PlaybackState::Playing).await;
+    if opened.state != PlaybackState::Playing {
+        return Err(format!("the captioned channel ended in {:?}", opened.state));
+    }
+    // mpv lists the captions once it has met some in the picture.
+    let mut caption_track = None;
+    for _ in 0..100 {
+        let o = cmds::player_options().await?;
+        caption_track = o.subtitles.iter().find(|t| t.codec.as_deref() == Some("eia_608")).map(|t| t.id);
+        if caption_track.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    let track = caption_track.ok_or("no caption track was listed")?;
+    cmds::set_subtitle_track(app.clone(), Some(track)).await?;
+
+    // The fixture loops three captions: top left, centred at the bottom, and
+    // on the right. Each one's placement, once mpv draws it.
+    let shots = std::env::var("ZAPPER_CAPTION_SHOTS").ok();
+    let name = std::env::var("ZAPPER_FIXTURE_NAME").unwrap_or_default();
+    let tag = name.trim_end_matches(".ts");
+    let want = [("TOP LEFT", "left", "top-left"), ("THE BOTTOM", "center", "bottom-centre"), ("RIGHT SIDE", "right", "right")];
+    let mut seen = Vec::new();
+    // Every distinct reading, for a run that fails to say what mpv did.
+    let mut readings: Vec<[String; 9]> = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(45);
+    for (text, align, what) in want {
+        loop {
+            if Instant::now() > deadline {
+                return Err(format!(
+                    "the {what} caption was not seen placed (seen: {seen:?}; mpv said {readings:?})"
+                ));
+            }
+            let Some(v) = read(app).await else {
+                return Err("could not read mpv's properties".into());
+            };
+            if readings.last() != Some(&v) && readings.len() < 40 {
+                readings.push(v.clone());
+            }
+            // One caption on screen, once: the same event twice is a caption
+            // drawn twice, which must not pass for a placed one.
+            let events: Vec<&str> = v[0].split('\n').filter(|e| !e.is_empty()).collect();
+            if events.iter().enumerate().any(|(i, e)| events[..i].contains(e)) {
+                return Err(format!("a caption was drawn twice: {:?}", v[0]));
+            }
+            if !v[0].contains(text) {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                continue;
+            }
+            // The placement follows the caption on the next heartbeat.
+            tokio::time::sleep(Duration::from_millis(600)).await;
+            let Some(v) = read(app).await else {
+                return Err("could not read mpv's properties".into());
+            };
+            if !v[0].contains(text) {
+                continue;
+            }
+            if v[3] != align {
+                return Err(format!("the {what} caption was aligned {}, not {align}", v[3]));
+            }
+            if v[1] != "strip" {
+                return Err(format!("the {what} caption was drawn with sub-ass-override={}", v[1]));
+            }
+            let (pos, margin, w, ml, mr) = (num(&v[2]), num(&v[4]), num(&v[5]), num(&v[6]), num(&v[7]));
+            // Where mpv puts a side caption's edge, in the window's pixels
+            // (see ipc::captions): inside the picture, never in a band.
+            let edge = margin * (w - ml - mr) / 960.0;
+            match what {
+                "top-left" if !(pos < 40.0 && edge > ml + 1.0) => {
+                    return Err(format!("top left placed at sub-pos {pos}, its edge {edge:.0}px with a {ml}px band"));
+                }
+                "bottom-centre" if pos < 70.0 => {
+                    return Err(format!("the bottom caption placed at sub-pos {pos}"));
+                }
+                "right" if !(pos > 70.0 && edge > mr + 1.0) => {
+                    return Err(format!("the right caption placed at sub-pos {pos}, its edge {edge:.0}px with a {mr}px band"));
+                }
+                _ => {}
+            }
+            // A moment for the frame to carry it, then the picture.
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            if let Some(dir) = &shots {
+                grab(app, format!("{dir}/{tag}-{what}.png")).await?;
+            }
+            seen.push(format!("{what}: sub-pos {pos} {align} margin {margin} (edge {edge:.0}px, bands {ml}/{mr}px of {w})"));
+            break;
+        }
+    }
+
+    // Off: hidden, the caption track kept, and the channel plays on.
+    cmds::set_subtitle_track(app.clone(), None).await?;
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    let o = cmds::player_options().await?;
+    if o.subtitles_visible || !o.subtitles.iter().any(|t| t.selected && t.id == track) {
+        return Err("captions turned off were not hidden with their track kept".into());
+    }
+    if cmds::player_state().await?.state != PlaybackState::Playing {
+        return Err("turning captions off stopped the channel".into());
+    }
+    // No captions track any more (stopped): mpv's own values back.
+    cmds::stop(app.clone()).await?;
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    let v = read(app).await.ok_or("could not read mpv's properties")?;
+    // The placement only: how a channel's subtitles are styled
+    // (sub-ass-override) is the open's, set again by the next one.
+    if v[2..5] != before[2..5] {
+        return Err(format!("with no captions track, mpv was left with {:?}, not {:?}", &v[2..5], &before[2..5]));
+    }
+    Ok(format!(
+        "{}; turned off, hidden with the track kept, playing on; with no captions track, mpv's \
+         own placement ({}) again",
+        seen.join("; "),
+        before[2..5].join(", ")
     ))
 }
 

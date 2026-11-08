@@ -26,7 +26,7 @@ use crate::catalog::vod_store::{self, ItemKind, VodItem};
 use crate::connections::{self, Limit, Verdict};
 use crate::ipc::ending::{self, Clues, Ending, EndingKind, Flow, How};
 use crate::ipc::live_start::{Join, Settle};
-use crate::ipc::tracks;
+use crate::ipc::{captions, tracks};
 use crate::ipc::types::{
     events, AspectMode, ChannelQualityDto, ConnectionsDto, DeinterlaceMode, LiveJumpDto,
     LiveStart, OnDemandDto, OnDemandKind, PlaybackState, PlayerOptionsDto, PlayerStateDto,
@@ -215,13 +215,19 @@ struct Machine {
     /// Bumped by anything that makes a waiting reconnect stale: an open, a
     /// stop, Cancel. A reconnect checks it before acting.
     reconnect_token: u64,
-    /// The audio and subtitle languages this open is heard and read in, as
-    /// its track list last said: what moving on to the next episode
-    /// carries. Kept past a finished end, which empties the list.
+    /// The audio language this open is heard in, as its track list last
+    /// said: what moving on to the next episode carries. Kept past a
+    /// finished end, which empties the list.
     languages: Option<Languages>,
-    /// The languages the last episode was in, to look for in this one's
-    /// tracks once they are known: moving on to the next episode only.
+    /// The language the last episode was heard in, to look for in this
+    /// one's tracks once they are known: moving on to the next episode only.
     carry_languages: Option<Languages>,
+    /// The standing subtitle choice ([`SubtitlePref`]) is still to be
+    /// applied to this open: once, when its track list first has a subtitle
+    /// track. A live channel may list its captions only a moment in. A
+    /// choice the viewer makes meanwhile ([`Machine::chose_subtitles`]) is
+    /// theirs, and the standing one is not applied over it.
+    subtitles_due: bool,
     /// Where a title was last sought to, and when, until mpv's clock gets
     /// there ([`SEEK_LANDED`]) or [`SEEK_SETTLE`] has passed. The title's
     /// position says this meanwhile: a seek to its end can reach the end of
@@ -334,6 +340,7 @@ impl Machine {
             reconnect_token: 0,
             languages: None,
             carry_languages: None,
+            subtitles_due: false,
             seek_target: None,
         }
     }
@@ -435,6 +442,7 @@ impl Machine {
         self.dto.finished = None;
         self.languages = None;
         self.carry_languages = None;
+        self.subtitles_due = false;
         self.seek_target = None;
         self.live = true;
         self.catch_up = None;
@@ -840,6 +848,44 @@ impl Machine {
         Ok(languages)
     }
 
+    /// What this open does about tracks once they are known, as `tracks`
+    /// says: the next episode looks for the last one's language; every open
+    /// but a move onto another connection applies the standing subtitles.
+    fn choose_tracks(&mut self, tracks: &TrackChoice) {
+        self.carry_languages = match tracks {
+            TrackChoice::Carry(l) => Some(l.clone()),
+            TrackChoice::Fresh | TrackChoice::Keep(..) => None,
+        };
+        self.subtitles_due = !matches!(tracks, TrackChoice::Keep(..));
+    }
+
+    /// The viewer chose subtitles (a track, or Off) during this open: the
+    /// standing choice is not applied over that.
+    fn chose_subtitles(&mut self) {
+        self.subtitles_due = false;
+    }
+
+    /// This open's tracks, now known: the `aid` and `sid` to set. The last
+    /// episode's audio language, looked for once; the standing subtitles
+    /// (`pref`), applied once a subtitle track is listed. Notes the
+    /// language it is heard in, for the next episode.
+    fn tracks_listed(
+        &mut self,
+        pref: &SubtitlePref,
+        audio: &[TrackDto],
+        subtitles: &[TrackDto],
+    ) -> Vec<(&'static str, String)> {
+        let carry = self.carry_languages.take();
+        let pref = (self.subtitles_due && !subtitles.is_empty()).then_some(pref);
+        if pref.is_some() {
+            self.subtitles_due = false;
+        }
+        self.languages = Some(Languages::of(audio));
+        // A channel, live: not a programme from its archive.
+        let live = self.live && self.catch_up.is_none();
+        carried_choice(carry.as_ref(), pref, audio, subtitles, live)
+    }
+
     /// A title was sought to `at` seconds (already clamped to its length):
     /// its position says so from now, until mpv's clock catches up. Only
     /// while it plays or is paused: a seek that lands as another title is
@@ -1197,33 +1243,107 @@ fn up_next_allowed(dto: &PlayerStateDto, from: i64) -> bool {
     }
 }
 
-/// The audio and subtitle languages an open is heard and read in.
+/// The audio language an open is heard in: what the next episode of a show
+/// carries ([`TrackChoice::Carry`]). Its subtitles are the standing choice,
+/// as every open's are ([`SubtitlePref`]).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct Languages {
     /// The audio track's, when it declares one.
     audio: Option<String>,
-    /// The subtitle track's, when one is shown and declares one.
-    subtitles: Option<String>,
-    /// No subtitles are shown.
-    subtitles_off: bool,
 }
 
 impl Languages {
-    /// As a track list says: whichever tracks are selected in it.
-    fn of(audio: &[TrackDto], subtitles: &[TrackDto]) -> Self {
-        let selected = |tracks: &[TrackDto]| tracks.iter().find(|t| t.selected).cloned();
-        let sub = selected(subtitles);
+    /// As a track list says: whichever audio track is selected in it.
+    fn of(audio: &[TrackDto]) -> Self {
         Self {
-            audio: selected(audio).and_then(|t| t.lang),
-            subtitles_off: sub.is_none(),
-            subtitles: sub.and_then(|t| t.lang),
+            audio: audio.iter().find(|t| t.selected).and_then(|t| t.lang.clone()),
         }
     }
 }
 
-/// The first of `tracks` in the language `prev_lang`, the one the last
-/// episode was in. `None` when that language is unknown or not there, which
-/// leaves the choice to mpv.
+/// The viewer's standing subtitle choice: the settings' `subtitles_on` and
+/// `subtitle_language`. Every open applies it once its subtitle tracks are
+/// known ([`subtitle_choice`]); choosing a track or Off changes it
+/// ([`SubtitlePref::chose`]). The rule is `src/logic/subtitles.ts`'s too,
+/// which the browser's player follows.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct SubtitlePref {
+    on: bool,
+    language: Option<String>,
+}
+
+impl SubtitlePref {
+    fn of(s: &crate::ipc::types::SettingsDto) -> Self {
+        Self {
+            on: s.subtitles_on,
+            language: s.subtitle_language.clone(),
+        }
+    }
+
+    /// The viewer chose `track`, or Off with `None`: on, in its language
+    /// (the one there was, when it names none); off keeps the language for
+    /// the next time they are turned on.
+    fn chose(&mut self, track: Option<&TrackDto>) {
+        match track {
+            Some(t) => {
+                self.on = true;
+                if let Some(lang) = t.lang.as_deref().filter(|l| !l.is_empty()) {
+                    self.language = Some(lang.to_owned());
+                }
+            }
+            None => self.on = false,
+        }
+    }
+}
+
+/// The viewer's choice of subtitle track `id`, or Off with `None`, as the
+/// tracks listed now (`subtitles`) take it.
+#[derive(Debug, Clone, PartialEq)]
+enum SubtitleAsk {
+    /// Hide them, or show this track: what to set, and the track.
+    Choose(Vec<(&'static str, String)>, Option<TrackDto>),
+    /// A track no longer listed: another stream opened since the choice was
+    /// made (a zap got there first). Subtitles were asked for, so they stay
+    /// on, in the language there was, and are shown (what to set: the new
+    /// stream opened them hidden, if they were off); no track is switched,
+    /// and the new stream's own choice is still to come.
+    Gone(Vec<(&'static str, String)>),
+}
+
+/// `selected` is the track mpv has chosen now, as mpv says rather than as
+/// the last track list did: setting `sid` to the track it already has makes
+/// mpv start that track over, which can draw a caption twice.
+fn subtitle_ask(subtitles: &[TrackDto], id: Option<i64>, selected: Option<i64>) -> SubtitleAsk {
+    let track = match id {
+        None => None,
+        Some(id) => match subtitles.iter().find(|t| t.id == id) {
+            Some(t) => Some(t.clone()),
+            None => return SubtitleAsk::Gone(vec![("sub-visibility", "yes".to_owned())]),
+        },
+    };
+    SubtitleAsk::Choose(subtitle_command(selected, id), track)
+}
+
+/// The standing subtitle choice, as the settings last said
+/// (`apply_saved_settings`, `apply_playback_settings`) or the viewer last
+/// chose (`set_subtitle_track`, at once: the saved settings follow).
+static SUBTITLES: Mutex<SubtitlePref> = Mutex::new(SubtitlePref {
+    on: false,
+    language: None,
+});
+
+fn subtitle_pref() -> SubtitlePref {
+    SUBTITLES.lock().map(|p| p.clone()).unwrap_or_default()
+}
+
+fn set_subtitle_pref(f: impl FnOnce(&mut SubtitlePref)) {
+    if let Ok(mut p) = SUBTITLES.lock() {
+        f(&mut p);
+    }
+}
+
+/// The first of `tracks` in the language `prev_lang`. `None` when that
+/// language is unknown or not there.
 fn carried_track(prev_lang: Option<&str>, tracks: &[TrackDto]) -> Option<i64> {
     let want = prev_lang?;
     tracks
@@ -1232,26 +1352,68 @@ fn carried_track(prev_lang: Option<&str>, tracks: &[TrackDto]) -> Option<i64> {
         .map(|t| t.id)
 }
 
-/// The `aid` and `sid` to set on an episode whose tracks have just become
-/// known, to keep the languages the last one was in: each the first track
-/// of the same language, or mpv's own choice when there is none; subtitles
-/// off when they were off. Only what differs from what is selected.
-fn carried_choice(l: &Languages, audio: &[TrackDto], subtitles: &[TrackDto]) -> Vec<(&'static str, String)> {
-    let selected = |tracks: &[TrackDto]| tracks.iter().find(|t| t.selected).map(|t| t.id);
-    let mut out = Vec::new();
-    match carried_track(l.audio.as_deref(), audio) {
-        Some(id) if selected(audio) == Some(id) => {}
-        id => out.push(("aid", id.map_or_else(|| "auto".to_owned(), |id| id.to_string()))),
+/// The subtitle track turning subtitles on shows: the first in `language`,
+/// else the first; a full track before a forced one (signs, or only the
+/// lines in another language) either way. `None` without tracks.
+fn preferred_subtitle(language: Option<&str>, tracks: &[TrackDto]) -> Option<i64> {
+    let full: Vec<TrackDto> = tracks.iter().filter(|t| !t.forced).cloned().collect();
+    carried_track(language, &full)
+        .or_else(|| carried_track(language, tracks))
+        .or_else(|| full.first().map(|t| t.id))
+        .or_else(|| tracks.first().map(|t| t.id))
+}
+
+/// The `sid` that chooses an open's subtitle track as `pref` says, or `None`
+/// when it is chosen already or there are none: [`preferred_subtitle`]. A
+/// track mpv picked itself in the language wanted (or any, when that
+/// language is not there) is left: switching costs a trip back through the
+/// file ([`subtitle_open_properties`]).
+///
+/// With subtitles off, a track is chosen (hidden) after the load only on a
+/// `live` channel, where nothing is a trip back through the file. A title's
+/// captions are always listed late (mpv makes their track when it meets
+/// them in the picture), and choosing one then would be that trip, for a
+/// track nobody sees; the toggle's first press makes the one switch.
+fn subtitle_choice(pref: &SubtitlePref, subtitles: &[TrackDto], live: bool) -> Option<String> {
+    if !pref.on && !live {
+        return None;
     }
-    if l.subtitles_off {
-        if selected(subtitles).is_some() {
-            out.push(("sid", "no".to_owned()));
+    let selected = subtitles.iter().find(|t| t.selected);
+    let id = preferred_subtitle(pref.language.as_deref(), subtitles)?;
+    let in_language = |t: &TrackDto| match pref.language.as_deref() {
+        Some(want) => t.lang.as_deref().is_some_and(|l| l.eq_ignore_ascii_case(want)),
+        None => true,
+    };
+    let language_there = subtitles.iter().any(in_language);
+    match selected {
+        Some(t) if t.id == id => None,
+        Some(t) if !language_there || in_language(t) => None,
+        _ => Some(id.to_string()),
+    }
+}
+
+/// The `aid` and `sid` to set on an open whose tracks have just become
+/// known. With `carry`, the next episode of a show: the first audio track in
+/// the last one's language, or mpv's own choice when there is none. With
+/// `pref`, the standing subtitles ([`subtitle_choice`]). Only what differs
+/// from what is selected.
+fn carried_choice(
+    carry: Option<&Languages>,
+    pref: Option<&SubtitlePref>,
+    audio: &[TrackDto],
+    subtitles: &[TrackDto],
+    live: bool,
+) -> Vec<(&'static str, String)> {
+    let mut out = Vec::new();
+    if let Some(l) = carry {
+        let selected = audio.iter().find(|t| t.selected).map(|t| t.id);
+        match carried_track(l.audio.as_deref(), audio) {
+            Some(id) if selected == Some(id) => {}
+            id => out.push(("aid", id.map_or_else(|| "auto".to_owned(), |id| id.to_string()))),
         }
-    } else {
-        match carried_track(l.subtitles.as_deref(), subtitles) {
-            Some(id) if selected(subtitles) == Some(id) => {}
-            id => out.push(("sid", id.map_or_else(|| "auto".to_owned(), |id| id.to_string()))),
-        }
+    }
+    if let Some(sid) = pref.and_then(|p| subtitle_choice(p, subtitles, live)) {
+        out.push(("sid", sid));
     }
     out
 }
@@ -1705,6 +1867,22 @@ fn tick(app: &AppHandle, p: &Player) {
             o.subtitles = subtitles.clone();
         });
     }
+    // Closed captions where the broadcaster put them: see `ipc::captions`.
+    let caption_text = signals.iter().rev().find_map(|s| match s {
+        Signal::SubText(text) => Some(text.as_str()),
+        _ => None,
+    });
+    // Only a channel's (live or from its archive): a title's subtitles keep
+    // their own positions (see `ass_override`).
+    let broadcast = LAST_OPEN
+        .lock()
+        .ok()
+        .and_then(|l| l.as_ref().map(|(_, _, kind, _)| *kind != OpenKind::OnDemand))
+        .unwrap_or(false);
+    let captions_chosen = track_lists
+        .as_ref()
+        .map(|(_, subtitles)| broadcast && captions::captions_selected(subtitles));
+    place_captions(p, captions_chosen, caption_text);
     let mut finished = None;
     // Whether the file mpv has is the one the current open loaded: its
     // `path` against the address. Read before the state lock, and kept out
@@ -1758,22 +1936,20 @@ fn tick(app: &AppHandle, p: &Player) {
                 // `Machine::heard`.
                 Signal::Log(text) => m.heard(text),
                 Signal::StartFile => m.file_started(),
-                Signal::FileLoaded | Signal::Tracks(_) => {}
+                Signal::FileLoaded | Signal::Tracks(_) | Signal::SubText(_) => {}
             }
         }
-        // This open's tracks, once known: the languages it is in, and the
-        // last episode's looked for in them when this one is the next.
+        // This open's tracks, once known: the last episode's language looked
+        // for in them when this one is the next, and the standing subtitles
+        // applied once there are any.
         if let Some((audio, subtitles)) = &track_lists {
             let known = !audio.is_empty() || !subtitles.is_empty();
             if known && m.started && this_opens_file {
-                if let Some(l) = m.carry_languages.take() {
-                    for (key, value) in carried_choice(&l, audio, subtitles) {
-                        if let Err(e) = p.set_property(key, &value) {
-                            tracing::warn!("could not keep the last episode's {key}: {e}");
-                        }
+                for (key, value) in m.tracks_listed(&subtitle_pref(), audio, subtitles) {
+                    if let Err(e) = p.set_property(key, &value) {
+                        tracing::warn!("could not choose this open's {key}: {e}");
                     }
                 }
-                m.languages = Some(Languages::of(audio, subtitles));
             }
         }
         // A radio channel's "it works"; see `Machine::audio_only`.
@@ -2549,15 +2725,16 @@ async fn open(app: &AppHandle, stream_id: i64, target: Playable, kind: OpenKind)
 /// Which audio and subtitle tracks an open starts on.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum TrackChoice {
-    /// mpv's own: a track picked on one stream is not a choice for the
-    /// next ([`reset_track_choice`]).
+    /// mpv's own audio track (a track picked on one stream is not a choice
+    /// for the next) and no subtitles until the standing choice is applied
+    /// ([`reset_track_choice`], [`Machine::tracks_listed`]).
     Fresh,
     /// These (mpv's `aid` and `sid`): the same channel, moved onto another
     /// connection.
     Keep(String, String),
     /// The next episode of a show: the last one's tracks stay chosen until
-    /// this one's are known, and then its languages are looked for in them
-    /// ([`carried_choice`]).
+    /// this one's are known, and then its audio language is looked for in
+    /// them and the standing subtitles applied ([`carried_choice`]).
     Carry(Languages),
 }
 
@@ -2630,9 +2807,7 @@ async fn open_as(
     commit(app, |m| {
         was_holding = m.joining;
         m.opening(what);
-        if let TrackChoice::Carry(l) = &tracks {
-            m.carry_languages = Some(l.clone());
-        }
+        m.choose_tracks(&tracks);
         m.live = kind == OpenKind::Live;
         m.catch_up = match kind {
             OpenKind::CatchUp(c) => Some(c),
@@ -2654,9 +2829,25 @@ async fn open_as(
             None => m.chain_ending = None,
         }
     });
+    let subtitles = subtitle_pref();
+    if !matches!(tracks, TrackChoice::Keep(..)) {
+        commit_options(app, |o| o.subtitles_visible = subtitles.on);
+    }
     let r = on_player(app, move |p| {
         apply_http_headers(p, &target, &via);
         apply_start(p, start);
+        if let Err(e) = p.set_property("stream-lavf-o", &stream_options(kind)) {
+            tracing::warn!("could not set the stream's HTTP options: {e}");
+        }
+        // Read before it is first written: mpv's own.
+        let own = ASS_OVERRIDE_OWN.get_or_init(|| p.get_string("sub-ass-override").unwrap_or_else(|| "scale".into()));
+        // Only a change: setting it at all starts a caption track over.
+        let wanted = ass_override(kind, own);
+        if p.get_string("sub-ass-override").as_deref() != Some(wanted) {
+            if let Err(e) = p.set_property("sub-ass-override", wanted) {
+                tracing::warn!("could not set how subtitles are styled: {e}");
+            }
+        }
         match &tracks {
             TrackChoice::Keep(aid, sid) => {
                 for (key, value) in [("aid", aid), ("sid", sid)] {
@@ -2665,10 +2856,13 @@ async fn open_as(
                     }
                 }
             }
-            // Left as they are, for the heartbeat to settle once this
-            // episode's tracks are known.
-            TrackChoice::Carry(_) => {}
-            TrackChoice::Fresh => reset_track_choice(p),
+            // The sound left as it was, for the heartbeat to settle once
+            // this episode's tracks are known.
+            TrackChoice::Carry(_) => open_subtitles(p, &subtitles),
+            TrackChoice::Fresh => {
+                reset_track_choice(p);
+                open_subtitles(p, &subtitles);
+            }
         }
         if let Some(paused) = pause_on_open(&tracks, join, was_holding) {
             if let Err(e) = p.set_flag("pause", paused) {
@@ -3142,6 +3336,56 @@ fn commit_options(app: &AppHandle, f: impl FnOnce(&mut PlayerOptionsDto)) -> Pla
     now
 }
 
+/// FFmpeg's HTTP options for an open of `kind`: never reconnecting by
+/// itself to a stream that was cut off ([`mpv::NO_RECONNECT`]), and for a
+/// movie or an episode, a seek's request made again, once, on a fresh
+/// connection when the one it was made on has gone.
+///
+/// A title is seekable, and mpv seeks it below its cache whenever a track
+/// is switched while it plays (it goes back for the new track's packets, and
+/// a Matroska file reads its index from the end first). Once the whole of a
+/// small file has arrived, FFmpeg (8.1) makes that request on the
+/// connection that carried it: closed at once when FFmpeg had asked the
+/// server to close it, and after the server's idle timeout when it had
+/// asked to keep it (`multiple_requests`). Either way the request meets the
+/// end of the connection, the seek fails, and the title ends as if dropped.
+/// `reconnect_on_network_error` makes that one request again on a new
+/// connection (it is about failing to connect, not about a stream cut off
+/// as it played, which stays ended); `multiple_requests` saves that second
+/// connection while the first is still open. Live channels never seek below
+/// the cache, and are left as they were. Set by every open, since the
+/// option outlives the file.
+fn stream_options(kind: OpenKind) -> String {
+    match kind {
+        OpenKind::OnDemand => format!(
+            "{},multiple_requests=1,reconnect_on_network_error=1,reconnect_max_retries=1",
+            mpv::NO_RECONNECT
+        ),
+        OpenKind::Live | OpenKind::CatchUp(_) => mpv::NO_RECONNECT.to_owned(),
+    }
+}
+
+/// How an open of `kind` draws ASS subtitles: a channel's, live or from its
+/// archive, without their positions (`strip`), and anything else as mpv
+/// would (`own`, mpv's own value).
+///
+/// A channel's text subtitles are its closed captions, pinned to a 4:3
+/// grid that mpv misplaces on wide video; `ipc::captions` places them
+/// again. Set before the open rather than when captions are chosen:
+/// changing it while a caption track plays makes mpv start the track over,
+/// and the captions it had are then drawn twice. A movie's or an episode's
+/// subtitles keep what their author placed: real ASS (signs, positioned
+/// dialogue) would be flattened.
+fn ass_override(kind: OpenKind, own: &str) -> &str {
+    match kind {
+        OpenKind::Live | OpenKind::CatchUp(_) => "strip",
+        OpenKind::OnDemand => own,
+    }
+}
+
+/// mpv's own `sub-ass-override`, read before the first open sets it.
+static ASS_OVERRIDE_OWN: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
 /// Where mpv starts the file it is about to open. Set by every open, since
 /// the option outlives the file: a channel opened after a resumed movie must
 /// not begin where the movie did.
@@ -3160,11 +3404,96 @@ fn apply_start(p: &Player, start: Option<f64>) {
 /// `aid` and `sid` are options as well as properties: setting one switches
 /// the track *and* stays set for every file after it. Audio track 2 on the
 /// next channel may be a different language, or not exist — and mpv then
-/// plays that channel silent. So each stream opens on mpv's own choice.
+/// plays that channel silent. So each stream opens on mpv's own audio
+/// choice; its subtitles are the standing choice ([`open_subtitles`]).
 fn reset_track_choice(p: &Player) {
-    for key in ["aid", "sid"] {
-        if let Err(e) = p.set_property(key, "auto") {
-            tracing::warn!("could not reset {key}: {e}");
+    if let Err(e) = p.set_property("aid", "auto") {
+        tracing::warn!("could not reset aid: {e}");
+    }
+}
+
+/// The subtitle options an open starts with, under the standing choice:
+/// mpv's own pick of a full track in its language, else of any full track,
+/// made as the file loads; shown when subtitles are on, hidden when off
+/// (`sub-visibility`).
+///
+/// A track is chosen even with subtitles off, and before the load rather
+/// than once the tracks are listed: changing tracks on a file that is
+/// playing makes mpv go back for the packets it passed, a trip through the
+/// file that a server can answer with the end of the stream. So turning
+/// subtitles on or off is only ever `sub-visibility` ([`subtitle_command`]).
+/// The heartbeat still settles anything mpv did not pick
+/// ([`subtitle_choice`]): captions a live channel lists only later.
+fn subtitle_open_properties(pref: &SubtitlePref) -> Vec<(&'static str, String)> {
+    vec![
+        ("slang", pref.language.clone().unwrap_or_default()),
+        ("subs-fallback", "yes".to_owned()),
+        // The pick is `slang`'s alone: also when the sound is in that
+        // language, and never the computer's language instead.
+        ("subs-with-matching-audio", "yes".to_owned()),
+        ("subs-match-os-language", "no".to_owned()),
+        ("sid", "auto".to_owned()),
+        ("sub-visibility", if pref.on { "yes" } else { "no" }.to_owned()),
+    ]
+}
+
+/// What showing subtitle track `id`, or none with `None`, takes when
+/// `selected` is the track chosen now: none is hiding them, the track kept;
+/// the track chosen is showing it; another track is a switch, and showing.
+/// A switch is the one thing that sends mpv back through the file
+/// ([`subtitle_open_properties`]), so it is made only when the track asked
+/// for is not the one there.
+fn subtitle_command(selected: Option<i64>, id: Option<i64>) -> Vec<(&'static str, String)> {
+    match id {
+        None => vec![("sub-visibility", "no".to_owned())],
+        Some(id) if selected == Some(id) => vec![("sub-visibility", "yes".to_owned())],
+        Some(id) => vec![("sid", id.to_string()), ("sub-visibility", "yes".to_owned())],
+    }
+}
+
+fn open_subtitles(p: &Player, pref: &SubtitlePref) {
+    for (key, value) in subtitle_open_properties(pref) {
+        if let Err(e) = p.set_property(key, &value) {
+            tracing::warn!("could not set {key} for the subtitles chosen: {e}");
+        }
+    }
+}
+
+/// Closed captions placed where the broadcaster put them, as
+/// `ipc::captions` works out from the caption's grid position: mpv does not
+/// rescale those positions on wide video, so they are drawn without them and
+/// placed again from the grid, against where the picture is in the window.
+/// `selected` when the track list said whether captions are the track
+/// chosen; `text` when the caption on screen changed. Called on every
+/// heartbeat while captions are chosen, so a window resized, or the picture
+/// docked, places them again.
+static CAPTIONS: Mutex<captions::Captions> = Mutex::new(captions::Captions::new());
+
+fn place_captions(p: &Player, selected: Option<bool>, text: Option<&str>) {
+    let Ok(mut c) = CAPTIONS.lock() else {
+        return;
+    };
+    // Captions not chosen, and not chosen now: nothing to place or put back.
+    if !c.on() && selected != Some(true) {
+        return;
+    }
+    let dim = |k: &str| p.get_f64(&format!("osd-dimensions/{k}"));
+    let view = (|| {
+        Some(captions::View {
+            w: dim("w")?,
+            h: dim("h")?,
+            ml: dim("ml")?,
+            mr: dim("mr")?,
+            mt: dim("mt")?,
+            mb: dim("mb")?,
+        })
+    })();
+    // A value mpv refuses stays written down as wanted, so it is tried (and
+    // warned about) again only when the value wanted changes, not on every
+    // heartbeat.
+    for (key, value) in c.update(selected, text, view.as_ref(), |k| p.get_string(k)) {
+        if let Err(e) = p.set_property(key, &value) {
+            tracing::warn!("could not set {key} to {value} for the captions: {e}");
         }
     }
 }
@@ -3191,21 +3520,39 @@ pub async fn set_audio_track(app: AppHandle, id: i64) -> Result<PlayerOptionsDto
     }))
 }
 
-/// Shows one of the stream's subtitle tracks, or none.
+/// Shows one of the stream's subtitle tracks, or hides them with `None`:
+/// the picture menu's choice, and the toggle's. Hiding keeps the track, and
+/// showing the track already chosen is not a switch ([`subtitle_command`]).
+///
+/// The viewer's choice: it is the standing one from now, for every open
+/// after this (the interface saves it in the settings as well), and this
+/// open's standing choice is not applied over it.
 #[tauri::command]
 pub async fn set_subtitle_track(
     app: AppHandle,
     id: Option<i64>,
 ) -> Result<PlayerOptionsDto, String> {
-    on_player(&app, move |p| {
-        p.set_property("sid", &tracks::track_value(id))
-            .map_err(|e| e.to_string())
-    })
-    .await?;
-    Ok(commit_options(&app, |o| {
-        for t in &mut o.subtitles {
-            t.selected = Some(t.id) == id;
+    let listed = OPTIONS.lock().map(|o| o.subtitles.clone()).unwrap_or_default();
+    let selected = on_player(&app, |p| Ok(p.get_i64("current-tracks/sub/id"))).await?;
+    let (props, chosen) = match subtitle_ask(&listed, id, selected) {
+        SubtitleAsk::Choose(props, chosen) => (props, chosen),
+        SubtitleAsk::Gone(props) => {
+            set_subtitle_pref(|p| p.on = true);
+            on_player(&app, move |p| apply_properties(p, &props)).await?;
+            commit_options(&app, |o| o.subtitles_visible = true);
+            return player_options().await;
         }
+    };
+    on_player(&app, move |p| apply_properties(p, &props)).await?;
+    commit(&app, Machine::chose_subtitles);
+    set_subtitle_pref(|p| p.chose(chosen.as_ref()));
+    Ok(commit_options(&app, |o| {
+        if let Some(id) = id {
+            for t in &mut o.subtitles {
+                t.selected = t.id == id;
+            }
+        }
+        o.subtitles_visible = id.is_some();
     }))
 }
 
@@ -3887,8 +4234,6 @@ mod tests {
             let mut m = finished_episode(7);
             m.languages = Some(Languages {
                 audio: Some("fra".into()),
-                subtitles: None,
-                subtitles_off: true,
             });
             let carried = m.advance(7, 8).unwrap();
             assert_eq!(carried.and_then(|l| l.audio).as_deref(), Some("fra"));
@@ -3910,6 +4255,24 @@ mod tests {
             }
         }
 
+        fn selected(t: TrackDto) -> TrackDto {
+            TrackDto { selected: true, ..t }
+        }
+
+        fn on(language: Option<&str>) -> SubtitlePref {
+            SubtitlePref {
+                on: true,
+                language: language.map(str::to_owned),
+            }
+        }
+
+        fn off() -> SubtitlePref {
+            SubtitlePref {
+                on: false,
+                language: Some("fra".into()),
+            }
+        }
+
         #[test]
         fn the_next_episode_keeps_the_language_chosen() {
             let tracks = [track(1, "eng"), track(2, "fra")];
@@ -3923,46 +4286,318 @@ mod tests {
         }
 
         #[test]
-        fn the_carried_languages_change_only_what_differs() {
-            let selected = |t: TrackDto| TrackDto { selected: true, ..t };
+        fn subtitles_on_show_the_language_last_chosen() {
+            let subtitles = [track(1, "eng"), track(2, "fra")];
+            assert_eq!(subtitle_choice(&on(Some("fra")), &subtitles, true).as_deref(), Some("2"));
+            assert_eq!(subtitle_choice(&on(Some("FRA")), &subtitles, true).as_deref(), Some("2"));
+            // Already showing: nothing to do.
+            let showing = [track(1, "eng"), selected(track(2, "fra"))];
+            assert_eq!(subtitle_choice(&on(Some("fra")), &showing, true), None);
+        }
+
+        #[test]
+        fn subtitles_on_in_a_language_not_there_show_the_first() {
+            let subtitles = [track(1, "eng"), track(2, "fra")];
+            assert_eq!(subtitle_choice(&on(Some("deu")), &subtitles, true).as_deref(), Some("1"));
+            assert_eq!(subtitle_choice(&on(None), &subtitles, true).as_deref(), Some("1"));
+            // A full track before a forced one (signs, a line of another
+            // language), in the language and out of it.
+            let forced = TrackDto {
+                forced: true,
+                ..track(1, "eng")
+            };
+            let subtitles = [forced.clone(), track(2, "eng"), track(3, "fra")];
+            assert_eq!(subtitle_choice(&on(Some("eng")), &subtitles, true).as_deref(), Some("2"));
+            assert_eq!(subtitle_choice(&on(Some("deu")), &subtitles, true).as_deref(), Some("2"));
+            assert_eq!(subtitle_choice(&on(Some("eng")), &[forced], true).as_deref(), Some("1"));
+        }
+
+        #[test]
+        fn subtitles_off_on_a_live_channel_still_have_a_track_chosen_hidden() {
+            // Off is sub-visibility, not the track: one is chosen all the
+            // same (captions found a moment in), so turning them on later is
+            // never a switch of tracks.
+            let subtitles = [track(1, "eng"), track(2, "fra")];
+            assert_eq!(subtitle_choice(&off(), &subtitles, true).as_deref(), Some("2"));
+            let chosen = [selected(track(1, "eng")), track(2, "fra")];
+            assert_eq!(subtitle_choice(&off(), &chosen, true).as_deref(), Some("2"));
+            let right = [track(1, "eng"), selected(track(2, "fra"))];
+            assert_eq!(subtitle_choice(&off(), &right, true), None);
+        }
+
+        #[test]
+        fn subtitles_off_on_a_title_are_never_chosen_late() {
+            // A movie's or an episode's track mpv did not pick as it loaded
+            // (its captions, made late): left alone while subtitles are off,
+            // since choosing one is a trip back through the file.
+            let subtitles = [track(1, "eng"), track(2, "fra")];
+            assert_eq!(subtitle_choice(&off(), &subtitles, false), None);
+            let chosen = [selected(track(1, "eng")), track(2, "fra")];
+            assert_eq!(subtitle_choice(&off(), &chosen, false), None);
+            // On, they are chosen as before.
+            assert_eq!(subtitle_choice(&on(Some("fra")), &subtitles, false).as_deref(), Some("2"));
+        }
+
+        #[test]
+        fn late_captions_with_subtitles_off_are_chosen_hidden_only_live() {
+            let audio = [selected(track(1, "eng"))];
+            let captions = [track(1, "eng")];
+            // A movie: nothing.
+            let mut m = Machine::new();
+            m.opening(Opened::Movie(2));
+            m.live = false;
+            m.choose_tracks(&TrackChoice::Fresh);
+            assert!(m.tracks_listed(&off(), &audio, &[]).is_empty());
+            assert!(m.tracks_listed(&off(), &audio, &captions).is_empty());
+            // A catch-up programme: nothing either.
+            let mut m = Machine::new();
+            m.opening(Opened::Channel(1));
+            m.live = false;
+            m.catch_up = Some(CatchUp { near_edge: false });
+            m.choose_tracks(&TrackChoice::Fresh);
+            assert!(m.tracks_listed(&off(), &audio, &captions).is_empty());
+            // A channel, live: chosen (hidden, by sub-visibility).
+            let mut m = Machine::new();
+            m.opening(Opened::Channel(1));
+            m.choose_tracks(&TrackChoice::Fresh);
+            assert!(m.tracks_listed(&off(), &audio, &[]).is_empty());
+            assert_eq!(m.tracks_listed(&off(), &audio, &captions), [("sid", "1".to_owned())]);
+        }
+
+        #[test]
+        fn the_track_mpv_has_is_never_chosen_again() {
+            // The list may not say yet what mpv chose a moment ago (the
+            // heartbeat's choice of late captions): mpv's word is taken, and
+            // the same track is only shown.
+            let listed = [track(1, "eng"), track(2, "fra")];
+            assert_eq!(
+                subtitle_ask(&listed, Some(1), Some(1)),
+                SubtitleAsk::Choose(vec![("sub-visibility", "yes".to_owned())], Some(track(1, "eng")))
+            );
+        }
+
+        #[test]
+        fn a_track_no_longer_listed_keeps_subtitles_on_and_sets_nothing() {
+            let listed = [selected(track(1, "eng")), track(2, "fra")];
+            // Shown, with no switch: the stream opening may have hidden them.
+            let shown = SubtitleAsk::Gone(vec![("sub-visibility", "yes".to_owned())]);
+            assert_eq!(subtitle_ask(&listed, Some(7), Some(1)), shown);
+            // What is listed is chosen as ever.
+            assert_eq!(
+                subtitle_ask(&listed, Some(2), Some(1)),
+                SubtitleAsk::Choose(
+                    vec![("sid", "2".to_owned()), ("sub-visibility", "yes".to_owned())],
+                    Some(track(2, "fra"))
+                )
+            );
+            assert_eq!(
+                subtitle_ask(&listed, None, Some(1)),
+                SubtitleAsk::Choose(vec![("sub-visibility", "no".to_owned())], None)
+            );
+            // Nothing listed at all (a zap under way): gone too.
+            assert_eq!(subtitle_ask(&[], Some(1), None), shown);
+        }
+
+        #[test]
+        fn the_menu_and_the_toggle_show_and_hide_without_switching() {
+            // Off: hidden, the track kept.
+            assert_eq!(subtitle_command(Some(2), None), [("sub-visibility", "no".to_owned())]);
+            // The track already chosen (the toggle turning them on): shown.
+            assert_eq!(subtitle_command(Some(2), Some(2)), [("sub-visibility", "yes".to_owned())]);
+            // Another track from the menu: switched, and shown.
+            assert_eq!(
+                subtitle_command(Some(2), Some(1)),
+                [("sid", "1".to_owned()), ("sub-visibility", "yes".to_owned())]
+            );
+            // None chosen yet: the only time the toggle switches.
+            assert_eq!(
+                subtitle_command(None, Some(1)),
+                [("sid", "1".to_owned()), ("sub-visibility", "yes".to_owned())]
+            );
+        }
+
+        #[test]
+        fn what_mpv_picked_as_the_file_loaded_is_kept_when_it_fits() {
+            // A second English track (for the hard of hearing, say): still
+            // English, and switching would cost a trip back through the file.
+            let subtitles = [track(1, "eng"), selected(track(2, "eng"))];
+            assert_eq!(subtitle_choice(&on(Some("eng")), &subtitles, true), None);
+            // Any track, when the language wanted is not there.
+            let subtitles = [selected(track(1, "eng")), track(2, "spa")];
+            assert_eq!(subtitle_choice(&on(Some("fra")), &subtitles, true), None);
+            // The wrong language, with the right one there: switched.
+            let subtitles = [selected(track(1, "eng")), track(2, "fra")];
+            assert_eq!(subtitle_choice(&on(Some("fra")), &subtitles, true).as_deref(), Some("2"));
+        }
+
+        #[test]
+        fn an_open_asks_mpv_for_the_standing_subtitles_as_the_file_loads() {
+            // Off: the track chosen all the same, and hidden.
+            assert_eq!(
+                subtitle_open_properties(&off()),
+                [
+                    ("slang", "fra".to_owned()),
+                    ("subs-fallback", "yes".to_owned()),
+                    // mpv's pick is slang's alone, whatever the sound or the
+                    // computer's language.
+                    ("subs-with-matching-audio", "yes".to_owned()),
+                    ("subs-match-os-language", "no".to_owned()),
+                    ("sid", "auto".to_owned()),
+                    ("sub-visibility", "no".to_owned())
+                ]
+            );
+            assert_eq!(
+                subtitle_open_properties(&on(Some("fra"))),
+                [
+                    ("slang", "fra".to_owned()),
+                    ("subs-fallback", "yes".to_owned()),
+                    // mpv's pick is slang's alone, whatever the sound or the
+                    // computer's language.
+                    ("subs-with-matching-audio", "yes".to_owned()),
+                    ("subs-match-os-language", "no".to_owned()),
+                    ("sid", "auto".to_owned()),
+                    ("sub-visibility", "yes".to_owned())
+                ]
+            );
+            assert_eq!(subtitle_open_properties(&on(None))[0], ("slang", String::new()));
+        }
+
+        #[test]
+        fn no_subtitle_tracks_is_nothing_to_do() {
+            assert_eq!(subtitle_choice(&on(Some("fra")), &[], true), None);
+            assert_eq!(subtitle_choice(&off(), &[], true), None);
+        }
+
+        #[test]
+        fn the_next_episode_carries_its_sound_and_the_standing_subtitles() {
             let french = Languages {
                 audio: Some("fra".into()),
-                subtitles: Some("eng".into()),
-                subtitles_off: false,
             };
             // mpv kept the last episode's track numbers: French audio is
             // now 1, and English subtitles are not shown.
             let audio = [track(1, "fra"), selected(track(2, "eng"))];
             let subtitles = [track(1, "eng")];
             assert_eq!(
-                carried_choice(&french, &audio, &subtitles),
+                carried_choice(Some(&french), Some(&on(Some("eng"))), &audio, &subtitles, true),
                 [("aid", "1".to_owned()), ("sid", "1".to_owned())]
             );
             // Already right: nothing to do.
             let audio = [selected(track(1, "fra")), track(2, "eng")];
             let subtitles = [selected(track(1, "eng"))];
-            assert!(carried_choice(&french, &audio, &subtitles).is_empty());
+            assert!(carried_choice(Some(&french), Some(&on(Some("eng"))), &audio, &subtitles, true).is_empty());
             // A language this one does not have is mpv's choice.
             let german = Languages {
                 audio: Some("deu".into()),
-                ..french.clone()
             };
-            assert_eq!(carried_choice(&german, &audio, &subtitles), [("aid", "auto".to_owned())]);
-            // Subtitles that were off stay off.
-            let off = Languages {
-                subtitles: None,
-                subtitles_off: true,
-                ..french
-            };
-            assert_eq!(carried_choice(&off, &audio, &subtitles), [("sid", "no".to_owned())]);
             assert_eq!(
-                Languages::of(&audio, &subtitles),
+                carried_choice(Some(&german), Some(&on(Some("eng"))), &audio, &subtitles, true),
+                [("aid", "auto".to_owned())]
+            );
+            // Subtitles that are off keep their track, hidden.
+            assert!(carried_choice(Some(&french), Some(&off()), &audio, &subtitles, true).is_empty());
+            // Any other open leaves the sound to mpv.
+            assert_eq!(
+                carried_choice(None, Some(&off()), &audio, &[track(1, "eng"), track(2, "fra")], true),
+                [("sid", "2".to_owned())]
+            );
+            assert!(carried_choice(None, None, &audio, &subtitles, true).is_empty());
+            assert_eq!(
+                Languages::of(&audio),
                 Languages {
                     audio: Some("fra".into()),
-                    subtitles: Some("eng".into()),
-                    subtitles_off: false,
                 }
             );
+        }
+
+        #[test]
+        fn an_open_applies_the_standing_subtitles_once_a_track_is_listed() {
+            let mut m = Machine::new();
+            m.opening(Opened::Channel(1));
+            m.choose_tracks(&TrackChoice::Fresh);
+            let audio = [selected(track(1, "eng"))];
+            // A live channel whose captions are found a moment in: nothing
+            // until there is a subtitle track to show.
+            assert!(m.tracks_listed(&on(Some("fra")), &audio, &[]).is_empty());
+            let captions = [track(1, "eng")];
+            assert_eq!(
+                m.tracks_listed(&on(Some("fra")), &audio, &captions),
+                [("sid", "1".to_owned())]
+            );
+            // Once: what the viewer does after is theirs.
+            assert!(m.tracks_listed(&on(Some("fra")), &audio, &captions).is_empty());
+            // Every open, again.
+            m.opening(Opened::Movie(2));
+            m.choose_tracks(&TrackChoice::Fresh);
+            assert_eq!(
+                m.tracks_listed(&on(Some("fra")), &audio, &[track(1, "eng"), track(2, "fra")]),
+                [("sid", "2".to_owned())]
+            );
+        }
+
+        #[test]
+        fn a_choice_made_by_hand_is_not_overridden_by_a_track_found_later() {
+            let mut m = Machine::new();
+            m.opening(Opened::Channel(1));
+            m.choose_tracks(&TrackChoice::Fresh);
+            let audio = [selected(track(1, "eng"))];
+            assert!(m.tracks_listed(&on(Some("eng")), &audio, &[]).is_empty());
+            // The viewer chose (Off, from the menu) before captions came.
+            m.chose_subtitles();
+            assert!(m.tracks_listed(&on(Some("eng")), &audio, &[track(1, "eng")]).is_empty());
+            // The same channel moved onto another connection keeps what it
+            // had, and the standing choice is not applied over it.
+            m.opening(Opened::Channel(1));
+            m.choose_tracks(&TrackChoice::Keep("1".into(), "no".into()));
+            assert!(m.tracks_listed(&on(Some("eng")), &audio, &[track(1, "eng")]).is_empty());
+        }
+
+        #[test]
+        fn the_next_episode_carries_its_sound_once_its_tracks_are_known() {
+            let mut m = Machine::new();
+            m.opening(Opened::Episode(8));
+            m.choose_tracks(&TrackChoice::Carry(Languages {
+                audio: Some("fra".into()),
+            }));
+            let audio = [selected(track(1, "eng")), track(2, "fra")];
+            assert_eq!(m.tracks_listed(&off(), &audio, &[]), [("aid", "2".to_owned())]);
+            // What it is heard in now, for the one after.
+            assert_eq!(
+                m.languages,
+                Some(Languages {
+                    audio: Some("eng".into())
+                })
+            );
+            assert!(m.tracks_listed(&off(), &audio, &[]).is_empty());
+        }
+
+        #[test]
+        fn a_choice_in_the_menu_is_the_new_standing_one() {
+            let mut p = off();
+            p.chose(Some(&track(2, "eng")));
+            assert_eq!(p, on(Some("eng")));
+            // A track that names no language keeps the one there was.
+            let nameless = TrackDto {
+                lang: None,
+                ..track(3, "")
+            };
+            p.chose(Some(&nameless));
+            assert_eq!(p, on(Some("eng")));
+            // Off keeps the language, for the next time they are turned on.
+            p.chose(None);
+            assert_eq!(
+                p,
+                SubtitlePref {
+                    on: false,
+                    language: Some("eng".into()),
+                }
+            );
+            let s = SettingsDto {
+                subtitles_on: true,
+                subtitle_language: Some("fra".into()),
+                ..Default::default()
+            };
+            assert_eq!(SubtitlePref::of(&s), on(Some("fra")));
+            assert_eq!(SubtitlePref::of(&SettingsDto::default()), SubtitlePref::default());
         }
 
         #[test]
@@ -4000,6 +4635,26 @@ mod tests {
             let keep = TrackChoice::Keep("1".into(), "no".into());
             assert_eq!(pause_on_open(&keep, false, false), None);
         }
+    }
+
+    #[test]
+    fn only_a_title_makes_a_seeks_request_again_on_a_fresh_connection() {
+        let title = stream_options(OpenKind::OnDemand);
+        assert!(title.starts_with(mpv::NO_RECONNECT));
+        assert!(title.contains(",multiple_requests=1"));
+        // Once: a provider refusing is not asked again and again.
+        assert!(title.ends_with(",reconnect_on_network_error=1,reconnect_max_retries=1"));
+        assert_eq!(stream_options(OpenKind::Live), mpv::NO_RECONNECT);
+        let catch_up = OpenKind::CatchUp(CatchUp { near_edge: false });
+        assert_eq!(stream_options(catch_up), mpv::NO_RECONNECT);
+    }
+
+    #[test]
+    fn a_channels_subtitles_are_drawn_without_their_positions_and_nothing_else_is() {
+        assert_eq!(ass_override(OpenKind::Live, "scale"), "strip");
+        assert_eq!(ass_override(OpenKind::CatchUp(CatchUp { near_edge: false }), "scale"), "strip");
+        assert_eq!(ass_override(OpenKind::OnDemand, "scale"), "scale");
+        assert_eq!(ass_override(OpenKind::OnDemand, "force"), "force");
     }
 
     #[test]
@@ -5990,6 +6645,7 @@ pub async fn apply_playback_settings(
     settings: crate::ipc::types::SettingsDto,
 ) -> Result<(), String> {
     LIVE_START.store(settings.live_start as u8, Ordering::Release);
+    set_subtitle_pref(|p| *p = SubtitlePref::of(&settings));
     let props = playback_properties(&settings);
     on_player(&app, move |p| apply_properties(p, &props)).await
 }
@@ -6019,6 +6675,7 @@ pub async fn set_media_session(
 pub fn apply_saved_settings(app: &tauri::AppHandle) {
     let saved = crate::catalog::settings::load_or_default();
     LIVE_START.store(saved.live_start as u8, Ordering::Release);
+    set_subtitle_pref(|p| *p = SubtitlePref::of(&saved));
     let mut props = playback_properties(&saved);
     props.extend(subtitle_properties(&saved.subtitle));
 

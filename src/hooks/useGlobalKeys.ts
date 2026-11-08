@@ -7,12 +7,13 @@
 // plain-letter shortcut also stands aside while Command or Control is held,
 // so ⌘F or ⌃T is never mistaken for F or T.
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { backend, capabilities } from "../backend";
 import { playNextEpisode, playPrevious, recordFromPlayer, runAction } from "../actions";
 import { focusSearch, typingInto } from "../focus";
 import { exitFullscreen, toggleFullscreen } from "../fullscreen";
 import { fullscreenNow, refreshFullscreen } from "./useFullscreen";
+import { useSubtitles } from "./useSubtitles";
 import { blocksPlainKey, shortcutModifier } from "../logic/keys";
 import { moviesAvailable, playingKind } from "../logic/movies";
 import { showsAvailable } from "../logic/shows";
@@ -35,6 +36,11 @@ export function useGlobalKeys(
 ) {
   // The episode Up next would play: the same object while the count runs.
   const upNextEpisode = upNext.kind === "none" ? null : upNext.next;
+  // Read when C is pressed, rather than listened again for every change of
+  // the tracks or the settings it depends on.
+  const latestSubtitles = useSubtitles();
+  const subtitles = useRef(latestSubtitles);
+  subtitles.current = latestSubtitles;
   useEffect(() => {
     // The Up next card in the full player (docked, no key is taken from the
     // lists beside it: its buttons are in the tab order).
@@ -282,6 +288,15 @@ export function useGlobalKeys(
           dispatch,
           playerRecord(state.recordings, state.nowChannel, state.nowProgramme, Math.floor(Date.now() / 1000)),
         );
+        return;
+      }
+
+      // Subtitles on or off, the transport's toggle: off when they show, on
+      // in the language last chosen when they don't, and kept for every
+      // channel and title after. Only with subtitles to show.
+      if ((e.key === "c" || e.key === "C") && !e.altKey && subtitles.current.available) {
+        e.preventDefault();
+        subtitles.current.toggle();
         return;
       }
 
