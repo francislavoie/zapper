@@ -49,6 +49,8 @@ test("a search is every movie that matches, in the list's sort and years", () =>
     search: "EN -",
   });
   assert.equal(movieQuery("c7", "az", null, "   ").list, "category", "blank is no search");
+  assert.equal(movieQuery("c7", "az", null, " | ").list, "category", "only pipes is no search");
+  assert.equal(movieQuery("c7", "az", null, "|").search, null);
   // The query is the list's key: another search, or another sort of the
   // same one, is another list (and starts at the top); the rail's choice
   // under a search is not.
