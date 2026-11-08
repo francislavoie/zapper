@@ -3183,6 +3183,7 @@ pub(crate) mod tests {
                 ffmpeg.arg("-i").arg(&srt);
             }
             ffmpeg.args(["-t", "10", "-map", "0:v", "-map", "1:a"]);
+            ffmpeg.args(["-threads", "1", "-filter_threads", "1", "-fflags", "+bitexact"]);
             if subtitled {
                 ffmpeg
                     .args(["-map", "2:s", "-c:s", "mov_text"])
@@ -3197,7 +3198,7 @@ pub(crate) mod tests {
                 .ok()?
                 .success();
             let bytes = made.then(|| std::fs::read(&out).ok()).flatten();
-            let _ = std::fs::remove_dir_all(&dir);
+            crate::recording::vodmux::tests::keep_or_remove(&dir);
             bytes.map(Arc::new)
         })
         .clone()
@@ -3807,6 +3808,10 @@ pub(crate) mod tests {
             eprintln!("skipped: no ffmpeg command to make a fixture with");
             return;
         };
+        if !crate::recording::vodmux::can_decode("mov_text") {
+            eprintln!("skipped: this FFmpeg has no decoder for MP4's subtitles");
+            return;
+        }
         let _catalogue = movie_catalogue();
         let s = server("vod-mp4-subs");
         enable(&s, true).await;
