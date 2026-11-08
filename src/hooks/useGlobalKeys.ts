@@ -413,7 +413,7 @@ export function useGlobalKeys(
           upNextTakesEnter(e, state.mode === "watch" && !stacked && !overlayOpen())
         ) {
           e.preventDefault();
-          void resumeHeld(dispatch, state.player.state);
+          void resumeHeld(dispatch);
           return;
         }
 

@@ -5,6 +5,7 @@
 // src/__checks__/resume.test.mjs.
 
 import { calendarDate, clock, hhmm, runtime } from "./format.ts";
+import type { MarksDto } from "../types.ts";
 
 export const STARTED_FRACTION = 0.01;
 export const WATCHED_FRACTION = 0.92;
@@ -32,6 +33,14 @@ export function progressOf(t: Place): number | null {
 /** Where Resume starts, while the title is in progress. */
 export function resumePoint(t: Place): number | null {
   return progressOf(t) === null ? null : t.position;
+}
+
+/** Where Up next starts the next episode: where it was left while in
+ *  progress (`listedSecs`, the provider's length, when the player measured
+ *  none), else its beginning. */
+export function nextStart(marks: MarksDto | null, listedSecs: number | null): number {
+  if (!marks) return 0;
+  return resumePoint({ ...marks, durationSecs: listedSecs }) ?? 0;
 }
 
 /** "14m left", at least "1m left"; nothing when not in progress. */
