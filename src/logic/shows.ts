@@ -17,6 +17,7 @@ import type {
 import type { Async } from "./async.ts";
 import { movieBadges, runtime, type MovieRailKind, type PosterCard, type YearRange } from "./movies.ts";
 import type { FixedRailItem } from "./railItems.ts";
+import { OVERSCAN, computeWindow } from "./virtual.ts";
 
 export const SHOW_FAVOURITES = "*favourites*";
 export const SHOW_RECENT = "*added*";
@@ -197,10 +198,38 @@ export function showAction(d: SeriesDetailsDto): ShowAction {
 }
 
 /** The season a show's episode list opens on: the next-up's, else the
- *  first listed. */
+ *  first listed that is not the specials, else the specials (a show of
+ *  nothing else). */
 export function firstSeason(d: SeriesDetailsDto): number | null {
   const next = d.nextUp !== null ? d.episodes.find((x) => x.episodeId === d.nextUp) : undefined;
-  return next?.season ?? d.seasons[0]?.number ?? null;
+  return next?.season ?? (d.seasons.find((s) => s.number !== 0) ?? d.seasons[0])?.number ?? null;
+}
+
+/** How far into an episode it was left, 0–1, while it is in progress
+ *  (1 %–92 %, as catalog/vod_progress.rs has it); `null` otherwise: not
+ *  started, watched, or of no known length. */
+export function episodeProgress(
+  e: Pick<EpisodeDto, "watched" | "position" | "duration" | "durationSecs">,
+): number | null {
+  const length = e.duration ?? e.durationSecs;
+  if (e.watched || e.position === null || !length || length <= 0) return null;
+  const f = e.position / length;
+  return f >= 0.01 && f < 0.92 ? f : null;
+}
+
+/** An episode row's height in the Show sheet, in pixels: a 63-pixel still
+ *  and its padding. */
+export const EPISODE_ROW_HEIGHT = 84;
+
+/** Which of a season's episodes are drawn: those in sight and a few either
+ *  side, so a season of hundreds stays a few dozen rows in the page. */
+export function episodeWindow(
+  scrollTop: number,
+  height: number,
+  count: number,
+): { start: number; end: number; totalHeight: number } {
+  const w = computeWindow(scrollTop, height, EPISODE_ROW_HEIGHT, count, OVERSCAN);
+  return { start: w.start, end: w.end, totalHeight: w.totalHeight };
 }
 
 /** The episode the player holds: the one it has open, else the one that has

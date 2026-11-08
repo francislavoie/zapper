@@ -53,6 +53,7 @@ import { MoviesList } from "./components/MoviesList";
 import { MovieSheet } from "./components/MovieSheet";
 import { MoviesRail } from "./components/MoviesRail";
 import { ShowsList } from "./components/ShowsList";
+import { ShowSheet } from "./components/ShowSheet";
 import { ShowsRail } from "./components/ShowsRail";
 import { RecordingsView } from "./components/RecordingsView";
 import { RecordingsWatcher } from "./components/RecordingsWatcher";
@@ -683,6 +684,9 @@ export function App() {
             {/* Over the rail and the list, under the band. */}
             {moviesOn && !guiding && state.movies.sheetId !== null ? (
               <MovieSheet id={state.movies.sheetId} />
+            ) : null}
+            {showsOn && !guiding && state.shows.sheetId !== null ? (
+              <ShowSheet key={state.shows.sheetId} id={state.shows.sheetId} />
             ) : null}
           </div>
         </Activity>

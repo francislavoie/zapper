@@ -12,6 +12,7 @@ import type { ActionId } from "./logic/palette";
 import type { SleepRequest } from "./logic/sleep";
 import { refreshFullscreen } from "./hooks/useFullscreen";
 import { clearMovieDetails } from "./hooks/useMovieDetails";
+import { clearShowDetails } from "./hooks/useShowDetails";
 import { clearDeadPosters } from "./deadPosters";
 import { windowControls } from "./window";
 import { ALL_CATEGORIES, run, type Action, type Mode } from "./store";
@@ -535,13 +536,17 @@ export async function setEpisodeWatched(
 let showsOrigin: string | null = null;
 
 /** The rail's counts, and whether the account has shows at all, as
- *  `loadMoviesSummary`. When the shows are another account's, the pictures
- *  that failed to load are asked for again (the store resets the rest). */
+ *  `loadMoviesSummary`. When the shows are another account's, the details
+ *  kept by id and the pictures that failed to load are forgotten (the store
+ *  resets the rest). */
 export async function loadShowsSummary(dispatch: Dispatch<Action>, quiet = false): Promise<void> {
   if (!quiet) dispatch({ type: "shows/summary", value: loading() });
   try {
     const summary = await backend.showsSummary();
-    if (showsOrigin !== null && showsOrigin !== summary.origin) clearDeadPosters();
+    if (showsOrigin !== null && showsOrigin !== summary.origin) {
+      clearShowDetails();
+      clearDeadPosters();
+    }
     showsOrigin = summary.origin;
     dispatch({ type: "shows/summary", value: ready(summary) });
   } catch (e) {

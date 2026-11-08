@@ -4,7 +4,9 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { OVERSCAN } from "../logic/virtual.ts";
 import {
+  EPISODE_ROW_HEIGHT,
   SHOW_FAVOURITES,
   SHOW_RECENT,
   SHOW_SEARCH_PLACEHOLDER,
@@ -12,7 +14,9 @@ import {
   SHOWS_VIEW_STORAGE_KEY,
   episodeCode,
   episodeLine,
+  episodeProgress,
   episodeTitle,
+  episodeWindow,
   firstSeason,
   fixedShowItems,
   heldEpisode,
@@ -98,6 +102,28 @@ test("the sheet opens on the next-up's season, else the first", () => {
   assert.equal(firstSeason(details({ seasons, episodes, nextUp: null })), 1);
   assert.equal(firstSeason(details()), null);
 });
+test("with nothing next, the sheet opens on a season rather than the specials", () => {
+  const specials = { number: 0, name: "Specials", episodeCount: 2, watchedCount: 0 };
+  const one = { number: 1, name: "Season 1", episodeCount: 3, watchedCount: 3 };
+  const episodes = [ep(101, 1, 1, { watched: true }), ep(1, 0, 1)];
+  assert.equal(firstSeason(details({ seasons: [one, specials], episodes, nextUp: null })), 1);
+  // Even listed first, the specials are not where the sheet opens.
+  assert.equal(firstSeason(details({ seasons: [specials, one], episodes, nextUp: null })), 1);
+  // A show of specials alone opens on them.
+  assert.equal(firstSeason(details({ seasons: [specials], episodes: [ep(1, 0, 1)], nextUp: null })), 0);
+});
+test("the episode list is windowed: a long season draws only what is in sight", () => {
+  assert.equal(EPISODE_ROW_HEIGHT, 84);
+  const top = episodeWindow(0, 840, 400);
+  assert.equal(top.start, 0);
+  assert.ok(top.end <= 10 + 2 * OVERSCAN, `end ${top.end}`);
+  assert.equal(top.totalHeight, 33600);
+  assert.ok(episodeWindow(84 * 200, 840, 400).start >= 200 - OVERSCAN);
+  assert.equal(episodeWindow(0, 840, 0).end, 0);
+  assert.equal(episodeWindow(0, 840, 0).totalHeight, 0);
+  // Scrolled to the end, the last episode is drawn.
+  assert.equal(episodeWindow(84 * 400 - 840, 840, 400).end, 400);
+});
 test("a selection becomes the query the backend reads", () => {
   assert.deepEqual(showQuery(SHOW_RECENT, "added", null), { list: "recent", categoryId: null, sort: "added", yearFrom: null, yearTo: null });
   assert.deepEqual(showQuery("s4", "az", { from: 2010, to: 2019 }), { list: "category", categoryId: "s4", sort: "az", yearFrom: 2010, yearTo: 2019 });
@@ -137,4 +163,13 @@ test("the episode the player holds: open, or just finished", () => {
 test("the placeholder leaves the key hint to the box", () => {
   assert.equal(SHOW_SEARCH_PLACEHOLDER, "Search shows  ·  a|b for either");
   assert.equal(SHOWS_VIEW_STORAGE_KEY, "zapper.showsView");
+});
+test("an episode's progress shows only while it is in progress", () => {
+  assert.equal(episodeProgress(ep(1, 1, 1, { position: 1000, durationSecs: 2000 })), 0.5);
+  assert.equal(episodeProgress(ep(1, 1, 1, { position: 1000, duration: 4000, durationSecs: 2000 })), 0.25);
+  assert.equal(episodeProgress(ep(1, 1, 1, { position: 10, durationSecs: 2000 })), null);
+  assert.equal(episodeProgress(ep(1, 1, 1, { position: 1900, durationSecs: 2000 })), null);
+  assert.equal(episodeProgress(ep(1, 1, 1, { position: 1000, durationSecs: 2000, watched: true })), null);
+  assert.equal(episodeProgress(ep(1, 1, 1, { position: 1000 })), null);
+  assert.equal(episodeProgress(ep(1, 1, 1)), null);
 });
