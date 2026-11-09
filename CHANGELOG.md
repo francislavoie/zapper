@@ -9,6 +9,8 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-08
+
 ### Added
 
 - **Continue watching** (`W`): pick up movies and shows where you left off, in the app and the browser. Opening one you left partway asks whether to resume or start over, and movies show a progress bar.
