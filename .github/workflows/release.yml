@@ -266,9 +266,17 @@ jobs:
         run: npm run build
 
       # zapper-server, built against that FFmpeg.
+      # The notices --licenses prints, compiled in as the static build does
+      # (scripts/build-server-static.sh): zapper's, the Rust crates', the interface's.
       - name: Build zapper-server
         run: |
           $env:CARGO_BUILD_JOBS = "$env:NUMBER_OF_PROCESSORS"
+          $notices = "target/server-notices"
+          New-Item -ItemType Directory -Force $notices | Out-Null
+          Copy-Item LICENSE "$notices/1-LICENSE.txt"
+          Copy-Item target/licenses/THIRD-PARTY-NOTICES-rust.txt "$notices/4-THIRD-PARTY-NOTICES-rust.txt"
+          Copy-Item dist/licenses/THIRD-PARTY-NOTICES-ui.txt "$notices/5-THIRD-PARTY-NOTICES-ui.txt"
+          $env:ZAPPER_SERVER_NOTICES = (Resolve-Path $notices).Path
           cargo build --release -p zapper-server --bin zapper-server
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
