@@ -34,7 +34,7 @@ while read -r tag; do
   [ "$(python3 scripts/version.py cmp "$v" "${tag#v}")" = 1 ] || fail "$v is not newer than $tag"
 done < <(git tag -l 'v*')
 
-files=(crates/zapper/tauri.conf.json Cargo.toml Cargo.lock package.json package-lock.json CHANGELOG.md)
+files=(Cargo.toml Cargo.lock package.json package-lock.json CHANGELOG.md)
 committed=
 trap '[ -n "$committed" ] || git checkout -q -- "${files[@]}"' EXIT
 python3 scripts/set-version.py "$v"

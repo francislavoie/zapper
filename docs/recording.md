@@ -775,16 +775,14 @@ Logs go to standard error: `journalctl --user -u zapper-server` when installed f
 
 ```sh
 npm run build          # the interface it serves to browsers, compiled in
-cd crates/zapper
-cargo build --release --no-default-features --features server --bin zapper-server
+cargo build --release -p zapper --features server --bin zapper-server
 ```
 
 The web interface is the frontend's build in `dist/`, compiled into the binary by `build.rs`: a
 release build refuses without it, and a debug build without it serves a page saying it was not
 built.
 
-`--no-default-features` leaves out the `gui` feature, so nothing of Tauri, WebKit, GTK or libmpv
-is linked; the server needs only `libavformat`, `libavcodec` and `libavutil`. It takes them from
+The `server` feature alone (no `mpv`), so no libmpv is linked; the server needs only `libavformat`, `libavcodec` and `libavutil`. It takes them from
 zapper's own LGPL FFmpeg, the one the app's libmpv uses, when `just fetch-libmpv` has unpacked
 it into `crates/zapper/lib/<platform>/` (headers in `include/`, libraries in `link/` and `runtime/`;
 docs/licensing.md); `build.rs` then links them from there and points the binary at them

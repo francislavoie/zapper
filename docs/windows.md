@@ -1,5 +1,16 @@
 # zapper on Windows
 
+> **This line is the rewrite:** it has no desktop app (the Tauri app, 0.4.x, is on the
+> [`main-tauri`](https://github.com/francislavoie/zapper/tree/main-tauri) branch). Here, Windows
+> gets `zapper-server-<version>-windows-x86_64.zip`: `zapper-server.exe`, the libmpv and FFmpeg
+> DLLs it loads and the license notices, built and checked by the release workflow
+> (docs/releasing.md). Building it is `tools\fetch-libmpv.ps1`, `npm run build`, then
+> `cargo build --release -p zapper --no-default-features --features server --bin zapper-server`.
+> The installers, `npm run app`, `npx tauri build` and `scripts/check-windows.ps1` below describe
+> the 0.4.x app and are kept on `main-tauri`; what they say about libmpv, the DLLs, paths and the
+> recording service still applies.
+
+
 zapper builds and runs on Windows 10 and 11 (x64), and each release carries
 two installers for it. The interface is the same WebView2 page as on Linux;
 video is drawn by libmpv into a window of its own beneath the page. This

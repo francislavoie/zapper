@@ -2,8 +2,7 @@
 """Usage: scripts/set-version.py <version>  (part of `just release`)
 
 Sets zapper's version everywhere it's recorded, editing only the version lines (no
-reformatting): crates/zapper/tauri.conf.json (what the packages are named after), [workspace.package] in
-Cargo.toml (zapper's crate inherits it) and zapper's own entry in Cargo.lock (what the updater compares
+reformatting): [workspace.package] in Cargo.toml (zapper's crate inherits it) and zapper's own entry in Cargo.lock (what the updater compares
 against: CARGO_PKG_VERSION), package.json, and package-lock.json's two copies. Each file is
 parsed again afterwards and must differ from the original only in those versions. Errors exit
 with status 2 before any file is written.
@@ -56,8 +55,6 @@ def main(argv):
         raise Fail(f"unexpected characters in {version!r}")
     writes = []
 
-    writes.append(json_edit("crates/zapper/tauri.conf.json", version,
-                            [(r'^(  "version": ")([^"]*)(")', ["version"])]))
     writes.append(json_edit("package.json", version, [(r'^(  "version": ")([^"]*)(")', ["version"])]))
     writes.append(json_edit("package-lock.json", version, [
         (r'^(  "version": ")([^"]*)(")', ["version"]),

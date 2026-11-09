@@ -1,19 +1,19 @@
 # Release: `just release <version>` commits the version bump and tags it v<version>; pushing the
-# tag builds the Linux packages (.deb, .rpm and the Arch package), the static zapper-server for
-# Linux and the Windows installers (the NSIS setup and the MSI), checks them, and uploads them with SHA256SUMS to a *draft* GitHub
-# release for review. Nothing is published until someone presses Publish.
+# tag builds zapper-server (the static binary for Linux and a zip for Windows), checks them, and
+# uploads them with SHA256SUMS to a *draft* GitHub release for review. Nothing is published
+# until someone presses Publish.
+#
+# This line ships zapper-server and the browser interface it serves; the desktop app is being
+# rebuilt, so there are no installers, .deb, .rpm or Arch packages here (the Tauri app's, 0.4.x,
+# are released from the main-tauri branch).
 #
 # - a pushed v* tag builds that tag and drafts its release;
 # - "Run workflow" (workflow_dispatch) with a tag does the same for that tag (to redo or rescue
-#   a release); without one it is a dry run: the same build and checks, the packages kept as a
-#   workflow artifact, no release.
+#   a release); without one it is a dry run: the same build and checks, the files kept as
+#   workflow artifacts, no release.
 #
-# macOS: the job is here and wired up. macOS builds, packages and plays on the CI runners
-# (.github/workflows/macos.yml, docs/macos.md) but has not been tried on a real Mac, and needs a
-# published libmpv for macos-arm64 in packaging/libmpv/manifest.json. It runs only on a manual
-# run with "Also build macOS" ticked. A tag push never runs it, so it can never hold a release
-# back. When the port is ready: make it run on tag pushes too (drop the `inputs.macos`
-# condition) and list its asset in docs/releasing.md.
+# The version is the one in [workspace.package] in Cargo.toml (scripts/version.py current); a tag
+# must match it.
 #
 # See docs/releasing.md.
 name: Release
@@ -27,11 +27,6 @@ on:
         description: 'Release this tag (v1.2.3): build its commit and draft the release. Empty: a dry run.'
         required: false
         default: ''
-      macos:
-        description: 'Also build macOS (not released yet; needs a published macOS libmpv in the manifest).'
-        type: boolean
-        required: false
-        default: false
 
 permissions: {}
 
@@ -49,8 +44,6 @@ jobs:
     name: Plan
     runs-on: ubuntu-24.04
     timeout-minutes: 5
-    permissions:
-      contents: read # read the tag through the API, which a private repository requires
     outputs:
       tag: ${{ steps.plan.outputs.tag }}
       sha: ${{ steps.plan.outputs.sha }}
@@ -84,8 +77,15 @@ jobs:
           echo "tag=${tag:-none (dry run)} sha=$sha"
           { echo "tag=$tag"; echo "sha=$sha"; } >> "$GITHUB_OUTPUT"
 
-  linux:
-    name: Build and check the Linux packages
+  # zapper-server for Linux as one static file, zapper-server-<version>-linux-x86_64: built for
+  # x86_64-unknown-linux-musl in a pinned Rust image on Alpine, with a minimal static LGPL FFmpeg
+  # (scripts/build-ffmpeg-static.sh, cached on what it is made from) and its licence notices
+  # built in (scripts/build-server-static.sh). Then scripts/check-server-binary.sh: statically
+  # linked, run in bare debian:stable-slim and alpine containers and from scratch, its sample
+  # Dockerfile, and the fixture streams recorded through it by recording_check, built for the
+  # same target. This job also checks the tag against the version and writes the release notes.
+  server:
+    name: Build and check the static zapper-server
     needs: plan
     runs-on: ubuntu-24.04
     timeout-minutes: 90
@@ -100,19 +100,19 @@ jobs:
           ref: ${{ needs.plan.outputs.sha }}
           persist-credentials: false
 
-      # The tag must be the version the packages are built as, and the updater inside them must
+      # The tag must be the version the binaries are built as, and the updater inside them must
       # take its releases from this repository: a build pointing at the placeholder, or at
-      # another repository, would ship installs that never find their next update.
+      # another repository, would ship builds that never find their next update.
       - name: Version and releases repository
         id: version
         env:
           TAG: ${{ needs.plan.outputs.tag }}
         run: |
-          conf=$(jq -er .version crates/zapper/tauri.conf.json)
+          conf=$(python3 scripts/version.py current)
           if [ -n "$TAG" ]; then
             v=${TAG#v}
             if [ "$v" != "$conf" ]; then
-              echo "::error::The tag $TAG doesn't match tauri.conf.json's version $conf; tag with 'just release <version>'."
+              echo "::error::The tag $TAG doesn't match the workspace version $conf in Cargo.toml; tag with 'just release <version>'."
               exit 1
             fi
           else
@@ -125,8 +125,6 @@ jobs:
             if [ -n "$TAG" ]; then echo "::error::$msg"; exit 1; else echo "::warning::$msg"; fi
           fi
           { echo "version=$v"; echo "prerelease=$(python3 scripts/version.py prerelease "$v")"; } >> "$GITHUB_OUTPUT"
-          # The Arch package's file times and build date: the release commit's time.
-          echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
           echo "Version $v (pre-release: $(python3 scripts/version.py prerelease "$v")), releases from $repo"
 
       # Before the long build: a tag needs its CHANGELOG.md section (just release writes it).
@@ -135,8 +133,6 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
           TAG: ${{ needs.plan.outputs.tag }}
         run: |
-          # out/, not dist/: the frontend build `just package` runs empties dist/ (Vite's
-          # outDir), which took the notes with it.
           mkdir -p out
           if python3 scripts/changelog.py notes "$VERSION" CHANGELOG.md > out/release-notes.md; then
             echo "Release notes: $(wc -l < out/release-notes.md) lines"
@@ -146,121 +142,6 @@ jobs:
             echo "::warning::No CHANGELOG.md section for $VERSION (fine for a dry run)."
             rm out/release-notes.md
           fi
-
-      # The Linux build dependencies (README.md). The packages' Depends are fixed in tauri.conf.json, not
-      # derived from these, so a package built here installs wherever its Depends resolve. No
-      # libmpv: the packages carry zapper's own LGPL build, which `just package` fetches
-      # (scripts/fetch-libmpv.sh, the archive packaging/libmpv/manifest.json names).
-      - name: System packages
-        run: |
-          sudo apt-get update -q
-          sudo apt-get install -y -q --no-install-recommends \
-            libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev \
-            libjavascriptcoregtk-4.1-dev librsvg2-dev libxdo-dev libayatana-appindicator3-dev \
-            libepoxy-dev pkg-config jq dpkg-dev desktop-file-utils zstd
-          # The runtime libraries the .deb depends on (the first of each set of alternatives, without
-          # a version constraint such as "(>= 2.40)"), which the bundled libmpv links: check-deb has
-          # dpkg-shlibdeps map those links to packages, and it can only map a library that is installed.
-          jq -r '.bundle.linux.deb.depends[] | split(" | ")[0] | sub(" *\\(.*\\)$"; "")' crates/zapper/tauri.conf.json \
-            | xargs sudo apt-get install -y -q --no-install-recommends
-
-      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
-        with:
-          toolchain: stable
-
-      # Restore only: a tag's cache would serve nothing but a re-run of that tag, and CI on main
-      # (ci.yml) keeps a debug cache, which a release build can't use anyway.
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          key: release
-          save-if: 'false'
-
-      # just, and cargo-about for the license notices `just package` generates
-      # (scripts/licenses.sh, docs/licensing.md).
-      - uses: taiki-e/install-action@183e4297cca2404691e9380e1307288dced5c82a # v2.87.25
-        with:
-          tool: just,cargo-about@${{ env.CARGO_ABOUT_VERSION }}
-
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version-file: .nvmrc
-          cache: npm
-      - run: npm ci
-
-      # `just package`: the bundled libmpv (scripts/fetch-libmpv.sh), the frontend build, the
-      # release binary, the .deb and the .rpm from it, then scripts/fix-deb.sh (a pre-release's
-      # Version in Debian's form), scripts/check-deb.sh (name, Depends, /usr/bin, the bundled
-      # libmpv and the binary's way to it, the install-kind marker, the desktop entry) and
-      # scripts/package-arch.sh (the Arch package, from the .deb).
-      # ZAPPER_RELEASE_VERSION must equal tauri.conf.json's version.
-      - name: Build the packages
-        env:
-          ZAPPER_RELEASE_VERSION: ${{ steps.version.outputs.version }}
-        run: CARGO_BUILD_JOBS=$(nproc) just package
-
-      # Installs it in archlinux:latest: dependencies, pacman -Qkk, the install-kind marker, the
-      # license notices, ldd and a headless launch (scripts/check-arch-pkg.sh).
-      - name: Check the Arch package
-        run: just check-arch-pkg
-
-
-      # The names are an API: installed copies find their update by them
-      # (crates/zapper/src/updates/release.rs, docs/releasing.md).
-      - name: Collect the packages and SHA256SUMS
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          deb=target/release/bundle/deb/zapper_${VERSION}_amd64.deb
-          rpm=target/release/bundle/rpm/zapper-${VERSION}-1.x86_64.rpm
-          # pacman's version has no '-': 0.2.0-rc.1 is 0.2.0rc.1 (scripts/arch-pkg.py).
-          pkg=target/release/bundle/arch/zapper-${VERSION//-/}-1-x86_64.pkg.tar.zst
-          for f in "$deb" "$rpm" "$pkg"; do
-            [ -f "$f" ] || { echo "::error::Missing $f: $(ls target/release/bundle/*/)"; exit 1; }
-          done
-          cp "$deb" "$rpm" "$pkg" out/
-          (cd out && sha256sum -- *.deb *.rpm *.pkg.tar.zst > SHA256SUMS && cat SHA256SUMS)
-
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: zapper-${{ steps.version.outputs.version }}-linux
-          path: out/
-          if-no-files-found: error
-          retention-days: 3
-          compression-level: 0
-          overwrite: true # a re-run replaces the earlier attempt's artifact
-
-  # zapper-server for Linux as one static file, zapper-server-<version>-linux-x86_64, beside the
-  # other jobs: built for x86_64-unknown-linux-musl in a pinned Rust image on Alpine, with a
-  # minimal static LGPL FFmpeg (scripts/build-ffmpeg-static.sh, cached on what it is made from)
-  # and its licence notices built in (scripts/build-server-static.sh). Then
-  # scripts/check-server-binary.sh: statically linked, run in bare debian:stable-slim and alpine
-  # containers and from scratch, its sample Dockerfile, and the fixture streams recorded through
-  # it by recording_check, built for the same target. The version check is the Windows job's.
-  server:
-    name: Build and check the static zapper-server
-    needs: plan
-    runs-on: ubuntu-24.04
-    timeout-minutes: 90
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ needs.plan.outputs.sha }}
-          persist-credentials: false
-
-      - name: Version
-        id: version
-        env:
-          TAG: ${{ needs.plan.outputs.tag }}
-        run: |
-          conf=$(jq -er .version crates/zapper/tauri.conf.json)
-          v=$conf
-          if [ -n "$TAG" ]; then
-            v=${TAG#v}
-            [ "$v" = "$conf" ] || { echo "::error::The tag $TAG doesn't match tauri.conf.json's version $conf"; exit 1; }
-          fi
-          echo "version=$v" >> "$GITHUB_OUTPUT"
 
       # The Rust notices it carries, from Linux's crate graph (the musl build's is the same
       # crates), and the interface it serves, with its own notices.
@@ -312,12 +193,12 @@ jobs:
           compression-level: 0
           overwrite: true
 
-  # The NSIS setup (per-user) and the MSI (per-machine), from one build, beside the Linux job
-  # rather than after it: the version check is repeated here, so neither waits on the other.
-  # Unsigned, so SmartScreen warns on the first run (README.md): a signing step goes here when
-  # there's a certificate.
+  # zapper-server for Windows, zapper-server-<version>-windows-x86_64.zip: zapper-server.exe, the
+  # libmpv and FFmpeg DLLs it loads, and the license notices, to unzip anywhere. Unsigned, so
+  # SmartScreen warns on the first run. The version check is repeated here, so it doesn't wait on
+  # the Linux job.
   windows:
-    name: Build and check the Windows installers
+    name: Build and check zapper-server for Windows
     needs: plan
     runs-on: windows-latest
     timeout-minutes: 90
@@ -335,27 +216,22 @@ jobs:
           ref: ${{ needs.plan.outputs.sha }}
           persist-credentials: false
 
-      # As the Linux job checks it: the tag is tauri.conf.json's version. An MSI's own version
-      # is numeric (Tauri refuses `0.2.0-rc.1`), so a pre-release's MSI says X.Y.Z; its file
-      # name keeps the full version, which is what the updater looks for. Every build of X.Y.Z
-      # then shares one MSI version, which is fine: Tauri's MSI replaces any version it finds.
       - name: Version
         id: version
         env:
           TAG: ${{ needs.plan.outputs.tag }}
         run: |
-          $conf = (Get-Content -Raw crates/zapper/tauri.conf.json | ConvertFrom-Json).version
+          $conf = (python scripts/version.py current).Trim()
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
           $v = $conf
           if ($env:TAG) {
             $v = $env:TAG.Substring(1)
-            if ($v -ne $conf) { throw "The tag $env:TAG doesn't match tauri.conf.json's version $conf" }
+            if ($v -ne $conf) { throw "The tag $env:TAG doesn't match the workspace version $conf in Cargo.toml" }
           }
-          $numeric = ($v -split '-')[0]
-          $wix = Join-Path $env:RUNNER_TEMP "wix-version.json"
-          @{ bundle = @{ windows = @{ wix = @{ version = $numeric } } } } | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 $wix
+          python scripts/version.py check $v
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
           "version=$v" >> $env:GITHUB_OUTPUT
-          "wix_config=$wix" >> $env:GITHUB_OUTPUT
-          "Version $v (MSI version $numeric)"
+          "Version $v"
 
       - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
         with:
@@ -374,9 +250,8 @@ jobs:
       - name: Fetch libmpv
         run: ./tools/fetch-libmpv.ps1
 
-      # The license notices the installers carry in licenses\ (docs/licensing.md): the Rust
-      # crates' from Windows' graph, in Git for Windows' bash. The UI build `tauri build` runs
-      # writes the interface's, and copies in libmpv's from the fetched archive.
+      # The license notices the zip carries in licenses\ (docs/licensing.md): the Rust crates'
+      # from Windows' graph, in Git for Windows' bash.
       - uses: taiki-e/install-action@183e4297cca2404691e9380e1307288dced5c82a # v2.87.25
         with:
           tool: cargo-about@${{ env.CARGO_ABOUT_VERSION }}
@@ -390,49 +265,45 @@ jobs:
       - name: Build the interface
         run: npm run build
 
-      # zapper-server, the recording service, built against the same FFmpeg; the installers put
-      # it beside zapper.exe (packaging/windows/installers.conf.json).
+      # zapper-server, built against that FFmpeg.
       - name: Build zapper-server
         run: |
           $env:CARGO_BUILD_JOBS = "$env:NUMBER_OF_PROCESSORS"
-          cargo build --release --manifest-path crates/zapper/Cargo.toml --no-default-features --features server --bin zapper-server
+          cargo build --release -p zapper --no-default-features --features server --bin zapper-server
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
-      # The NSIS installer and the MSI, with the install-kind markers (packaging/windows/).
-      - name: Build the installers
-        env:
-          WIX_CONFIG: ${{ steps.version.outputs.wix_config }}
-        run: |
-          $env:CARGO_BUILD_JOBS = "$env:NUMBER_OF_PROCESSORS"
-          npx tauri build --config packaging/windows/installers.conf.json --config $env:WIX_CONFIG
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-
-      # The names are an API: installed copies find their update by them
-      # (crates/zapper/src/updates/release.rs, docs/releasing.md).
-      - name: Collect the installers
+      # The exe, the DLLs it loads and the notices, in one folder, zipped. The name is an API:
+      # the release job and docs/releasing.md name it.
+      - name: Collect the zip
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          $files = @(
-            "target/release/bundle/nsis/zapper_${env:VERSION}_x64-setup.exe",
-            "target/release/bundle/msi/zapper_${env:VERSION}_x64_en-US.msi"
-          )
-          New-Item -ItemType Directory -Force out | Out-Null
-          foreach ($f in $files) {
-            if (-not (Test-Path $f)) { throw "Missing $f`: $(Get-ChildItem -Name target/release/bundle/*/)" }
-            Copy-Item $f out/
+          $dir = "stage/zapper-server-$env:VERSION-windows-x86_64"
+          New-Item -ItemType Directory -Force $dir, out | Out-Null
+          Copy-Item target/release/zapper-server.exe $dir/
+          Copy-Item crates/zapper/lib/windows-x86_64/runtime/*.dll $dir/
+          New-Item -ItemType Directory -Force "$dir/licenses" | Out-Null
+          Copy-Item -Recurse target/licenses/* "$dir/licenses/"
+          Copy-Item LICENSE $dir/
+          Compress-Archive -Path $dir -DestinationPath "out/zapper-server-$env:VERSION-windows-x86_64.zip"
+
+      # Unpacks it and runs what it says: the version it was built as, its notices, and the
+      # DLLs beside the exe (a missing one fails to start, here, not on a user's machine).
+      - name: Check the zip
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          Expand-Archive "out/zapper-server-$env:VERSION-windows-x86_64.zip" -DestinationPath check
+          $exe = "check/zapper-server-$env:VERSION-windows-x86_64/zapper-server.exe"
+          $say = (& $exe --version) -join "`n"
+          if ($LASTEXITCODE) { throw "zapper-server.exe --version failed" }
+          if ($say.Trim() -ne "zapper-server $env:VERSION") { throw "--version says '$say', not 'zapper-server $env:VERSION'" }
+          $licenses = (& $exe --licenses) -join "`n"
+          if ($LASTEXITCODE -or $licenses.Length -lt 1000) { throw "zapper-server.exe --licenses printed no notices" }
+          foreach ($dll in 'libmpv-2.dll', 'avcodec-62.dll', 'avformat-62.dll') {
+            if (-not (Test-Path "check/zapper-server-$env:VERSION-windows-x86_64/$dll")) { throw "the zip lacks $dll" }
           }
-
-      # Unpacks the MSI, and installs the NSIS setup (silently, for this user) then uninstalls
-      # it: zapper.exe, zapper-server.exe and the DLLs side by side, the install-kind marker each
-      # leaves, the license notices, nothing imported but the bundled DLLs and Windows' own,
-      # FFmpeg and libmpv built LGPL, and zapper-server starting (scripts/check-windows.ps1).
-      - name: Check the installers
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          ./scripts/check-windows.ps1 -Dir out -Version $env:VERSION -Install
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          "ok: $say"
 
       - name: SHA256SUMS
         run: |
@@ -450,82 +321,14 @@ jobs:
           compression-level: 0
           overwrite: true
 
-  # Not released yet (docs/macos.md). Runs only when asked for on a manual run. Ad-hoc signed,
-  # not notarized: a signing identity and notarization are still to be set up.
-  macos:
-    name: Build the macOS disk image (experimental)
-    needs: [plan, linux]
-    if: ${{ inputs.macos == true }}
-    runs-on: macos-15 # Apple Silicon: the aarch64 .dmg
-    timeout-minutes: 90
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ needs.plan.outputs.sha }}
-          persist-credentials: false
-
-      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
-        with:
-          toolchain: stable
-
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version-file: .nvmrc
-          cache: npm
-      - run: npm ci
-
-      # zapper's LGPL libmpv.2.dylib, the archive packaging/libmpv/manifest.json names, into
-      # crates/zapper/lib/macos-arm64; the bundle carries it in Contents/Frameworks.
-      - name: Fetch libmpv
-        run: scripts/fetch-libmpv.sh macos-arm64
-
-      # The license notices zapper.app carries in Contents/Resources/licenses (docs/licensing.md),
-      # the Rust crates' from this Mac's graph.
-      - uses: taiki-e/install-action@183e4297cca2404691e9380e1307288dced5c82a # v2.87.25
-        with:
-          tool: cargo-about@${{ env.CARGO_ABOUT_VERSION }}
-      - name: License notices
-        run: scripts/licenses.sh
-
-      # zapper.app with install-kind = dmg in Contents/Resources, and the .dmg holding it.
-      - name: Build the disk image
-        run: CARGO_BUILD_JOBS=$(sysctl -n hw.ncpu) npx tauri build --config packaging/macos/dmg.conf.json
-
-      # What it links, that nothing in it is GPL, the notices, the marker and the signature.
-      - name: Check the bundle
-        run: scripts/check-macos-app.sh target/release/bundle/macos/zapper.app
-
-      - name: Collect the disk image and its checksum
-        env:
-          VERSION: ${{ needs.linux.outputs.version }}
-        run: |
-          dmg=target/release/bundle/dmg/zapper_${VERSION}_aarch64.dmg
-          [ -f "$dmg" ] || { echo "::error::Missing $dmg"; exit 1; }
-          mkdir -p out
-          cp "$dmg" out/
-          (cd out && shasum -a 256 -- *.dmg > SHA256SUMS && cat SHA256SUMS)
-
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: zapper-${{ needs.linux.outputs.version }}-macos
-          path: out/
-          if-no-files-found: error
-          retention-days: 3
-          compression-level: 0
-          overwrite: true
-
   release:
     name: Draft the GitHub release
-    needs: [plan, linux, server, windows, macos]
-    # The Linux packages and the Windows installers are the release. macOS joins it when it ran
-    # and passed; skipped (the normal case) it's simply absent, but a failure or a cancel holds
-    # the release back rather than drafting it without it by surprise.
+    needs: [plan, server, windows]
+    # Both builds are the release: a failure or a cancel holds it back rather than drafting it
+    # without one by surprise.
     if: >-
-      ${{ always() && needs.plan.outputs.tag != '' && needs.linux.result == 'success'
-      && needs.windows.result == 'success' && needs.server.result == 'success'
-      && needs.macos.result != 'failure' && needs.macos.result != 'cancelled' }}
+      ${{ always() && needs.plan.outputs.tag != '' && needs.server.result == 'success'
+      && needs.windows.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -535,10 +338,10 @@ jobs:
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: zapper-${{ needs.linux.outputs.version }}-*
+          pattern: zapper-${{ needs.server.outputs.version }}-*
           path: parts
 
-      # Each job's checksums, then one SHA256SUMS for every package. The updater refuses any
+      # Each job's checksums, then one SHA256SUMS for every file. The updater refuses any
       # package SHA256SUMS doesn't list, so this file is what makes the release installable.
       - name: Verify and merge SHA256SUMS
         run: |
@@ -565,13 +368,8 @@ jobs:
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
-            dist/*.deb
-            dist/*.rpm
-            dist/*.pkg.tar.zst
             dist/zapper-server-*-linux-x86_64
-            dist/*.exe
-            dist/*.msi
-            dist/*.dmg
+            dist/zapper-server-*-windows-x86_64.zip
 
       # Creates the draft, or on a re-run updates it and replaces its assets (--clobber). A
       # release that's already published is left alone: the run fails instead.
@@ -580,11 +378,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           TAG: ${{ needs.plan.outputs.tag }}
-          VERSION: ${{ needs.linux.outputs.version }}
-          PRERELEASE: ${{ needs.linux.outputs.prerelease }}
+          VERSION: ${{ needs.server.outputs.version }}
+          PRERELEASE: ${{ needs.server.outputs.prerelease }}
         run: |
           shopt -s nullglob
-          assets=(dist/*.deb dist/*.rpm dist/*.pkg.tar.zst dist/zapper-server-*-linux-x86_64 dist/*.exe dist/*.msi dist/*.dmg dist/SHA256SUMS)
+          assets=(dist/zapper-server-*-linux-x86_64 dist/zapper-server-*-windows-x86_64.zip dist/SHA256SUMS)
           if draft=$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null); then
             if [ "$draft" != true ]; then
               echo "::error::The release $TAG is already published; not replacing its assets."

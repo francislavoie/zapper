@@ -1,22 +1,25 @@
 #!/usr/bin/env python3
-"""zapper's version rules (`just release`, fix-deb.sh, the release workflow).
+"""zapper's version rules (`just release`, the release workflow).
 
 A release version is SemVer without build metadata: X.Y.Z or X.Y.Z-<pre-release>, where the
 pre-release is dot-separated identifiers that are each lowercase letters or a number, the first
 a word: 0.1.0-alpha.1, 0.2.0-rc.2. That subset keeps one order everywhere: SemVer's (which the
-updater uses, crates/zapper/src/updates/version.rs), dpkg's (0.1.0~alpha.1) and rpm's (Tauri writes
-0.1.0~alpha.1 there too). Mixed identifiers such as alpha10 are refused: SemVer sorts alpha10
+updater uses, crates/zapper/src/updates/version.rs), dpkg's (0.1.0~alpha.1) and rpm's (0.1.0~alpha.1). Mixed identifiers such as alpha10 are refused: SemVer sorts alpha10
 before alpha9 as words, and a person reading the tags would not expect that.
 
 Subcommands (errors go to stderr with exit status 2):
+  current [dir]         prints the version in [workspace.package] of <dir>/Cargo.toml (default: the
+                        repository's): the one version the tag, the binaries and the workflows share
   check <version>       exit 0 when <version> is a valid release version
   deb <version>         the Debian version: '-' before the pre-release becomes '~' (it sorts
                         before the release); a +build stamp is kept. Idempotent.
   prerelease <version>  prints true or false
   cmp <a> <b>           prints -1, 0 or 1 by SemVer precedence
 """
+import os
 import re
 import sys
+import tomllib
 
 NUM = r"(?:0|[1-9][0-9]*)"
 CORE = rf"{NUM}\.{NUM}\.{NUM}"
@@ -37,6 +40,14 @@ def check(v):
                    "numbers without leading zeros, no 'v' and no +build")
     raise Fail(f"{v!r}: the pre-release must start with a lowercase word (alpha, beta, rc), then "
                "dot-separated lowercase words or numbers without leading zeros: 0.1.0-alpha.1")
+
+
+def current(root):
+    try:
+        with open(os.path.join(root, "Cargo.toml"), "rb") as f:
+            return tomllib.load(f)["workspace"]["package"]["version"]
+    except (OSError, KeyError, tomllib.TOMLDecodeError) as e:
+        raise Fail(f"no [workspace.package] version in {root}/Cargo.toml: {e}")
 
 
 def parse(v):
@@ -68,6 +79,9 @@ def cmp(a, b):
 def main(argv):
     if len(argv) >= 2:
         cmd, args = argv[1], argv[2:]
+        if cmd == "current" and len(args) <= 1:
+            print(current(args[0] if args else os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+            return
         if cmd == "check" and len(args) == 1:
             check(args[0])
             return

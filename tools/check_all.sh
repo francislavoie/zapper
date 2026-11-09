@@ -1,23 +1,22 @@
 #!/usr/bin/env bash
 # Every layer, one command, no account access.
 #
-# The unit suites prove pieces in isolation; the harnesses prove the real
-# ones work together — GL compositing, mpv decode and transport, and the
-# catalogue commands over a large fixture catalogue. Video comes from a local
-# fixture (tools/make_fixtures.sh, served by tools/fake_stream.py), never a
-# provider.
+# The unit suites prove pieces in isolation; the harnesses prove the real ones work together:
+# the recording service through a real zapper-server, and (with --host) mpv decoding and the
+# player's transport on a headless host. Video comes from a local fixture
+# (tools/make_fixtures.sh, served by tools/fake_stream.py), never a provider.
 #
-# Nothing here reads the account or the catalogue on this machine: every
-# harness and the app itself run with ZAPPER_HOME pointed at a scratch
-# directory, which has neither. (A run against the real ones needs
-# ZAPPER_ALLOW_REAL_ACCOUNT=1, and this script never sets it.)
+# Nothing here reads the account or the catalogue on this machine: every harness runs with
+# ZAPPER_HOME pointed at a scratch directory, which has neither. (A run against the real ones
+# needs ZAPPER_ALLOW_REAL_ACCOUNT=1, and this script never sets it.)
 #
-#   tools/check_all.sh            # tests, lint, build, the fixture catalogue
-#   tools/check_all.sh --windowed # also the GL and playback harnesses
+#   tools/check_all.sh          # tests, lint, build, the recording and service checks
+#   tools/check_all.sh --host   # also the player checks, on a headless mpv host
 #
-# The windowed harnesses open real windows and play video, which interrupts
-# whoever is at the machine. They are opt-in for that reason: run them when
-# surface, mpv or rect behaviour changed, not on every edit.
+# --host needs libmpv (crates/zapper/lib, `just fetch-libmpv`), gnome-shell and dbus-run-session:
+# mpv opens its own window, so those checks run inside tools/headless_host.sh's headless
+# gnome-shell, never on the display of whoever is at the machine. They play video for a few
+# minutes: run them when the player, the mpv backend or the host changed, not on every edit.
 
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -25,11 +24,11 @@ export PATH="$HOME/.local/bin:$PATH"
 # An opt-in left exported in the calling shell is not consent for this run.
 unset ZAPPER_ALLOW_REAL_ACCOUNT
 
-WINDOWED=0
+HOST=0
 case "${1:-}" in
-  --windowed|--full) WINDOWED=1 ;;
+  --host|--full) HOST=1 ;;
   --fast|"") ;;
-  *) echo "usage: check_all.sh [--windowed]" >&2; exit 2 ;;
+  *) echo "usage: check_all.sh [--host]" >&2; exit 2 ;;
 esac
 
 PASS=0; FAIL=0
@@ -40,8 +39,13 @@ step() {
   else printf '\033[31m   FAIL\033[0m %s\n' "$label"; FAIL=$((FAIL+1)); fi
 }
 
-rust_tests()  { (cd crates/zapper && cargo test --lib -q 2>&1 | tail -3); }
-rust_clippy() { (cd crates/zapper && cargo clippy --lib --bins -q -- -D warnings 2>&1 | tail -3); }
+# The CI jobs' cargo commands (.github/workflows/ci.yml): core, mpv and server (pipefail keeps cargo's status).
+core_tests()    { cargo test -p zapper --lib -q 2>&1 | tail -3; }
+core_clippy()   { cargo clippy -p zapper --lib --bins -q -- -D warnings 2>&1 | tail -3; }
+mpv_tests()     { cargo test -p zapper --features mpv --lib -q 2>&1 | tail -3; }
+mpv_clippy()    { cargo clippy -p zapper --lib --bins --features harness,mpv -q -- -D warnings 2>&1 | tail -3; }
+server_tests()  { CI=1 cargo test -p zapper --lib --no-default-features --features server -q 2>&1 | tail -3; }
+server_clippy() { cargo clippy -p zapper --lib --bins --no-default-features --features server -q -- -D warnings 2>&1 | tail -3; }
 # The Node in .nvmrc, through nvm when it is installed; otherwise whatever is on PATH.
 use_node()    { [[ -s "$HOME/.nvm/nvm.sh" ]] || return 0; . "$HOME/.nvm/nvm.sh" && nvm use >/dev/null 2>&1; }
 front_build() { use_node && npm run build 2>&1 | tail -2; }
@@ -57,108 +61,120 @@ front_checks(){
   echo "$out" | grep -E '(pass|fail) [0-9]+' | head -2
   return $rc
 }
-ipc_check()   { (cd crates/zapper && cargo run -q --features harness --bin ipc_check 2>&1 | grep -E '^(PASS|FAIL|  FAIL)'); }
-# A provider ending and refusing streams, imitated by fake_stream.py (which it
-# starts itself), each one explained and none reopened behind the viewer.
-ending_check(){
-  (cd crates/zapper && ../../target/debug/ending_check 2>&1 | grep -E '^(PASS|FAIL|  FAIL)'
+
+TMP=$(mktemp -d)
+# Config, data and cache for every harness: empty, and gone with $TMP when this script exits. See
+# crates/zapper/src/paths.rs.
+export ZAPPER_HOME="$TMP/home"
+mkdir -p "$ZAPPER_HOME"
+PIDS=()
+stop_fixtures() { local p; for p in "${PIDS[@]}"; do kill "$p" 2>/dev/null; done; PIDS=(); }
+trap 'stop_fixtures; rm -rf "$TMP"' EXIT
+
+# --- the recording service, through a real zapper-server ----------------------
+
+server_bins() {
+  cargo build -q -p zapper --no-default-features --features harness,server \
+    --bin zapper-server --bin recording_check --bin offair_check --bin service_check 2>&1 | tail -3
+}
+# A harness bin run from the crate's directory, with its PASS/FAIL lines shown and its exit status
+# kept. No core dumps: a crash in a test process must not write one.
+harness() { # harness <bin> [args]
+  local bin="$1"; shift
+  (cd crates/zapper && ulimit -c 1 && ../../target/debug/"$bin" "$@" 2>&1 | grep -E '^(PASS|FAIL|  FAIL)'
    exit "${PIPESTATUS[0]}")
 }
 
-# --- windowed harnesses -----------------------------------------------------
+# --- the player checks, on a headless mpv host ---------------------------------
 
-SRV=""
 start_fixtures() {
-  python3 tools/fake_stream.py --port 8788 >"$TMP/fixtures.log" 2>&1 &
-  SRV=$!
+  python3 tools/fake_stream.py --port 8788 --movies 2 --series 1 >"$TMP/fixtures.log" 2>&1 &
+  PIDS+=($!)
+  python3 tools/fake_opensubtitles.py --port 19641 >"$TMP/subs.log" 2>&1 &
+  PIDS+=($!)
   sleep 2
   # Probe the index, not a fixture: the fixture endpoint is an endless chunked
   # stream with no Content-Length, so curl never sees a clean finish and
   # reports failure against a server that is working perfectly.
-  curl -sf --max-time 5 http://127.0.0.1:8788/ | grep -q '\.ts' 
+  curl -sf --max-time 5 http://127.0.0.1:8788/ | grep -q '\.ts'
 }
-stop_fixtures() { [[ -n "$SRV" ]] && kill "$SRV" 2>/dev/null; SRV=""; }
-TMP=$(mktemp -d)
-# Config, data and cache for every harness and the app: empty, and gone with
-# $TMP when this script exits. See crates/zapper/src/paths.rs.
-export ZAPPER_HOME="$TMP/home"
-mkdir -p "$ZAPPER_HOME"
-# The session's Wayland socket, with the usual defaults for a shell that wasn't
-# started inside the session (an SSH login, say).
-WL=${WAYLAND_DISPLAY:-wayland-0}
-XRD=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
-trap 'stop_fixtures; rm -rf "$TMP"' EXIT
 
-# Not `timeout`: uutils' implementation aborts on its kill path, which throws
-# a desktop crash dialog. Poll, then kill by PID.
-run_windowed() {
-  local bin="$1" secs="$2" log; log=$(mktemp)
-  ( cd crates/zapper && WAYLAND_DISPLAY=$WL XDG_RUNTIME_DIR=$XRD \
-      GDK_BACKEND=wayland ZAPPER_HARNESS=1 ZAPPER_FIXTURE_BASE=http://127.0.0.1:8788 \
-      ZAPPER_FIXTURE_NAME=sample1080.ts ZAPPER_STREAM_ID=1 \
-      ZAPPER_STREAM_URL=http://127.0.0.1:8788/sample1080.ts \
-      ../../target/debug/"$bin" >"$log" 2>&1 & echo $! >"$TMP/win.pid" )
-  local pid; pid=$(cat "$TMP/win.pid")
-  for _ in $(seq 1 "$secs"); do
-    sleep 1
-    grep -qE '^(PASS|FAIL)' "$log" && break
-    kill -0 "$pid" 2>/dev/null || break
-  done
-  kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
-  grep -E '^(PASS|FAIL)' "$log" | tail -1
+# A bin run inside the headless host (tools/headless_host.sh), its PASS/FAIL line shown. The
+# harnesses bound their own runs; there is no `timeout` here: uutils' implementation aborts on
+# its kill path, which throws a desktop crash dialog.
+on_host() { # on_host <bin> [flags]
+  local bin="$1"; shift
+  local log; log=$(mktemp)
+  (cd crates/zapper && ../../tools/headless_host.sh ../../target/debug/"$bin" "$@" >"$log" 2>&1)
+  grep -E '^(PASS|FAIL|  FAIL)' "$log" | tail -2
+  # Judged on the verdict line, not the exit status: a crash in mpv's teardown after PASS (exit
+  # 139, eglMakeCurrent) is a known host issue, not a failure of the check.
   grep -q '^PASS' "$log"
 }
 
-# The real binary, not a harness.
-#
-# Every other windowed check runs a purpose-built bin that calls into the
-# library directly, so none of them executes `run()` — and a panic in there
-# is a panic before the app has a window, which is as broken as it gets. For
-# example, `gdk::set_program_class` asserts GDK is initialised while the app
-# id has to be set before Tauri creates anything: get that order wrong and
-# the app dies on launch while every other check passes.
-#
-# Nothing is asserted about what it draws. Still alive after a few seconds,
-# and no panic on the way, is the entire question.
-app_starts() {
-  local log; log=$(mktemp)
-  ( cd crates/zapper && WAYLAND_DISPLAY=$WL XDG_RUNTIME_DIR=$XRD \
-      GDK_BACKEND=wayland ZAPPER_HARNESS=1 ../../target/debug/zapper >"$log" 2>&1 & echo $! >"$TMP/app.pid" )
-  local pid; pid=$(cat "$TMP/app.pid")
-  sleep 6
-  local alive=0
-  kill -0 "$pid" 2>/dev/null && alive=1
-  kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
-  if grep -qiE 'panicked at' "$log"; then
-    grep -iE 'panicked at' "$log" | head -2
-    return 1
-  fi
-  if [[ $alive -eq 0 ]]; then
-    echo "the app exited within 6s of starting"
-    tail -3 "$log"
-    return 1
-  fi
-  echo "still running after 6s, no panic"
+MOVIE=movie/u/p/2.mp4
+EPISODE=series/u/p/100111.mkv
+# pc [VAR=value ...] -- <player_check flags>: player_check against the fixture server, with the
+# fixture a flag needs set for that run alone.
+pc() {
+  local envs=()
+  while [[ "$1" != -- ]]; do envs+=("$1"); shift; done
+  shift
+  (
+    export ZAPPER_FIXTURE_BASE=http://127.0.0.1:8788 ZAPPER_FIXTURE_NAME=sample1080.ts ZAPPER_STREAM_ID=1
+    export ZAPPER_STREAM_URL=http://127.0.0.1:8788/sample1080.ts
+    for e in "${envs[@]}"; do export "$e"; done
+    on_host player_check "$@"
+  )
 }
+# Catch-up, with the server and this computer in different zones.
+catchup() {
+  python3 tools/fake_stream.py --port 8789 --panel-utc-offset 1 --archive-days 3 >"$TMP/catchup.log" 2>&1 &
+  local cs=$!
+  sleep 2
+  ( export ZAPPER_FIXTURE_BASE=http://127.0.0.1:8789 TZ=America/New_York; on_host catchup_check )
+  local rc=$?
+  kill "$cs" 2>/dev/null
+  return $rc
+}
+mpv_bins() { cargo build -q -p zapper --features harness,mpv --bins 2>&1 | tail -3; }
 
-step "rust unit tests"      rust_tests
-step "rust clippy"          rust_clippy
-step "frontend build"       front_build
-step "frontend checks"      front_checks
-step "release scripts"      scripts/test-scripts.sh
-step "catalogue over a fixture mirror" ipc_check
+step "core unit tests"       core_tests
+step "core clippy"           core_clippy
+step "mpv unit tests"        mpv_tests
+step "mpv clippy"            mpv_clippy
+step "frontend build"        front_build
+step "server unit tests"     server_tests
+step "server clippy"         server_clippy
+step "frontend checks"       front_checks
+step "release scripts"       scripts/test-scripts.sh
+step "build the server and its checks" server_bins
+step "recording through zapper-server" harness recording_check
+step "a channel that is off air"       harness offair_check
+step "the service installs and goes"   harness service_check
 
-if [[ $WINDOWED -eq 1 ]]; then
-  (cd crates/zapper && cargo build -q --bins --features harness 2>&1 | tail -2)
-  step "fixture server"     start_fixtures
-  step "the app starts"        app_starts
-  step "surface: GL + decode"  run_windowed surface_check 40
-  step "player: transport"     run_windowed player_check 70
-  # No window and no sound, but it plays: here with the rest that do.
-  step "player: endings"       ending_check
+if [[ $HOST -eq 1 ]]; then
+  step "build the mpv checks"       mpv_bins
+  step "fixture servers"            start_fixtures
+  step "player: live transport"     pc --
+  step "player: keeps playing"      pc -- --keeps-playing 20
+  step "player: movie"              pc ZAPPER_FIXTURE_MOVIE=$MOVIE -- --movie
+  step "player: held, then resumed" pc ZAPPER_FIXTURE_MOVIE=$MOVIE -- --held
+  step "player: pause then play"    pc ZAPPER_FIXTURE_MOVIE=$MOVIE -- --pause-then-play
+  step "player: previews on a title" pc ZAPPER_FIXTURE_MOVIE=$MOVIE -- --trickplay-vod
+  step "player: episode"            pc ZAPPER_FIXTURE_EPISODE=$EPISODE -- --episode
+  step "player: up next"            pc ZAPPER_FIXTURE_EPISODE=$EPISODE -- --up-next
+  step "player: subtitles"          pc ZAPPER_FIXTURE_EPISODE=$EPISODE -- --subtitles
+  step "player: find subtitles"     pc ZAPPER_FIXTURE_MOVIE=movie/u/p/1.mkv ZAPPER_OPENSUBTITLES_URL=http://127.0.0.1:19641 -- --find-subtitles
+  step "player: captions"           pc ZAPPER_FIXTURE_NAME=captions169.ts -- --captions
+  step "catch-up"                   catchup
+  # Windowless libmpv: no host needed, but they play, so they run with the rest that do.
+  step "player: endings"            harness ending_check
+  step "player: recording handover" harness handover_check
+  stop_fixtures
 fi
 
 printf '\n\033[1m%d passed, %d failed\033[0m' "$PASS" "$FAIL"
-[[ $WINDOWED -eq 0 ]] && printf '  \033[2m(--windowed also runs the GL and playback harnesses)\033[0m'
-printf '\n' 
+[[ $HOST -eq 0 ]] && printf '  \033[2m(--host also runs the player checks on a headless mpv host)\033[0m'
+printf '\n'
 [[ $FAIL -eq 0 ]]
