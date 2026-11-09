@@ -23,6 +23,8 @@
 //!   no framebuffer of ours to read. mpv's `screenshot-raw` hands over the
 //!   current frame instead, off the main thread, and [`shrink_bgr0`] reduces
 //!   it here.
+//! - The host (`surface::host`): mpv draws into a window it made itself, and
+//!   the frame comes the same way as on Windows, from the host's own thread.
 //!
 //! The store is a plain mutex rather than a thread-local, because the capture
 //! happens on one thread and the lookup answers an IPC command on another.
