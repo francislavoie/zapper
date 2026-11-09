@@ -5,16 +5,19 @@
 //! `loadfile ... replace` satisfies that by construction: mpv closes the
 //! current demuxer before opening the next.
 //!
-//! **Threading.** Commands arrive on Tauri's async worker threads. The player
-//! and the video surface live in main-thread locals (the surface's toolkit
-//! objects are `!Send` on every platform), so every command that touches them
-//! hops with [`tauri::AppHandle::run_on_main_thread`] and carries plain data
-//! across - never a toolkit handle. The shared state that
-//! both sides read is a `Mutex<Machine>` here, which is ordinary `Send` data.
+//! **Threading.** Commands arrive on Tauri's async worker threads, and the
+//! heartbeat runs on a thread of its own. Both reach the player through
+//! [`player::backend`], from wherever they are, and take turns at it
+//! ([`PLAYER_TURN`]): a command's calls and a heartbeat's never interleave.
+//! Only the video surface is main-thread state (the toolkit's objects are
+//! `!Send` on every platform), so moving it is the one command that hops with
+//! [`tauri::AppHandle::run_on_main_thread`], carrying plain data across -
+//! never a toolkit handle. The shared state that both sides read is a
+//! `Mutex<Machine>` here, which is ordinary `Send` data.
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{LazyLock, Mutex};
+use std::sync::{LazyLock, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use tauri::AppHandle;
@@ -36,13 +39,14 @@ use crate::ipc::types::{
     ReconnectDto, TrackDto,
 };
 use crate::recording::client::{Client, PlayerWatch, Watching};
-use crate::surface::mpv::{self, Player, Probe, Signal};
+use crate::player::{self, PlayerBackend, Probe, Signal};
+use crate::surface::mpv;
 use crate::surface::VideoRect;
 use crate::source::{Playable, Source};
 use crate::xtream::XtreamClient;
 
 /// How long a stream gets to produce its first frame before it is called dead.
-/// Matches mpv's own `network-timeout`, set in [`Player::new`].
+/// Matches mpv's own `network-timeout`, set in [`mpv::Player::new`].
 const FIRST_FRAME_DEADLINE: Duration = Duration::from_secs(8);
 
 /// State-feed heartbeat. Fast enough that a channel change feels instant,
@@ -69,7 +73,7 @@ const MARK_WAIT: Duration = Duration::from_secs(5);
 const PLACE_WAIT: Duration = Duration::from_secs(1);
 
 // ---------------------------------------------------------------------------
-// Main-thread access
+// Player and main-thread access
 // ---------------------------------------------------------------------------
 
 /// Runs `f` on the main thread and waits for its result.
@@ -90,18 +94,31 @@ async fn on_main<R: Send + 'static>(
         .map_err(|_| "the main thread did not answer".to_owned())?
 }
 
-/// Runs `f` against the player on the main thread and waits for its result.
-/// Commands arrive on worker threads; the player lives on the main thread.
+/// Whose turn it is at the player: one command's visit, or one heartbeat.
+///
+/// libmpv takes calls from any thread, but a command's few calls belong
+/// together - the options an open sets, then the load - and a heartbeat
+/// reading the player halfway through them would see a state that never
+/// was. They took turns on the main thread before; they take turns here.
+/// Nothing else is locked while it is held, apart from the state the
+/// heartbeat locks after it, in that order.
+static PLAYER_TURN: Mutex<()> = Mutex::new(());
+
+/// Runs `f` against the player, on this thread, in its turn.
+///
+/// `Err` at once, not a hang, when no player has been installed yet: a
+/// command that arrives before `setup` has built the player says so
+/// immediately. The app is not needed any more, now that nothing hops to
+/// the main thread; it stays in the signature while the callers move over.
 async fn on_player<R: Send + 'static>(
-    app: &AppHandle,
-    f: impl FnOnce(&Player) -> Result<R, String> + Send + 'static,
+    _app: &AppHandle,
+    f: impl FnOnce(&dyn PlayerBackend) -> Result<R, String> + Send + 'static,
 ) -> Result<R, String> {
-    on_main(app, move || {
-        // `None`, not a hang: a command that arrives before `setup` has built
-        // the player should say so immediately.
-        mpv::with_player(f).unwrap_or_else(|| Err("the player is not running".to_owned()))
-    })
-    .await
+    let Some(p) = player::backend() else {
+        return Err("the player is not running".to_owned());
+    };
+    let _turn = PLAYER_TURN.lock().unwrap_or_else(PoisonError::into_inner);
+    f(p.as_ref())
 }
 
 // ---------------------------------------------------------------------------
@@ -1851,18 +1868,29 @@ pub async fn connection_status() -> Result<ConnectionsDto, String> {
 
 static TICKER_STARTED: AtomicBool = AtomicBool::new(false);
 
-/// Starts the main-thread heartbeat once, on the first play.
+/// Starts the heartbeat once, on the first play: a thread of its own, every
+/// [`TICK`], taking its turn at the player like any command.
 ///
 /// It is what turns mpv's event queue into state transitions, and the queue
-/// has to be drained by somebody or it overflows.
+/// has to be drained by somebody or it overflows. One per process: a second
+/// would double every state update and drain the queue behind the first
+/// one's back. Off the main thread, so the thread that draws the picture
+/// and runs the interface never waits on mpv for it.
 fn ensure_ticker(app: &AppHandle) {
     if TICKER_STARTED.swap(true, Ordering::AcqRel) {
         return;
     }
     let app = app.clone();
-    if let Err(e) = app.clone().run_on_main_thread(move || {
-        mpv::start_ticker(TICK, move |p| tick(&app, p));
-    }) {
+    let spawned = std::thread::Builder::new()
+        .name("zapper-heartbeat".into())
+        .spawn(move || loop {
+            if let Some(p) = player::backend() {
+                let _turn = PLAYER_TURN.lock().unwrap_or_else(PoisonError::into_inner);
+                tick(&app, p.as_ref());
+            }
+            std::thread::sleep(TICK);
+        });
+    if let Err(e) = spawned {
         // Nothing else drives the state feed, so a failure here is not
         // cosmetic; let the next play try again.
         TICKER_STARTED.store(false, Ordering::Release);
@@ -1884,8 +1912,8 @@ fn logs_first(signals: &[Signal]) -> Vec<&Signal> {
     logs.into_iter().chain(events).collect()
 }
 
-/// One heartbeat, on the main thread.
-fn tick(app: &AppHandle, p: &Player) {
+/// One heartbeat, on the heartbeat's thread, in its turn at the player.
+fn tick(app: &AppHandle, p: &dyn PlayerBackend) {
     let signals = p.pump();
     let probe = p.probe();
     // The diagnostics graphs are drawn from a record kept whether or not the
@@ -2207,7 +2235,7 @@ fn tick(app: &AppHandle, p: &Player) {
         persist_progress(w);
     }
     if let Some(l) = ledger {
-        // Read here, on the main thread where the player lives; written
+        // Read here, in the heartbeat's turn at the player; written
         // elsewhere, like the watch time.
         let reading = matches!(l, Ledger::Measure(_)).then(|| p.reading());
         remember(app, l, reading);
@@ -2779,7 +2807,7 @@ static SERVICE_HEADER: AtomicBool = AtomicBool::new(false);
 ///
 /// Failures are logged rather than returned: a stream that wanted a header
 /// may still play without one, and refusing to try would be worse.
-fn apply_http_headers(p: &Player, target: &Playable, via: &Via) {
+fn apply_http_headers(p: &dyn PlayerBackend, target: &Playable, via: &Via) {
     let token = match via {
         Via::Service { header, .. } => header.as_deref(),
         Via::Direct => None,
@@ -3130,7 +3158,7 @@ pub async fn seek_relative(app: AppHandle, seconds: f64) -> Result<(), String> {
 }
 
 /// A title's length as mpv reads it, when it knows one.
-fn title_length(p: &Player) -> Option<f64> {
+fn title_length(p: &dyn PlayerBackend) -> Option<f64> {
     p.get_f64("duration").filter(|d| d.is_finite() && *d > 0.0)
 }
 
@@ -3583,7 +3611,7 @@ static ASS_OVERRIDE_OWN: std::sync::OnceLock<String> = std::sync::OnceLock::new(
 /// Where mpv starts the file it is about to open. Set by every open, since
 /// the option outlives the file: a channel opened after a resumed movie must
 /// not begin where the movie did.
-fn apply_start(p: &Player, start: Option<f64>) {
+fn apply_start(p: &dyn PlayerBackend, start: Option<f64>) {
     let value = match start.filter(|s| s.is_finite() && *s > 0.0) {
         Some(secs) => format!("{secs:.1}"),
         None => "none".to_owned(),
@@ -3600,7 +3628,7 @@ fn apply_start(p: &Player, start: Option<f64>) {
 /// next channel may be a different language, or not exist — and mpv then
 /// plays that channel silent. So each stream opens on mpv's own audio
 /// choice; its subtitles are the standing choice ([`open_subtitles`]).
-fn reset_track_choice(p: &Player) {
+fn reset_track_choice(p: &dyn PlayerBackend) {
     if let Err(e) = p.set_property("aid", "auto") {
         tracing::warn!("could not reset aid: {e}");
     }
@@ -3645,7 +3673,7 @@ fn subtitle_command(selected: Option<i64>, id: Option<i64>) -> Vec<(&'static str
     }
 }
 
-fn open_subtitles(p: &Player, pref: &SubtitlePref) {
+fn open_subtitles(p: &dyn PlayerBackend, pref: &SubtitlePref) {
     for (key, value) in subtitle_open_properties(pref) {
         if let Err(e) = p.set_property(key, &value) {
             tracing::warn!("could not set {key} for the subtitles chosen: {e}");
@@ -3663,7 +3691,7 @@ fn open_subtitles(p: &Player, pref: &SubtitlePref) {
 /// docked, places them again.
 static CAPTIONS: Mutex<captions::Captions> = Mutex::new(captions::Captions::new());
 
-fn place_captions(p: &Player, selected: Option<bool>, text: Option<&str>) {
+fn place_captions(p: &dyn PlayerBackend, selected: Option<bool>, text: Option<&str>) {
     let Ok(mut c) = CAPTIONS.lock() else {
         return;
     };
@@ -7127,7 +7155,7 @@ fn playback_properties(s: &crate::ipc::types::SettingsDto) -> Vec<(&'static str,
 
 /// Sets every property, then reports. One property mpv dislikes must not stop
 /// the rest: a font it cannot find should not also cost you hardware decoding.
-fn apply_properties(p: &Player, props: &[(&'static str, String)]) -> Result<(), String> {
+fn apply_properties(p: &dyn PlayerBackend, props: &[(&'static str, String)]) -> Result<(), String> {
     let failures: Vec<String> = props
         .iter()
         .filter_map(|(k, v)| match p.set_property(k, v) {
@@ -7184,26 +7212,23 @@ pub async fn set_media_session(
 /// silently reset every launch. `lib.rs` calls this from `setup`, after the
 /// player is built.
 ///
-/// Deliberately infallible and non-blocking: it queues onto the main
-/// thread and returns, so it is safe to call from `setup` (which is already
-/// on that thread) without deadlocking on itself. Nothing here is worth
-/// failing a launch over — the defaults mpv was initialised with are a
-/// working player.
-pub fn apply_saved_settings(app: &tauri::AppHandle) {
+/// Deliberately infallible: nothing here is worth failing a launch over —
+/// the defaults mpv was initialised with are a working player.
+pub fn apply_saved_settings(_app: &tauri::AppHandle) {
     let saved = crate::catalog::settings::load_or_default();
     LIVE_START.store(saved.live_start as u8, Ordering::Release);
     set_subtitle_pref(|p| *p = SubtitlePref::of(&saved));
     let mut props = playback_properties(&saved);
     props.extend(subtitle_properties(&saved.subtitle));
 
-    if let Err(e) = app.run_on_main_thread(move || {
-        match mpv::with_player(|p| apply_properties(p, &props)) {
-            None => tracing::warn!("no player yet; saved settings were not applied"),
-            Some(Err(e)) => tracing::warn!("some saved settings were not applied: {e}"),
-            Some(Ok(())) => tracing::info!("saved settings applied"),
-        }
-    }) {
-        tracing::warn!("could not reach the main thread to apply saved settings: {e}");
+    let Some(p) = player::backend() else {
+        tracing::warn!("no player yet; saved settings were not applied");
+        return;
+    };
+    let _turn = PLAYER_TURN.lock().unwrap_or_else(PoisonError::into_inner);
+    match apply_properties(p.as_ref(), &props) {
+        Err(e) => tracing::warn!("some saved settings were not applied: {e}"),
+        Ok(()) => tracing::info!("saved settings applied"),
     }
 
 

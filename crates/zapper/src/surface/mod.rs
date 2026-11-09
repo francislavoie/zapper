@@ -7,8 +7,8 @@
 //!   creates the player that draws into it. Once, from `setup`.
 //! - [`set_video_rect`] moves that surface; the frontend animates the picture
 //!   into a corner and back through it.
-//! - [`repeat_on_main`] is a main-thread timer, which is what the player's
-//!   heartbeat runs on.
+//! - [`repeat_on_main`] is a main-thread timer, for work that must touch
+//!   the toolkit on a schedule (the harnesses, Windows' thumbnails).
 //! - [`request_capture`] is the development self-capture (`ZAPPER_CAPTURE`).
 //! - [`mpv`] is the player itself and [`trickplay`] the scrollback
 //!   thumbnails; both are portable, and neither names a toolkit. Neither
@@ -28,7 +28,10 @@
 //!
 //! Every platform function is main-thread-only, for the same reason on each:
 //! the toolkit's objects are not `Send`. Commands on worker threads hop with
-//! `AppHandle::run_on_main_thread` and carry plain data across.
+//! `AppHandle::run_on_main_thread` and carry plain data across. The two that
+//! [`mpv`] asks from any thread are the exceptions, and are written so:
+//! whether the video output can open a file yet, and a request for a frame.
+//! The player itself is reached from any thread (`crate::player`).
 
 pub mod mpv;
 pub mod png;

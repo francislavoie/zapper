@@ -21,7 +21,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use libmpv2::Mpv;
+use crate::player::{self, PlayerBackend};
 
 use super::trickplay::{self, DUMP_SPAN_S, THUMB_H, THUMB_W};
 
@@ -246,9 +246,9 @@ impl State {
     }
 }
 
-fn read_state(mpv: &Mpv) -> Option<State> {
-    let position = mpv.get_property::<f64>("time-pos").ok()?;
-    let raw = mpv.get_property::<String>("demuxer-cache-state").ok()?;
+fn read_state(mpv: &dyn PlayerBackend) -> Option<State> {
+    let position = mpv.get_f64("time-pos")?;
+    let raw = mpv.get_string("demuxer-cache-state")?;
     let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
     let ranges: Vec<(f64, f64)> = v
         .get("seekable-ranges")
@@ -264,13 +264,13 @@ fn read_state(mpv: &Mpv) -> Option<State> {
         .get("cache-end")
         .and_then(|x| x.as_f64())
         .map_or(0.0, |end| end - position);
-    let flag = |k: &str| mpv.get_property::<bool>(k).unwrap_or(false);
+    let flag = |k: &str| mpv.get_bool(k).unwrap_or(false);
     let calm = !flag("seeking") && !flag("paused-for-cache") && (eof || ahead >= MIN_AHEAD_S);
-    let count = |k: &str| mpv.get_property::<i64>(k).unwrap_or(0);
+    let count = |k: &str| mpv.get_i64(k).unwrap_or(0);
     Some(State {
         ranges,
         position,
-        duration: mpv.get_property::<f64>("duration").ok().filter(|d| *d > 0.0),
+        duration: mpv.get_f64("duration").filter(|d| *d > 0.0),
         calm,
         drops: count("frame-drop-count") + count("decoder-frame-drop-count"),
     })
@@ -338,7 +338,7 @@ fn run(epoch: u64) {
             wait = IDLE;
             continue;
         }
-        let Some(mpv) = super::mpv::handle() else {
+        let Some(mpv) = player::backend() else {
             wait = IDLE;
             continue;
         };
@@ -348,7 +348,7 @@ fn run(epoch: u64) {
             STRIDE.store(1, Ordering::Release);
         }
         compress_one();
-        let Some(state) = read_state(mpv) else {
+        let Some(state) = read_state(mpv.as_ref()) else {
             wait = IDLE;
             continue;
         };
@@ -390,7 +390,8 @@ fn run(epoch: u64) {
             continue;
         };
         walk.tried.insert(slot);
-        let (bytes, busy) = fill(mpv, &mut walk, slot as f64 * spacing, &base, &mut container);
+        let (bytes, busy) =
+            fill(mpv.as_ref(), &mut walk, slot as f64 * spacing, &base, &mut container);
         walk.stride = stride_after(walk.stride, bytes);
         STRIDE.store(walk.stride, Ordering::Release);
         wait = pause_after(bytes, busy);
@@ -407,7 +408,13 @@ const CONTAINERS: [&str; 2] = ["mkv", "ts"];
 /// how many bytes the excerpt was and how long the slot took. The excerpt
 /// is `base` with the extension
 /// of `CONTAINERS[*container]`, or a later one when mpv cannot write that.
-fn fill(mpv: &Mpv, walk: &mut Walk, t: f64, base: &Path, container: &mut usize) -> (u64, Duration) {
+fn fill(
+    mpv: &dyn PlayerBackend,
+    walk: &mut Walk,
+    t: f64,
+    base: &Path,
+    container: &mut usize,
+) -> (u64, Duration) {
     let began = Instant::now();
     // mpv writes the title's selected tracks, and picks the container from
     // the name. Matroska takes any video, but not every subtitle format (an
@@ -416,7 +423,7 @@ fn fill(mpv: &Mpv, walk: &mut Walk, t: f64, base: &Path, container: &mut usize) 
     let mut dumped = None;
     for (i, ext) in CONTAINERS.iter().enumerate().skip(*container) {
         let file = base.with_extension(ext);
-        match super::mpv::dump_cache(mpv, t, t + DUMP_SPAN_S, &file) {
+        match mpv.dump_cache(t, t + DUMP_SPAN_S, &file) {
             Ok(()) => {
                 *container = i;
                 dumped = Some(file);

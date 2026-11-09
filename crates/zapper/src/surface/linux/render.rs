@@ -13,6 +13,7 @@ use gtk::prelude::*;
 use libmpv2::render::{OpenGLInitParams, RenderContext, RenderParam, RenderParamApiType};
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use super::gl;
 use crate::surface::mpv;
@@ -28,6 +29,11 @@ static FBO_LOGGED: AtomicBool = AtomicBool::new(false);
 /// late redraw does not create a new one.
 static SHUT_DOWN: AtomicBool = AtomicBool::new(false);
 
+/// Whether the render context exists, readable from any thread: a load asked
+/// for on a command's thread checks it ([`mpv::Player`]'s `load`). The
+/// context itself stays in this thread's locals.
+static READY: AtomicBool = AtomicBool::new(false);
+
 /// Hand mpv an upside-down target: GL's origin is bottom-left, video's is
 /// top-left.
 ///
@@ -42,11 +48,11 @@ thread_local! {
     static AREA: RefCell<Option<gtk::GLArea>> = const { RefCell::new(None) };
 }
 
-/// Creates the player and binds it to `area`. The render context itself is
-/// deferred to the first draw, because `mpv_render_context_create` needs a
-/// *current* GL context and the GLArea is not realized during Tauri's
-/// `setup`.
-pub fn new_player(area: &gtk::GLArea) -> anyhow::Result<mpv::Player> {
+/// Creates the player, binds it to `area` and installs it as the process's
+/// player (`crate::player::install`). The render context itself is deferred
+/// to the first draw, because `mpv_render_context_create` needs a *current*
+/// GL context and the GLArea is not realized during Tauri's `setup`.
+pub fn new_player(area: &gtk::GLArea) -> anyhow::Result<Arc<mpv::Player>> {
     force_c_numeric_locale();
     let player = mpv::Player::new(|init| {
         init.set_property("vo", "libmpv".to_owned())?;
@@ -64,13 +70,15 @@ pub fn new_player(area: &gtk::GLArea) -> anyhow::Result<mpv::Player> {
         init.set_property("video-timing-offset", 0i64)
     })?;
     AREA.with(|a| *a.borrow_mut() = Some(area.clone()));
+    let player = Arc::new(player);
+    crate::player::install(player.clone());
     Ok(player)
 }
 
 /// Whether mpv can open a file yet: only once the render context exists.
-/// See [`mpv::Player::load`].
+/// Any thread. See [`mpv::Player`]'s `load`.
 pub(super) fn ready() -> bool {
-    CTX.with(|c| c.borrow().is_some())
+    READY.load(Ordering::Acquire)
 }
 
 /// Stops playback and frees mpv's render context, for quitting.
@@ -96,6 +104,7 @@ pub(crate) fn shut_down() {
     let Some(ctx) = CTX.with(|c| c.borrow_mut().take()) else {
         return;
     };
+    READY.store(false, Ordering::Release);
     let current = AREA.with(|a| {
         a.borrow().as_ref().is_some_and(|area| {
             if !area.is_realized() {
@@ -114,7 +123,14 @@ pub(crate) fn shut_down() {
     }
 }
 
-/// Asks GTK for a frame, which is what creates the render context.
+/// Asks GTK for a frame from any thread: the request is passed to the main
+/// loop, where the GLArea lives.
+pub(super) fn kick_from_anywhere() {
+    gtk::glib::idle_add_once(kick);
+}
+
+/// Asks GTK for a frame, which is what creates the render context. GTK's
+/// thread only; elsewhere it finds no area and does nothing.
 pub(super) fn kick() {
     AREA.with(|a| {
         if let Some(a) = a.borrow().as_ref() {
@@ -239,6 +255,9 @@ pub(crate) fn draw(area: &gtk::GLArea) -> bool {
                     *slot = Some(ctx);
                     // Now that a video output can succeed, start anything that
                     // was asked for while the surface was still coming up.
+                    // Ready first: a load asked for from now on goes straight
+                    // through, and one asked for before is pending here.
+                    READY.store(true, Ordering::Release);
                     mpv::load_pending();
                 }
                 Err(e) => {

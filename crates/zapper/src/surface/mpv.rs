@@ -7,16 +7,20 @@
 //! Windows gives mpv a window to draw into), and the readiness gate in
 //! [`Player::load`].
 //!
-//! Main-thread-only by convention: commands reach the player through
-//! `AppHandle::run_on_main_thread` and [`with_player`], which answers `None`
-//! anywhere else. The mpv handle itself is thread-safe, and is shared with
-//! [`handle`] only for work that must not block the main thread.
+//! [`Player`] is the app's [`PlayerBackend`]: the platform's surface creates
+//! it and installs it (`crate::player::install`), and the controller calls it
+//! from whichever thread it is on. libmpv's client API is thread-safe; only
+//! the render context, which draws, belongs to one thread, and that lives in
+//! the platform's module, not here.
 
 use anyhow::{anyhow, Context, Result};
 use libmpv2::Mpv;
-use std::cell::{Cell, RefCell};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock, PoisonError};
+
+use crate::player::{BackendCaps, PlayerBackend};
+pub use crate::player::{Health, Probe, Signal, Stats};
 
 /// The process's mpv. Leaked deliberately: Linux's render context borrows it
 /// for `'static`, and the player outlives everything anyway, so a
@@ -24,10 +28,19 @@ use std::sync::OnceLock;
 /// client API is thread-safe), which is what lets it be a plain static.
 static MPV: OnceLock<&'static Mpv> = OnceLock::new();
 
-thread_local! {
-    /// A URL asked for before the surface could show it. See [`Player::load`].
-    static PENDING: RefCell<Option<String>> = const { RefCell::new(None) };
-}
+/// A URL asked for before the surface could show it. See [`Player::load`].
+///
+/// A lock rather than a thread's local: a load is asked for on a command's
+/// thread and let go on the surface's. Every `loadfile` is sent under it,
+/// with the readiness check before it, so a surface that becomes ready
+/// meanwhile cannot miss the URL (it sets its readiness before
+/// [`load_pending`] takes this), and a held URL cannot be sent after a newer
+/// one.
+static PENDING: Mutex<Option<String>> = Mutex::new(None);
+
+/// One pump at a time: `mpv_wait_event` must not run on two threads at once
+/// for the same handle.
+static PUMPING: Mutex<()> = Mutex::new(());
 
 /// FFmpeg's HTTP options that would open a stream again by themselves.
 ///
@@ -76,7 +89,8 @@ pub const DEMUXER_MAX_BYTES: i64 = 256 * 1024 * 1024;
 /// A handle to the process-wide mpv instance.
 ///
 /// Zero-sized: the real state is the static above, plus whatever the
-/// platform's surface keeps in its own main-thread locals.
+/// platform's surface keeps on its own thread. `Send + Sync`, so the surface
+/// installs it as the process's [`PlayerBackend`].
 pub struct Player;
 
 impl Player {
@@ -162,9 +176,6 @@ impl Player {
         let mpv: &'static Mpv = Box::leak(Box::new(mpv));
         MPV.set(mpv)
             .map_err(|_| anyhow!("mpv is already initialised in this process"))?;
-        // Register on the way out so command code can reach the player without
-        // `lib.rs` having to remember a second call.
-        set_installed(Player);
         Ok(Self)
     }
 
@@ -183,21 +194,19 @@ impl Player {
     /// a load requested before the surface is ready is held until it is (see
     /// [`load_pending`]). Windows hands mpv a window up front and is always
     /// ready.
-    pub fn load(&self, url: &str) -> Result<()> {
+    fn load_now_or_later(url: &str) -> Result<()> {
+        let mut pending = PENDING.lock().unwrap_or_else(PoisonError::into_inner);
         if !crate::surface::platform::video_ready() {
-            PENDING.with(|p| *p.borrow_mut() = Some(url.to_owned()));
+            *pending = Some(url.to_owned());
+            drop(pending);
             crate::surface::platform::request_frame();
             return Ok(());
         }
+        // This one is newer than anything still held.
+        *pending = None;
         Self::mpv()?
             .command("loadfile", &[url, "replace"])
             .context("loadfile")
-    }
-
-    pub fn set_property(&self, key: &str, value: &str) -> Result<()> {
-        Self::mpv()?
-            .set_property(key, value.to_owned())
-            .with_context(|| format!("setting {key}"))
     }
 
     /// The decoded video's pixel dimensions, or `None` before the first frame.
@@ -215,6 +224,13 @@ impl Player {
 /// thread. `None` before [`Player::new`].
 pub fn handle() -> Option<&'static Mpv> {
     MPV.get().copied()
+}
+
+/// The player [`Player::new`] made, for the harnesses, which read what the
+/// controller does not ([`Player::dimensions`], [`Player::diagnostics`]).
+/// `None` before it.
+pub fn created() -> Option<Player> {
+    handle().map(|_| Player)
 }
 
 /// What the demuxer cache holds, in the stream's own time: from the oldest
@@ -236,8 +252,9 @@ pub fn cache_span(mpv: &Mpv) -> Option<(f64, f64)> {
 /// Writes what the cache holds from `start` to `end` (the stream's time, as
 /// [`cache_span`] gives it) to `path`, as MPEG-TS: mpv's `dump-cache`, the
 /// packets copied as they are. Blocks until the file is written, so never on
-/// the main thread; playback carries on meanwhile.
-pub fn dump_cache(mpv: &Mpv, start: f64, end: f64, path: &std::path::Path) -> Result<()> {
+/// a thread that draws or answers the interface; playback carries on
+/// meanwhile.
+pub fn dump_cache(mpv: &Mpv, start: f64, end: f64, path: &Path) -> Result<()> {
     let path = path
         .to_str()
         .ok_or_else(|| anyhow!("a path mpv cannot be given"))?;
@@ -249,9 +266,11 @@ pub fn dump_cache(mpv: &Mpv, start: f64, end: f64, path: &std::path::Path) -> Re
 }
 
 /// Opens the URL held back by [`Player::load`], now that the surface can show
-/// it. Called by the platform once its video output can succeed.
+/// it. Called by the platform once its video output can succeed, after it has
+/// made its `video_ready` true.
 pub fn load_pending() {
-    let Some(url) = PENDING.with(|p| p.borrow_mut().take()) else {
+    let mut pending = PENDING.lock().unwrap_or_else(PoisonError::into_inner);
+    let Some(url) = pending.take() else {
         return;
     };
     let Some(mpv) = handle() else { return };
@@ -261,88 +280,14 @@ pub fn load_pending() {
 }
 
 // ---------------------------------------------------------------------------
-// Command-facing API: registry, event pump, and property probe.
+// The controller's side: the event pump, the property probe, and the rest of
+// [`PlayerBackend`].
 //
-// Everything below is main-thread-only: the registry is a thread-local of the
-// main thread, so the player is reachable only there. Tauri commands reach it
-// through `AppHandle::run_on_main_thread` and [`with_player`].
+// Callable from any thread: libmpv's client API is thread-safe, and the
+// handle is a process-wide static. What stays on the platform's own thread is
+// the drawing (the render context, in `linux::render` and `macos`), which
+// never comes through here.
 // ---------------------------------------------------------------------------
-
-thread_local! {
-    /// The installed player, reachable only from the main thread.
-    ///
-    /// `Player` is zero-sized, but the registry still has to exist: the
-    /// surface it draws into is main-thread state on every platform, so "is
-    /// there a player here" is a per-thread question.
-    static INSTALLED: RefCell<Option<Player>> = const { RefCell::new(None) };
-
-    /// One ticker per process. A second one would double every state update
-    /// and drain the event queue behind the first one's back.
-    static TICKING: Cell<bool> = const { Cell::new(false) };
-}
-
-/// Records the player for later command access. Called by [`Player::new`], so
-/// no caller has to remember to.
-pub fn set_installed(p: Player) {
-    INSTALLED.with(|i| *i.borrow_mut() = Some(p));
-}
-
-/// Runs `f` against the player. Returns `None` off the main thread or
-/// before the player is created - never blocks, so a command that arrives
-/// early fails fast instead of hanging.
-pub fn with_player<R>(f: impl FnOnce(&Player) -> R) -> Option<R> {
-    INSTALLED.with(|i| i.borrow().as_ref().map(f))
-}
-
-/// Installs a main-thread timer handing the player to `f` every `interval`.
-///
-/// The state feed needs a heartbeat: mpv reports first frame, end of file and
-/// cache movement through an event queue that somebody has to drain, and an
-/// undrained queue eventually overflows. Idempotent - a second call is a
-/// no-op, because two tickers would each emit a state event per change.
-///
-/// Must be called on the main thread.
-pub fn start_ticker(interval: std::time::Duration, mut f: impl FnMut(&Player) + 'static) {
-    if TICKING.with(|t| t.replace(true)) {
-        return;
-    }
-    crate::surface::repeat_on_main(interval, move || {
-        with_player(&mut f);
-        true
-    });
-}
-
-/// What mpv reported since the last pump. Plain data: it crosses back to the
-/// command thread, where the surface's types may not go.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Signal {
-    StartFile,
-    FileLoaded,
-    /// First frame of a new size - the honest "playing" signal. `file-loaded`
-    /// fires before a single frame is decoded, so a stream that connects and
-    /// then stalls would otherwise look healthy.
-    VideoReconfig,
-    /// Playback of a file ended.
-    EndFile {
-        /// mpv's error code, when it called it a failure rather than an
-        /// ending.
-        error: Option<i32>,
-        /// True when it ended only because something else was loaded over it.
-        /// The obituary of the *previous* stream arrives after the next one
-        /// has already opened, and acting on it would knock a healthy channel
-        /// change back to stopped.
-        replaced: bool,
-    },
-    /// mpv's `track-list`, as JSON, after it changed.
-    Tracks(String),
-    /// mpv's `sub-text/ass`: the subtitle on screen, with its ASS tags,
-    /// after it changed. Never logged: it is what is being said.
-    SubText(String),
-    /// A warning or error mpv logged. Only ever read for the clues in
-    /// `ipc::ending`, and never logged or shown: the text can carry the
-    /// stream URL, and with it the account.
-    Log(String),
-}
 
 /// One mpv event as a [`Signal`], or `None` for the ones nothing reads.
 ///
@@ -393,72 +338,6 @@ pub fn signal_of(ev: libmpv2::Result<libmpv2::events::Event<'_>>) -> Option<Sign
     }
 }
 
-/// A one-shot reading for the diagnostics panel.
-///
-/// Every field is optional on purpose: mpv drops most of these between
-/// files, and half of them never exist for a raw MPEG-TS multiplex. A
-/// missing reading is a dash on screen, not a failure.
-#[derive(Debug, Clone, Default)]
-pub struct Stats {
-    pub container: Option<String>,
-    pub video_codec: Option<String>,
-    pub audio_codec: Option<String>,
-    pub hwdec: Option<String>,
-    pub pixel_format: Option<String>,
-    pub primaries: Option<String>,
-    pub gamma: Option<String>,
-    pub video_bitrate: Option<f64>,
-    pub audio_bitrate: Option<f64>,
-    pub measured_fps: Option<f64>,
-    pub container_fps: Option<f64>,
-    pub audio_samplerate: Option<i64>,
-    pub audio_channels: Option<i64>,
-    pub cache_duration: Option<f64>,
-    pub cache_speed: Option<f64>,
-    pub demuxer_bytes: Option<i64>,
-    pub buffering: Option<bool>,
-    pub cache_buffering_percent: Option<f64>,
-    pub dropped_frames: Option<i64>,
-    pub decoder_dropped_frames: Option<i64>,
-    pub avsync: Option<f64>,
-}
-
-/// A snapshot of the properties the UI shows. Plain data, same reason.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct Probe {
-    pub width: Option<i64>,
-    pub height: Option<i64>,
-    pub fps: Option<f64>,
-    pub codec: Option<String>,
-    /// Seconds between the newest demuxed packet and where playback is.
-    pub behind_live: f64,
-    /// Seconds of scrollback the demuxer is still holding.
-    pub buffered_back: f64,
-    pub paused: bool,
-    /// The end of mpv's seekable window, in stream time - the furthest
-    /// forward a seek can actually land.
-    pub live_edge: Option<f64>,
-    pub time_pos: Option<f64>,
-    /// The newest packet mpv holds, in stream time. Unlike `live_edge` it
-    /// moves with every packet read, so it is what tells how fast data is
-    /// arriving — and it moves while playback is paused.
-    pub cache_end: Option<f64>,
-    /// The oldest packet mpv still holds, in stream time: the start of its
-    /// seekable window. With `cache_end`, how much stream time has arrived.
-    pub cache_start: Option<f64>,
-    /// The demuxer has read the end of the stream: the server finished the
-    /// response, or the connection failed. Playback carries on through
-    /// what is buffered, so this comes well before `end-file`.
-    pub demuxer_eof: bool,
-    /// Bytes buffered ahead of the playhead.
-    pub fw_bytes: Option<i64>,
-    /// Bytes the demuxer holds in all, behind the playhead and ahead.
-    pub cache_bytes: Option<i64>,
-    /// The length of the file, when it has one: a movie's, not a live
-    /// stream's, which mpv reports as unknown.
-    pub duration: Option<f64>,
-}
-
 /// `demuxer-cache-state`, the parts of it that are read.
 #[derive(Debug, Clone, Copy, Default)]
 struct CacheWindow {
@@ -479,21 +358,43 @@ struct CacheWindow {
 /// four times a second.
 static CACHE_STATE_WARNED: AtomicBool = AtomicBool::new(false);
 
-impl Player {
+impl PlayerBackend for Player {
+    /// mpv does everything zapper asks of a player.
+    fn capabilities(&self) -> BackendCaps {
+        BackendCaps {
+            rewind_buffer: true,
+            cache_dump: true,
+            audio_filters: true,
+            caption_geometry: true,
+        }
+    }
+
+    /// Starts playback, deferring if the surface is not ready yet: see
+    /// [`Player::load_now_or_later`].
+    fn load(&self, url: &str) -> Result<()> {
+        Self::load_now_or_later(url)
+    }
+
+    fn set_property(&self, key: &str, value: &str) -> Result<()> {
+        Self::mpv()?
+            .set_property(key, value.to_owned())
+            .with_context(|| format!("setting {key}"))
+    }
+
     /// Sends a raw mpv command, as written in `input.conf`.
-    pub fn command(&self, name: &str, args: &[&str]) -> Result<()> {
+    fn command(&self, name: &str, args: &[&str]) -> Result<()> {
         Self::mpv()?
             .command(name, args)
             .with_context(|| format!("mpv command {name}"))
     }
 
-    pub fn set_flag(&self, key: &str, value: bool) -> Result<()> {
+    fn set_flag(&self, key: &str, value: bool) -> Result<()> {
         Self::mpv()?
             .set_property(key, value)
             .with_context(|| format!("setting {key}"))
     }
 
-    pub fn set_f64(&self, key: &str, value: f64) -> Result<()> {
+    fn set_f64(&self, key: &str, value: f64) -> Result<()> {
         Self::mpv()?
             .set_property(key, value)
             .with_context(|| format!("setting {key}"))
@@ -502,19 +403,19 @@ impl Player {
     /// `None` rather than `Err` throughout the getters: almost every property
     /// here is legitimately unavailable before the first frame, and a caller
     /// polling for it does not want an error per tick.
-    pub fn get_f64(&self, key: &str) -> Option<f64> {
+    fn get_f64(&self, key: &str) -> Option<f64> {
         Self::mpv().ok()?.get_property::<f64>(key).ok()
     }
 
-    pub fn get_i64(&self, key: &str) -> Option<i64> {
+    fn get_i64(&self, key: &str) -> Option<i64> {
         Self::mpv().ok()?.get_property::<i64>(key).ok()
     }
 
-    pub fn get_bool(&self, key: &str) -> Option<bool> {
+    fn get_bool(&self, key: &str) -> Option<bool> {
         Self::mpv().ok()?.get_property::<bool>(key).ok()
     }
 
-    pub fn get_string(&self, key: &str) -> Option<String> {
+    fn get_string(&self, key: &str) -> Option<String> {
         let s = Self::mpv().ok()?.get_property::<String>(key).ok()?;
         (!s.is_empty()).then_some(s)
     }
@@ -523,59 +424,21 @@ impl Player {
     ///
     /// Somebody must: mpv buffers events and eventually reports
     /// `QueueOverflow`, and the "first frame arrived" edge exists nowhere
-    /// else. Called from the ticker, on the main thread.
-    pub fn pump(&self) -> Vec<Signal> {
+    /// else. Called by the heartbeat, on its own thread.
+    fn pump(&self) -> Vec<Signal> {
         let Ok(mpv) = Self::mpv() else {
             return Vec::new();
         };
+        let _one_at_a_time = PUMPING.lock().unwrap_or_else(PoisonError::into_inner);
         let mut out = Vec::new();
-        // 0.0 polls rather than waits; this runs on the main thread and must
-        // never block it.
+        // 0.0 polls rather than waits: a pump never holds up its caller.
         while let Some(ev) = mpv.wait_event(0.0) {
             out.extend(signal_of(ev));
         }
         out
     }
 
-    /// The window mpv will actually seek within, plus where it is reading.
-    ///
-    /// Two traps live here, both found by measuring against a real server
-    /// rather than read out of the manual.
-    ///
-    /// `demuxer-cache-state` is an `MPV_FORMAT_NODE` map whose handler
-    /// implements only a plain GET, so the `demuxer-cache-state/cache-end`
-    /// path does not resolve. The whole node is read as a string instead -
-    /// mpv renders a node as JSON - and parsed here.
-    ///
-    /// And the seekable window is **not** `cache-begin`..`cache-end`. There
-    /// is no `cache-begin` key at all, and `seekable-ranges` ends one to three
-    /// seconds short of `cache-end`, because the tail of the cache is buffered
-    /// but not yet seekable. A seek past that end is refused silently -
-    /// playback simply stays where it was - so this is the number that must
-    /// drive both the live edge and the forward clamp.
-    fn cache_window(&self) -> Option<CacheWindow> {
-        let raw = self.get_string("demuxer-cache-state")?;
-        let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
-        let ranges = v.get("seekable-ranges").and_then(|r| r.as_array());
-        let bound = |which: fn(&[serde_json::Value]) -> Option<&serde_json::Value>, key| {
-            ranges
-                .and_then(|r| which(r))
-                .and_then(|r| r.get(key))
-                .and_then(|x| x.as_f64())
-        };
-        let cache_end = v.get("cache-end").and_then(|x| x.as_f64());
-        Some(CacheWindow {
-            start: bound(<[_]>::first, "start"),
-            end: bound(<[_]>::last, "end").or(cache_end),
-            reader: v.get("reader-pts").and_then(|x| x.as_f64()),
-            cache_end,
-            eof: v.get("eof").and_then(|x| x.as_bool()).unwrap_or(false),
-            fw_bytes: v.get("fw-bytes").and_then(|x| x.as_i64()),
-            total_bytes: v.get("total-bytes").and_then(|x| x.as_i64()),
-        })
-    }
 
-    /// Everything the state feed needs, in one main-thread visit.
     /// Everything the diagnostics panel shows, read in one pass.
     ///
     /// Separate from [`Player::probe`] because it is far more than the state
@@ -586,7 +449,7 @@ impl Player {
     /// **No stream URL, ever.** It carries the account's username and
     /// password in its query string, and this panel exists to be screenshotted
     /// and pasted into a bug report.
-    pub fn stats(&self) -> Stats {
+    fn stats(&self) -> Stats {
         Stats {
             // Container and codecs.
             container: self.get_string("file-format"),
@@ -627,7 +490,7 @@ impl Player {
     /// the filter runs only for interlaced frames, so `deinterlace-active`
     /// is the answer; with it off, the frame is; forced on, the filter runs
     /// regardless and nothing can tell.
-    pub fn reading(&self) -> crate::catalog::store::Reading {
+    fn reading(&self) -> crate::catalog::store::Reading {
         let interlaced = match self.get_string("deinterlace").as_deref() {
             Some("auto") => self.get_bool("deinterlace-active"),
             Some("yes") => None,
@@ -655,8 +518,8 @@ impl Player {
     /// `stats()` reads twenty-odd properties and most of them are static text
     /// about codecs and colour; this runs on every heartbeat, so it reads the
     /// four that move and nothing else.
-    pub fn health(&self) -> crate::ipc::health::Reading {
-        crate::ipc::health::Reading {
+    fn health(&self) -> Health {
+        Health {
             cache_duration: self.get_f64("demuxer-cache-duration"),
             cache_speed: self.get_f64("cache-speed"),
             dropped_total: self.get_i64("frame-drop-count").unwrap_or(0)
@@ -665,7 +528,7 @@ impl Player {
         }
     }
 
-    pub fn probe(&self) -> Probe {
+    fn probe(&self) -> Probe {
         let time_pos = self.get_f64("time-pos");
         let w = match self.cache_window() {
             Some(w) => w,
@@ -721,6 +584,50 @@ impl Player {
         }
     }
 
+    fn dump_cache(&self, start: f64, end: f64, path: &Path) -> Result<()> {
+        dump_cache(Self::mpv()?, start, end, path)
+    }
+}
+
+impl Player {
+    /// The window mpv will actually seek within, plus where it is reading.
+    ///
+    /// Two traps live here, both found by measuring against a real server
+    /// rather than read out of the manual.
+    ///
+    /// `demuxer-cache-state` is an `MPV_FORMAT_NODE` map whose handler
+    /// implements only a plain GET, so the `demuxer-cache-state/cache-end`
+    /// path does not resolve. The whole node is read as a string instead -
+    /// mpv renders a node as JSON - and parsed here.
+    ///
+    /// And the seekable window is **not** `cache-begin`..`cache-end`. There
+    /// is no `cache-begin` key at all, and `seekable-ranges` ends one to three
+    /// seconds short of `cache-end`, because the tail of the cache is buffered
+    /// but not yet seekable. A seek past that end is refused silently -
+    /// playback simply stays where it was - so this is the number that must
+    /// drive both the live edge and the forward clamp.
+    fn cache_window(&self) -> Option<CacheWindow> {
+        let raw = self.get_string("demuxer-cache-state")?;
+        let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
+        let ranges = v.get("seekable-ranges").and_then(|r| r.as_array());
+        let bound = |which: fn(&[serde_json::Value]) -> Option<&serde_json::Value>, key| {
+            ranges
+                .and_then(|r| which(r))
+                .and_then(|r| r.get(key))
+                .and_then(|x| x.as_f64())
+        };
+        let cache_end = v.get("cache-end").and_then(|x| x.as_f64());
+        Some(CacheWindow {
+            start: bound(<[_]>::first, "start"),
+            end: bound(<[_]>::last, "end").or(cache_end),
+            reader: v.get("reader-pts").and_then(|x| x.as_f64()),
+            cache_end,
+            eof: v.get("eof").and_then(|x| x.as_bool()).unwrap_or(false),
+            fw_bytes: v.get("fw-bytes").and_then(|x| x.as_i64()),
+            total_bytes: v.get("total-bytes").and_then(|x| x.as_i64()),
+        })
+    }
+
     /// Every transport property as mpv itself renders it, errors included.
     ///
     /// The seek behaviour of a live MPEG-TS cache is not documented anywhere
@@ -762,9 +669,12 @@ mod tests {
 
     #[test]
     fn a_thread_with_no_player_gets_none_rather_than_a_hang() {
-        // Every command hops to the main thread; one that arrives before
-        // `setup` has built the player must fail immediately, not block on a
-        // reply that will never come.
-        assert!(with_player(|_| ()).is_none());
+        // A command that arrives before `setup` has built the player must
+        // fail immediately, not block on a reply that will never come.
+        let _turn = crate::player::backend::TEST_REGISTRY
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let asked = std::thread::spawn(|| crate::player::backend().is_none());
+        assert!(asked.join().expect("the asking thread panicked"));
     }
 }

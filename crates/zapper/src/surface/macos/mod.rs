@@ -105,6 +105,11 @@ struct Surface {
 /// updates between two draws asks the main thread for one redraw.
 static FRAME_READY: AtomicBool = AtomicBool::new(true);
 
+/// Whether the render context exists, readable from any thread: a load asked
+/// for on a command's thread checks it ([`mpv::Player`]'s `load`). The
+/// context itself stays in the main thread's locals.
+static READY: AtomicBool = AtomicBool::new(false);
+
 /// What the verification harness asserts on: how often the layer drew, how
 /// many of those mpv painted, and the brightest value seen in the centre of
 /// the surface while sampling is on. A layer that never draws, or draws
@@ -182,7 +187,7 @@ pub(super) fn install(window: &tauri::WebviewWindow) -> anyhow::Result<()> {
     place();
 
     force_c_numeric_locale();
-    mpv::Player::new(|init| {
+    let player = mpv::Player::new(|init| {
         init.set_property("vo", "libmpv".to_owned())?;
         // Render without waiting out each frame's display time: the draw runs
         // on the main thread, which also runs the interface, and Core
@@ -190,6 +195,7 @@ pub(super) fn install(window: &tauri::WebviewWindow) -> anyhow::Result<()> {
         // `linux::render`).
         init.set_property("video-timing-offset", 0i64)
     })?;
+    crate::player::install(std::sync::Arc::new(player));
 
     kick();
     tracing::info!("video surface: OpenGL layer beneath the webview");
@@ -270,15 +276,15 @@ pub(super) fn repeat_on_main(interval: Duration, f: impl FnMut() -> bool + 'stat
 }
 
 /// Whether mpv can open a file yet: only once the render context exists.
-/// See [`mpv::Player::load`].
+/// Any thread. See [`mpv::Player`]'s `load`.
 pub(super) fn video_ready() -> bool {
-    CTX.with(|c| c.borrow().is_some())
+    READY.load(Ordering::Acquire)
 }
 
 /// Asks Core Animation for a draw, which is also what creates the render
-/// context.
+/// context. Any thread: the layer is asked on the main queue.
 pub(super) fn request_frame() {
-    kick();
+    dispatch2::DispatchQueue::main().exec_async(kick);
 }
 
 /// Nothing to take down in order here yet; see `surface::shut_down`.
@@ -534,7 +540,10 @@ fn draw() {
                     });
                     *slot = Some(ctx);
                     // Start anything that was asked for while the surface was
-                    // still coming up.
+                    // still coming up. Ready first: a load asked for from now
+                    // on goes straight through, and one asked for before is
+                    // pending here.
+                    READY.store(true, Ordering::Release);
                     mpv::load_pending();
                 }
                 Err(e) => {
@@ -567,7 +576,7 @@ fn draw() {
         // A copy of the frame just drawn, for the scrubber. The gate first,
         // so the ordinary frame does not read mpv's clock.
         if trickplay::is_due() {
-            if let Some(Some(at)) = mpv::with_player(|p| p.get_f64("playback-time")) {
+            if let Some(at) = crate::player::backend().and_then(|p| p.get_f64("playback-time")) {
                 unsafe { thumbnail(fbo, w, h, at) };
             }
         }

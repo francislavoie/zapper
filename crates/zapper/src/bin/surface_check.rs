@@ -46,6 +46,7 @@ const DOCKED: zapper_lib::surface::VideoRect = zapper_lib::surface::VideoRect {
 fn main() {
     use gtk::prelude::GLAreaExt;
     use tauri::Manager;
+    use zapper_lib::player::PlayerBackend;
 
     tracing_subscriber::fmt::init();
 
@@ -135,6 +136,7 @@ fn verdict(
 ) -> anyhow::Result<String> {
     use anyhow::anyhow;
     use gtk::prelude::{GLAreaExt, WidgetExt};
+    use zapper_lib::player::PlayerBackend;
     use zapper_lib::surface::linux::gl;
 
     let renders = ov.render_count();
@@ -301,7 +303,7 @@ fn main() {
             surface::install(&window)?;
             // `ao=null` before anything is loaded: this runs unattended and
             // must never make noise.
-            mpv::with_player(|p| -> anyhow::Result<()> {
+            zapper_lib::player::backend().map(|p| -> anyhow::Result<()> {
                 p.set_property("ao", "null")?;
                 // A decoder other than the app's, for a machine whose OpenGL
                 // cannot take VideoToolbox's frames reliably (CI's software
@@ -408,8 +410,8 @@ fn verdict() -> anyhow::Result<String> {
             "mpv painted only {painted} of {draws} draws; the layer is clearing to black"
         ));
     }
-    let (w, h) = mpv::with_player(|p| p.dimensions())
-        .flatten()
+    let (w, h) = mpv::created()
+        .and_then(|p| p.dimensions())
         .ok_or_else(|| anyhow!("mpv reported no video dimensions; the stream never decoded"))?;
     if peak == 0 {
         return Err(anyhow!(

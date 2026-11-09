@@ -43,6 +43,7 @@ pub mod logfile;
 pub mod m3u;
 pub mod online;
 pub mod paths;
+pub mod player;
 pub mod recording;
 pub mod source;
 #[cfg(test)]
@@ -508,7 +509,7 @@ fn dev_hooks(app: &tauri::AppHandle) {
     // Anything driven by these hooks runs unattended, so kill the audio path
     // outright before a stream can open. `ao=null` cannot be undone by a later
     // volume or mute change, which muting can.
-    if let Some(Err(e)) = surface::mpv::with_player(|p| p.set_property("ao", "null")) {
+    if let Some(Err(e)) = player::backend().map(|p| p.set_property("ao", "null")) {
         tracing::warn!("could not silence playback for an unattended run: {e}");
     }
 
