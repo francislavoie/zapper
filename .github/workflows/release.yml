@@ -295,10 +295,12 @@ jobs:
         run: |
           Expand-Archive "out/zapper-server-$env:VERSION-windows-x86_64.zip" -DestinationPath check
           $exe = "check/zapper-server-$env:VERSION-windows-x86_64/zapper-server.exe"
-          $say = (& $exe --version) -join "`n"
+          # zapper-server is a windowless program: PowerShell waits for one only when its output
+          # is piped, so each run goes through Out-String (as scripts/check-windows.ps1 did).
+          $say = (& $exe --version 2>&1 | Out-String)
           if ($LASTEXITCODE) { throw "zapper-server.exe --version failed" }
           if ($say.Trim() -ne "zapper-server $env:VERSION") { throw "--version says '$say', not 'zapper-server $env:VERSION'" }
-          $licenses = (& $exe --licenses) -join "`n"
+          $licenses = (& $exe --licenses 2>&1 | Out-String)
           if ($LASTEXITCODE -or $licenses.Length -lt 1000) { throw "zapper-server.exe --licenses printed no notices" }
           # By name without FFmpeg's major version, so moving FFmpeg to a new major needs no edit here.
           foreach ($dll in 'libmpv-*.dll', 'avcodec-*.dll', 'avformat-*.dll') {
