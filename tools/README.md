@@ -16,7 +16,7 @@ short synthetic stream from a local server instead:
 tools/make_fixtures.sh                    # once: generates the fixtures with ffmpeg
 tools/fake_stream.py &                    # serves them on 127.0.0.1:8788
 ZAPPER_STREAM_URL=http://127.0.0.1:8788/sample1080.ts \
-  cargo run -p zapper --features harness,mpv --bin seek_bench
+  cargo run -p zapper-mpv --features harness --bin seek_bench
 ```
 
 Fixtures live in `~/.cache/zapper/fixtures` (`ZAPPER_FIXTURES` overrides it),
@@ -84,9 +84,9 @@ it to check the recording service end to end (docs/recording.md, "Checking
 it"):
 
 ```sh
-cd crates/zapper
-cargo build --no-default-features --features harness,server --bin zapper-server --bin offair_check
-target/debug/offair_check 19700
+cd crates/zapper-server
+cargo build --features harness --bin zapper-server --bin offair_check
+../../target/debug/offair_check 19700
 ```
 
 And the network failing instead: `--drop-after 5` resets the connection after
@@ -242,7 +242,7 @@ Without it:
 `<dir>/data` and `<dir>/cache` for any run. Unit tests (`cargo test`) never
 see the real directories at all, whatever the environment says: under test
 they resolve into a sandbox in the system's temporary directory
-(`crates/zapper/src/paths.rs`).
+(`crates/zapper-core/src/paths.rs`).
 
 ## Screenshots
 

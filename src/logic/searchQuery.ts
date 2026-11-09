@@ -3,7 +3,7 @@
 // `|` offers alternatives: `news|weather` finds either. It binds loosest, so
 // each alternative is a whole query and its words must all match —
 // `news|weather uk` is "news", or "weather" and "uk" together. The backend
-// reads the same syntax for channels (crates/zapper/src/catalog/search.rs) and
+// reads the same syntax for channels (crates/zapper-core/src/catalog/search.rs) and
 // programmes (guide_search.rs); this is the frontend's half, for the
 // palette's action filter and the mock, and the words the help shows.
 //

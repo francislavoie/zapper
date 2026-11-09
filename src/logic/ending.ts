@@ -1,6 +1,6 @@
 // What to say when a stream stops by itself.
 //
-// The backend works out why (`ipc::ending` in Rust): most often a provider
+// The backend works out why (`api::ending` in Rust): most often a provider
 // that allows a limited number of connections ended this one because another
 // device opened a stream on the same account. This turns that into words for
 // the picture, which until now simply went blank.

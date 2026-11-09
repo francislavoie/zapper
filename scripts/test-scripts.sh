@@ -61,10 +61,13 @@ python3 "$copy/scripts/set-version.py" 9.8.7-rc.1 >/dev/null
 [ "$(jq -r .version "$copy/package.json")" = 9.8.7-rc.1 ] || fail "package.json"; ok
 [ "$(jq -r '.version + " " + .packages[""].version' "$copy/package-lock.json")" = "9.8.7-rc.1 9.8.7-rc.1" ] || fail "package-lock.json"; ok
 grep -q '^version = "9.8.7-rc.1"$' "$copy/Cargo.toml" || fail "Cargo.toml"; ok
-[ "$(grep -A1 '^name = "zapper"$' "$copy/Cargo.lock" | tail -1)" = 'version = "9.8.7-rc.1"' ] || fail "Cargo.lock"; ok
+for crate in zapper-core zapper-mpv zapper-server; do
+  [ "$(grep -A1 "^name = \"$crate\"\$" "$copy/Cargo.lock" | tail -1)" = 'version = "9.8.7-rc.1"' ] || fail "Cargo.lock: $crate"; ok
+done
 for f in package.json package-lock.json Cargo.toml Cargo.lock; do
   changed=$(diff "$root/$f" "$copy/$f" | grep -c '^>' || true)
-  [ "$changed" -ge 1 ] && [ "$changed" -le 2 ] || fail "$f: $changed lines changed, expected only the version"; ok
+  most=2; [ "$f" = Cargo.lock ] && most=3
+  [ "$changed" -ge 1 ] && [ "$changed" -le "$most" ] || fail "$f: $changed lines changed, expected only the version"; ok
 done
 ! python3 "$copy/scripts/set-version.py" '1.0.0"; rm' 2>/dev/null || fail "set-version must refuse odd characters"; ok
 

@@ -77,7 +77,7 @@ The short list; [docs/features.md](docs/features.md) has how each part behaves.
 
 Requirements: a stable Rust toolchain, Node.js 26 (see `.nvmrc`) and npm,
 [`just`](https://github.com/casey/just), and `pkg-config`. libmpv and FFmpeg are zapper's own LGPL
-build, which `just fetch-libmpv` downloads into `crates/zapper/lib/`
+build, which `just fetch-libmpv` downloads into `lib/`
 ([docs/licensing.md](docs/licensing.md#mpv-and-ffmpeg)); without it a development build falls
 back to the system's (`libmpv-dev`, `libavformat-dev` and friends). The release-script checks want
 `jq`; the license notices want [`cargo-about`](https://github.com/EmbarkStudios/cargo-about)
@@ -85,7 +85,7 @@ back to the system's (`libmpv-dev`, `libavformat-dev` and friends). The release-
 
 ```sh
 npm ci
-just fetch-libmpv       # the bundled libmpv and FFmpeg, into crates/zapper/lib/
+just fetch-libmpv       # the bundled libmpv and FFmpeg, into lib/
 just server             # the interface, then target/release/zapper-server
 target/release/zapper-server
 just dev                # the interface alone, against a mock backend, at http://localhost:5180
@@ -95,8 +95,9 @@ just check --host       # also the player checks, on a headless mpv host (needs 
 just package-server     # the static Linux binary, in a container (Docker or Podman)
 ```
 
-The crate has three features, all off by default: `server` (the recording service and its
-browser interface), `mpv` (the libmpv backend) and `harness` (the check programs).
+Three crates: `zapper-core` (everything a front end shares, no native libraries),
+`zapper-mpv` (the libmpv backend) and `zapper-server` (the recording service and its browser
+interface); each crate's check programs are behind its `harness` feature.
 [docs/architecture.md](docs/architecture.md) says how the parts fit.
 [docs/windows.md](docs/windows.md) covers Windows, [docs/macos.md](docs/macos.md) macOS and
 [docs/releasing.md](docs/releasing.md) cutting a release.

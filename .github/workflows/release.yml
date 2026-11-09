@@ -121,7 +121,7 @@ jobs:
           python3 scripts/version.py check "$v"
           repo=$(scripts/releases-repo.sh)
           if [ "${repo,,}" != "${GITHUB_REPOSITORY,,}" ]; then
-            msg="RELEASES_REPO in crates/zapper/src/updates/mod.rs is '$repo', not this repository ($GITHUB_REPOSITORY). See docs/releasing.md, One-time setup."
+            msg="RELEASES_REPO in crates/zapper-core/src/updates/mod.rs is '$repo', not this repository ($GITHUB_REPOSITORY). See docs/releasing.md, One-time setup."
             if [ -n "$TAG" ]; then echo "::error::$msg"; exit 1; else echo "::warning::$msg"; fi
           fi
           { echo "version=$v"; echo "prerelease=$(python3 scripts/version.py prerelease "$v")"; } >> "$GITHUB_OUTPUT"
@@ -244,7 +244,7 @@ jobs:
       - run: npm ci
 
       # zapper's LGPL libmpv-2.dll and FFmpeg's DLLs, the archive packaging/libmpv/manifest.json
-      # names, and the import libraries the link needs, into crates/zapper/lib/windows-x86_64
+      # names, and the import libraries the link needs, into lib/windows-x86_64
       # (docs/windows.md). The manifest pins it: a release changes libmpv only when that file
       # does.
       - name: Fetch libmpv
@@ -261,7 +261,7 @@ jobs:
           PYTHON: python
         run: scripts/licenses.sh
 
-      # The interface, which zapper-server compiles in to serve to browsers (crates/zapper/build.rs).
+      # The interface, which zapper-server compiles in to serve to browsers (crates/zapper-server/build.rs).
       - name: Build the interface
         run: npm run build
 
@@ -269,7 +269,7 @@ jobs:
       - name: Build zapper-server
         run: |
           $env:CARGO_BUILD_JOBS = "$env:NUMBER_OF_PROCESSORS"
-          cargo build --release -p zapper --no-default-features --features server --bin zapper-server
+          cargo build --release -p zapper-server --bin zapper-server
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
       # The exe, the DLLs it loads and the notices, in one folder, zipped. The name is an API:
@@ -281,7 +281,7 @@ jobs:
           $dir = "stage/zapper-server-$env:VERSION-windows-x86_64"
           New-Item -ItemType Directory -Force $dir, out | Out-Null
           Copy-Item target/release/zapper-server.exe $dir/
-          Copy-Item crates/zapper/lib/windows-x86_64/runtime/*.dll $dir/
+          Copy-Item lib/windows-x86_64/runtime/*.dll $dir/
           New-Item -ItemType Directory -Force "$dir/licenses" | Out-Null
           Copy-Item -Recurse target/licenses/* "$dir/licenses/"
           Copy-Item LICENSE $dir/

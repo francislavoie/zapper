@@ -18,7 +18,7 @@
 #             exact tarballs this platform was built from
 #
 # FFmpeg's libraries are shared, because two programs use them: libmpv, and zapper-server's
-# remuxer (crates/zapper/src/recording/remux.c). Every other dependency (libplacebo, libass, dav1d,
+# remuxer (crates/zapper-server/src/recording/remux.c). Every other dependency (libplacebo, libass, dav1d,
 # the text stack, the shader compilers) is a static library linked into the one that needs it,
 # with every symbol but that library's API hidden, so nothing can collide with a same-named
 # library the system has already loaded into the process (GTK's FreeType). What the libraries
@@ -407,7 +407,7 @@ unpack ffmpeg
 # not here. Protocols, parsers, bitstream filters and filters are left at FFmpeg's full set,
 # which here means its LGPL set. Encoders: PNG and MJPEG for mpv's screenshots, and FFmpeg's own
 # AAC encoder (LGPL), which zapper-server uses to turn sound a browser can't play (AC-3, MP2)
-# into AAC while a browser watches (crates/zapper/src/recording/livemux.c).
+# into AAC while a browser watches (crates/zapper-server/src/recording/livemux.c).
 #
 # The names are configure's (allcodecs.c's ff_<name>_decoder), not the codecs' own: MP4's text
 # subtitles are movtext, though FFmpeg calls the codec mov_text. A name configure doesn't know is

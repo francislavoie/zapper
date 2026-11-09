@@ -4,7 +4,7 @@
 A release version is SemVer without build metadata: X.Y.Z or X.Y.Z-<pre-release>, where the
 pre-release is dot-separated identifiers that are each lowercase letters or a number, the first
 a word: 0.1.0-alpha.1, 0.2.0-rc.2. That subset keeps one order everywhere: SemVer's (which the
-updater uses, crates/zapper/src/updates/version.rs), dpkg's (0.1.0~alpha.1) and rpm's (0.1.0~alpha.1). Mixed identifiers such as alpha10 are refused: SemVer sorts alpha10
+updater uses, crates/zapper-core/src/updates/version.rs), dpkg's (0.1.0~alpha.1) and rpm's (0.1.0~alpha.1). Mixed identifiers such as alpha10 are refused: SemVer sorts alpha10
 before alpha9 as words, and a person reading the tags would not expect that.
 
 Subcommands (errors go to stderr with exit status 2):

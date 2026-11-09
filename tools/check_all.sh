@@ -13,7 +13,7 @@
 #   tools/check_all.sh          # tests, lint, build, the recording and service checks
 #   tools/check_all.sh --host   # also the player checks, on a headless mpv host
 #
-# --host needs libmpv (crates/zapper/lib, `just fetch-libmpv`), gnome-shell and dbus-run-session:
+# --host needs libmpv (lib/, `just fetch-libmpv`), gnome-shell and dbus-run-session:
 # mpv opens its own window, so those checks run inside tools/headless_host.sh's headless
 # gnome-shell, never on the display of whoever is at the machine. They play video for a few
 # minutes: run them when the player, the mpv backend or the host changed, not on every edit.
@@ -39,13 +39,13 @@ step() {
   else printf '\033[31m   FAIL\033[0m %s\n' "$label"; FAIL=$((FAIL+1)); fi
 }
 
-# The CI jobs' cargo commands (.github/workflows/ci.yml): core, mpv and server (pipefail keeps cargo's status).
-core_tests()    { cargo test -p zapper --lib -q 2>&1 | tail -3; }
-core_clippy()   { cargo clippy -p zapper --lib --bins -q -- -D warnings 2>&1 | tail -3; }
-mpv_tests()     { cargo test -p zapper --features mpv --lib -q 2>&1 | tail -3; }
-mpv_clippy()    { cargo clippy -p zapper --lib --bins --features harness,mpv -q -- -D warnings 2>&1 | tail -3; }
-server_tests()  { CI=1 cargo test -p zapper --lib --no-default-features --features server -q 2>&1 | tail -3; }
-server_clippy() { cargo clippy -p zapper --lib --bins --no-default-features --features server -q -- -D warnings 2>&1 | tail -3; }
+# The CI jobs' cargo commands (.github/workflows/ci.yml): zapper-core, zapper-mpv and zapper-server (pipefail keeps cargo's status).
+core_tests()    { cargo test -p zapper-core --lib -q 2>&1 | tail -3; }
+core_clippy()   { cargo clippy -p zapper-core --lib --features harness -q -- -D warnings 2>&1 | tail -3; }
+mpv_tests()     { cargo test -p zapper-mpv --lib -q 2>&1 | tail -3; }
+mpv_clippy()    { cargo clippy -p zapper-mpv --lib --bins --features harness -q -- -D warnings 2>&1 | tail -3; }
+server_tests()  { CI=1 cargo test -p zapper-server --lib -q 2>&1 | tail -3; }
+server_clippy() { cargo clippy -p zapper-server --lib --bins --features harness -q -- -D warnings 2>&1 | tail -3; }
 # The Node in .nvmrc, through nvm when it is installed; otherwise whatever is on PATH.
 use_node()    { [[ -s "$HOME/.nvm/nvm.sh" ]] || return 0; . "$HOME/.nvm/nvm.sh" && nvm use >/dev/null 2>&1; }
 front_build() { use_node && npm run build 2>&1 | tail -2; }
@@ -64,7 +64,7 @@ front_checks(){
 
 TMP=$(mktemp -d)
 # Config, data and cache for every harness: empty, and gone with $TMP when this script exits. See
-# crates/zapper/src/paths.rs.
+# crates/zapper-core/src/paths.rs.
 export ZAPPER_HOME="$TMP/home"
 mkdir -p "$ZAPPER_HOME"
 PIDS=()
@@ -74,14 +74,14 @@ trap 'stop_fixtures; rm -rf "$TMP"' EXIT
 # --- the recording service, through a real zapper-server ----------------------
 
 server_bins() {
-  cargo build -q -p zapper --no-default-features --features harness,server \
+  cargo build -q -p zapper-server --features harness \
     --bin zapper-server --bin recording_check --bin offair_check --bin service_check 2>&1 | tail -3
 }
 # A harness bin run from the crate's directory, with its PASS/FAIL lines shown and its exit status
 # kept. No core dumps: a crash in a test process must not write one.
 harness() { # harness <bin> [args]
   local bin="$1"; shift
-  (cd crates/zapper && ulimit -c 1 && ../../target/debug/"$bin" "$@" 2>&1 | grep -E '^(PASS|FAIL|  FAIL)'
+  (cd crates/zapper-server && ulimit -c 1 && ../../target/debug/"$bin" "$@" 2>&1 | grep -E '^(PASS|FAIL|  FAIL)'
    exit "${PIPESTATUS[0]}")
 }
 
@@ -105,7 +105,7 @@ start_fixtures() {
 on_host() { # on_host <bin> [flags]
   local bin="$1"; shift
   local log; log=$(mktemp)
-  (cd crates/zapper && ../../tools/headless_host.sh ../../target/debug/"$bin" "$@" >"$log" 2>&1)
+  (cd crates/zapper-mpv && ../../tools/headless_host.sh ../../target/debug/"$bin" "$@" >"$log" 2>&1)
   grep -E '^(PASS|FAIL|  FAIL)' "$log" | tail -2
   # Judged on the verdict line, not the exit status: a crash in mpv's teardown after PASS (exit
   # 139, eglMakeCurrent) is a known host issue, not a failure of the check.
@@ -137,7 +137,7 @@ catchup() {
   kill "$cs" 2>/dev/null
   return $rc
 }
-mpv_bins() { cargo build -q -p zapper --features harness,mpv --bins 2>&1 | tail -3; }
+mpv_bins() { cargo build -q -p zapper-mpv --features harness --bins 2>&1 | tail -3; }
 
 step "core unit tests"       core_tests
 step "core clippy"           core_clippy

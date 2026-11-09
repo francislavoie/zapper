@@ -1,8 +1,8 @@
 # The checks that need no window, no account and no network beyond the package mirrors, on
-# pushes to main and on pull requests, in three jobs by what they build: `core` (no native
+# pushes to main and on pull requests, in three jobs, one per crate: `core` (zapper-core, no native
 # libraries: the Rust unit tests and clippy, the frontend's type check and build, its node
-# checks, and the release scripts' tests), `mpv` (the libmpv backend, against the libmpv bundle)
-# and `server` (the recording service and the browser interface it serves). tools/check_all.sh
+# checks, and the release scripts' tests), `mpv` (zapper-mpv, the libmpv backend, against the libmpv bundle)
+# and `server` (zapper-server, the recording service and the browser interface it serves). tools/check_all.sh
 # runs the same locally, plus the player checks on a headless mpv host (`--host`). Releases are
 # release.yml. Actions are pinned by commit, as in release.yml.
 name: CI
@@ -58,10 +58,10 @@ jobs:
       - run: npm ci
 
       - name: Rust unit tests
-        run: cargo test -p zapper --lib -q
+        run: cargo test -p zapper-core --lib -q
 
       - name: Clippy
-        run: cargo clippy -p zapper --lib --bins -q -- -D warnings
+        run: cargo clippy -p zapper-core --lib --features harness -q -- -D warnings
 
       - name: Frontend build
         run: npm run build
@@ -72,7 +72,7 @@ jobs:
       - name: Release scripts
         run: scripts/test-scripts.sh
 
-  # The libmpv backend and the harness bins that use it (features `mpv` and `harness`), against
+  # zapper-mpv, the libmpv backend, and the harness bins that use it (feature `harness`), against
   # the libmpv bundle that ships, not Ubuntu's (docs/licensing.md). Until the manifest names a
   # published one, Ubuntu's stands in (a debug build links the system's when none was fetched),
   # so the checks still run. The player checks that play video need a host and run locally
@@ -115,13 +115,13 @@ jobs:
           key: mpv
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: Clippy, mpv and harness features
-        run: cargo clippy -p zapper --lib --bins --features harness,mpv -q -- -D warnings
+      - name: Clippy, libmpv backend and its harnesses
+        run: cargo clippy -p zapper-mpv --lib --bins --features harness -q -- -D warnings
 
-      - name: Rust tests, mpv feature
-        run: cargo test -p zapper --features mpv --lib -q
+      - name: Rust tests, libmpv backend
+        run: cargo test -p zapper-mpv --lib -q
 
-  # The recording service (feature `server`, off by default) has its own tests, which the jobs
+  # zapper-server, the recording service, has its own tests, which the jobs
   # above never build. They run against the libmpv bundle that ships, not Ubuntu's; ffmpeg only
   # makes their fixtures. Two of them need dist/, so the frontend is built first.
   server:
@@ -163,9 +163,9 @@ jobs:
       - name: Frontend build
         run: npm run build
 
-      - name: Rust tests, server feature
+      - name: Rust tests, recording service
         # CI=1, as GitHub sets anyway: a missing fixture, decoder or encoder fails rather than skips.
-        run: CI=1 cargo test -p zapper --lib --no-default-features --features server
+        run: CI=1 cargo test -p zapper-server --lib
 
-      - name: Clippy, server feature
-        run: cargo clippy -p zapper --lib --bins --no-default-features --features server -- -D warnings
+      - name: Clippy, recording service and its harnesses
+        run: cargo clippy -p zapper-server --lib --bins --features harness -- -D warnings

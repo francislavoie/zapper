@@ -1,5 +1,5 @@
 // What the update badge, dialog and settings pane say about the updater's
-// state. The deciding all happens in Rust (crates/zapper/src/updates/): which
+// state. The deciding all happens in Rust (crates/zapper-core/src/updates/): which
 // release is newer, which file this install takes, whether the download is
 // the one SHA256SUMS vouches for. This file only turns that state into words
 // and into the one thing the dialog's main button should do.

@@ -61,12 +61,12 @@ jobs:
           # What macOS gets that Linux CI doesn't exercise.
           MACOS_PATHS: >-
             ^\.github/workflows/macos\.yml$
-            ^crates/zapper/src/paths\.rs$
-            ^crates/zapper/src/recording/service(\.rs$|/)
-            ^crates/zapper/src/bin/zapper_server\.rs$
-            ^crates/zapper/build\.rs$
+            ^crates/zapper-core/src/paths\.rs$
+            ^crates/zapper-core/src/recording/service(\.rs$|/)
+            ^crates/zapper-server/src/bin/zapper_server\.rs$
+            ^crates/zapper-(mpv|server)/build\.rs$
             ^Cargo\.(toml|lock)$
-            ^crates/zapper/Cargo\.(toml|lock)$
+            ^crates/zapper-[a-z]+/Cargo\.(toml|lock)$
             ^packaging/libmpv/
             ^scripts/(build|fetch)-libmpv\.sh$
         run: |
@@ -182,28 +182,35 @@ jobs:
 
       - run: npm ci
 
-      - name: Rust unit tests
-        run: cargo test -p zapper --lib -q
+      - name: Rust unit tests, core
+        run: cargo test -p zapper-core --lib -q
 
-      - name: Clippy
-        run: cargo clippy -p zapper --lib --bins -q -- -D warnings
+      - name: Clippy, core
+        run: cargo clippy -p zapper-core --lib -q -- -D warnings
 
-      - name: Clippy (libmpv backend and harnesses)
-        run: cargo clippy -p zapper --lib --bins --features harness,mpv -q -- -D warnings
+      - name: Clippy, libmpv backend and harnesses
+        run: cargo clippy -p zapper-mpv --lib --bins --features harness -q -- -D warnings
 
-      - name: Rust tests, mpv feature
-        run: cargo test -p zapper --features mpv --lib -q
+      - name: Rust tests, libmpv backend
+        run: cargo test -p zapper-mpv --lib -q
 
       # Before zapper-server, which compiles the interface in to serve it to browsers
-      # (crates/zapper/build.rs).
+      # (crates/zapper-server/build.rs).
       - name: Frontend build
         run: npm run build
 
-      - name: Rust tests, server feature
-        run: CI=1 cargo test -p zapper --lib --no-default-features --features server -q
+      # ffmpeg makes the server tests' fixtures; with CI=1 a missing one fails rather than skips.
+      - name: ffmpeg
+        run: brew install --quiet ffmpeg
+
+      - name: Rust tests, recording service
+        run: CI=1 cargo test -p zapper-server --lib -q
+
+      - name: Clippy, recording service and harnesses
+        run: cargo clippy -p zapper-server --lib --bins --features harness -q -- -D warnings
 
       - name: zapper-server
-        run: cargo build --release -p zapper --no-default-features --features server --bin zapper-server
+        run: cargo build --release -p zapper-server --bin zapper-server
 
       # The recording service's install on a Mac, through the built zapper-server's own
       # --install-service (the same code): the LaunchAgent in ~/Library/LaunchAgents, loaded by

@@ -13,7 +13,7 @@
 #
 # The crate graph is the one of the platform it runs on: Linux's (about.toml's target), Windows'
 # in Git for Windows' bash (`just package-windows`, the release workflow; Python as $PYTHON), or
-# this Mac's. It is the recording service's (`--features server`), the binary this line ships.
+# this Mac's. It is the recording service's (crates/zapper-server), the binary this line ships.
 #
 # --if-changed (`just package`): does nothing when the files in out-dir were made from the same
 # inputs (Cargo.lock, Cargo.toml, about.toml, LICENSE, these scripts, the target) and haven't
@@ -50,7 +50,7 @@ key_file=$out.key
 inputs_key() {
   {
     echo "target=${target[*]-} repo=$ZAPPER_REPO $(cargo about --version)"
-    (cd "$root" && sha256sum Cargo.lock Cargo.toml crates/zapper/Cargo.toml about.toml LICENSE \
+    (cd "$root" && sha256sum Cargo.lock Cargo.toml crates/zapper-*/Cargo.toml about.toml LICENSE \
       scripts/licenses.sh scripts/notices.py)
   } | sha256sum | cut -d' ' -f1
 }
@@ -67,7 +67,7 @@ rm -f "$key_file"
 
 # --locked: the notices describe exactly what Cargo.lock builds.
 cargo about generate --format json --locked --fail -c "$root/about.toml" ${target[@]+"${target[@]}"} \
-  --features server -m "$root/crates/zapper/Cargo.toml" -o "$out/about.json"
+  -m "$root/crates/zapper-server/Cargo.toml" -o "$out/about.json"
 "$python" "$here/notices.py" rust "$out/about.json" "$out/THIRD-PARTY-NOTICES-rust.txt"
 rm "$out/about.json"
 "$python" "$here/notices.py" copyright "$root/LICENSE" "$out/copyright"

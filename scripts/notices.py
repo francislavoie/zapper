@@ -17,7 +17,7 @@ import re
 import sys
 
 # Where zapper's source is: the repository the updater takes its releases from (RELEASES_REPO in
-# crates/zapper/src/updates/mod.rs), which scripts/licenses.sh reads through scripts/releases-repo.sh.
+# crates/zapper-core/src/updates/mod.rs), which scripts/licenses.sh reads through scripts/releases-repo.sh.
 REPO = f"https://github.com/{os.environ.get('ZAPPER_REPO', 'francislavoie/zapper')}"
 
 

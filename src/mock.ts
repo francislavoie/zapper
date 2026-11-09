@@ -884,7 +884,7 @@ function patchPlayer(p: Partial<PlayerStateDto>) {
 
 /** A driver's way to end the current stream as a provider would:
  *  `__mockEnd("dropped")`, `__mockEnd("refused", 509, true)`. The real
- *  backend's reasons are in `ipc::ending`. */
+ *  backend's reasons are in `api::ending`. */
 (globalThis as Record<string, unknown>).__mockEnd = (
   kind: NonNullable<PlayerStateDto["ending"]>["kind"],
   status: number | null = null,
@@ -1378,7 +1378,7 @@ const mockRecordingApi = {
     list.push(rec);
     return rec;
   },
-  // The service plays the schedule through its rules (crates/zapper/src/
+  // The service plays the schedule through its rules (crates/zapper-core/src/
   // recording/sharing.rs); this is a rough likeness on one stream: two
   // channels whose windows overlap clash, the earlier one keeping its
   // programme and the later one losing what overlaps it.
@@ -1407,7 +1407,7 @@ const mockRecordingApi = {
     return out;
   },
   // The service ranks channels on the same guide channel, then the same
-  // programme elsewhere (crates/zapper/src/recording/backup.rs). The mock has no
+  // programme elsewhere (crates/zapper-core/src/recording/backup.rs). The mock has no
   // guide channels, so its neighbours in the category stand in.
   recordingBackups: async (id: number): Promise<BackupsDto> => {
     await delay(50);

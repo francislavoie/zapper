@@ -324,7 +324,7 @@ service does not (`--no-sync`), and reads the catalogue again once a sync lands.
 from another device, the password typed there crosses the network unencrypted, and the page says
 so; turn HTTPS back on (Settings → Recording, *Plain HTTP on the network* off) to avoid it.
 
-The interface is the app's, built into `zapper-server` (`crates/zapper/build.rs`): the same version as
+The interface is the app's, built into `zapper-server` (`crates/zapper-server/build.rs`): the same version as
 the service, nothing installed beside it. Its files under `/assets/` are named by their contents
 and kept by the browser for a year; the page itself is asked for again each time.
 
@@ -648,7 +648,7 @@ minutes it stops switching, stays on the last feed that delivered and retries wi
 
 **Off air.** Some providers answer a channel that isn't broadcasting with a placeholder clip:
 minutes of black, sent at once, then the end of the stream. The service tells one apart by the
-app's own rule (see `ipc::ending::off_air`): the stream ends cleanly within 20 seconds of the
+app's own rule (see `api::ending::off_air`): the stream ends cleanly within 20 seconds of the
 connection, having carried at least two minutes of stream time (read from its timestamps) with
 enough data behind it, which no live channel can send that fast.
 
@@ -775,16 +775,16 @@ Logs go to standard error: `journalctl --user -u zapper-server` when installed f
 
 ```sh
 npm run build          # the interface it serves to browsers, compiled in
-cargo build --release -p zapper --features server --bin zapper-server
+cargo build --release -p zapper-server --bin zapper-server
 ```
 
 The web interface is the frontend's build in `dist/`, compiled into the binary by `build.rs`: a
 release build refuses without it, and a debug build without it serves a page saying it was not
 built.
 
-The `server` feature alone (no `mpv`), so no libmpv is linked; the server needs only `libavformat`, `libavcodec` and `libavutil`. It takes them from
+zapper-server does not depend on zapper-mpv, so no libmpv is linked; the server needs only `libavformat`, `libavcodec` and `libavutil`. It takes them from
 zapper's own LGPL FFmpeg, the one the app's libmpv uses, when `just fetch-libmpv` has unpacked
-it into `crates/zapper/lib/<platform>/` (headers in `include/`, libraries in `link/` and `runtime/`;
+it into `lib/<platform>/` (headers in `include/`, libraries in `link/` and `runtime/`;
 docs/licensing.md); `build.rs` then links them from there and points the binary at them
 (`$ORIGIN/../lib/zapper` on Linux, beside the executable on Windows). Without it, a debug build
 uses the development files pkg-config finds, and a release build refuses unless
@@ -840,9 +840,9 @@ own.
 ### Checking it
 
 ```sh
-cd crates/zapper
-cargo build --no-default-features --features harness,server --bin zapper-server --bin recording_check
-target/debug/recording_check
+cd crates/zapper-server
+cargo build --features harness --bin zapper-server --bin recording_check
+../../target/debug/recording_check
 ```
 
 On a scratch `ZAPPER_HOME`, never your account: two `tools/fake_stream.py` servers stand for a
@@ -865,8 +865,8 @@ none of the clip however often it comes; that it records once the file is gone; 
 `/api/channels/{id}/alternatives` needs a sign-in and names no provider address. With
 `--serve-until FILE` it leaves everything running afterwards, for a browser to look at.
 
-`handover_check` (built with the app's features: `cargo build --features harness,server --bin
-zapper-server --bin handover_check`) records what a headless, silent mpv set up as the app's
+`handover_check` (`cargo build -p zapper-server --bin zapper-server` and `cargo build -p zapper-mpv
+--features harness --bin handover_check`) records what a headless, silent mpv set up as the app's
 plays, on a playlist of one stream: it checks that Record moves the player onto the service's
 connection and the player plays from it, that what the service streams to the app is the bytes the
 recording writes, that the fixture server sees one connection from then on, that the player's

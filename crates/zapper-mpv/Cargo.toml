@@ -1,0 +1,100 @@
+[package]
+name = "zapper-mpv"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# libmpv, the one player: the backend zapper-core's controller drives
+# (`backend`), the host that gives it a window of its own (`host`), and the
+# seek bar's previews of a title, a small C file against the FFmpeg libmpv
+# loads (`thumbframe`, see build.rs). And the player checks and benches.
+
+[lib]
+name = "zapper_mpv"
+
+# The harnesses are not part of the product. They are behind a feature that
+# is off by default: `cargo build` does not build them, and
+# tools/check_all.sh asks for them by name.
+[features]
+default = []
+harness = ["zapper-core/harness"]
+
+[[bin]]
+name = "player_check"
+path = "src/bin/player_check.rs"
+required-features = ["harness"]
+
+[[bin]]
+name = "catchup_check"
+path = "src/bin/catchup_check.rs"
+required-features = ["harness"]
+
+# The player in a window mpv makes itself (`host`): plays a film, takes scrollback thumbnails, survives a seek storm.
+[[bin]]
+name = "host_smoke"
+path = "src/bin/host_smoke.rs"
+required-features = ["harness"]
+
+[[bin]]
+name = "ending_check"
+path = "src/bin/ending_check.rs"
+required-features = ["harness"]
+
+# Records what a headless mpv is watching on an account of one connection:
+# the player moves onto zapper-server's connection, and its buffer becomes
+# the recording's first part.
+[[bin]]
+name = "handover_check"
+path = "src/bin/handover_check.rs"
+required-features = ["harness"]
+
+[[bin]]
+name = "seek_bench"
+path = "src/bin/seek_bench.rs"
+required-features = ["harness"]
+
+[[bin]]
+name = "filter_bench"
+path = "src/bin/filter_bench.rs"
+required-features = ["harness"]
+
+[[bin]]
+name = "open_bench"
+path = "src/bin/open_bench.rs"
+required-features = ["harness"]
+
+[[bin]]
+name = "live_start_bench"
+path = "src/bin/live_start_bench.rs"
+required-features = ["harness"]
+
+[build-dependencies]
+# The previews' C file, compiled against the FFmpeg pkg-config finds when no
+# bundle is fetched.
+cc = "1"
+pkg-config = "0.3"
+# On Windows, the Visual C++ runtime linked in rather than loaded from
+# vcruntime140.dll, which a fresh Windows does not have.
+static_vcruntime = "3"
+
+[dependencies]
+zapper-core = { path = "../zapper-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "rustls-native-certs", "stream", "json"] }
+rusqlite = { version = "0.41", features = ["bundled", "functions"] }
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+libmpv2 = "7"
+# libmpv2-sys is named directly for what the safe wrapper does not expose:
+# `mpv_request_log_messages`, which is the only place mpv says what HTTP
+# status refused a stream (see `zapper_core::api::ending`), and on Windows
+# `mpv_command_ret` for `screenshot-raw` (the thumbnails). It is already in
+# the tree under libmpv2, and covered by the same license entry.
+libmpv2-sys = "4"
+
+[dev-dependencies]
+zapper-core = { path = "../zapper-core", features = ["test-support"] }

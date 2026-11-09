@@ -33,7 +33,7 @@ Until this is done, `just release` refuses to run, and the updater in any build 
    first release that people will install, or accept that updates only work once it is.
 
 2. **Set the releases repository** in one place, `RELEASES_REPO` in
-   [crates/zapper/src/updates/mod.rs](../crates/zapper/src/updates/mod.rs):
+   [crates/zapper-core/src/updates/mod.rs](../crates/zapper-core/src/updates/mod.rs):
 
    ```rust
    pub const RELEASES_REPO: &str = "<owner>/zapper";
@@ -104,7 +104,7 @@ Until this is done, `just release` refuses to run, and the updater in any build 
 
 ## The updater
 
-The update code (`crates/zapper/src/updates/`) is kept for the app that comes back: it reads
+The update code (`crates/zapper-core/src/updates/`) is kept for the app that comes back: it reads
 `GET https://api.github.com/repos/<RELEASES_REPO>/releases`, picks the asset by a fixed name,
 downloads it, and refuses anything `SHA256SUMS` doesn't list. `zapper-server` doesn't update
 itself, so nothing installed from this line looks for these releases yet; a new binary replaces
@@ -112,7 +112,7 @@ the old one by hand (packaging/server/README.md).
 
 The release still keeps what that code needs, so the next app can use it unchanged:
 
-- `RELEASES_REPO` in [crates/zapper/src/updates/mod.rs](../crates/zapper/src/updates/mod.rs) is the
+- `RELEASES_REPO` in [crates/zapper-core/src/updates/mod.rs](../crates/zapper-core/src/updates/mod.rs) is the
   one repository releases come from, and the workflow fails a tagged build whose `RELEASES_REPO`
   isn't the repository it runs in (`scripts/releases-repo.sh` reads it);
 - every release has `SHA256SUMS`, merged from each job's, and the tag stays `v<version>`;
@@ -126,7 +126,7 @@ A release version is [SemVer](https://semver.org) without build metadata: `X.Y.Z
 `X.Y.Z-<pre-release>`, where the pre-release is a lowercase word then optional dot-separated
 words or numbers: `0.2.0-rc.1`, `1.0.0-beta.2`. The rules are in `scripts/version.py`, and the
 updater compares versions the same way
-([crates/zapper/src/updates/version.rs](../crates/zapper/src/updates/version.rs)).
+([crates/zapper-core/src/updates/version.rs](../crates/zapper-core/src/updates/version.rs)).
 
 The version rules are SemVer's order everywhere: `scripts/version.py cmp` compares two versions,
 `prerelease` says whether one is a pre-release, and `deb` writes the Debian form (`0.2.0~rc.1`),
