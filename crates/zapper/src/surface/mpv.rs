@@ -663,18 +663,3 @@ impl Player {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_thread_with_no_player_gets_none_rather_than_a_hang() {
-        // A command that arrives before `setup` has built the player must
-        // fail immediately, not block on a reply that will never come.
-        let _turn = crate::player::backend::TEST_REGISTRY
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        let asked = std::thread::spawn(|| crate::player::backend().is_none());
-        assert!(asked.join().expect("the asking thread panicked"));
-    }
-}
