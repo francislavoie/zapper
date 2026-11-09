@@ -69,19 +69,45 @@ pub async fn play(stream_id: i64) -> Result<(), String> {
 /// player's own connection, like a live channel and under the same budget:
 /// never through the recording service, which has nothing to do with a
 /// title.
-pub async fn play_movie(movie_id: i64, start: Option<f64>, held: Option<bool>) -> Result<(), String> {
+pub async fn play_movie(
+    movie_id: i64,
+    start: Option<f64>,
+    held: Option<bool>,
+) -> Result<(), String> {
     let target = movie_target(movie_id)?;
     let at = OpenAt::asked(start, held);
-    open_as(Opened::Movie(movie_id), target, OpenKind::OnDemand, None, Via::Direct, TrackChoice::Fresh, at).await
+    open_as(
+        Opened::Movie(movie_id),
+        target,
+        OpenKind::OnDemand,
+        None,
+        Via::Direct,
+        TrackChoice::Fresh,
+        at,
+    )
+    .await
 }
 
 /// Plays an episode, from `start` seconds in when given (`held`, paused
 /// there): on the player's own connection and under the same rules as a
 /// movie.
-pub async fn play_episode(episode_id: i64, start: Option<f64>, held: Option<bool>) -> Result<(), String> {
+pub async fn play_episode(
+    episode_id: i64,
+    start: Option<f64>,
+    held: Option<bool>,
+) -> Result<(), String> {
     let target = episode_target(episode_id)?;
     let at = OpenAt::asked(start, held);
-    open_as(Opened::Episode(episode_id), target, OpenKind::OnDemand, None, Via::Direct, TrackChoice::Fresh, at).await
+    open_as(
+        Opened::Episode(episode_id),
+        target,
+        OpenKind::OnDemand,
+        None,
+        Via::Direct,
+        TrackChoice::Fresh,
+        at,
+    )
+    .await
 }
 
 /// Moves on from episode `from_episode_id`, playing or just played to its
@@ -136,9 +162,16 @@ pub async fn play_next_episode(from_episode_id: i64, next_episode_id: i64) -> Re
         }
     });
     let tracks = languages.map_or(TrackChoice::Fresh, TrackChoice::Carry);
-    let opened =
-        open_as(Opened::Episode(next_episode_id), target, OpenKind::OnDemand, None, Via::Direct, tracks, at)
-            .await;
+    let opened = open_as(
+        Opened::Episode(next_episode_id),
+        target,
+        OpenKind::OnDemand,
+        None,
+        Via::Direct,
+        tracks,
+        at,
+    )
+    .await;
     // Not a reason to fail the move on: the next episode is open either way.
     // Waited for a few seconds at most: a catalogue refresh holding the
     // database must not hold up the answer; the mark still lands after.
@@ -155,11 +188,7 @@ pub async fn play_next_episode(from_episode_id: i64, next_episode_id: i64) -> Re
 
 /// Replays a past programme on an archive-enabled channel.
 /// `start` is Unix seconds; `duration_minutes` bounds the request.
-pub async fn play_catchup(
-    stream_id: i64,
-    start: i64,
-    duration_minutes: u32,
-) -> Result<(), String> {
+pub async fn play_catchup(stream_id: i64, start: i64, duration_minutes: u32) -> Result<(), String> {
     let (start, duration_minutes, near_edge) = within_archive(stream_id, start, duration_minutes);
     let target = match source()? {
         Source::Xtream(server) => {
@@ -258,7 +287,11 @@ pub async fn seek_relative(seconds: f64) -> Result<(), String> {
         // the buffered window is a live stream's limit, not its. Its own
         // ends are, though: never before the start or past the end.
         let target = movie
-            .then(|| probe.time_pos.map(|now| clamp_to_title(now + seconds, title_length(p))))
+            .then(|| {
+                probe
+                    .time_pos
+                    .map(|now| clamp_to_title(now + seconds, title_length(p)))
+            })
             .flatten();
         let by = match (movie, probe.time_pos, target) {
             (true, Some(now), Some(at)) => at - now,
@@ -365,19 +398,13 @@ pub async fn seek_live() -> Result<(), String> {
 pub async fn set_volume(volume: f64) -> Result<(), String> {
     let v = volume.clamp(0.0, 200.0);
     let to_mpv = mpv_volume(v);
-    on_player(move |p| {
-        p.set_f64("volume", to_mpv).map_err(|e| e.to_string())
-    })
-    .await?;
+    on_player(move |p| p.set_f64("volume", to_mpv).map_err(|e| e.to_string())).await?;
     commit(|m| m.dto.volume = v);
     Ok(())
 }
 
 pub async fn set_muted(muted: bool) -> Result<(), String> {
-    on_player(move |p| {
-        p.set_flag("mute", muted).map_err(|e| e.to_string())
-    })
-    .await?;
+    on_player(move |p| p.set_flag("mute", muted).map_err(|e| e.to_string())).await?;
     commit(|m| m.dto.muted = muted);
     Ok(())
 }
@@ -391,10 +418,7 @@ pub async fn set_compressor(enabled: bool) -> Result<(), String> {
     } else {
         String::new()
     };
-    on_player(move |p| {
-        p.set_property("af", &filter).map_err(|e| e.to_string())
-    })
-    .await?;
+    on_player(move |p| p.set_property("af", &filter).map_err(|e| e.to_string())).await?;
     commit(|m| m.dto.compressor = enabled);
     Ok(())
 }
@@ -447,15 +471,17 @@ pub async fn thumbnail_at(
 pub async fn thumbnail_for_title(
     at: f64,
 ) -> Result<Option<crate::ipc::types::TitleThumbnailDto>, String> {
-    Ok(crate::surface::trickplay::title_frame(at).map(|(at, mime, bytes)| {
-        crate::ipc::types::TitleThumbnailDto {
-            data_url: format!(
-                "data:{mime};base64,{}",
-                crate::surface::trickplay::base64(&bytes)
-            ),
-            at,
-        }
-    }))
+    Ok(
+        crate::surface::trickplay::title_frame(at).map(|(at, mime, bytes)| {
+            crate::ipc::types::TitleThumbnailDto {
+                data_url: format!(
+                    "data:{mime};base64,{}",
+                    crate::surface::trickplay::base64(&bytes)
+                ),
+                at,
+            }
+        }),
+    )
 }
 
 /// Everything the diagnostics panel shows: one reading, and the history.
@@ -509,7 +535,10 @@ pub async fn player_state() -> Result<PlayerStateDto, String> {
 }
 
 pub async fn player_options() -> Result<PlayerOptionsDto, String> {
-    Ok(OPTIONS.lock().expect("player options mutex poisoned").clone())
+    Ok(OPTIONS
+        .lock()
+        .expect("player options mutex poisoned")
+        .clone())
 }
 
 /// Switches to one of the stream's audio tracks, by mpv's audio id.
@@ -535,10 +564,11 @@ pub async fn set_audio_track(id: i64) -> Result<PlayerOptionsDto, String> {
 /// The viewer's choice: it is the standing one from now, for every open
 /// after this (the interface saves it in the settings as well), and this
 /// open's standing choice is not applied over it.
-pub async fn set_subtitle_track(
-    id: Option<i64>,
-) -> Result<PlayerOptionsDto, String> {
-    let listed = OPTIONS.lock().map(|o| o.subtitles.clone()).unwrap_or_default();
+pub async fn set_subtitle_track(id: Option<i64>) -> Result<PlayerOptionsDto, String> {
+    let listed = OPTIONS
+        .lock()
+        .map(|o| o.subtitles.clone())
+        .unwrap_or_default();
     let selected = on_player(|p| Ok(p.get_i64("current-tracks/sub/id"))).await?;
     let (props, chosen) = match subtitle_ask(&listed, id, selected) {
         SubtitleAsk::Choose(props, chosen) => (props, chosen),
@@ -571,9 +601,7 @@ pub async fn set_aspect(aspect: AspectMode) -> Result<PlayerOptionsDto, String> 
     Ok(commit_options(|o| o.aspect = aspect))
 }
 
-pub async fn set_deinterlace(
-    mode: DeinterlaceMode,
-) -> Result<PlayerOptionsDto, String> {
+pub async fn set_deinterlace(mode: DeinterlaceMode) -> Result<PlayerOptionsDto, String> {
     on_player(move |p| {
         p.set_property("deinterlace", tracks::deinterlace_value(mode))
             .map_err(|e| e.to_string())
@@ -586,9 +614,7 @@ pub async fn set_deinterlace(
 ///
 /// Subtitles are drawn by libass inside the video layer, not the DOM, so this
 /// is the only way to style them.
-pub async fn set_subtitle_style(
-    style: crate::ipc::types::SubtitleStyleDto,
-) -> Result<(), String> {
+pub async fn set_subtitle_style(style: crate::ipc::types::SubtitleStyleDto) -> Result<(), String> {
     let props = subtitle_properties(&style);
     on_player(move |p| apply_properties(p, &props)).await
 }

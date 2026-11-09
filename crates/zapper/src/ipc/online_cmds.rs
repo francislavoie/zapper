@@ -9,7 +9,6 @@
 
 use std::path::PathBuf;
 
-
 use crate::catalog::sync_engine::scrub;
 use crate::catalog::vod_store::VodItem;
 use crate::player::controller;
