@@ -56,7 +56,7 @@ export interface Capabilities {
 }
 
 /** The app's window, and the mock that stands in for it. */
-export const DESKTOP: Capabilities = {
+export const MOCK_DESKTOP: Capabilities = {
   playback: true,
   catchup: true,
   mpv: true,

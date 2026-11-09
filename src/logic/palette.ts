@@ -7,7 +7,7 @@
 // Checked in src/__checks__/palette.test.mjs.
 
 import type { ChannelDto, ProgrammeHitDto } from "../types";
-import { allows, DESKTOP, type Capabilities, type Capability } from "./capabilities.ts";
+import { allows, MOCK_DESKTOP, type Capabilities, type Capability } from "./capabilities.ts";
 import { anyAlternative } from "./searchQuery.ts";
 import type { SleepRequest } from "./sleep";
 
@@ -244,7 +244,7 @@ export function availableActions(
   playing: boolean,
   conditions: ActionConditions = {},
 ): PaletteAction[] {
-  const caps = conditions.capabilities ?? DESKTOP;
+  const caps = conditions.capabilities ?? MOCK_DESKTOP;
   const noMovies = conditions.movies === false;
   const noShows = conditions.shows === false;
   return ACTIONS.filter(

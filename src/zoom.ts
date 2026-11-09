@@ -51,13 +51,11 @@ function reveal(): void {
  *  Page zoom scales the CSS pixel instead, so those constants scale with
  *  everything else and the JS arithmetic needs no special case at all.
  *
- *  Under Tauri this is WebKit's own zoom, the same mechanism the browser's
- *  Ctrl+= drives. In a plain browser - the mock, and the automated checks -
- *  there is no such API, so the CSS `zoom` property stands in; it scales
- *  layout the same way, which `font-size` never did.
+ *  A page cannot reach the browser's own zoom, so the CSS `zoom` property
+ *  stands in; it scales layout the same way, which `font-size` never did.
  *
- *  Both paths scale `clientWidth`/`clientHeight` along with element boxes, so
- *  the normalised video rect stays correct without knowing the zoom at all.
+ *  It scales `clientWidth`/`clientHeight` along with element boxes, so the
+ *  normalised video rect stays correct without knowing the zoom at all.
  */
 export function applyZoom(zoom: number): void {
   if (typeof document === "undefined") return;
@@ -68,31 +66,8 @@ export function applyZoom(zoom: number): void {
   // drive sizing.
   root.style.setProperty("--zoom", String(scale));
 
-  const tauri = (globalThis as { __TAURI_INTERNALS__?: unknown })
-    .__TAURI_INTERNALS__;
-  if (!tauri) {
-    root.style.zoom = String(scale);
-    reveal();
-    return;
-  }
-
-  // index.html has already set CSS zoom to the remembered value, so the page
-  // is the right size before this resolves. Handing over to WebKit's own page
-  // zoom means clearing that first write, and the two must never both be in
-  // effect - they multiply. The swap therefore happens after `setZoom` has
-  // taken, and while the interface is still hidden, so neither the doubled
-  // size nor the bare 100% is ever painted.
-  void import("@tauri-apps/api/webview")
-    .then(({ getCurrentWebview }) => getCurrentWebview().setZoom(scale))
-    .then(() => {
-      root.style.zoom = "";
-    })
-    .catch(() => {
-      // Permission missing or the call failed. CSS zoom is already applied
-      // and correct; leaving it in place is the fallback.
-      root.style.zoom = String(scale);
-    })
-    .finally(reveal);
+  root.style.zoom = String(scale);
+  reveal();
 }
 
 /** How many visual pixels the document draws per CSS pixel.
