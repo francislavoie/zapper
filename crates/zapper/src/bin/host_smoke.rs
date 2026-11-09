@@ -6,10 +6,10 @@
 //! it to play in mpv's own window (`gpu-next`, configured); waits for live
 //! scrollback thumbnails from `screenshot-raw` (two, the clock's pace, and a
 //! picture rather than a blank); then a seek storm, 50 relative seeks in two
-//! seconds while it plays and while another thread pumps and probes as the
-//! heartbeat does, which must neither hang nor lose a seek: the position it
-//! settles at is the start plus the seeks' sum, plus at most the time that
-//! played meanwhile, to within a second.
+//! seconds while another thread pumps and probes as the heartbeat does,
+//! which must neither hang nor lose a seek: paused for it, so the position
+//! it settles at is the start plus the seeks' sum, to within a second; then
+//! it plays on.
 //!
 //! Usage: `tools/fake_stream.py --movies 2 &`, then
 //! `cargo run --features harness --bin host_smoke` inside a desktop session
@@ -177,7 +177,12 @@ fn main() {
         png.len()
     );
 
-    // The seek storm, with a heartbeat pumping and probing beside it.
+    // The seek storm, with a heartbeat pumping and probing beside it. Paused,
+    // so the clock moves only by the seeks and the sum is exact (hr-seek
+    // lands where it is asked to): a lost or doubled seek shows.
+    if let Err(e) = p.set_flag("pause", true) {
+        fail(format!("pausing before the storm: {e:#}"));
+    }
     let start = settle(p, "settling before the storm");
     let stop = Arc::new(AtomicBool::new(false));
     let ticker = {
@@ -210,24 +215,20 @@ fn main() {
     let ticks = ticker.join().unwrap_or_else(|_| fail("the heartbeat panicked"));
     let end = settle(p, "settling after the storm");
     let elapsed = storm.elapsed().as_secs_f64();
-    if p.get_bool("pause") != Some(false) {
-        fail("paused after the storm");
-    }
     let residue = end - start - sum;
     println!(
         "seek storm: 50 seeks in {:.2}s, {ticks} heartbeat ticks beside them; \
          {start:.2}s + {sum:.0}s -> {end:.2}s ({residue:+.2}s, {elapsed:.2}s elapsed)",
         sent.as_secs_f64()
     );
-    // Playback carries on between seeks, so the position may run ahead of
-    // the sum by as much as the time that passed, never fall behind it.
-    if !(-1.0..=elapsed + 1.0).contains(&residue) {
-        fail(format!(
-            "after the storm at {end:.2}s, not {start:.2}s + {sum:.0}s (+ up to {elapsed:.2}s played)"
-        ));
+    if residue.abs() >= 1.0 {
+        fail(format!("after the storm at {end:.2}s, not {start:.2}s + {sum:.0}s"));
+    }
+    if let Err(e) = p.set_flag("pause", false) {
+        fail(format!("resuming after the storm: {e:#}"));
     }
     wait_for(p, "playing on after the storm", Duration::from_secs(5), |p, _| {
-        p.get_f64("time-pos").is_some_and(|t| t > end + 0.5)
+        p.get_f64("time-pos").is_some_and(|t| t > end + 1.0)
     });
 
     let _ = p.command("stop", &[]);

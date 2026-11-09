@@ -48,16 +48,17 @@ pub fn open_host(opts: HostOptions) -> Result<Arc<dyn PlayerBackend>, String> {
         Ok(())
     })
     .map_err(|e| format!("{e:#}"))?;
+    // First, so a failure here leaves nothing installed. It waits for the
+    // player to be installed before it looks for frames.
+    std::thread::Builder::new()
+        .name("zapper-host-thumbs".into())
+        .spawn(thumbnails)
+        .map_err(|e| format!("starting the thumbnail thread: {e}"))?;
     // Before it is installed: nothing can ask it to load before the gate is
     // open.
     mpv::set_own_window();
     let player: Arc<dyn PlayerBackend> = Arc::new(player);
     crate::player::install(player.clone());
-
-    std::thread::Builder::new()
-        .name("zapper-host-thumbs".into())
-        .spawn(thumbnails)
-        .map_err(|e| format!("starting the thumbnail thread: {e}"))?;
     tracing::info!("video surface: mpv's own window");
     Ok(player)
 }
@@ -97,13 +98,19 @@ fn mute_asked(var: Option<OsString>) -> bool {
     var.is_some_and(|v| !v.is_empty())
 }
 
-/// Takes a thumbnail whenever one is due, until the player is uninstalled.
+/// Takes a thumbnail whenever one is due, from when the player is installed
+/// until it is uninstalled.
 fn thumbnails() {
+    let mut installed = false;
     loop {
         std::thread::sleep(THUMB_POLL);
         let Some(player) = crate::player::backend() else {
-            return;
+            if installed {
+                return;
+            }
+            continue;
         };
+        installed = true;
         // Nothing loaded, nothing to photograph. Read before the clock, so
         // that an idle player does not use up the due time.
         let Some(at) = player.get_f64("playback-time") else {
