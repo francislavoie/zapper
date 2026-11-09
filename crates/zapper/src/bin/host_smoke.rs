@@ -102,6 +102,7 @@ fn main() {
     let opened = host::open_host(host::HostOptions {
         title: "zapper host_smoke".to_owned(),
         muted: true,
+        window: None,
     })
     .unwrap_or_else(|e| fail(format!("opening the host: {e}")));
     let Some(p) = player::backend() else {

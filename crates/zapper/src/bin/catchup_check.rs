@@ -65,6 +65,7 @@ fn main() {
     let opened = zapper_lib::surface::host::open_host(zapper_lib::surface::host::HostOptions {
         title: "zapper catchup_check".to_owned(),
         muted: true,
+        window: Some((1920, 1080)),
     });
     if let Err(e) = opened {
         eprintln!("FAIL: opening the player: {e}");
