@@ -1,5 +1,5 @@
 // The interface's backend in a browser, served by the recording service:
-// the same calls as src/api.ts makes through Tauri, made to the service's
+// the same calls the desktop app once made through Tauri, made to the service's
 // HTTP API on the same origin instead (docs/recording.md, "Web access").
 //
 // Signed in, the browser holds a cookie its scripts cannot read; this file
@@ -15,7 +15,6 @@
 // `BROWSER`'s capabilities. The calls
 // are still answered, harmlessly: they say they are not available.
 
-import type { api } from "./api";
 import { DEFAULT_SETTINGS } from "./logic/settings";
 import {
   BROWSER_SETTINGS_KEY,
@@ -34,6 +33,7 @@ import {
 } from "./logic/web";
 import * as player from "./webPlayer";
 import * as vod from "./webVod";
+import type { Backend } from "./backendContract";
 import type {
   AccountCandidateDto,
   AccountDto,
@@ -208,7 +208,7 @@ async function saveAccount(form: AccountCandidateDto): Promise<void> {
 
 player.onPlayerSignedOut(signedOut);
 
-export const webBackend: typeof api = {
+export const webBackend: Backend = {
   categories: () => get<CategoryDto[]>("/api/categories"),
   channels: (categoryId, offset, limit) =>
     get<ChannelDto[]>(apiUrl("/api/channels", { category: categoryId, offset, limit })),

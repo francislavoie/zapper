@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import {
   BROWSER,
-  DESKTOP,
+  MOCK_DESKTOP,
   SETTINGS_SECTIONS,
   allows,
   settingsSections,
@@ -13,24 +13,24 @@ import { ACTIONS, availableActions } from "../logic/palette.ts";
 const ids = (actions) => actions.map((a) => a.id);
 
 test("the app's window can do everything but sign out", () => {
-  for (const [k, v] of Object.entries(DESKTOP)) assert.equal(v, k !== "signOut", k);
-  assert.deepEqual(settingsSections(DESKTOP), [...SETTINGS_SECTIONS]);
+  for (const [k, v] of Object.entries(MOCK_DESKTOP)) assert.equal(v, k !== "signOut", k);
+  assert.deepEqual(settingsSections(MOCK_DESKTOP), [...SETTINGS_SECTIONS]);
 });
 
 test("Online services follow Data, in the app and in a browser", () => {
-  for (const caps of [DESKTOP, BROWSER]) {
+  for (const caps of [MOCK_DESKTOP, BROWSER]) {
     const s = settingsSections(caps);
     assert.equal(s[s.indexOf("Data") + 1], "Online services");
   }
 });
 
 test("Movies are on offer in the app and in a browser alike", () => {
-  assert.equal(DESKTOP.onDemand, true);
+  assert.equal(MOCK_DESKTOP.onDemand, true);
   assert.equal(BROWSER.onDemand, true);
 });
 
 test("a browser shows a movie's text subtitles, not those that are pictures", () => {
-  assert.equal(DESKTOP.pictureSubtitles, true);
+  assert.equal(MOCK_DESKTOP.pictureSubtitles, true);
   assert.equal(BROWSER.pictureSubtitles, false);
 });
 
@@ -69,7 +69,7 @@ test("a browser keeps the guide, recordings, the account, refreshing and watchin
 
 test("the menu and the palette offer only what can be done here", () => {
   const everything = { hasPrevious: true, sleeping: true, programme: true, recordable: true };
-  const desktop = ids(availableActions(true, { ...everything, capabilities: DESKTOP }));
+  const desktop = ids(availableActions(true, { ...everything, capabilities: MOCK_DESKTOP }));
   assert.ok(desktop.includes("quit") && desktop.includes("updates") && desktop.includes("pause"));
   assert.ok(!desktop.includes("signOut"), "nothing to sign out of in the app");
   // The default is the app's window, so callers that say nothing are unchanged.
@@ -109,11 +109,10 @@ test("the menu and the palette offer only what can be done here", () => {
 });
 
 // What the interface can do is asked of `capabilities`, not worked out from
-// where it is running: only the switch itself and the modules that wrap
-// Tauri's own window calls (the window, fullscreen, page zoom) know about
-// Tauri.
-test("nothing outside the backend switch asks whether it is in Tauri", () => {
-  const allowed = new Set(["backend.ts", "window.ts", "fullscreen.ts", "zoom.ts"]);
+// where it is running: only the switch itself knows which backend it is, and
+// nothing asks for a Tauri bridge any more.
+test("nothing asks whether it is in Tauri", () => {
+  const allowed = new Set();
   const root = new URL("../", import.meta.url);
   const walk = (dir) =>
     readdirSync(dir).flatMap((name) => {
@@ -123,7 +122,7 @@ test("nothing outside the backend switch asks whether it is in Tauri", () => {
     });
   const offenders = walk(root)
     .filter(([, rel]) => !allowed.has(rel))
-    .filter(([path]) => /\binTauri\b|__TAURI/.test(readFileSync(path, "utf8")))
+    .filter(([path]) => /\binTauri\b|__TAURI|@tauri-apps/.test(readFileSync(path, "utf8")))
     .map(([, rel]) => rel);
   assert.deepEqual(offenders, []);
 });

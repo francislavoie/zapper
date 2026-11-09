@@ -95,9 +95,9 @@ test("rows read cleanly: something to press and something it does", () => {
 
 test("a browser lists the player's keys but not mpv's or the window's, and the app lists them all", async () => {
   const { shortcutGroups } = await import("../logic/shortcuts.ts");
-  const { BROWSER, DESKTOP } = await import("../logic/capabilities.ts");
+  const { BROWSER, MOCK_DESKTOP } = await import("../logic/capabilities.ts");
   const count = (groups) => groups.reduce((n, g) => n + g.items.length, 0);
-  assert.equal(count(shortcutGroups(DESKTOP)), count(SHORTCUT_GROUPS));
+  assert.equal(count(shortcutGroups(MOCK_DESKTOP)), count(SHORTCUT_GROUPS));
   const browser = shortcutGroups(BROWSER);
   const titles = browser.map((g) => g.title);
   assert.ok(titles.includes("While watching"), titles.join(", "));

@@ -10,7 +10,7 @@ import {
   moveIndex,
   paletteItems,
 } from "../logic/palette.ts";
-import { DESKTOP } from "../logic/capabilities.ts";
+import { MOCK_DESKTOP } from "../logic/capabilities.ts";
 
 const chan = (streamId, cleanName, isSeparator = false) => ({
   streamId,
@@ -179,8 +179,8 @@ test("'end of this programme' needs the guide to know the end, and 'off' needs a
 });
 
 test("Movies, Shows and Live TV are offered where there is something to switch between", () => {
-  const on = { ...DESKTOP, onDemand: true };
-  const off = { ...DESKTOP, onDemand: false };
+  const on = { ...MOCK_DESKTOP, onDemand: true };
+  const off = { ...MOCK_DESKTOP, onDemand: false };
   const movies = ACTIONS.find((a) => a.id === "movies");
   assert.equal(movies.label, "Movies");
   assert.equal(movies.hint, "M");
@@ -208,8 +208,8 @@ test("Movies, Shows and Live TV are offered where there is something to switch b
 });
 
 test("Continue watching is offered, with W, where Movies or Shows are", () => {
-  const on = { ...DESKTOP, onDemand: true };
-  const off = { ...DESKTOP, onDemand: false };
+  const on = { ...MOCK_DESKTOP, onDemand: true };
+  const off = { ...MOCK_DESKTOP, onDemand: false };
   const a = ACTIONS.find((x) => x.id === "continue");
   assert.ok(a, "listed");
   assert.equal(a.label, "Continue watching");

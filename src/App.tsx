@@ -35,7 +35,6 @@ import { errorMessage } from "./logic/async";
 import { useGlobalKeys } from "./hooks/useGlobalKeys";
 import { useResumePrompt } from "./hooks/useResumePrompt";
 import { useUpNext } from "./hooks/useUpNext";
-import { useMenuCommands } from "./hooks/useMenuCommands";
 import { useMediaControls } from "./mediaKeys";
 import { useWheelSteps } from "./hooks/useWheelSteps";
 import { useSettings } from "./hooks/useSettings";
@@ -154,7 +153,6 @@ export function App() {
   const resume = useResumePrompt();
   const upNext = useUpNext(resume.held);
   useGlobalKeys(state, dispatch, upNext, stacked, resume.shown);
-  useMenuCommands(dispatch);
   // The desktop's media keys, when Settings › Playback turns them on.
   useMediaControls(state, dispatch);
   // Wheel scrolling that steps rather than glides; see logic/wheel.ts.
@@ -667,7 +665,7 @@ export function App() {
 
   return (
     <div className={`app ${fullscreen ? "fullscreen" : ""}`} data-mode={state.mode}>
-      {/* Mock only. In Tauri this never renders, because a painted rectangle
+      {/* Mock only. A real player never renders this, because a painted rectangle
           here would sit on top of the video plane and hide it. */}
       {isMock ? <div className="mock-video" ref={(el) => void (planeRef.current = el)} /> : null}
       {/* A browser's picture: the page's own video element, beneath the

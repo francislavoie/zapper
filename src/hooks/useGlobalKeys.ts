@@ -12,7 +12,7 @@
 // so ⌘F or ⌃T is never mistaken for F or T.
 
 import { useEffect, useRef } from "react";
-import { backend, backendKind, capabilities } from "../backend";
+import { backend, capabilities } from "../backend";
 import { escapeStep, type EscapeContext } from "../logic/escape";
 import {
   MOUSE_BACK,
@@ -105,7 +105,7 @@ export function useGlobalKeys(
 
   // A browser's own Back — its toolbar button, Alt+Left, or a side button
   // it acts on before the page can cancel it — would leave the app: the
-  // page is one history entry. So outside the desktop app a second entry,
+  // page is one history entry. So a second entry,
   // the sentinel, is kept on top of it: pushed once, at the first press of
   // anything (Chromium's Back skips entries a page adds unprompted, and
   // Escape is not a press that counts), and kept across reloads. When Back
@@ -113,11 +113,8 @@ export function useGlobalKeys(
   // new one, which would be pushed without a press and so skipped — and the
   // app goes back a step instead. The return is itself a pop, onto the
   // sentinel, and is passed over. A side button that has already acted has
-  // its pop absorbed rather than acted on twice. The desktop app's webview
-  // has no history to go through, and cancelling the button is enough
-  // there.
+  // its pop absorbed rather than acted on twice.
   useEffect(() => {
-    if (backendKind === "tauri") return;
     const SENTINEL = "back";
     let pushed = (window.history.state as { zapper?: string } | null)?.zapper === SENTINEL;
     const push = (e: Event) => {
