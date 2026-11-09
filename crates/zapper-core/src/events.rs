@@ -61,20 +61,27 @@ pub fn bus() -> &'static EventBus {
     BUS.get_or_init(|| EventBus::new(256))
 }
 
-/// The next event, or on a lagged receiver the newest one still held: a
-/// listener that fell behind wants where things are now, not every step
-/// it missed. Only for consumers that want the newest state: it drops the
-/// events in between. `None` once the bus is gone.
-pub async fn recv_latest(rx: &mut broadcast::Receiver<Event>) -> Option<Event> {
+/// The next player state, or on a lagged receiver the newest one still
+/// held: a listener that fell behind wants where the player is now, not
+/// every step it missed. Every other kind of event is skipped, so a lag
+/// whose last event is, say, a channel's quality still ends on the state
+/// before it (a state is sent only when it changes, so missing the last one
+/// would leave the listener on a stale one). Only for consumers that want
+/// the player's state alone. `None` once the bus is gone.
+pub async fn recv_latest_player_state(
+    rx: &mut broadcast::Receiver<Event>,
+) -> Option<PlayerStateDto> {
     loop {
         match rx.recv().await {
-            Ok(e) => return Some(e),
+            Ok(Event::PlayerState(s)) => return Some(s),
+            Ok(_) => continue,
             Err(RecvError::Closed) => return None,
             Err(RecvError::Lagged(_)) => {
                 let mut latest = None;
                 loop {
                     match rx.try_recv() {
-                        Ok(e) => latest = Some(e),
+                        Ok(Event::PlayerState(s)) => latest = Some(s),
+                        Ok(_) => {}
                         Err(broadcast::error::TryRecvError::Lagged(_)) => continue,
                         Err(_) => break,
                     }
@@ -127,7 +134,23 @@ mod tests {
         for i in 0..10 {
             bus.emit(state(i as f64));
         }
-        assert_eq!(pos(&recv_latest(&mut rx).await.unwrap()), 9.0);
+        // Another kind of event after the last state: ignored, not taken
+        // for the newest.
+        bus.emit(quality());
+        let s = recv_latest_player_state(&mut rx).await.unwrap();
+        assert_eq!(s.buffered_back, 9.0);
+        // Without a lag, other kinds are skipped on the way to the next state.
+        bus.emit(quality());
+        bus.emit(state(10.0));
+        let s = recv_latest_player_state(&mut rx).await.unwrap();
+        assert_eq!(s.buffered_back, 10.0);
+    }
+
+    fn quality() -> Event {
+        Event::ChannelQuality(ChannelQualityDto {
+            stream_id: 1,
+            quality: None,
+        })
     }
 
     #[test]
