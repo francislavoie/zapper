@@ -235,6 +235,34 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::{Duration, Instant};
 
+    #[test]
+    fn the_cache_span_runs_from_the_oldest_seekable_moment_to_the_newest_packet() {
+        let state = r#"{"seekable-ranges":[{"start":12.5,"end":80.0},{"start":90.0,"end":95.0}],"cache-end":96.25}"#;
+        assert_eq!(cache_span(state), Some((12.5, 96.25)));
+    }
+
+    #[test]
+    fn no_cache_span_without_a_seekable_range_or_an_end() {
+        for state in [
+            r#"{"cache-end":96.25}"#,
+            r#"{"seekable-ranges":[],"cache-end":96.25}"#,
+            r#"{"seekable-ranges":[{"end":80.0}],"cache-end":96.25}"#,
+            r#"{"seekable-ranges":[{"start":12.5,"end":80.0}]}"#,
+            "not json",
+            "",
+        ] {
+            assert_eq!(cache_span(state), None, "{state}");
+        }
+    }
+
+    #[test]
+    fn no_cache_span_when_the_end_is_not_past_the_start() {
+        for end in ["12.5", "3.0"] {
+            let state = format!(r#"{{"seekable-ranges":[{{"start":12.5}}],"cache-end":{end}}}"#);
+            assert_eq!(cache_span(&state), None, "{state}");
+        }
+    }
+
     fn registry() -> std::sync::MutexGuard<'static, ()> {
         TEST_REGISTRY.lock().unwrap_or_else(PoisonError::into_inner)
     }
