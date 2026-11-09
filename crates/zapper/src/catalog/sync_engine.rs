@@ -1017,7 +1017,7 @@ pub async fn watch_elsewhere<S: StatusSink>(sink: S, on_account: impl Fn()) {
     }
 }
 
-/// [`watch_elsewhere`] on the app's runtime, telling its window.
+/// [`watch_elsewhere`] on the app's runtime, telling the bus.
 pub fn spawn_watch_elsewhere(on_account: impl Fn() + Send + 'static) {
     tokio::spawn(watch_elsewhere(BusSink, on_account));
 }
