@@ -398,13 +398,16 @@ async fn shared(port: u16, stream_id: i64, fixture: &Fixture) -> Result<(), Stri
     client.set_settings(&settings).await.map_err(|e| e.to_string())?;
     let before = fixture.requests();
 
+    // A recording holds back what it receives for the hub's first OFF_AIR_WINDOW (20 s), so a
+    // placeholder clip never reaches its file: their files show from then on. They overlap
+    // after it.
     let start = zapper_lib::recording::now();
     let a = client
-        .schedule(&request(stream_id, "Fixture: First", start, start + 20))
+        .schedule(&request(stream_id, "Fixture: First", start, start + 40))
         .await
         .map_err(|e| e.to_string())?;
     let b = client
-        .schedule(&request(stream_id, "Fixture: Second", start + 10, start + 30))
+        .schedule(&request(stream_id, "Fixture: Second", start + 10, start + 50))
         .await
         .map_err(|e| e.to_string())?;
     if !a.conflicts.is_empty() || !b.conflicts.is_empty() {
@@ -415,7 +418,7 @@ async fn shared(port: u16, stream_id: i64, fixture: &Fixture) -> Result<(), Stri
     }
 
     // While both record, their files are there for other programs to see.
-    let deadline = Instant::now() + Duration::from_secs(40);
+    let deadline = Instant::now() + Duration::from_secs(60);
     loop {
         if Instant::now() > deadline {
             return Err("the two recordings were never on at once".into());
@@ -624,7 +627,9 @@ async fn followed_through_strm(port: u16, stream_id: i64) -> Result<(), String> 
 
     let start = zapper_lib::recording::now();
     let rec = client
-        .schedule(&request(stream_id, "Fixture: Followed", start, start + 35))
+        // Long enough that after the restart below, its second part (held back for the hub's
+        // first 20 s, OFF_AIR_WINDOW) is written while it still records.
+        .schedule(&request(stream_id, "Fixture: Followed", start, start + 60))
         .await
         .map_err(|e| e.to_string())?;
     let strm = wait_for(Duration::from_secs(20), || {
@@ -682,7 +687,7 @@ async fn followed_through_strm(port: u16, stream_id: i64) -> Result<(), String> 
     if again.trim() != url {
         return Err("the .strm changed across a restart".into());
     }
-    wait_until(Duration::from_secs(30), || async {
+    wait_until(Duration::from_secs(45), || async {
         one(&client, rec.id).await.is_ok_and(|r| r.parts.len() >= 2)
     })
     .await?;
