@@ -104,21 +104,52 @@ async fn on_main<R: Send + 'static>(
 /// heartbeat locks after it, in that order.
 static PLAYER_TURN: Mutex<()> = Mutex::new(());
 
-/// Runs `f` against the player, on this thread, in its turn.
+/// How long a command waits for its turn at the player, and then for the
+/// player's answer, before it fails rather than wedging the frontend.
+const PLAYER_WAIT: Duration = Duration::from_secs(5);
+
+/// Runs `f` against the player in its turn, and waits for its result.
+///
+/// On a blocking thread, not the async worker the command arrived on: a
+/// player that never answers, or a turn never given up, then costs a
+/// blocking thread rather than one of the runtime's few workers. Bounded
+/// both ways by [`PLAYER_WAIT`]: the turn is only waited for that long, so
+/// a command that gives up is never run late, and its answer only waited
+/// for that long after it.
 ///
 /// `Err` at once, not a hang, when no player has been installed yet: a
 /// command that arrives before `setup` has built the player says so
-/// immediately. The app is not needed any more, now that nothing hops to
-/// the main thread; it stays in the signature while the callers move over.
+/// immediately.
 async fn on_player<R: Send + 'static>(
-    _app: &AppHandle,
     f: impl FnOnce(&dyn PlayerBackend) -> Result<R, String> + Send + 'static,
 ) -> Result<R, String> {
     let Some(p) = player::backend() else {
         return Err("the player is not running".to_owned());
     };
-    let _turn = PLAYER_TURN.lock().unwrap_or_else(PoisonError::into_inner);
-    f(p.as_ref())
+    let visit = tokio::task::spawn_blocking(move || {
+        let _turn = take_turn(Instant::now() + PLAYER_WAIT)
+            .ok_or_else(|| "the player is busy and did not answer".to_owned())?;
+        f(p.as_ref())
+    });
+    match tokio::time::timeout(PLAYER_WAIT * 2, visit).await {
+        Ok(Ok(r)) => r,
+        Ok(Err(e)) => Err(format!("the player command failed: {e}")),
+        Err(_) => Err("the player did not answer".to_owned()),
+    }
+}
+
+/// [`PLAYER_TURN`], or `None` if it is not free by `deadline`.
+fn take_turn(deadline: Instant) -> Option<std::sync::MutexGuard<'static, ()>> {
+    loop {
+        match PLAYER_TURN.try_lock() {
+            Ok(turn) => return Some(turn),
+            Err(std::sync::TryLockError::Poisoned(e)) => return Some(e.into_inner()),
+            Err(std::sync::TryLockError::WouldBlock) if Instant::now() >= deadline => return None,
+            Err(std::sync::TryLockError::WouldBlock) => {
+                std::thread::sleep(Duration::from_millis(2))
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -126,8 +157,8 @@ async fn on_player<R: Send + 'static>(
 // ---------------------------------------------------------------------------
 
 /// Everything the frontend sees, plus the bookkeeping that decides when it
-/// changes. Held behind a `Mutex` so worker threads and the main-thread ticker can
-/// both drive it.
+/// changes. Held behind a `Mutex` so worker threads and the heartbeat's
+/// thread can both drive it.
 struct Machine {
     dto: PlayerStateDto,
     /// When the current open began. The first-frame deadline runs off it.
@@ -1824,7 +1855,7 @@ pub async fn cancel_reconnect(app: AppHandle) -> Result<(), String> {
         attempting
     };
     if attempting {
-        on_player(&app, |p| p.command("stop", &[]).map_err(|e| e.to_string())).await?;
+        on_player(|p| p.command("stop", &[]).map_err(|e| e.to_string())).await?;
     }
     commit(&app, |m| {
         let ending = m.chain_ending.take().or(m.dto.ending);
@@ -1886,7 +1917,15 @@ fn ensure_ticker(app: &AppHandle) {
         .spawn(move || loop {
             if let Some(p) = player::backend() {
                 let _turn = PLAYER_TURN.lock().unwrap_or_else(PoisonError::into_inner);
-                tick(&app, p.as_ref());
+                // A panic in one heartbeat must not end the state feed: it
+                // is logged by the panic hook, said here, and the next
+                // heartbeat runs as usual.
+                let beat = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    tick(&app, p.as_ref())
+                }));
+                if beat.is_err() {
+                    tracing::error!("a player heartbeat panicked; carrying on");
+                }
             }
             std::thread::sleep(TICK);
         });
@@ -2649,7 +2688,7 @@ pub fn now_playing() -> Option<NowPlaying> {
 /// volume and the tracks chosen are kept. Should the service not manage it,
 /// the player connects again by itself and says why.
 pub async fn move_to_service(app: &AppHandle, client: &Client, stream_id: i64) -> Result<(), String> {
-    let tracks = on_player(app, |p| {
+    let tracks = on_player(|p| {
         Ok((
             p.get_string("aid").unwrap_or_else(|| "auto".into()),
             p.get_string("sid").unwrap_or_else(|| "auto".into()),
@@ -2661,7 +2700,7 @@ pub async fn move_to_service(app: &AppHandle, client: &Client, stream_id: i64) -
         m.opening(Opened::Channel(stream_id));
         m.starting(live_start_mode());
     });
-    on_player(app, |p| p.command("stop", &[]).map_err(|e| e.to_string())).await?;
+    on_player(|p| p.command("stop", &[]).map_err(|e| e.to_string())).await?;
     let req = PlayerWatch {
         stream_id,
         anyway: true,
@@ -3023,7 +3062,7 @@ async fn open_as(
     if !matches!(tracks, TrackChoice::Keep(..)) {
         commit_options(app, |o| o.subtitles_visible = subtitles.on);
     }
-    let r = on_player(app, move |p| {
+    let r = on_player(move |p| {
         apply_http_headers(p, &target, &via);
         apply_start(p, at.secs);
         if let Err(e) = p.set_property("stream-lavf-o", &stream_options(kind)) {
@@ -3079,7 +3118,7 @@ pub async fn stop(app: AppHandle) -> Result<(), String> {
     if let Some(w) = place {
         persist_progress(w);
     }
-    let r = on_player(&app, |p| p.command("stop", &[]).map_err(|e| e.to_string())).await;
+    let r = on_player(|p| p.command("stop", &[]).map_err(|e| e.to_string())).await;
     commit(&app, |m| m.stopped());
     // Its place on the recording service's connection, given back now.
     if let Some(viewer) = current_viewer() {
@@ -3098,7 +3137,7 @@ pub async fn stop(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn toggle_pause(app: AppHandle) -> Result<(), String> {
-    let paused = on_player(&app, |p| {
+    let paused = on_player(|p| {
         let want = !p.get_bool("pause").unwrap_or(false);
         p.set_flag("pause", want).map_err(|e| e.to_string())?;
         Ok(want)
@@ -3113,14 +3152,14 @@ pub async fn toggle_pause(app: AppHandle) -> Result<(), String> {
 /// opened held ends its hold.
 #[tauri::command]
 pub async fn set_paused(app: AppHandle, paused: bool) -> Result<(), String> {
-    on_player(&app, move |p| p.set_flag("pause", paused).map_err(|e| e.to_string())).await?;
+    on_player(move |p| p.set_flag("pause", paused).map_err(|e| e.to_string())).await?;
     commit(&app, |m| m.chose_pause(paused));
     Ok(())
 }
 
 /// Negative seeks back. Clamped to the buffered window.
 #[tauri::command]
-pub async fn seek_relative(app: AppHandle, seconds: f64) -> Result<(), String> {
+pub async fn seek_relative(_app: AppHandle, seconds: f64) -> Result<(), String> {
     // Rewinding is a deliberate choice to be behind, so stop chasing the edge.
     // Seeking forward is the viewer catching up themselves and leaves the mode
     // alone; the automatic follow will finish the job if they stop short.
@@ -3131,7 +3170,7 @@ pub async fn seek_relative(app: AppHandle, seconds: f64) -> Result<(), String> {
         }
         m.dto.on_demand.is_some()
     };
-    on_player(&app, move |p| {
+    on_player(move |p| {
         let probe = p.probe();
         // A movie is read from a file that can be asked for any part of it:
         // the buffered window is a live stream's limit, not its. Its own
@@ -3162,8 +3201,8 @@ fn title_length(p: &dyn PlayerBackend) -> Option<f64> {
     p.get_f64("duration").filter(|d| d.is_finite() && *d > 0.0)
 }
 
-/// Notes a seek on a title the moment it is sent, on the main thread where
-/// the heartbeat runs, so that no heartbeat reads an end of file between
+/// Notes a seek on a title the moment it is sent, in the same turn at the
+/// player as the seek, so that no heartbeat reads an end of file between
 /// the two. See [`Machine::seek_target`].
 fn sought(at: f64) {
     if let Ok(mut m) = STATE.lock() {
@@ -3180,7 +3219,7 @@ fn clamp_to_title(seconds: f64, duration: Option<f64>) -> f64 {
 
 /// Seeks a movie or an episode to `seconds` from its start.
 #[tauri::command]
-pub async fn seek_to(app: AppHandle, seconds: f64) -> Result<(), String> {
+pub async fn seek_to(_app: AppHandle, seconds: f64) -> Result<(), String> {
     if !seconds.is_finite() {
         return Err("that is not a time".into());
     }
@@ -3193,7 +3232,7 @@ pub async fn seek_to(app: AppHandle, seconds: f64) -> Result<(), String> {
     if !movie {
         return Err("seeking to a time is for movies and episodes".into());
     }
-    on_player(&app, move |p| {
+    on_player(move |p| {
         let at = clamp_to_title(seconds, title_length(p));
         p.command("seek", &[&format!("{at:.3}"), "absolute"])
             .map_err(|e| e.to_string())?;
@@ -3323,7 +3362,7 @@ pub async fn seek_live(app: AppHandle) -> Result<(), String> {
         // the channel. Should it not start, the programme is gone either
         // way, and that is said.
         tracing::info!("back to live from a catch-up programme");
-        let r = match on_player(&app, |p| p.command("stop", &[]).map_err(|e| e.to_string())).await {
+        let r = match on_player(|p| p.command("stop", &[]).map_err(|e| e.to_string())).await {
             Ok(()) => play_channel(&app, stream_id).await,
             Err(e) => Err(e),
         };
@@ -3332,7 +3371,7 @@ pub async fn seek_live(app: AppHandle) -> Result<(), String> {
         }
         return r;
     }
-    let by = on_player(&app, |p| {
+    let by = on_player(|p| {
         let probe = p.probe();
         // Relative, the same operation the backward seek already does, in
         // reverse - and bounded by `behind_live`, which is measured to the end
@@ -3377,7 +3416,7 @@ fn mpv_volume(perceived: f64) -> f64 {
 pub async fn set_volume(app: AppHandle, volume: f64) -> Result<(), String> {
     let v = volume.clamp(0.0, 200.0);
     let to_mpv = mpv_volume(v);
-    on_player(&app, move |p| {
+    on_player(move |p| {
         p.set_f64("volume", to_mpv).map_err(|e| e.to_string())
     })
     .await?;
@@ -3387,7 +3426,7 @@ pub async fn set_volume(app: AppHandle, volume: f64) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn set_muted(app: AppHandle, muted: bool) -> Result<(), String> {
-    on_player(&app, move |p| {
+    on_player(move |p| {
         p.set_flag("mute", muted).map_err(|e| e.to_string())
     })
     .await?;
@@ -3405,7 +3444,7 @@ pub async fn set_compressor(app: AppHandle, enabled: bool) -> Result<(), String>
     } else {
         String::new()
     };
-    on_player(&app, move |p| {
+    on_player(move |p| {
         p.set_property("af", &filter).map_err(|e| e.to_string())
     })
     .await?;
@@ -3428,13 +3467,13 @@ pub async fn set_video_rect(app: AppHandle, rect: VideoRect) -> Result<(), Strin
 /// buffer and was never on this screen to be photographed.
 #[tauri::command]
 pub async fn thumbnail_at(
-    app: AppHandle,
+    _app: AppHandle,
     behind_live: f64,
 ) -> Result<Option<crate::ipc::types::ThumbnailDto>, String> {
     if !behind_live.is_finite() || behind_live < 0.0 {
         return Ok(None);
     }
-    on_player(&app, move |p| {
+    on_player(move |p| {
         let probe = p.probe();
         // The seekable end is the live edge in stream time, and it is what
         // the thumbnails were stamped against. Falling back to the playhead
@@ -3489,8 +3528,8 @@ pub async fn thumbnail_for_title(
 /// for how little it costs — but it still only crosses the boundary when
 /// somebody asks, which is what makes one call enough to draw the panel.
 #[tauri::command]
-pub async fn player_stats(app: AppHandle) -> Result<crate::ipc::types::StatsDto, String> {
-    on_player(&app, |p| {
+pub async fn player_stats(_app: AppHandle) -> Result<crate::ipc::types::StatsDto, String> {
+    on_player(|p| {
         let s = p.stats();
         let probe = p.probe();
         Ok(crate::ipc::types::StatsDto {
@@ -3728,7 +3767,7 @@ pub async fn player_options() -> Result<PlayerOptionsDto, String> {
 /// Switches to one of the stream's audio tracks, by mpv's audio id.
 #[tauri::command]
 pub async fn set_audio_track(app: AppHandle, id: i64) -> Result<PlayerOptionsDto, String> {
-    on_player(&app, move |p| {
+    on_player(move |p| {
         p.set_property("aid", &tracks::track_value(Some(id)))
             .map_err(|e| e.to_string())
     })
@@ -3755,17 +3794,17 @@ pub async fn set_subtitle_track(
     id: Option<i64>,
 ) -> Result<PlayerOptionsDto, String> {
     let listed = OPTIONS.lock().map(|o| o.subtitles.clone()).unwrap_or_default();
-    let selected = on_player(&app, |p| Ok(p.get_i64("current-tracks/sub/id"))).await?;
+    let selected = on_player(|p| Ok(p.get_i64("current-tracks/sub/id"))).await?;
     let (props, chosen) = match subtitle_ask(&listed, id, selected) {
         SubtitleAsk::Choose(props, chosen) => (props, chosen),
         SubtitleAsk::Gone(props) => {
             set_subtitle_pref(|p| p.on = true);
-            on_player(&app, move |p| apply_properties(p, &props)).await?;
+            on_player(move |p| apply_properties(p, &props)).await?;
             commit_options(&app, |o| o.subtitles_visible = true);
             return player_options().await;
         }
     };
-    on_player(&app, move |p| apply_properties(p, &props)).await?;
+    on_player(move |p| apply_properties(p, &props)).await?;
     commit(&app, Machine::chose_subtitles);
     set_subtitle_pref(|p| p.chose(chosen.as_ref()));
     Ok(commit_options(&app, |o| {
@@ -3832,10 +3871,10 @@ pub(crate) async fn add_external_subtitle(
         .ok_or("the subtitle file's name cannot be given to the player")?;
     let args = subtitle_add_args(path, title, lang);
     let lang = Some(args[3].clone()).filter(|l| !l.is_empty());
-    // On the main thread, which is where every open is made too: whether
-    // the title is still the one open cannot change between this check and
-    // the file being added.
-    on_player(app, move |p| {
+    // In a turn at the player, as every open is made: whether the title is
+    // still the one open cannot change between this check and the file
+    // being added.
+    on_player(move |p| {
         let open = STATE
             .lock()
             .map(|m| may_add_subtitle(&m.dto, kind, id))
@@ -3873,7 +3912,7 @@ pub async fn set_aspect(app: AppHandle, aspect: AspectMode) -> Result<PlayerOpti
         .iter()
         .map(|(k, v)| (*k, (*v).to_owned()))
         .collect();
-    on_player(&app, move |p| apply_properties(p, &props)).await?;
+    on_player(move |p| apply_properties(p, &props)).await?;
     Ok(commit_options(&app, |o| o.aspect = aspect))
 }
 
@@ -3882,7 +3921,7 @@ pub async fn set_deinterlace(
     app: AppHandle,
     mode: DeinterlaceMode,
 ) -> Result<PlayerOptionsDto, String> {
-    on_player(&app, move |p| {
+    on_player(move |p| {
         p.set_property("deinterlace", tracks::deinterlace_value(mode))
             .map_err(|e| e.to_string())
     })
@@ -4004,6 +4043,52 @@ fn timeshift_stamp(unix: i64, offset: i64) -> String {
 mod tests {
     use super::*;
     use crate::ipc::types::{SettingsDto, SubtitleBackdrop, SubtitleStyleDto};
+
+    fn registry() -> std::sync::MutexGuard<'static, ()> {
+        crate::player::backend::TEST_REGISTRY
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    #[tokio::test]
+    async fn a_thread_with_no_player_gets_none_rather_than_a_hang() {
+        // A command that arrives before `setup` has built the player must
+        // fail immediately, not block on a reply that will never come.
+        let _registry = registry();
+        player::uninstall();
+        let began = Instant::now();
+        let r = on_player(|_| Ok(())).await;
+        assert_eq!(r, Err("the player is not running".to_owned()));
+        assert!(began.elapsed() < Duration::from_secs(1));
+    }
+
+    #[tokio::test]
+    async fn a_command_gives_up_on_a_turn_that_is_never_given_back() {
+        let _registry = registry();
+        let fake = std::sync::Arc::new(crate::player::fake::FakeBackend::new());
+        player::install(fake.clone());
+        // A heartbeat, say, wedged inside mpv: it holds the turn until told.
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        let (held, holding) = std::sync::mpsc::channel::<()>();
+        let wedged = std::thread::spawn(move || {
+            let _turn = PLAYER_TURN.lock().unwrap_or_else(PoisonError::into_inner);
+            held.send(()).unwrap();
+            let _ = released.recv();
+        });
+        holding.recv().unwrap();
+        let began = Instant::now();
+        let r = on_player(|p| p.set_property("volume", "50").map_err(|e| e.to_string())).await;
+        let took = began.elapsed();
+        release.send(()).unwrap();
+        wedged.join().unwrap();
+        player::uninstall();
+
+        assert!(r.is_err(), "{r:?}");
+        assert!(took >= PLAYER_WAIT && took < PLAYER_WAIT + Duration::from_secs(2), "{took:?}");
+        // Given up on, it is never run late.
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(fake.calls().is_empty(), "{:?}", fake.calls());
+    }
 
     #[test]
     fn quitting_writes_the_place_a_movie_got_to_and_only_once() {
@@ -7175,24 +7260,24 @@ fn apply_properties(p: &dyn PlayerBackend, props: &[(&'static str, String)]) -> 
 /// is the only way to style them.
 #[tauri::command]
 pub async fn set_subtitle_style(
-    app: AppHandle,
+    _app: AppHandle,
     style: crate::ipc::types::SubtitleStyleDto,
 ) -> Result<(), String> {
     let props = subtitle_properties(&style);
-    on_player(&app, move |p| apply_properties(p, &props)).await
+    on_player(move |p| apply_properties(p, &props)).await
 }
 
 /// Applies playback settings that mpv owns: rewind budget, hardware decode,
 /// tone mapping. Persisted by the caller.
 #[tauri::command]
 pub async fn apply_playback_settings(
-    app: AppHandle,
+    _app: AppHandle,
     settings: crate::ipc::types::SettingsDto,
 ) -> Result<(), String> {
     LIVE_START.store(settings.live_start as u8, Ordering::Release);
     set_subtitle_pref(|p| *p = SubtitlePref::of(&settings));
     let props = playback_properties(&settings);
-    on_player(&app, move |p| apply_properties(p, &props)).await
+    on_player(move |p| apply_properties(p, &props)).await
 }
 
 /// What the desktop's media controls show: the channel, its programme and
@@ -7230,6 +7315,4 @@ pub fn apply_saved_settings(_app: &tauri::AppHandle) {
         Err(e) => tracing::warn!("some saved settings were not applied: {e}"),
         Ok(()) => tracing::info!("saved settings applied"),
     }
-
-
 }

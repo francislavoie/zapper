@@ -96,6 +96,11 @@ pub(crate) fn shut_down() {
     if SHUT_DOWN.swap(true, Ordering::AcqRel) {
         return;
     }
+    // Commands and heartbeats from now on fail at once rather than reach a
+    // player that is going away, and no load goes to a video output that
+    // can no longer draw.
+    READY.store(false, Ordering::Release);
+    crate::player::uninstall();
     if let Some(mpv) = mpv::handle() {
         if let Err(e) = mpv.command("stop", &[]) {
             tracing::warn!("stopping playback to quit: {e}");
@@ -104,7 +109,6 @@ pub(crate) fn shut_down() {
     let Some(ctx) = CTX.with(|c| c.borrow_mut().take()) else {
         return;
     };
-    READY.store(false, Ordering::Release);
     let current = AREA.with(|a| {
         a.borrow().as_ref().is_some_and(|area| {
             if !area.is_realized() {
