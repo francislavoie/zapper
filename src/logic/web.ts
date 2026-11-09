@@ -8,7 +8,7 @@ import { isBusy } from "./toolbar.ts";
 import type { SettingsDto, SyncStatusDto } from "../types";
 
 /** The header the recording service wants on every request that changes
- *  something (src-tauri/src/recording/web.rs): a page on another site
+ *  something (crates/zapper/src/recording/web.rs): a page on another site
  *  cannot add it. */
 export const CSRF_HEADER = "X-Zapper";
 

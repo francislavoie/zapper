@@ -1,7 +1,7 @@
 // Programme search results: what each one says and what choosing it does.
 //
 // Matching and ordering are the backend's (an FTS5 index over guide titles,
-// see src-tauri/src/catalog/guide_search.rs); this is only the wording and
+// see crates/zapper/src/catalog/guide_search.rs); this is only the wording and
 // the arithmetic for taking the guide to an airing.
 //
 // Checked in src/__checks__/programmes.test.mjs.

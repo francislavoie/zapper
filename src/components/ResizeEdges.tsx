@@ -34,7 +34,7 @@ export function ResizeEdges({ fullscreen }: { fullscreen: boolean }) {
   const maximised = useMaximised();
   // A maximised or fullscreen window has no edge to grab, and a strip of
   // resize cursor along the screen's border would only be in the way. A Mac's
-  // window is decorated (src-tauri/tauri.macos.conf.json) and AppKit resizes
+  // window is decorated (crates/zapper/tauri.macos.conf.json) and AppKit resizes
   // it from its own edges.
   if (maximised || fullscreen || IS_MAC) return null;
   return (

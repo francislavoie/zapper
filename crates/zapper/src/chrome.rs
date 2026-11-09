@@ -3,7 +3,7 @@
 //!
 //! Linux and Windows have neither: the window is undecorated and the
 //! interface draws its own title bar, buttons and menu. A Mac keeps its own
-//! title bar under the interface's (src-tauri/tauri.macos.conf.json), and
+//! title bar under the interface's (crates/zapper/tauri.macos.conf.json), and
 //! with it two things a Mac app is expected to have:
 //!
 //! - **The menu bar.** zapper › About, Settings… (⌘,), Hide, Quit (⌘Q); Edit

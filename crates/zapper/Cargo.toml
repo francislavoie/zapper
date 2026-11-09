@@ -1,8 +1,8 @@
 [package]
 name = "zapper"
-version = "0.4.0"
-edition = "2021"
-license = "MIT"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 publish = false
 # Verification harnesses live alongside the app, so a bare `cargo run`
 # (which is what `tauri dev` issues) cannot tell which to launch.
@@ -328,6 +328,3 @@ dispatch2 = "0.3"
 # the static zapper-server's tests run there, with no libdbus to link.
 [target.'cfg(all(target_os = "linux", target_env = "gnu"))'.dev-dependencies]
 dbus = "0.9"
-
-[profile.dev]
-incremental = true

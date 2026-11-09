@@ -61,7 +61,7 @@ own LGPL build of both (docs/licensing.md, "mpv and FFmpeg"), published as a
 pre-release of this repository and named in `packaging/libmpv/manifest.json`.
 libmpv2-sys asks the linker for `mpv`, and the remuxer for `avformat` and
 the rest, which MSVC resolves to *import libraries* (`mpv.lib`,
-`avformat.lib`, ...) for the DLLs. None of it is committed (`src-tauri/lib/`
+`avformat.lib`, ...) for the DLLs. None of it is committed (`crates/zapper/lib/`
 is ignored).
 
 ```powershell
@@ -69,7 +69,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\fetch-libmpv.ps1
 ```
 
 That downloads the manifest's `libmpv-windows-x86_64.zip`, checks it against
-the manifest's SHA-256, and leaves in `src-tauri\lib\windows-x86_64\`:
+the manifest's SHA-256, and leaves in `crates\zapper\lib\windows-x86_64\`:
 
 | Path | What it is |
 |---|---|
@@ -95,7 +95,7 @@ lib /def:mpv.def /out:mpv.lib /machine:x64
 `build.rs` adds `link\` to the link path and copies `runtime\` beside the
 executable it builds, so `cargo run`, `npm run app` and a debug
 `zapper-server.exe` find the DLLs without PATH changes. Installers carry
-them as bundle resources (`src-tauri/tauri.windows.conf.json`), installed
+them as bundle resources (`crates/zapper/tauri.windows.conf.json`), installed
 beside `zapper.exe` with `zapper-server.exe`
 (`packaging/windows/installers.conf.json`), and their notices in
 `licenses\`.
@@ -113,11 +113,11 @@ FFmpeg. Not yet checked by a person: video on screen through Direct3D 11.
 npm ci
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\fetch-libmpv.ps1
 npm run app            # tauri dev: the Vite dev server plus a debug build
-npx tauri build        # release: an NSIS installer and an MSI in src-tauri\target\release\bundle
+npx tauri build        # release: an NSIS installer and an MSI in target\release\bundle
 just package-windows   # the same, plus the install-kind markers the updater reads
 ```
 
-`src-tauri/tauri.windows.conf.json` is what every Windows build needs (the
+`crates/zapper/tauri.windows.conf.json` is what every Windows build needs (the
 installer targets, the `.ico`, libmpv as a resource); Tauri merges it in by
 itself. `packaging/windows/installers.conf.json` adds only what a release
 needs on top (docs/releasing.md).
@@ -240,8 +240,8 @@ with a real uninstall of the setup and with the MSI's removal.
 home, with no window:
 
 ```powershell
-cargo build --manifest-path src-tauri\Cargo.toml --features harness,server --bin zapper-server --bin service_check
-src-tauri\target\debug\service_check.exe
+cargo build --manifest-path crates\zapper\Cargo.toml --features harness,server --bin zapper-server --bin service_check
+target\debug\service_check.exe
 ```
 
 ### The harnesses on Windows
@@ -275,7 +275,7 @@ account on purpose (tools/README.md, "Never the real account").
 
 On Linux, zapper renders mpv's frames itself into a GL surface slid beneath
 WebKitGTK's webview. On Windows the arrangement is simpler
-(`src-tauri/src/surface/windows`):
+(`crates/zapper/src/surface/windows`):
 
 1. A child window, `ZAPPER_VIDEO`, is created inside the main window and kept
    at the **bottom** of the main window's children. wry puts WebView2's
@@ -340,4 +340,4 @@ itself was installed.
 | Downloaded updates | `%LOCALAPPDATA%\zapper\updates` |
 | WebView2 profile | `%LOCALAPPDATA%\dev.lavoie.zapper` (Tauri's default) |
 
-See `src-tauri/src/paths.rs` for every platform's rules.
+See `crates/zapper/src/paths.rs` for every platform's rules.

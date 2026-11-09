@@ -3,7 +3,7 @@
 #
 # Turns the built (and fix-deb'ed) .deb into an Arch package, zapper-<pkgver>-1-x86_64.pkg.tar.zst,
 # without makepkg (the build machine is Ubuntu). out-dir defaults to
-# src-tauri/target/release/bundle/arch.
+# target/release/bundle/arch.
 #   payload  = the .deb's data member: same paths and modes, with /usr/lib/zapper/install-kind
 #              saying `arch` (packaging/install-kind-arch), plus usr/share/licenses/zapper ->
 #              ../doc/zapper (the license notices, where Arch looks for them)
@@ -21,7 +21,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 root=$(dirname "$here")
 helper="$here/arch-pkg.py"
 deb=$(realpath "${1:?usage: package-arch.sh <package.deb> [out-dir]}")
-out=${2:-src-tauri/target/release/bundle/arch}
+out=${2:-target/release/bundle/arch}
 fail() { echo "package-arch: $*" >&2; exit 1; }
 [ -f "$deb" ] || fail "no such file: $deb"
 for tool in ar dpkg-deb python3 zstd; do

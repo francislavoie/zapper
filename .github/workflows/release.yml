@@ -108,7 +108,7 @@ jobs:
         env:
           TAG: ${{ needs.plan.outputs.tag }}
         run: |
-          conf=$(jq -er .version src-tauri/tauri.conf.json)
+          conf=$(jq -er .version crates/zapper/tauri.conf.json)
           if [ -n "$TAG" ]; then
             v=${TAG#v}
             if [ "$v" != "$conf" ]; then
@@ -121,7 +121,7 @@ jobs:
           python3 scripts/version.py check "$v"
           repo=$(scripts/releases-repo.sh)
           if [ "${repo,,}" != "${GITHUB_REPOSITORY,,}" ]; then
-            msg="RELEASES_REPO in src-tauri/src/updates/mod.rs is '$repo', not this repository ($GITHUB_REPOSITORY). See docs/releasing.md, One-time setup."
+            msg="RELEASES_REPO in crates/zapper/src/updates/mod.rs is '$repo', not this repository ($GITHUB_REPOSITORY). See docs/releasing.md, One-time setup."
             if [ -n "$TAG" ]; then echo "::error::$msg"; exit 1; else echo "::warning::$msg"; fi
           fi
           { echo "version=$v"; echo "prerelease=$(python3 scripts/version.py prerelease "$v")"; } >> "$GITHUB_OUTPUT"
@@ -161,7 +161,7 @@ jobs:
           # The runtime libraries the .deb depends on (the first of each set of alternatives, without
           # a version constraint such as "(>= 2.40)"), which the bundled libmpv links: check-deb has
           # dpkg-shlibdeps map those links to packages, and it can only map a library that is installed.
-          jq -r '.bundle.linux.deb.depends[] | split(" | ")[0] | sub(" *\\(.*\\)$"; "")' src-tauri/tauri.conf.json \
+          jq -r '.bundle.linux.deb.depends[] | split(" | ")[0] | sub(" *\\(.*\\)$"; "")' crates/zapper/tauri.conf.json \
             | xargs sudo apt-get install -y -q --no-install-recommends
 
       - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
@@ -172,7 +172,6 @@ jobs:
       # (ci.yml) keeps a debug cache, which a release build can't use anyway.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: src-tauri
           key: release
           save-if: 'false'
 
@@ -206,17 +205,17 @@ jobs:
 
 
       # The names are an API: installed copies find their update by them
-      # (src-tauri/src/updates/release.rs, docs/releasing.md).
+      # (crates/zapper/src/updates/release.rs, docs/releasing.md).
       - name: Collect the packages and SHA256SUMS
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          deb=src-tauri/target/release/bundle/deb/zapper_${VERSION}_amd64.deb
-          rpm=src-tauri/target/release/bundle/rpm/zapper-${VERSION}-1.x86_64.rpm
+          deb=target/release/bundle/deb/zapper_${VERSION}_amd64.deb
+          rpm=target/release/bundle/rpm/zapper-${VERSION}-1.x86_64.rpm
           # pacman's version has no '-': 0.2.0-rc.1 is 0.2.0rc.1 (scripts/arch-pkg.py).
-          pkg=src-tauri/target/release/bundle/arch/zapper-${VERSION//-/}-1-x86_64.pkg.tar.zst
+          pkg=target/release/bundle/arch/zapper-${VERSION//-/}-1-x86_64.pkg.tar.zst
           for f in "$deb" "$rpm" "$pkg"; do
-            [ -f "$f" ] || { echo "::error::Missing $f: $(ls src-tauri/target/release/bundle/*/)"; exit 1; }
+            [ -f "$f" ] || { echo "::error::Missing $f: $(ls target/release/bundle/*/)"; exit 1; }
           done
           cp "$deb" "$rpm" "$pkg" out/
           (cd out && sha256sum -- *.deb *.rpm *.pkg.tar.zst > SHA256SUMS && cat SHA256SUMS)
@@ -255,7 +254,7 @@ jobs:
         env:
           TAG: ${{ needs.plan.outputs.tag }}
         run: |
-          conf=$(jq -er .version src-tauri/tauri.conf.json)
+          conf=$(jq -er .version crates/zapper/tauri.conf.json)
           v=$conf
           if [ -n "$TAG" ]; then
             v=${TAG#v}
@@ -284,8 +283,8 @@ jobs:
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
-            src-tauri/target/static/ffmpeg
-            src-tauri/target/static/sources
+            target/static/ffmpeg
+            target/static/sources
           key: server-ffmpeg-${{ hashFiles('packaging/libmpv/sources.txt', 'scripts/build-ffmpeg-static.sh') }}
 
       - name: Build the static zapper-server
@@ -345,7 +344,7 @@ jobs:
         env:
           TAG: ${{ needs.plan.outputs.tag }}
         run: |
-          $conf = (Get-Content -Raw src-tauri/tauri.conf.json | ConvertFrom-Json).version
+          $conf = (Get-Content -Raw crates/zapper/tauri.conf.json | ConvertFrom-Json).version
           $v = $conf
           if ($env:TAG) {
             $v = $env:TAG.Substring(1)
@@ -369,7 +368,7 @@ jobs:
       - run: npm ci
 
       # zapper's LGPL libmpv-2.dll and FFmpeg's DLLs, the archive packaging/libmpv/manifest.json
-      # names, and the import libraries the link needs, into src-tauri/lib/windows-x86_64
+      # names, and the import libraries the link needs, into crates/zapper/lib/windows-x86_64
       # (docs/windows.md). The manifest pins it: a release changes libmpv only when that file
       # does.
       - name: Fetch libmpv
@@ -387,7 +386,7 @@ jobs:
           PYTHON: python
         run: scripts/licenses.sh
 
-      # The interface, which zapper-server compiles in to serve to browsers (src-tauri/build.rs).
+      # The interface, which zapper-server compiles in to serve to browsers (crates/zapper/build.rs).
       - name: Build the interface
         run: npm run build
 
@@ -396,7 +395,7 @@ jobs:
       - name: Build zapper-server
         run: |
           $env:CARGO_BUILD_JOBS = "$env:NUMBER_OF_PROCESSORS"
-          cargo build --release --manifest-path src-tauri/Cargo.toml --no-default-features --features server --bin zapper-server
+          cargo build --release --manifest-path crates/zapper/Cargo.toml --no-default-features --features server --bin zapper-server
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
       # The NSIS installer and the MSI, with the install-kind markers (packaging/windows/).
@@ -409,18 +408,18 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
       # The names are an API: installed copies find their update by them
-      # (src-tauri/src/updates/release.rs, docs/releasing.md).
+      # (crates/zapper/src/updates/release.rs, docs/releasing.md).
       - name: Collect the installers
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           $files = @(
-            "src-tauri/target/release/bundle/nsis/zapper_${env:VERSION}_x64-setup.exe",
-            "src-tauri/target/release/bundle/msi/zapper_${env:VERSION}_x64_en-US.msi"
+            "target/release/bundle/nsis/zapper_${env:VERSION}_x64-setup.exe",
+            "target/release/bundle/msi/zapper_${env:VERSION}_x64_en-US.msi"
           )
           New-Item -ItemType Directory -Force out | Out-Null
           foreach ($f in $files) {
-            if (-not (Test-Path $f)) { throw "Missing $f`: $(Get-ChildItem -Name src-tauri/target/release/bundle/*/)" }
+            if (-not (Test-Path $f)) { throw "Missing $f`: $(Get-ChildItem -Name target/release/bundle/*/)" }
             Copy-Item $f out/
           }
 
@@ -478,7 +477,7 @@ jobs:
       - run: npm ci
 
       # zapper's LGPL libmpv.2.dylib, the archive packaging/libmpv/manifest.json names, into
-      # src-tauri/lib/macos-arm64; the bundle carries it in Contents/Frameworks.
+      # crates/zapper/lib/macos-arm64; the bundle carries it in Contents/Frameworks.
       - name: Fetch libmpv
         run: scripts/fetch-libmpv.sh macos-arm64
 
@@ -496,13 +495,13 @@ jobs:
 
       # What it links, that nothing in it is GPL, the notices, the marker and the signature.
       - name: Check the bundle
-        run: scripts/check-macos-app.sh src-tauri/target/release/bundle/macos/zapper.app
+        run: scripts/check-macos-app.sh target/release/bundle/macos/zapper.app
 
       - name: Collect the disk image and its checksum
         env:
           VERSION: ${{ needs.linux.outputs.version }}
         run: |
-          dmg=src-tauri/target/release/bundle/dmg/zapper_${VERSION}_aarch64.dmg
+          dmg=target/release/bundle/dmg/zapper_${VERSION}_aarch64.dmg
           [ -f "$dmg" ] || { echo "::error::Missing $dmg"; exit 1; }
           mkdir -p out
           cp "$dmg" out/

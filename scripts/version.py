@@ -4,7 +4,7 @@
 A release version is SemVer without build metadata: X.Y.Z or X.Y.Z-<pre-release>, where the
 pre-release is dot-separated identifiers that are each lowercase letters or a number, the first
 a word: 0.1.0-alpha.1, 0.2.0-rc.2. That subset keeps one order everywhere: SemVer's (which the
-updater uses, src-tauri/src/updates/version.rs), dpkg's (0.1.0~alpha.1) and rpm's (Tauri writes
+updater uses, crates/zapper/src/updates/version.rs), dpkg's (0.1.0~alpha.1) and rpm's (Tauri writes
 0.1.0~alpha.1 there too). Mixed identifiers such as alpha10 are refused: SemVer sorts alpha10
 before alpha9 as words, and a person reading the tags would not expect that.
 

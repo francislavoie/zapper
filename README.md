@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="src-tauri/icons/icon.png" alt="zapper" width="128" height="128">
+  <img src="crates/zapper/icons/icon.png" alt="zapper" width="128" height="128">
 </p>
 
 <h1 align="center">zapper</h1>
@@ -164,7 +164,7 @@ sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev \
 ```
 
 libmpv isn't one of them: zapper builds against, and its packages carry, its own LGPL build of
-libmpv and FFmpeg, which `just fetch-libmpv` downloads into `src-tauri/lib/`
+libmpv and FFmpeg, which `just fetch-libmpv` downloads into `crates/zapper/lib/`
 ([docs/licensing.md](docs/licensing.md#mpv-and-ffmpeg)). Without it a development build falls
 back to the system's (`libmpv-dev`), and builds the seek bar's previews of what a movie has
 buffered against the system's FFmpeg (`libavformat-dev`, `libavcodec-dev`, `libswscale-dev`,
@@ -180,7 +180,7 @@ Then:
 
 ```sh
 npm ci
-just fetch-libmpv  # the bundled libmpv, into src-tauri/lib/
+just fetch-libmpv  # the bundled libmpv, into crates/zapper/lib/
 just dev           # run a development build
 just test          # Rust, interface and release-script checks
 just package       # build the .deb and .rpm

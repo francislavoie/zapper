@@ -1,5 +1,5 @@
 // The Movies and Shows search's rule, for the mock catalogues: the real one is
-// src-tauri/src/catalog/title_search.rs, run inside the list's own query.
+// crates/zapper/src/catalog/title_search.rs, run inside the list's own query.
 // A query matches a name when its text appears in the name at the start of a
 // word (the start of the name, or after anything that is not a letter or a
 // digit), case and accents aside, a run of spaces counting as one. `a|b` is

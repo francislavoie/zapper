@@ -211,7 +211,7 @@ test("the zoom bootstrap agrees with the module", async () => {
 });
 
 // The recording service serves this page to browsers under a policy that runs
-// no inline script and applies no inline style (src-tauri/src/recording/web.rs),
+// no inline script and applies no inline style (crates/zapper/src/recording/web.rs),
 // so index.html loads the bootstrap from files, before the bundle.
 test("index.html has no inline script or style", async () => {
   const { readFileSync } = await import("node:fs");

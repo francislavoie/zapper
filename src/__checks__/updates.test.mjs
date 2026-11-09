@@ -1,7 +1,7 @@
 // What the update badge, dialog and settings pane make of the updater's
 // state. The decisions themselves (which release is newer, which asset this
 // install takes, whether the download matches SHA256SUMS) are Rust's and are
-// tested there: src-tauri/src/updates/. These are the words and the next
+// tested there: crates/zapper/src/updates/. These are the words and the next
 // step, which is where the interface can be wrong on its own.
 //
 // Run: node --test src/__checks__/

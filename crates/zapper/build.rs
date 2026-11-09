@@ -18,7 +18,7 @@ fn main() {
     static_vcruntime::metabuild();
 }
 
-/// The web interface zapper-server serves (`recording::web`): the frontend's build in `../dist`,
+/// The web interface zapper-server serves (`recording::web`): the frontend's build in `../../dist`,
 /// the same files the app's window shows, compiled into the binary. One file to install and
 /// nothing beside it to go missing or out of step with the API it talks to.
 ///
@@ -30,9 +30,7 @@ fn main() {
 fn web_assets() {
     use std::fmt::Write as _;
     let dist = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .map(|p| p.join("dist"))
-        .expect("src-tauri has a parent");
+        .join("../../dist");
     // Made when missing, so there is a directory to watch: watching a path that does not exist
     // reruns this script, and rebuilds the crate, on every build. Vite empties and fills it.
     let _ = std::fs::create_dir_all(&dist);
@@ -41,9 +39,9 @@ fn web_assets() {
     if dist.join("index.html").is_file() {
         collect(&dist, &dist, &mut files);
     } else if std::env::var("PROFILE").as_deref() == Ok("release") {
-        panic!("zapper-server serves the web interface from ../dist: run `npm run build` first");
+        panic!("zapper-server serves the web interface from ../../dist: run `npm run build` first");
     } else {
-        println!("cargo:warning=../dist has no index.html: zapper-server's web interface will say it was not built (run `npm run build`)");
+        println!("cargo:warning=../../dist has no index.html: zapper-server's web interface will say it was not built (run `npm run build`)");
     }
     files.sort();
     let mut code = String::from("&[\n");

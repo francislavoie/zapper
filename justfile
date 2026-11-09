@@ -13,7 +13,7 @@ default: test
 test: test-rust test-ui test-scripts
 
 test-rust:
-    cd src-tauri && cargo test --lib -q
+    cd crates/zapper && cargo test --lib -q
 
 test-ui:
     node --test src/__checks__/*.test.mjs
@@ -23,7 +23,7 @@ test-scripts:
     scripts/test-scripts.sh
 
 lint:
-    cd src-tauri && cargo clippy --lib --bins -q -- -D warnings
+    cd crates/zapper && cargo clippy --lib --bins -q -- -D warnings
     npx tsc --noEmit
 
 # Everything, as tools/check_all.sh runs it (`just check --windowed` adds the GL and playback
@@ -37,7 +37,7 @@ dev:
 
 # The libmpv zapper links and ships (docs/licensing.md): the LGPL build of libmpv and FFmpeg
 # that packaging/libmpv/manifest.json names for this platform, downloaded, checked against its
-# SHA-256 and unpacked into src-tauri/lib/<platform>/. `just fetch-libmpv --archive <file>`
+# SHA-256 and unpacked into crates/zapper/lib/<platform>/. `just fetch-libmpv --archive <file>`
 # takes one built by `just build-libmpv` instead. On Windows: tools/fetch-libmpv.ps1.
 fetch-libmpv *args:
     scripts/fetch-libmpv.sh {{args}}
@@ -54,7 +54,7 @@ build-libmpv platform="linux-x86_64":
 release version:
     @scripts/release.sh "{{version}}"
 
-# The Linux packages, into src-tauri/target/release/bundle/: the .deb (its Version made
+# The Linux packages, into target/release/bundle/: the .deb (its Version made
 # Debian's by scripts/fix-deb.sh, then checked by scripts/check-deb.sh) and the .rpm, from one
 # build, then the Arch package made from the .deb (`just package-arch`). Through `npx tauri`, the project's own Tauri 2 CLI: a `cargo tauri` on PATH may be
 # another major version.
@@ -65,7 +65,7 @@ release version:
 package:
     #!/usr/bin/env bash
     set -euo pipefail
-    v=$(jq -er .version src-tauri/tauri.conf.json)
+    v=$(jq -er .version crates/zapper/tauri.conf.json)
     if [ -n "${ZAPPER_RELEASE_VERSION:-}" ]; then
       python3 scripts/version.py check "$ZAPPER_RELEASE_VERSION"
       [ "$ZAPPER_RELEASE_VERSION" = "$v" ] || { echo "package: ZAPPER_RELEASE_VERSION=$ZAPPER_RELEASE_VERSION doesn't match tauri.conf.json's $v" >&2; exit 1; }
@@ -73,55 +73,55 @@ package:
     # The bundled libmpv and FFmpeg the packages carry in /usr/lib/zapper (docs/licensing.md).
     scripts/fetch-libmpv.sh linux-x86_64
     # The license notices the packages ship (docs/licensing.md): the Rust crates' and the .deb's
-    # copyright file into src-tauri/target/licenses, unless Cargo.lock, the manifest, about.toml
+    # copyright file into target/licenses, unless Cargo.lock, the manifest, about.toml
     # and LICENSE are as they were for the last ones; the interface's come from the UI build.
     # Either fails the build on a license outside about.toml's allow-list.
     scripts/licenses.sh --if-changed
     # The interface, before zapper-server: the service compiles it in to serve it to browsers
-    # (src-tauri/build.rs). `tauri build` builds it again for the app, to the same files.
+    # (crates/zapper/build.rs). `tauri build` builds it again for the app, to the same files.
     npm run build
     # zapper-server, the recording service the packages install as /usr/bin/zapper-server, built
-    # against that FFmpeg (src-tauri/build.rs).
-    cargo build --release --manifest-path src-tauri/Cargo.toml --no-default-features --features server --bin zapper-server
+    # against that FFmpeg (crates/zapper/build.rs).
+    cargo build --release --manifest-path crates/zapper/Cargo.toml --no-default-features --features server --bin zapper-server
     # Old packages first, so the globs below match only this build's.
-    rm -f src-tauri/target/release/bundle/deb/zapper_*.deb src-tauri/target/release/bundle/rpm/zapper-*.rpm
+    rm -f target/release/bundle/deb/zapper_*.deb target/release/bundle/rpm/zapper-*.rpm
     npx tauri build --bundles deb,rpm
-    deb=(src-tauri/target/release/bundle/deb/zapper_*.deb)
+    deb=(target/release/bundle/deb/zapper_*.deb)
     [ ${#deb[@]} = 1 ] || { echo "package: expected one .deb, found: ${deb[*]}" >&2; exit 1; }
     scripts/fix-deb.sh "${deb[0]}"
     scripts/check-deb.sh "${deb[0]}" "$v"
-    scripts/package-arch.sh "${deb[0]}" src-tauri/target/release/bundle/arch
-    ls -l src-tauri/target/release/bundle/deb/zapper_*.deb src-tauri/target/release/bundle/rpm/zapper-*.rpm \
-      src-tauri/target/release/bundle/arch/zapper-*-x86_64.pkg.tar.zst
+    scripts/package-arch.sh "${deb[0]}" target/release/bundle/arch
+    ls -l target/release/bundle/deb/zapper_*.deb target/release/bundle/rpm/zapper-*.rpm \
+      target/release/bundle/arch/zapper-*-x86_64.pkg.tar.zst
 
-# The Arch package (src-tauri/target/release/bundle/arch/zapper-<pkgver>-1-x86_64.pkg.tar.zst),
+# The Arch package (target/release/bundle/arch/zapper-<pkgver>-1-x86_64.pkg.tar.zst),
 # made from the .deb of `just package` without makepkg: the same payload with the install-kind
 # marker saying arch, pacman's .PKGINFO and .MTREE, and Depends mapped through the table in
 # scripts/arch-pkg.py. `just package` already runs it; this redoes it from the last .deb.
 package-arch:
-    scripts/package-arch.sh src-tauri/target/release/bundle/deb/zapper_*.deb src-tauri/target/release/bundle/arch
+    scripts/package-arch.sh target/release/bundle/deb/zapper_*.deb target/release/bundle/arch
 
 # Installs that package in a throwaway archlinux:latest container and checks it (needs Docker and
 # the network, so `just package` doesn't run it): dependencies, pacman -Qkk, the marker, the
 # license notices, ldd and a headless launch. See scripts/check-arch-pkg.sh.
 check-arch-pkg:
-    scripts/check-arch-pkg.sh src-tauri/target/release/bundle/arch/zapper-*-x86_64.pkg.tar.zst
+    scripts/check-arch-pkg.sh target/release/bundle/arch/zapper-*-x86_64.pkg.tar.zst
 
 # zapper-server for Linux as one static file (docs/recording.md, "Without the app"):
-# src-tauri/target/release/bundle/server/zapper-server-<version>-linux-x86_64, built for musl
+# target/release/bundle/server/zapper-server-<version>-linux-x86_64, built for musl
 # with a minimal static LGPL FFmpeg and its licence notices built in, in a pinned Rust image on
 # Alpine (needs Docker or Podman, the interface built and the Rust notices). See
 # scripts/build-server-static.sh.
 package-server:
     npm run build
     scripts/licenses.sh --if-changed
-    scripts/build-server-static.sh src-tauri/target/release/bundle/server --with-checks
+    scripts/build-server-static.sh target/release/bundle/server --with-checks
 
 # Checks it: statically linked, run in bare debian:stable-slim and alpine containers and from
 # scratch, its sample Dockerfile, and the fixture streams recorded through it (needs Docker or
 # Podman and the network). See scripts/check-server-binary.sh.
 check-server-binary:
-    scripts/check-server-binary.sh src-tauri/target/release/bundle/server/zapper-server-*-linux-x86_64 src-tauri/target/release/bundle/server/checks
+    scripts/check-server-binary.sh target/release/bundle/server/zapper-server-*-linux-x86_64 target/release/bundle/server/checks
 
 # On Windows (builds; not yet tested on screen or released): the NSIS installer and the MSI,
 # with the install-kind markers the updater reads and the license notices in licenses\ beside
@@ -131,7 +131,7 @@ package-windows:
     & ./tools/fetch-libmpv.ps1; if ($LASTEXITCODE) { exit $LASTEXITCODE }
     $env:PYTHON = 'python'; & "$env:ProgramFiles\Git\bin\bash.exe" scripts/licenses.sh --if-changed; if ($LASTEXITCODE) { exit $LASTEXITCODE }
     npm run build; if ($LASTEXITCODE) { exit $LASTEXITCODE }
-    cargo build --release --manifest-path src-tauri/Cargo.toml --no-default-features --features server --bin zapper-server; if ($LASTEXITCODE) { exit $LASTEXITCODE }
+    cargo build --release --manifest-path crates/zapper/Cargo.toml --no-default-features --features server --bin zapper-server; if ($LASTEXITCODE) { exit $LASTEXITCODE }
     npx tauri build --config packaging/windows/installers.conf.json
 
 # On macOS (Apple Silicon; not released yet, docs/macos.md): zapper.app and the .dmg, with
@@ -141,10 +141,10 @@ package-macos:
     scripts/fetch-libmpv.sh
     scripts/licenses.sh --if-changed
     npx tauri build --config packaging/macos/dmg.conf.json
-    scripts/check-macos-app.sh src-tauri/target/release/bundle/macos/zapper.app
+    scripts/check-macos-app.sh target/release/bundle/macos/zapper.app
 
 # The third-party license notices the packages ship (docs/licensing.md): the Rust crates' into
-# src-tauri/target/licenses (scripts/licenses.sh, needs cargo-about), then the UI build, which
+# target/licenses (scripts/licenses.sh, needs cargo-about), then the UI build, which
 # writes dist/licenses/ with the interface's and copies the rest in beside it for Settings >
 # About. Fails on a license outside the allow-list in about.toml. `just package` runs the same.
 licenses:

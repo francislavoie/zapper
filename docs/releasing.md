@@ -30,7 +30,7 @@ Until this is done, `just release` refuses to run, and the updater in any build 
    first release that people will install, or accept that updates only work once it is.
 
 2. **Set the releases repository** in one place, `RELEASES_REPO` in
-   [src-tauri/src/updates/mod.rs](../src-tauri/src/updates/mod.rs):
+   [crates/zapper/src/updates/mod.rs](../crates/zapper/src/updates/mod.rs):
 
    ```rust
    pub const RELEASES_REPO: &str = "<owner>/zapper";
@@ -70,8 +70,8 @@ Until this is done, `just release` refuses to run, and the updater in any build 
    just release 0.2.0
    ```
 
-   It sets the version in `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` and
-   `src-tauri/Cargo.lock` (zapper's own entry), and `package.json` and `package-lock.json`. Then
+   It sets the version in `crates/zapper/tauri.conf.json`, `Cargo.toml` (the workspace's) and
+   `Cargo.lock` (zapper's own entry), and `package.json` and `package-lock.json`. Then
    it turns `## [Unreleased]` into `## [0.2.0] - <today>` under a fresh, empty `## [Unreleased]`,
    commits "Release 0.2.0" and creates the annotated tag `v0.2.0`. It never pushes.
 
@@ -104,7 +104,7 @@ Until this is done, `just release` refuses to run, and the updater in any build 
 ## The updater
 
 zapper updates itself without Tauri's updater plugin
-([src-tauri/src/updates/](../src-tauri/src/updates/)):
+([crates/zapper/src/updates/](../crates/zapper/src/updates/)):
 
 1. **Check:** `GET https://api.github.com/repos/<RELEASES_REPO>/releases`, unauthenticated
    (GitHub allows 60 an hour per address; zapper makes about one a day). Nothing about the user
@@ -146,7 +146,7 @@ setting says.
 ### Asset names are an API
 
 Installed copies find their update by these names
-([src-tauri/src/updates/release.rs](../src-tauri/src/updates/release.rs)). They are Tauri's own
+([crates/zapper/src/updates/release.rs](../crates/zapper/src/updates/release.rs)). They are Tauri's own
 bundle names (the Arch package's, pacman's); keep them exactly, and keep `SHA256SUMS` in every
 release: a package `SHA256SUMS` doesn't list is never installed.
 
@@ -168,7 +168,7 @@ dialog shows.
 
 The `.deb` and the `.rpm` hold the same binary, so each package carries a one-word marker the
 app reads at run time, `install-kind`
-([src-tauri/src/updates/install.rs](../src-tauri/src/updates/install.rs)):
+([crates/zapper/src/updates/install.rs](../crates/zapper/src/updates/install.rs)):
 
 - the `.deb` ships `/usr/lib/zapper/install-kind` = `deb` and the `.rpm` the same path = `rpm`,
   from [packaging/](../packaging/) through `bundle.linux.deb.files` and `bundle.linux.rpm.files`
@@ -193,7 +193,7 @@ A release version is [SemVer](https://semver.org) without build metadata: `X.Y.Z
 `X.Y.Z-<pre-release>`, where the pre-release is a lowercase word then optional dot-separated
 words or numbers: `0.2.0-rc.1`, `1.0.0-beta.2`. The rules are in `scripts/version.py`, and the
 updater compares versions the same way
-([src-tauri/src/updates/version.rs](../src-tauri/src/updates/version.rs)).
+([crates/zapper/src/updates/version.rs](../crates/zapper/src/updates/version.rs)).
 
 Each package manager gets a version that sorts the same way, pre-releases before the release:
 

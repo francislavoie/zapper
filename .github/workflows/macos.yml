@@ -61,22 +61,23 @@ jobs:
           # under APP_PATHS also builds the .app and .dmg.
           MACOS_PATHS: >-
             ^\.github/workflows/macos\.yml$
-            ^src-tauri/src/surface/
-            ^src-tauri/src/chrome\.rs$
-            ^src-tauri/src/paths\.rs$
-            ^src-tauri/src/bin/surface_check\.rs$
-            ^src-tauri/src/recording/service(\.rs$|/)
-            ^src-tauri/src/bin/zapper_server\.rs$
-            ^src-tauri/build\.rs$
-            ^src-tauri/Cargo\.(toml|lock)$
-            ^src-tauri/tauri(\.macos)?\.conf\.json$
+            ^crates/zapper/src/surface/
+            ^crates/zapper/src/chrome\.rs$
+            ^crates/zapper/src/paths\.rs$
+            ^crates/zapper/src/bin/surface_check\.rs$
+            ^crates/zapper/src/recording/service(\.rs$|/)
+            ^crates/zapper/src/bin/zapper_server\.rs$
+            ^crates/zapper/build\.rs$
+            ^Cargo\.(toml|lock)$
+            ^crates/zapper/Cargo\.(toml|lock)$
+            ^crates/zapper/tauri(\.macos)?\.conf\.json$
             ^packaging/macos/
             ^packaging/libmpv/
             ^scripts/(build|fetch)-libmpv\.sh$
             ^scripts/check-macos-app\.sh$
           APP_PATHS: >-
             ^\.github/workflows/macos\.yml$
-            ^src-tauri/tauri(\.macos)?\.conf\.json$
+            ^crates/zapper/tauri(\.macos)?\.conf\.json$
             ^packaging/macos/
             ^packaging/libmpv/
             ^scripts/(build|fetch)-libmpv\.sh$
@@ -186,7 +187,6 @@ jobs:
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: src-tauri
           key: macos
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -197,24 +197,24 @@ jobs:
       - run: npm ci
 
       - name: Rust unit tests
-        working-directory: src-tauri
+        working-directory: crates/zapper
         run: cargo test --lib -q
 
       - name: Clippy
-        working-directory: src-tauri
+        working-directory: crates/zapper
         run: cargo clippy --lib --bins -q -- -D warnings
 
       - name: Clippy (harnesses)
-        working-directory: src-tauri
+        working-directory: crates/zapper
         run: cargo clippy --lib --bins --features harness -q -- -D warnings
 
       # Before zapper-server, which compiles the interface in to serve it to browsers
-      # (src-tauri/build.rs).
+      # (crates/zapper/build.rs).
       - name: Frontend build
         run: npm run build
 
       - name: zapper-server
-        working-directory: src-tauri
+        working-directory: crates/zapper
         run: cargo build --release --no-default-features --features server --bin zapper-server
 
       # Settings > Recording's Install on a Mac, through the built zapper-server's own
@@ -224,7 +224,7 @@ jobs:
       - name: LaunchAgent
         run: |
           set -euo pipefail
-          bin=$PWD/src-tauri/target/release/zapper-server
+          bin=$PWD/target/release/zapper-server
           label=dev.lavoie.zapper.server
           plist=$HOME/Library/LaunchAgents/$label.plist
           export ZAPPER_HOME=$RUNNER_TEMP/zapper-home
@@ -291,7 +291,6 @@ jobs:
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: src-tauri
           key: macos-app
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -312,12 +311,12 @@ jobs:
         run: CARGO_BUILD_JOBS=$(sysctl -n hw.ncpu) npx tauri build --config packaging/macos/dmg.conf.json
 
       - name: Check the bundle
-        run: scripts/check-macos-app.sh src-tauri/target/release/bundle/macos/zapper.app
+        run: scripts/check-macos-app.sh target/release/bundle/macos/zapper.app
 
       - name: Collect the disk image
         run: |
           mkdir -p dist
-          cp src-tauri/target/release/bundle/dmg/zapper_*_aarch64.dmg dist/
+          cp target/release/bundle/dmg/zapper_*_aarch64.dmg dist/
           (cd dist && shasum -a 256 -- *.dmg | tee SHA256SUMS)
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -354,14 +353,14 @@ jobs:
       # everything of zapper's; the app's own path, VideoToolbox into OpenGL, is run after it twice
       # for the record, without failing the job (docs/macos.md).
       - name: Surface check
-        working-directory: src-tauri
+        working-directory: crates/zapper
         run: |
           CARGO_BUILD_JOBS=$(sysctl -n hw.ncpu) cargo build --release --features harness,tauri/custom-protocol --bin surface_check
           check() { # check <name> [hwdec]
-            local out=$PWD/../shots/surface-$1
+            local out=$PWD/../../shots/surface-$1
             mkdir -p "$out"
             ZAPPER_HWDEC=${2:-} ZAPPER_MPV_LOG=$out/mpv.log ZAPPER_SHOTS=$out \
-              ./target/release/surface_check 30 > "$out/check.log" 2>&1
+              ../../target/release/surface_check 30 > "$out/check.log" 2>&1
             grep -E '^(PASS|FAIL)' "$out/check.log" || tail -20 "$out/check.log"
             grep -q '^PASS' "$out/check.log"
           }
@@ -402,7 +401,7 @@ jobs:
           }
           keys() { osascript -e "tell application \"System Events\" to $1"; }
           mkdir -p shots
-          app=src-tauri/target/release/bundle/macos/zapper.app/Contents/MacOS/zapper
+          app=target/release/bundle/macos/zapper.app/Contents/MacOS/zapper
           ZAPPER_MUTE=1 ZAPPER_AUTOPLAY=1 ZAPPER_FIXTURE_BASE=http://127.0.0.1:8788 \
             ZAPPER_FIXTURE_NAME=orient.ts "$app" > shots/app.log 2>&1 &
           pid=$!

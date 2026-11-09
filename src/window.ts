@@ -3,7 +3,7 @@
 // The window is undecorated — Rust sets `decorations: false` — so the title
 // bar this app draws is the only one there is, and dragging, minimising,
 // maximising and closing have to be asked for explicitly. On a Mac the window
-// keeps its own buttons (src-tauri/tauri.macos.conf.json) and the bar here
+// keeps its own buttons (crates/zapper/tauri.macos.conf.json) and the bar here
 // only drags it and answers its double click. Under Tauri these
 // are real window calls, each one already granted in the capabilities; in a
 // plain browser they would throw, so the mock stands in and records what was

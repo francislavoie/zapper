@@ -1,4 +1,4 @@
-// Mirror of src-tauri/src/ipc/types.rs. Change both together or not at all.
+// Mirror of crates/zapper/src/ipc/types.rs. Change both together or not at all.
 // Rust serialises camelCase, so these names match the wire exactly.
 
 export interface CategoryDto {
@@ -219,7 +219,7 @@ export interface PlayerOptionsDto {
   deinterlace: DeinterlaceMode;
 }
 
-/** Mirrors `EndingKind` in `src-tauri/src/ipc/ending.rs`. */
+/** Mirrors `EndingKind` in `crates/zapper/src/ipc/ending.rs`. */
 export type EndingKind =
   | "dropped"
   | "refused"
@@ -613,7 +613,7 @@ export type AccountCandidateDto =
   | { kind: "tvheadend"; url: string; username: string; password: string };
 
 // ------------------------------------------------------------- recording
-// Mirror of src-tauri/src/recording/api.rs and recording/service.rs: what the
+// Mirror of crates/zapper/src/recording/api.rs and recording/service.rs: what the
 // recording service (zapper-server) answers, passed through the app's Rust
 // side unchanged.
 
@@ -667,7 +667,7 @@ export interface RecordingDto {
  *  guide channel, or its guide has the same programme at the same time. */
 export type BackupReason = "guide" | "programme";
 
-/** A channel a recording could fall back to (src-tauri/src/recording/backup.rs). */
+/** A channel a recording could fall back to (crates/zapper/src/recording/backup.rs). */
 export interface BackupDto {
   streamId: number;
   name: string;
@@ -722,7 +722,7 @@ export interface ScheduleRequest {
 export type Naming = "mediaServer" | "byChannel" | "byDate" | "flat" | "custom";
 
 /** What other programs see of a recording while it records
- *  (src-tauri/src/recording/api.rs). */
+ *  (crates/zapper/src/recording/api.rs). */
 export type WhileRecording = "hidden" | "visible" | "strm";
 
 export interface RecordingSettingsDto {
@@ -841,7 +841,7 @@ export interface NetworkDto extends NetworkSettingsDto {
 }
 
 // --------------------------------------------------------- online services
-// Mirrors the online-services DTOs at the end of `src-tauri/src/ipc/types.rs`.
+// Mirrors the online-services DTOs at the end of `crates/zapper/src/ipc/types.rs`.
 // None of these carries a password, a token or a download link.
 
 export interface OnlineServicesDto {
@@ -912,7 +912,7 @@ export type SubtitleDownloadDto =
   | { kind: "off" };
 
 // ------------------------------------------------------------------ movies
-// Mirrors the movie DTOs at the end of `src-tauri/src/ipc/types.rs`.
+// Mirrors the movie DTOs at the end of `crates/zapper/src/ipc/types.rs`.
 
 export interface VodCategoryDto {
   id: string;

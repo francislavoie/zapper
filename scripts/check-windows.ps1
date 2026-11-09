@@ -6,10 +6,10 @@
 .DESCRIPTION
     For the MSI and the NSIS installer of -Version in -Dir
     (zapper_<version>_x64_en-US.msi, zapper_<version>_x64-setup.exe, the names
-    the updater downloads by; src-tauri/src/updates/release.rs):
+    the updater downloads by; crates/zapper/src/updates/release.rs):
 
       * zapper.exe and zapper-server.exe side by side, with every DLL
-        src-tauri/tauri.windows.conf.json bundles, the same files in both;
+        crates/zapper/tauri.windows.conf.json bundles, the same files in both;
       * the install-kind marker the updater reads: msi in the MSI; nsis once
         the NSIS installer has run (its post-install hook writes it,
         packaging/windows/installer-hooks.nsh), msi in it before that;
@@ -71,14 +71,14 @@ foreach ($f in @($msi, $nsis)) { if (-not (Test-Path $f)) { throw "Missing $f" }
 
 # What the installers must carry: the DLLs tauri.windows.conf.json bundles,
 # beside the two programs.
-$conf = Get-Content -Raw (Join-Path $repo "src-tauri\tauri.windows.conf.json") | ConvertFrom-Json
+$conf = Get-Content -Raw (Join-Path $repo "crates\zapper\tauri.windows.conf.json") | ConvertFrom-Json
 $dlls = @($conf.bundle.resources.PSObject.Properties | ForEach-Object { $_.Value } | Where-Object { $_ -like "*.dll" })
 if ($dlls.Count -lt 2) { throw "tauri.windows.conf.json bundles no DLLs?" }
 $programs = @("zapper.exe", "zapper-server.exe")
 # Where both installers remember their folder: Software\<manufacturer>\<product>,
 # the manufacturer being the publisher, else the identifier's second part, as
 # Tauri's bundler names it.
-$tauri = Get-Content -Raw (Join-Path $repo "src-tauri\tauri.conf.json") | ConvertFrom-Json
+$tauri = Get-Content -Raw (Join-Path $repo "crates\zapper\tauri.conf.json") | ConvertFrom-Json
 $manufacturer = if ($tauri.bundle.publisher) { $tauri.bundle.publisher } else { ($tauri.identifier -split '\.')[1] }
 $folderKey = "HKCU:\Software\$manufacturer\$($tauri.productName)"
 function Remembered-Folder {

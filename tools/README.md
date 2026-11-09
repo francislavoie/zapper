@@ -77,7 +77,7 @@ it to check the recording service end to end (docs/recording.md, "Checking
 it"):
 
 ```sh
-cd src-tauri
+cd crates/zapper
 cargo build --no-default-features --features harness,server --bin zapper-server --bin offair_check
 target/debug/offair_check 19700
 ```
@@ -208,7 +208,7 @@ from the desktop's crash reporter. It starts `fake_stream.py` itself:
 
 ```sh
 npm run build
-(cd src-tauri && cargo build --release --features tauri/custom-protocol)
+(cd crates/zapper && cargo build --release --features tauri/custom-protocol)
 tools/quit_check.py --runs 30 --port 19601
 ```
 
@@ -281,7 +281,7 @@ Without it:
 `<dir>/data` and `<dir>/cache` for any run. Unit tests (`cargo test`) never
 see the real directories at all, whatever the environment says: under test
 they resolve into a sandbox in the system's temporary directory
-(`src-tauri/src/paths.rs`).
+(`crates/zapper/src/paths.rs`).
 
 ## Screenshots
 

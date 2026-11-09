@@ -3,8 +3,8 @@
 ## A real install
 
 ```sh
-just package                        # .deb and .rpm under src-tauri/target/release/bundle/
-sudo apt install --reinstall ./src-tauri/target/release/bundle/deb/zapper_*_amd64.deb
+just package                        # .deb and .rpm under target/release/bundle/
+sudo apt install --reinstall ./target/release/bundle/deb/zapper_*_amd64.deb
 ```
 
 `--reinstall` because a rebuild of the same version is otherwise "already
@@ -29,7 +29,7 @@ view of the id; logging out and back in rebuilds it.
 `npm run app` builds and runs a development build. With the package installed
 its window already takes the package's icon, so nothing more is needed.
 Without it, the dock shows a placeholder — `tools/install-desktop.sh` installs
-a per-user entry pointing at `src-tauri/target/debug/zapper`, and refuses to
+a per-user entry pointing at `target/debug/zapper`, and refuses to
 while the package is installed (`--force` overrides).
 
 ## Why a desktop entry is needed at all
@@ -37,7 +37,7 @@ while the package is installed (`--force` overrides).
 On Wayland a window carries no icon. The compositor pairs the toplevel's
 `app_id` with an installed `.desktop` file and takes the icon from there, so
 an application with no entry gets the generic placeholder however many icons
-are compiled into it. `APP_ID` in `src-tauri/src/lib.rs` fixes that id to
+are compiled into it. `APP_ID` in `crates/zapper/src/lib.rs` fixes that id to
 `zapper`, and both desktop entries carry `StartupWMClass=zapper` to match.
 
 ## Where your account lives

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Usage: scripts/fetch-libmpv.sh [--archive <libmpv-<platform>.tar.xz>] [platform]
 #
-# Puts the libmpv zapper links and ships into src-tauri/lib/<platform>/ (ignored by git): the
+# Puts the libmpv zapper links and ships into crates/zapper/lib/<platform>/ (ignored by git): the
 # archive packaging/libmpv/manifest.json names for this platform, downloaded and checked against
-# the manifest's SHA-256, then unpacked. src-tauri/build.rs links against it and the packages
+# the manifest's SHA-256, then unpacked. crates/zapper/build.rs links against it and the packages
 # carry it (docs/licensing.md). Does nothing when that archive is already unpacked there.
 #
 # --archive takes one made by scripts/build-libmpv.sh instead of downloading, for a build of
@@ -35,7 +35,7 @@ sha256() {
   else shasum -a 256 "$1" | cut -d' ' -f1; fi
 }
 
-lib=$repo/src-tauri/lib
+lib=$repo/crates/zapper/lib
 dest=$lib/$platform
 cache=$lib/.cache
 mkdir -p "$cache"

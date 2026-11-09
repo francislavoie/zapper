@@ -10,7 +10,7 @@
 # with a build provenance attestation for each archive (`gh attestation verify`).
 #
 # The tag is not a version and the release is a pre-release, so zapper's updater never takes it
-# for an update (src-tauri/src/updates/release.rs). Run by hand only ("Run workflow"); then
+# for an update (crates/zapper/src/updates/release.rs). Run by hand only ("Run workflow"); then
 # commit the release's manifest.json as packaging/libmpv/manifest.json, which is what builds
 # fetch (`just fetch-libmpv`). docs/licensing.md, "Updating libmpv".
 #

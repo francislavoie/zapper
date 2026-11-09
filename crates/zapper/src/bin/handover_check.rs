@@ -593,7 +593,7 @@ struct Fixture {
 
 impl Fixture {
     fn start(port: u16) -> Result<Self, String> {
-        let script = concat!(env!("CARGO_MANIFEST_DIR"), "/../tools/fake_stream.py");
+        let script = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tools/fake_stream.py");
         let mut child = Command::new(zapper_lib::harness::tool("python3"))
             .arg(script)
             .args(["--port", &port.to_string(), "--verbose", "--max-connections", "1"])

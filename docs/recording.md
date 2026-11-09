@@ -324,7 +324,7 @@ service does not (`--no-sync`), and reads the catalogue again once a sync lands.
 from another device, the password typed there crosses the network unencrypted, and the page says
 so; turn HTTPS back on (Settings → Recording, *Plain HTTP on the network* off) to avoid it.
 
-The interface is the app's, built into `zapper-server` (`src-tauri/build.rs`): the same version as
+The interface is the app's, built into `zapper-server` (`crates/zapper/build.rs`): the same version as
 the service, nothing installed beside it. Its files under `/assets/` are named by their contents
 and kept by the browser for a year; the page itself is asked for again each time.
 
@@ -775,7 +775,7 @@ Logs go to standard error: `journalctl --user -u zapper-server` when installed f
 
 ```sh
 npm run build          # the interface it serves to browsers, compiled in
-cd src-tauri
+cd crates/zapper
 cargo build --release --no-default-features --features server --bin zapper-server
 ```
 
@@ -786,7 +786,7 @@ built.
 `--no-default-features` leaves out the `gui` feature, so nothing of Tauri, WebKit, GTK or libmpv
 is linked; the server needs only `libavformat`, `libavcodec` and `libavutil`. It takes them from
 zapper's own LGPL FFmpeg, the one the app's libmpv uses, when `just fetch-libmpv` has unpacked
-it into `src-tauri/lib/<platform>/` (headers in `include/`, libraries in `link/` and `runtime/`;
+it into `crates/zapper/lib/<platform>/` (headers in `include/`, libraries in `link/` and `runtime/`;
 docs/licensing.md); `build.rs` then links them from there and points the binary at them
 (`$ORIGIN/../lib/zapper` on Linux, beside the executable on Windows). Without it, a debug build
 uses the development files pkg-config finds, and a release build refuses unless
@@ -842,7 +842,7 @@ own.
 ### Checking it
 
 ```sh
-cd src-tauri
+cd crates/zapper
 cargo build --no-default-features --features harness,server --bin zapper-server --bin recording_check
 target/debug/recording_check
 ```

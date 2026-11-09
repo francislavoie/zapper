@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Usage: scripts/licenses.sh [--if-changed] [out-dir]   (default: src-tauri/target/licenses)
+# Usage: scripts/licenses.sh [--if-changed] [out-dir]   (default: target/licenses)
 #
 # The license files the packages ship that don't come from the UI build (the UI build writes
 # THIRD-PARTY-NOTICES-ui.txt itself, see tools/licenses.mjs, and copies these in beside it for
@@ -27,7 +27,7 @@ root=$(dirname "$here")
 if_changed=
 [ "${1:-}" = --if-changed ] && { if_changed=1; shift; }
 [ "${ZAPPER_REBUILD:-}" = 1 ] && if_changed=
-out=${1:-$root/src-tauri/target/licenses}
+out=${1:-$root/target/licenses}
 outputs=(THIRD-PARTY-NOTICES-rust.txt copyright)
 fail() { echo "licenses: $*" >&2; exit 1; }
 command -v cargo-about >/dev/null ||
@@ -51,7 +51,7 @@ key_file=$out.key
 inputs_key() {
   {
     echo "target=${target[*]-} repo=$ZAPPER_REPO $(cargo about --version)"
-    (cd "$root" && sha256sum src-tauri/Cargo.lock src-tauri/Cargo.toml about.toml LICENSE \
+    (cd "$root" && sha256sum Cargo.lock Cargo.toml crates/zapper/Cargo.toml about.toml LICENSE \
       scripts/licenses.sh scripts/notices.py)
   } | sha256sum | cut -d' ' -f1
 }
@@ -68,7 +68,7 @@ rm -f "$key_file"
 
 # --locked: the notices describe exactly what Cargo.lock builds.
 cargo about generate --format json --locked --fail -c "$root/about.toml" ${target[@]+"${target[@]}"} \
-  --features server -m "$root/src-tauri/Cargo.toml" -o "$out/about.json"
+  --features server -m "$root/crates/zapper/Cargo.toml" -o "$out/about.json"
 "$python" "$here/notices.py" rust "$out/about.json" "$out/THIRD-PARTY-NOTICES-rust.txt"
 rm "$out/about.json"
 "$python" "$here/notices.py" copyright "$root/LICENSE" "$out/copyright"

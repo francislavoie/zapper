@@ -32,7 +32,7 @@ export default defineConfig({
       // The Rust tree is cargo's business. Watching it means a file-change
       // storm every time `cargo` writes to target/, and page reloads
       // triggered by a rebuild that has nothing to do with the frontend.
-      ignored: ["**/src-tauri/**"],
+      ignored: ["**/crates/**", "**/target/**"],
     },
   },
   build: { outDir: "dist", emptyOutDir: true },

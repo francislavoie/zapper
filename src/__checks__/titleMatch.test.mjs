@@ -1,6 +1,6 @@
 // The Movies and Shows search's rule, as the mock catalogues run it: the start
 // of a word, case and accents aside. The app's own is in Rust
-// (src-tauri/src/catalog/title_search.rs), with the same cases as tests.
+// (crates/zapper/src/catalog/title_search.rs), with the same cases as tests.
 // Run: node --test src/__checks__/
 
 import assert from "node:assert/strict";

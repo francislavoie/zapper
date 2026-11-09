@@ -24,7 +24,7 @@ const near = (a, b, eps = 1e-9) => assert.ok(Math.abs(a - b) < eps, `${a} !≈ $
 // ------------------------------------------------------------------ ceiling
 
 test("the ceiling is mpv's volume-max, not 100", () => {
-  // src-tauri/src/surface/mpv.rs sets volume-max to 200 and set_volume clamps
+  // crates/zapper/src/surface/mpv.rs sets volume-max to 200 and set_volume clamps
   // to the same number. A frontend that stopped at 100 would hide half the
   // range the backend accepts.
   assert.equal(VOLUME_MAX, 200);

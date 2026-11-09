@@ -82,9 +82,9 @@ test("libmpv's notices are this platform's archive's, and nothing ships the GPL'
   }
   const libmpv = (platform, arch) =>
     noticeFiles({ platform, arch }).find((f) => f.name === "THIRD-PARTY-NOTICES-libmpv.txt").path;
-  assert.equal(libmpv("linux", "x64"), "src-tauri/lib/linux-x86_64/THIRD-PARTY-NOTICES-libmpv.txt");
-  assert.equal(libmpv("win32", "x64"), "src-tauri/lib/windows-x86_64/THIRD-PARTY-NOTICES-libmpv.txt");
-  assert.equal(libmpv("darwin", "arm64"), "src-tauri/lib/macos-arm64/THIRD-PARTY-NOTICES-libmpv.txt");
+  assert.equal(libmpv("linux", "x64"), "crates/zapper/lib/linux-x86_64/THIRD-PARTY-NOTICES-libmpv.txt");
+  assert.equal(libmpv("win32", "x64"), "crates/zapper/lib/windows-x86_64/THIRD-PARTY-NOTICES-libmpv.txt");
+  assert.equal(libmpv("darwin", "arm64"), "crates/zapper/lib/macos-arm64/THIRD-PARTY-NOTICES-libmpv.txt");
   assert.equal(
     noticeFiles({ libmpvDir: "/m", platform: "linux" }).find((f) => f.name === "THIRD-PARTY-NOTICES-libmpv.txt").path,
     "/m/THIRD-PARTY-NOTICES-libmpv.txt",
@@ -117,7 +117,7 @@ test("a missing notice answered with the app's page is recognised, not shown as 
 
 // Each package carries every notice that applies to it, from where the build leaves it.
 test("the .deb, the .rpm, the Windows installers and the macOS app all carry the notices", () => {
-  const conf = JSON.parse(read("src-tauri/tauri.conf.json"));
+  const conf = JSON.parse(read("crates/zapper/tauri.conf.json"));
   const everywhere = [
     "LICENSE",
     "MPV-FFMPEG-NOTICE.txt",
@@ -143,7 +143,7 @@ test("the .deb, the .rpm, the Windows installers and the macOS app all carry the
 test("every package carries the bundled libmpv and FFmpeg, and zapper-server, and none depends on the system's", () => {
   // The same libraries everywhere: libmpv, and FFmpeg's seven, each under its platform's name.
   const ffmpeg = ["avutil", "avcodec", "avformat", "avfilter", "avdevice", "swscale", "swresample"];
-  const conf = JSON.parse(read("src-tauri/tauri.conf.json"));
+  const conf = JSON.parse(read("crates/zapper/tauri.conf.json"));
   const { deb, rpm } = conf.bundle.linux;
   for (const files of [deb.files, rpm.files]) {
     const libs = Object.keys(files).filter((k) => k.startsWith("/usr/lib/zapper/lib"));
@@ -152,17 +152,17 @@ test("every package carries the bundled libmpv and FFmpeg, and zapper-server, an
       ["mpv", ...ffmpeg].sort(),
     );
     for (const k of libs) assert.equal(files[k], `lib/linux-x86_64/runtime/${k.slice("/usr/lib/zapper/".length)}`);
-    assert.equal(files["/usr/bin/zapper-server"], "target/release/zapper-server");
+    assert.equal(files["/usr/bin/zapper-server"], "../../target/release/zapper-server");
   }
   for (const d of [...deb.depends, ...rpm.depends]) assert.doesNotMatch(d, /mpv|libav|libsw/, d);
-  const win = JSON.parse(read("src-tauri/tauri.windows.conf.json")).bundle.resources;
+  const win = JSON.parse(read("crates/zapper/tauri.windows.conf.json")).bundle.resources;
   assert.deepEqual(
     Object.values(win).map((n) => n.replace(/^(?:lib)?(.*?)-\d+\.dll$/, "$1")).sort(),
     ["mpv", ...ffmpeg].sort(),
   );
   for (const [src, dst] of Object.entries(win)) assert.equal(src, `lib/windows-x86_64/runtime/${dst}`);
   const installers = JSON.parse(read("packaging/windows/installers.conf.json")).bundle.resources;
-  assert.equal(installers["target/release/zapper-server.exe"], "zapper-server.exe");
+  assert.equal(installers["../../target/release/zapper-server.exe"], "zapper-server.exe");
   const mac = JSON.parse(read("packaging/macos/dmg.conf.json")).bundle.macOS.frameworks;
   assert.deepEqual(
     mac.map((p) => p.replace(/^lib\/macos-arm64\/runtime\/lib(.*?)\.\d+\.dylib$/, "$1")).sort(),
@@ -173,6 +173,6 @@ test("every package carries the bundled libmpv and FFmpeg, and zapper-server, an
 test("zapper is MIT everywhere it says so", () => {
   assert.match(read("LICENSE"), /^MIT License\n\nCopyright \(c\) 2026 Francis Lavoie\n/);
   assert.equal(JSON.parse(read("package.json")).license, "MIT");
-  assert.match(read("src-tauri/Cargo.toml"), /^license = "MIT"$/m);
-  assert.equal(JSON.parse(read("src-tauri/tauri.conf.json")).bundle.license, "MIT");
+  assert.match(read("Cargo.toml"), /^license = "MIT"$/m);
+  assert.equal(JSON.parse(read("crates/zapper/tauri.conf.json")).bundle.license, "MIT");
 });
