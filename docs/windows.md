@@ -318,8 +318,10 @@ itself was installed.
   GPU copy Linux uses. Same result, more CPU (a few milliseconds a shot).
 - **`ZAPPER_CAPTURE`** (the self-screenshot used for unattended verification)
   is Linux-only: it reconstructs GTK's layers. On Windows it says so.
-- **The GTK verification harnesses** (`player_check`, `shot_check`,
-  `surface_check`) are Linux-only and print so on Windows.
+- **The GTK verification harnesses** (`shot_check`, `surface_check`) are
+  Linux-only and print so on Windows. `player_check` and `catchup_check` play
+  in a window mpv makes itself (`surface::host`), and are Linux-only for now
+  too.
 - **No escape hatch if the interface fails to load.** Linux adds a title bar
   and a dialog; on Windows, Alt+F4 still closes the undecorated window.
 - **Updates**: only the release build (`just package-windows`, which adds

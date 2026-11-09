@@ -4,7 +4,11 @@
 //! it: that `play` reaches `Playing` with measured dimensions, that a relative
 //! seek moves into the buffered past, that `seek_live` comes back to the edge,
 //! and that `stop` stops. None of that is unit-testable - the whole point of
-//! these commands is the hop onto the GTK main thread and mpv's real answers.
+//! these commands is mpv's real answers.
+//!
+//! The player is mpv in a window of its own (`surface::host`), with no
+//! webview: run it inside a desktop session, the headless gnome-shell for
+//! anything unattended.
 //!
 //! Usage: `tools/fake_stream.py &` then `cargo run --bin player_check`. It
 //! plays a local fixture (`ZAPPER_FIXTURE_BASE`, default
@@ -121,7 +125,7 @@
 
 #[cfg(not(target_os = "linux"))]
 fn main() {
-    eprintln!("player_check only runs on Linux/GTK");
+    eprintln!("player_check only runs on Linux");
     std::process::exit(2);
 }
 
@@ -130,9 +134,9 @@ async fn quiesce() {
     tokio::time::sleep(std::time::Duration::from_millis(400)).await;
 }
 
-/// Exits without unwinding. Destructors for mpv and GTK objects owned by the
-/// main thread cannot run safely from here, and there is nothing left worth
-/// cleaning up in a one-shot harness.
+/// Exits without unwinding: mpv's threads, its window among them, are still
+/// running, and there is nothing left worth cleaning up in a one-shot
+/// harness.
 #[cfg(target_os = "linux")]
 fn finish(code: i32) -> ! {
     use std::io::Write;
@@ -143,14 +147,11 @@ fn finish(code: i32) -> ! {
 
 #[cfg(target_os = "linux")]
 fn main() {
-    use gtk::prelude::GLAreaExt;
-    use tauri::Manager;
-
     tracing_subscriber::fmt::init();
 
     // A scratch account, and the fixture server rather than a provider,
-    // unless a real run was asked for in so many words. Before Tauri starts
-    // a thread: this changes the environment.
+    // unless a real run was asked for in so many words. Before any thread
+    // starts: this changes the environment.
     if !zapper_lib::harness::isolate("player_check") {
         if std::env::var_os("ZAPPER_FIXTURE_BASE").is_none() {
             std::env::set_var("ZAPPER_FIXTURE_BASE", zapper_lib::harness::FIXTURE_BASE);
@@ -167,111 +168,106 @@ fn main() {
         }
     }
 
-    tauri::Builder::default()
-        .setup(move |app| {
-            let window = app.get_webview_window("main").unwrap();
-            let ov = zapper_lib::surface::linux::overlay::install(&window)?;
-            OVERLAY.with(|o| *o.borrow_mut() = Some(ov.clone()));
-            let player = zapper_lib::surface::linux::render::new_player(&ov.gl_area)?;
-            // Kill the audio path entirely before anything is loaded. Muting
-            // or zeroing the volume still opens the device and still leaks
-            // sound on any path that resets it; `ao=null` cannot.
-            zapper_lib::player::PlayerBackend::set_property(&*player, "ao", "null")?;
+    // A hung open must not leave a window behind. `ZAPPER_CHECK_TIMEOUT_SECS`
+    // for a run meant to be longer (`--trickplay-vod` on a 4K film, whose
+    // worker paces itself).
+    let limit: u64 = std::env::var("ZAPPER_CHECK_TIMEOUT_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(240);
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(limit));
+        eprintln!("FAIL: the run did not finish within {limit}s");
+        finish(1);
+    });
 
-            // Nothing drives the GLArea until mpv's update callback fires, and
-            // if mpv never decodes, that never happens. Ticking keeps the
-            // render count honest about whether the surface works, which is a
-            // separate failure from whether the stream works.
-            let tick = ov.gl_area.clone();
-            gtk::glib::timeout_add_local(std::time::Duration::from_millis(16), move || {
-                tick.queue_render();
-                gtk::glib::ControlFlow::Continue
-            });
+    // mpv in a window of its own, installed as the player. Audio off
+    // outright (`ao=null`) before anything is loaded: muting or zeroing the
+    // volume still opens the device and still leaks sound on any path that
+    // resets it; `ao=null` cannot.
+    let opened = zapper_lib::surface::host::open_host(zapper_lib::surface::host::HostOptions {
+        title: "zapper player_check".to_owned(),
+        muted: true,
+    });
+    if let Err(e) = opened {
+        eprintln!("FAIL: opening the player: {e}");
+        finish(1);
+    }
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap_or_else(|e| {
+            eprintln!("FAIL: starting the runtime: {e}");
+            finish(1)
+        });
+    // The player's heartbeat, as the app starts it.
+    zapper_lib::player::start(rt.handle());
 
-            // A hung open must not leave a GUI process on the user's session.
-            // `ZAPPER_CHECK_TIMEOUT_SECS` for a run meant to be longer
-            // (`--trickplay-vod` on a 4K film, whose worker paces itself).
-            let limit: u32 = std::env::var("ZAPPER_CHECK_TIMEOUT_SECS")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(240);
-            gtk::glib::timeout_add_seconds_local(limit, move || {
-                eprintln!("FAIL: the run did not finish within {limit}s");
-                std::process::exit(1);
-            });
-
-            // The player's heartbeat, as the app starts it.
-            zapper_lib::player::start(tauri::async_runtime::handle().inner());
-            let handle = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                let args: Vec<String> = std::env::args().collect();
-                let ending = args
-                    .iter()
-                    .position(|a| a == "--ending")
-                    .and_then(|i| args.get(i + 1).cloned());
-                let verdict = if let Err(e) = live_start_from_env().await {
-                    Err(e)
-                } else if let Some(kind) = ending {
-                    run_ending(&kind).await
-                } else if let Some(secs) = args
-                    .iter()
-                    .position(|a| a == "--keeps-playing")
-                    .and_then(|i| args.get(i + 1))
-                    .and_then(|s| s.parse::<u64>().ok())
-                {
-                    run_keeps_playing(secs, args.iter().any(|a| a == "--after-movie")).await
-                } else if args.iter().any(|a| a == "--movie") {
-                    run_movie().await
-                } else if args.iter().any(|a| a == "--trickplay-vod") {
-                    run_trickplay_vod().await
-                } else if args.iter().any(|a| a == "--held") {
-                    run_held().await
-                } else if args.iter().any(|a| a == "--pause-then-play") {
-                    run_pause_then_play().await
-                } else if args.iter().any(|a| a == "--up-next") {
-                    let has = |flag: &str| args.iter().any(|a| a == flag);
-                    run_up_next(has("--drop"), has("--past-end")).await
-                } else if args.iter().any(|a| a == "--captions") {
-                    run_captions(&handle).await
-                } else if args.iter().any(|a| a == "--subtitles") {
-                    run_subtitles().await
-                } else if args.iter().any(|a| a == "--find-subtitles") {
-                    let tmdb = args
-                        .iter()
-                        .position(|a| a == "--tmdb")
-                        .and_then(|i| args.get(i + 1))
-                        .and_then(|s| s.parse::<i64>().ok());
-                    if args.iter().any(|a| a == "--search-only") {
-                        run_subtitle_search(tmdb.unwrap_or(FILM_TMDB)).await
-                    } else {
-                        run_find_subtitles(&handle).await
-                    }
-                } else if args.iter().any(|a| a == "--episode") {
-                    run_episode().await
-                } else {
-                    run(&handle).await
-                };
-                // Let the GTK render loop finish the frame it is in before the
-                // process goes away. Exiting straight out of this task tears
-                // mpv's render context down underneath a live GL callback,
-                // which segfaults and leaves a core dump - and that dump holds
-                // the stream URL, credentials and all.
-                quiesce().await;
-                match verdict {
-                    Ok(msg) => {
-                        println!("PASS: {msg}");
-                        finish(0);
-                    }
-                    Err(e) => {
-                        eprintln!("FAIL: {e}");
-                        finish(1);
-                    }
-                }
-            });
-            Ok(())
-        })
-        .run(tauri::generate_context!())
-        .expect("player_check failed to run");
+    let verdict = rt.block_on(async {
+        let args: Vec<String> = std::env::args().collect();
+        let ending = args
+            .iter()
+            .position(|a| a == "--ending")
+            .and_then(|i| args.get(i + 1).cloned());
+        let verdict = if let Err(e) = live_start_from_env().await {
+            Err(e)
+        } else if let Some(kind) = ending {
+            run_ending(&kind).await
+        } else if let Some(secs) = args
+            .iter()
+            .position(|a| a == "--keeps-playing")
+            .and_then(|i| args.get(i + 1))
+            .and_then(|s| s.parse::<u64>().ok())
+        {
+            run_keeps_playing(secs, args.iter().any(|a| a == "--after-movie")).await
+        } else if args.iter().any(|a| a == "--movie") {
+            run_movie().await
+        } else if args.iter().any(|a| a == "--trickplay-vod") {
+            run_trickplay_vod().await
+        } else if args.iter().any(|a| a == "--held") {
+            run_held().await
+        } else if args.iter().any(|a| a == "--pause-then-play") {
+            run_pause_then_play().await
+        } else if args.iter().any(|a| a == "--up-next") {
+            let has = |flag: &str| args.iter().any(|a| a == flag);
+            run_up_next(has("--drop"), has("--past-end")).await
+        } else if args.iter().any(|a| a == "--captions") {
+            run_captions().await
+        } else if args.iter().any(|a| a == "--subtitles") {
+            run_subtitles().await
+        } else if args.iter().any(|a| a == "--find-subtitles") {
+            let tmdb = args
+                .iter()
+                .position(|a| a == "--tmdb")
+                .and_then(|i| args.get(i + 1))
+                .and_then(|s| s.parse::<i64>().ok());
+            if args.iter().any(|a| a == "--search-only") {
+                run_subtitle_search(tmdb.unwrap_or(FILM_TMDB)).await
+            } else {
+                run_find_subtitles().await
+            }
+        } else if args.iter().any(|a| a == "--episode") {
+            run_episode().await
+        } else {
+            run().await
+        };
+        // Let mpv's window finish the frame it is drawing before the process
+        // goes away. Exiting in the middle of one tears mpv's video output
+        // down underneath it, which can segfault and leave a core dump - and
+        // that dump holds the stream URL, credentials and all.
+        quiesce().await;
+        verdict
+    });
+    match verdict {
+        Ok(msg) => {
+            println!("PASS: {msg}");
+            finish(0);
+        }
+        Err(e) => {
+            eprintln!("FAIL: {e}");
+            finish(1);
+        }
+    }
 }
 
 /// Seconds of playback before the back-seek, so there is a past to seek into.
@@ -321,7 +317,7 @@ async fn watch_for_stalls(
 }
 
 #[cfg(target_os = "linux")]
-async fn run(app: &tauri::AppHandle) -> Result<String, String> {
+async fn run() -> Result<String, String> {
     use std::time::Duration;
     use tokio::time::sleep;
     use zapper_lib::player::api as cmds;
@@ -352,11 +348,11 @@ async fn run(app: &tauri::AppHandle) -> Result<String, String> {
         (Some(w), Some(h)) if w > 0 && h > 0 => (w, h),
         _ => return Err("Playing, but mpv reported no video dimensions".into()),
     };
-    note(app, "playing").await;
+    note("playing").await;
 
     // --- seek back --------------------------------------------------------
     sleep(Duration::from_secs(SETTLE)).await;
-    note(app, "settled").await;
+    note("settled").await;
     let before = cmds::player_state().await?;
     // Tuning in lands on the server's connect burst — the oldest of what it
     // already held — and must be brought up to live once that has arrived.
@@ -388,12 +384,12 @@ async fn run(app: &tauri::AppHandle) -> Result<String, String> {
     if back.behind_live <= 0.0 {
         return Err("behind_live is still 0 after seeking into the past".into());
     }
-    note(app, "seeked-back").await;
+    note("seeked-back").await;
 
     // --- back to live -----------------------------------------------------
     cmds::seek_live().await?;
     let live = await_state(Duration::from_secs(10), |s| s.behind_live < LIVE).await;
-    note(app, "seeked-live").await;
+    note("seeked-live").await;
     if live.behind_live >= LIVE {
         return Err(format!(
             "seek_live left {:.1}s behind the edge (was {:.1}s)",
@@ -407,7 +403,7 @@ async fn run(app: &tauri::AppHandle) -> Result<String, String> {
     // ahead plays for a few seconds and then stalls to refill. Watched for
     // long enough to see the stall a thin buffer produces.
     let (stalls, thinnest) = watch_for_stalls(Duration::from_secs(AFTER_LIVE)).await?;
-    note(app, "after-live").await;
+    note("after-live").await;
     if stalls > 0 {
         return Err(format!(
             "playback stalled to buffer {stalls} time(s) in the {AFTER_LIVE}s after seek_live \
@@ -436,7 +432,7 @@ async fn run(app: &tauri::AppHandle) -> Result<String, String> {
             // Past the deadline (8 s), and the hold of a start at live.
             sleep(Duration::from_secs(12)).await;
             let later = cmds::player_state().await?;
-            note(app, &format!("zapped-{id}")).await;
+            note(&format!("zapped-{id}")).await;
             if later.state != PlaybackState::Playing || later.stream_id != Some(id) {
                 return Err(format!(
                     "zap to {id}: {:?} after 12 s ({:?} {:?})",
@@ -1167,33 +1163,22 @@ fn local_json(port: u16, path: &str) -> Option<serde_json::Value> {
 /// What mpv says now of the subtitle track chosen, when it is an external
 /// file: its title; whether subtitles are shown; and the line drawn.
 #[cfg(target_os = "linux")]
-async fn external_subtitle(
-    app: &tauri::AppHandle,
-) -> Result<(Option<String>, bool, Option<String>), String> {
-    let (tx, rx) = std::sync::mpsc::channel();
-    app.run_on_main_thread(move || {
-        let r = zapper_lib::player::backend().map(|p| {
-            let count = p.get_i64("track-list/count").unwrap_or(0);
-            let external = (0..count).find_map(|i| {
-                let key = |k: &str| format!("track-list/{i}/{k}");
-                (p.get_string(&key("type")).as_deref() == Some("sub")
-                    && p.get_bool(&key("external")) == Some(true)
-                    && p.get_bool(&key("selected")) == Some(true))
-                .then(|| p.get_string(&key("title")).unwrap_or_default())
-            });
-            (external, p.get_bool("sub-visibility") == Some(true), p.get_string("sub-text"))
-        });
-        let _ = tx.send(r);
-    })
-    .map_err(|e| e.to_string())?;
-    rx.recv_timeout(std::time::Duration::from_secs(5))
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "no player on the main thread".to_owned())
+async fn external_subtitle() -> Result<(Option<String>, bool, Option<String>), String> {
+    let p = zapper_lib::player::backend().ok_or("no player installed")?;
+    let count = p.get_i64("track-list/count").unwrap_or(0);
+    let external = (0..count).find_map(|i| {
+        let key = |k: &str| format!("track-list/{i}/{k}");
+        (p.get_string(&key("type")).as_deref() == Some("sub")
+            && p.get_bool(&key("external")) == Some(true)
+            && p.get_bool(&key("selected")) == Some(true))
+        .then(|| p.get_string(&key("title")).unwrap_or_default())
+    });
+    Ok((external, p.get_bool("sub-visibility") == Some(true), p.get_string("sub-text")))
 }
 
 /// The `--find-subtitles` run; see the top of the file.
 #[cfg(target_os = "linux")]
-async fn run_find_subtitles(app: &tauri::AppHandle) -> Result<String, String> {
+async fn run_find_subtitles() -> Result<String, String> {
     use std::time::{Duration, Instant};
     use zapper_lib::ipc::online_cmds as online;
     use zapper_lib::player::api as cmds;
@@ -1279,10 +1264,10 @@ async fn run_find_subtitles(app: &tauri::AppHandle) -> Result<String, String> {
     }
     let added_at = Instant::now();
 
-    let mut now = external_subtitle(app).await?;
+    let mut now = external_subtitle().await?;
     while now.0.is_none() && added_at.elapsed() < Duration::from_secs(3) {
         tokio::time::sleep(Duration::from_millis(100)).await;
-        now = external_subtitle(app).await?;
+        now = external_subtitle().await?;
     }
     match &now.0 {
         None => return Err("3s after the file was added, mpv had no external track chosen".into()),
@@ -1294,7 +1279,7 @@ async fn run_find_subtitles(app: &tauri::AppHandle) -> Result<String, String> {
     }
     while now.2.is_none() && added_at.elapsed() < Duration::from_secs(4) {
         tokio::time::sleep(Duration::from_millis(100)).await;
-        now = external_subtitle(app).await?;
+        now = external_subtitle().await?;
     }
     let line = now.2.clone().ok_or_else(|| {
         format!("4s after the file was added (at {:.1}s), mpv drew no line of it", at(&before))
@@ -1353,31 +1338,17 @@ async fn run_find_subtitles(app: &tauri::AppHandle) -> Result<String, String> {
     ))
 }
 
+/// Saves what mpv's window shows to `path`: the picture as mpv drew it into
+/// the window, bands, subtitles and all (`screenshot-to-file … window`).
 #[cfg(target_os = "linux")]
-thread_local! {
-    /// The window's layers, for a picture of what it shows (`grab`).
-    static OVERLAY: std::cell::RefCell<Option<zapper_lib::surface::linux::overlay::Overlay>> =
-        const { std::cell::RefCell::new(None) };
-}
-
-/// Saves what the window shows to `path`: the video layer as mpv drew it
-/// into the window (bands, subtitles and all), read back from GL, under the
-/// interface.
-#[cfg(target_os = "linux")]
-async fn grab(app: &tauri::AppHandle, path: String) -> Result<(), String> {
-    use zapper_lib::surface::linux::capture;
-    app.run_on_main_thread(move || capture::request(path)).map_err(|e| e.to_string())?;
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-    let (tx, rx) = std::sync::mpsc::channel();
-    app.run_on_main_thread(move || {
-        let r = OVERLAY.with(|o| match o.borrow().as_ref() {
-            Some(ov) => capture::finish(ov).map(|_| ()).map_err(|e| e.to_string()),
-            None => Err("no window to picture".to_owned()),
-        });
-        let _ = tx.send(r);
+async fn grab(path: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        let p = zapper_lib::player::backend().ok_or("no window to picture")?;
+        p.command("screenshot-to-file", &[&path, "window"])
+            .map_err(|e| format!("picturing the window: {e:#}"))
     })
-    .map_err(|e| e.to_string())?;
-    rx.recv_timeout(std::time::Duration::from_secs(10)).map_err(|e| e.to_string())?
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// How long `--subtitles` lets the episode's connection sit idle before the
@@ -1401,12 +1372,12 @@ fn keep_alive(port: u16) -> Option<(f64, i64)> {
 
 /// The `--captions` run; see the top of the file.
 #[cfg(target_os = "linux")]
-async fn run_captions(app: &tauri::AppHandle) -> Result<String, String> {
+async fn run_captions() -> Result<String, String> {
     use std::time::{Duration, Instant};
     use zapper_lib::player::api as cmds;
     use zapper_lib::ipc::types::PlaybackState;
 
-    /// What mpv says, read on the main thread: the caption text and the
+    /// What mpv says: the caption text and the
     /// placement properties, then the window and the picture's bands in it
     /// (`osd-dimensions`).
     const KEYS: [&str; 9] = [
@@ -1420,19 +1391,14 @@ async fn run_captions(app: &tauri::AppHandle) -> Result<String, String> {
         "osd-dimensions/mr",
         "sub-visibility",
     ];
-    async fn read(app: &tauri::AppHandle) -> Option<[String; 9]> {
-        let (tx, rx) = std::sync::mpsc::channel();
-        app.run_on_main_thread(move || {
-            let v = zapper_lib::player::backend().map(|p| KEYS.map(|k| p.get_string(k).unwrap_or_default()));
-            let _ = tx.send(v);
-        })
-        .ok()?;
-        rx.recv_timeout(Duration::from_secs(5)).ok().flatten()
+    async fn read() -> Option<[String; 9]> {
+        let p = zapper_lib::player::backend()?;
+        Some(KEYS.map(|k| p.get_string(k).unwrap_or_default()))
     }
     let num = |s: &str| s.parse::<f64>().unwrap_or(f64::NAN);
 
     // mpv's own values, before anything is played.
-    let before = read(app).await.ok_or("could not read mpv's properties")?;
+    let before = read().await.ok_or("could not read mpv's properties")?;
     let id = resolve_stream_id().await?;
     cmds::play(id).await?;
     let opened = await_state(Duration::from_secs(25), |s| s.state == PlaybackState::Playing).await;
@@ -1469,7 +1435,7 @@ async fn run_captions(app: &tauri::AppHandle) -> Result<String, String> {
                     "the {what} caption was not seen placed (seen: {seen:?}; mpv said {readings:?})"
                 ));
             }
-            let Some(v) = read(app).await else {
+            let Some(v) = read().await else {
                 return Err("could not read mpv's properties".into());
             };
             if readings.last() != Some(&v) && readings.len() < 40 {
@@ -1487,7 +1453,7 @@ async fn run_captions(app: &tauri::AppHandle) -> Result<String, String> {
             }
             // The placement follows the caption on the next heartbeat.
             tokio::time::sleep(Duration::from_millis(600)).await;
-            let Some(v) = read(app).await else {
+            let Some(v) = read().await else {
                 return Err("could not read mpv's properties".into());
             };
             if !v[0].contains(text) {
@@ -1518,7 +1484,7 @@ async fn run_captions(app: &tauri::AppHandle) -> Result<String, String> {
             // A moment for the frame to carry it, then the picture.
             tokio::time::sleep(Duration::from_millis(300)).await;
             if let Some(dir) = &shots {
-                grab(app, format!("{dir}/{tag}-{what}.png")).await?;
+                grab(format!("{dir}/{tag}-{what}.png")).await?;
             }
             seen.push(format!("{what}: sub-pos {pos} {align} margin {margin} (edge {edge:.0}px, bands {ml}/{mr}px of {w})"));
             break;
@@ -1538,7 +1504,7 @@ async fn run_captions(app: &tauri::AppHandle) -> Result<String, String> {
     // No captions track any more (stopped): mpv's own values back.
     cmds::stop().await?;
     tokio::time::sleep(Duration::from_millis(1200)).await;
-    let v = read(app).await.ok_or("could not read mpv's properties")?;
+    let v = read().await.ok_or("could not read mpv's properties")?;
     // The placement only: how a channel's subtitles are styled
     // (sub-ass-override) is the open's, set again by the next one.
     if v[2..5] != before[2..5] {
@@ -1828,20 +1794,11 @@ fn active_streams(port: u16) -> Option<i64> {
 /// matches what any given server does, so a failing run has to say what mpv
 /// actually reported rather than only that an assertion tripped.
 #[cfg(target_os = "linux")]
-async fn note(app: &tauri::AppHandle, stage: &str) {
-    let (tx, rx) = std::sync::mpsc::channel();
-    let posted = app.run_on_main_thread(move || {
-        let d = zapper_lib::surface::mpv::created()
-            .map(|p| p.diagnostics())
-            .unwrap_or_else(|| "no player in this process".to_owned());
-        let _ = tx.send(d);
-    });
-    if posted.is_err() {
-        return;
-    }
-    if let Ok(d) = rx.recv_timeout(std::time::Duration::from_secs(5)) {
-        println!("[{stage}] {d}");
-    }
+async fn note(stage: &str) {
+    let d = zapper_lib::surface::mpv::created()
+        .map(|p| p.diagnostics())
+        .unwrap_or_else(|| "no player in this process".to_owned());
+    println!("[{stage}] {d}");
     if let Ok(s) = zapper_lib::player::api::player_state().await {
         println!(
             "[{stage}] state={:?} behind_live={:.1} buffered_back={:.1}",
