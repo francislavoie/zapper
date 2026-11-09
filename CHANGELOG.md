@@ -24,6 +24,7 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
 - **Up next**: near an episode's end, a 10-second countdown into the next one, with Play now and
   Cancel. It keeps your audio and subtitle languages.
 - Up next plays a next episode you had started from where you left it.
+- A movie's or episode's seek bar previews the picture under the pointer over what has played or is buffered.
 - Movies and episodes play in the browser through the recording service, converted on the fly when
   the browser can't play the file. Text subtitles included.
 - Off-air channels: when the provider sends a placeholder clip instead of the broadcast, zapper

@@ -268,6 +268,8 @@ export const webBackend: typeof api = {
   setAspect: (mode) => player.setAspect(mode),
   setDeinterlace: () => Promise.resolve(player.options()),
   thumbnailAt: () => Promise.resolve(null),
+  // The frames this page has played itself; nothing is decoded for them.
+  thumbnailForTitle: (at) => vod.thumbnailFor(at),
   cancelReconnect: nothing,
   setMediaSession: nothing,
   applyPlaybackSettings: nothing,

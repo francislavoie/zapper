@@ -76,6 +76,15 @@ import {
   type VodMode,
 } from "./logic/webVod";
 import { heldAfter, nextStart, placeReportDue, playsOnReopen } from "./logic/resume";
+import {
+  TITLE_MAX_SLOTS,
+  captureDue,
+  keepFrame,
+  letterbox,
+  slotOf,
+  titleFrameAt,
+  titleSpacing,
+} from "./logic/trickplay";
 import type {
   MarksDto,
   OnDemandDto,
@@ -83,6 +92,7 @@ import type {
   PlayerOptionsDto,
   PlayingEpisodeDto,
   StreamEnding,
+  TitleThumbnailDto,
   TrackDto,
 } from "./types";
 import {
@@ -205,6 +215,80 @@ let poller: ReturnType<typeof setInterval> | undefined;
  *  or stop. The stopped state says so as `finished`. */
 let finished: VodItemRef | null = null;
 let finishedLanguages: Languages | null = null;
+
+/** The seek bar's previews of the title, by slot (logic/trickplay.ts): a
+ *  small copy of the picture as it played, about every ten seconds of the
+ *  title. Kept while the same title is watched again, dropped for another
+ *  and on Stop.
+ *  `blocked` once the page may not read the picture back (a file the
+ *  browser fetched from elsewhere), so it is not asked again. */
+/** The frames are `blob:` addresses of small JPEGs, which the service's
+ *  content policy lets an image show (a `data:` one it does not); they are
+ *  let go when another title's take their place. `taking` while one is
+ *  being compressed, so the next tick does not take the same slot again. */
+let previews: {
+  item: VodItemRef;
+  frames: Map<number, string>;
+  blocked: boolean;
+  taking: boolean;
+} | null = null;
+
+/** Lets the previews go: Stop, as the app does. */
+function dropPreviews() {
+  for (const url of previews?.frames.values() ?? []) URL.revokeObjectURL(url);
+  previews = null;
+}
+
+/** Takes the playing picture's preview for its slot, when one is due. Off
+ *  screen: the canvas is never in the page, so nothing is drawn over the
+ *  picture. */
+function keepPlayedFrame(s: Session, el: HTMLVideoElement) {
+  if (el.readyState < 2 || el.videoWidth <= 0 || el.videoHeight <= 0) return;
+  if (!previews || !sameItem(previews.item, s.item)) {
+    dropPreviews();
+    previews = { item: s.item, frames: new Map(), blocked: false, taking: false };
+  }
+  const kept = previews;
+  if (kept.blocked || kept.taking) return;
+  const slot = captureDue(kept.frames, s.position, titleSpacing(durationOf(s)));
+  if (slot === null || kept.frames.size >= TITLE_MAX_SLOTS) return;
+  const c = document.createElement("canvas");
+  c.width = 160;
+  c.height = 90;
+  const g = c.getContext("2d");
+  if (!g) return;
+  g.fillStyle = "#000";
+  g.fillRect(0, 0, c.width, c.height);
+  const r = letterbox(el.videoWidth, el.videoHeight, c.width, c.height);
+  try {
+    g.drawImage(el, r.x, r.y, r.width, r.height);
+    kept.taking = true;
+    c.toBlob(
+      (blob) => {
+        kept.taking = false;
+        // Another title's by now: this one's store is gone.
+        if (!blob || previews !== kept) return;
+        kept.frames = keepFrame(kept.frames, slot, URL.createObjectURL(blob));
+      },
+      "image/jpeg",
+      0.75,
+    );
+  } catch {
+    // The picture may not be read back (a file the browser fetched from
+    // elsewhere): no previews for this title.
+    kept.taking = false;
+    kept.blocked = true;
+  }
+}
+
+/** The preview for the slot nearest `at` of the title playing here. */
+export function thumbnailFor(at: number): Promise<TitleThumbnailDto | null> {
+  const s = session;
+  if (!s || !previews || !sameItem(previews.item, s.item)) return Promise.resolve(null);
+  const spacing = titleSpacing(durationOf(s));
+  const dataUrl = titleFrameAt(previews.frames, at, spacing);
+  return Promise.resolve(dataUrl === null ? null : { dataUrl, at: slotOf(at, spacing) * spacing });
+}
 
 /** The sound's language, carried to the next episode. Its subtitles are
  *  the standing choice, as every title's are. */
@@ -800,6 +884,7 @@ export async function stop(): Promise<void> {
   lastFailure = null;
   finished = null;
   finishedLanguages = null;
+  dropPreviews();
   const viewer = leave();
   if (viewer) await forget(viewer);
 }
@@ -1001,6 +1086,7 @@ function tick() {
     return;
   }
   report(s);
+  if (!el.paused && !el.seeking) keepPlayedFrame(s, el);
   if (s.pausedAt !== null && releaseDue(s.pausedAt, now)) {
     release(s);
     return;

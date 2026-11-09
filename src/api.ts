@@ -44,6 +44,7 @@ import {
   type SyncStatusDto,
   type StatsDto,
   type ThumbnailDto,
+  type TitleThumbnailDto,
   type InstallOutcomeDto,
   type InstallWhen,
   type MediaKey,
@@ -144,6 +145,9 @@ export const api = {
     invoke<PlayerOptionsDto>("set_deinterlace", { mode }),
   thumbnailAt: (behindLive: number) =>
     invoke<ThumbnailDto | null>("thumbnail_at", { behindLive }),
+  /** The open movie's or episode's preview for the slot nearest `at`. */
+  thumbnailForTitle: (at: number) =>
+    invoke<TitleThumbnailDto | null>("thumbnail_for_title", { at }),
 
   account: () => invoke<AccountDto>("account"),
   setAccount: (host: string, username: string, password: string) =>

@@ -39,6 +39,10 @@ gui = [
     "dep:cairo-rs",
     # `_exit`, for the quit watchdog (lib.rs).
     "dep:libc",
+    # The seek bar's previews of a title, a small C file against the FFmpeg
+    # libmpv loads (see build.rs).
+    "dep:cc",
+    "dep:pkg-config",
 ]
 # The recording service's own pieces: its HTTP API and the remuxer, a small C
 # file against libavformat (see build.rs). Not in the app's build.
