@@ -24,8 +24,8 @@ use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use zapper_lib::ipc::live_start::{Join, Settle};
-use zapper_lib::ipc::player_cmds::LIVE_CUSHION;
+use zapper_lib::player::live_start::{Join, Settle};
+use zapper_lib::player::LIVE_CUSHION;
 use zapper_lib::surface::mpv::NO_RECONNECT;
 
 /// The app's heartbeat, so decisions land when the app's would.

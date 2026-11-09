@@ -200,6 +200,8 @@ fn main() {
                 std::process::exit(1);
             });
 
+            // The player's heartbeat, as the app starts it.
+            zapper_lib::player::start(tauri::async_runtime::handle().inner());
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let args: Vec<String> = std::env::args().collect();
@@ -207,32 +209,32 @@ fn main() {
                     .iter()
                     .position(|a| a == "--ending")
                     .and_then(|i| args.get(i + 1).cloned());
-                let verdict = if let Err(e) = live_start_from_env(&handle).await {
+                let verdict = if let Err(e) = live_start_from_env().await {
                     Err(e)
                 } else if let Some(kind) = ending {
-                    run_ending(&handle, &kind).await
+                    run_ending(&kind).await
                 } else if let Some(secs) = args
                     .iter()
                     .position(|a| a == "--keeps-playing")
                     .and_then(|i| args.get(i + 1))
                     .and_then(|s| s.parse::<u64>().ok())
                 {
-                    run_keeps_playing(&handle, secs, args.iter().any(|a| a == "--after-movie")).await
+                    run_keeps_playing(secs, args.iter().any(|a| a == "--after-movie")).await
                 } else if args.iter().any(|a| a == "--movie") {
-                    run_movie(&handle).await
+                    run_movie().await
                 } else if args.iter().any(|a| a == "--trickplay-vod") {
-                    run_trickplay_vod(&handle).await
+                    run_trickplay_vod().await
                 } else if args.iter().any(|a| a == "--held") {
-                    run_held(&handle).await
+                    run_held().await
                 } else if args.iter().any(|a| a == "--pause-then-play") {
-                    run_pause_then_play(&handle).await
+                    run_pause_then_play().await
                 } else if args.iter().any(|a| a == "--up-next") {
                     let has = |flag: &str| args.iter().any(|a| a == flag);
-                    run_up_next(&handle, has("--drop"), has("--past-end")).await
+                    run_up_next(has("--drop"), has("--past-end")).await
                 } else if args.iter().any(|a| a == "--captions") {
                     run_captions(&handle).await
                 } else if args.iter().any(|a| a == "--subtitles") {
-                    run_subtitles(&handle).await
+                    run_subtitles().await
                 } else if args.iter().any(|a| a == "--find-subtitles") {
                     let tmdb = args
                         .iter()
@@ -245,7 +247,7 @@ fn main() {
                         run_find_subtitles(&handle).await
                     }
                 } else if args.iter().any(|a| a == "--episode") {
-                    run_episode(&handle).await
+                    run_episode().await
                 } else {
                     run(&handle).await
                 };
@@ -286,7 +288,7 @@ const SEEK_BACK: f64 = -10.0;
 /// cushion behind the newest data, give or take the couple of seconds the
 /// seekable end jumps by as chunks arrive.
 #[cfg(target_os = "linux")]
-const LIVE: f64 = zapper_lib::ipc::player_cmds::LIVE_CUSHION + 2.5;
+const LIVE: f64 = zapper_lib::player::LIVE_CUSHION + 2.5;
 
 /// How long to watch for a stall after `seek_live`.
 #[cfg(target_os = "linux")]
@@ -297,14 +299,13 @@ const AFTER_LIVE: u64 = 15;
 /// buffer ahead of the playhead got.
 #[cfg(target_os = "linux")]
 async fn watch_for_stalls(
-    app: &tauri::AppHandle,
     for_how_long: std::time::Duration,
 ) -> Result<(u32, f64), String> {
-    use zapper_lib::ipc::player_cmds as cmds;
+    use zapper_lib::player::api as cmds;
     let until = std::time::Instant::now() + for_how_long;
     let (mut stalls, mut was, mut thinnest) = (0u32, false, f64::INFINITY);
     while std::time::Instant::now() < until {
-        let s = cmds::player_stats(app.clone()).await?;
+        let s = cmds::player_stats().await?;
         let now = s.buffering.unwrap_or(false);
         if now && !was {
             stalls += 1;
@@ -323,7 +324,7 @@ async fn watch_for_stalls(
 async fn run(app: &tauri::AppHandle) -> Result<String, String> {
     use std::time::Duration;
     use tokio::time::sleep;
-    use zapper_lib::ipc::player_cmds as cmds;
+    use zapper_lib::player::api as cmds;
     use zapper_lib::ipc::types::PlaybackState;
 
     let stream_id = resolve_stream_id().await?;
@@ -332,7 +333,7 @@ async fn run(app: &tauri::AppHandle) -> Result<String, String> {
     println!("[open] stream_id={stream_id}");
 
     // --- play -------------------------------------------------------------
-    cmds::play(app.clone(), stream_id).await?;
+    cmds::play(stream_id).await?;
     let opened = await_state(Duration::from_secs(25), |s| {
         !matches!(s.state, PlaybackState::Opening)
     })
@@ -373,7 +374,7 @@ async fn run(app: &tauri::AppHandle) -> Result<String, String> {
             before.buffered_back
         ));
     }
-    cmds::seek_relative(app.clone(), SEEK_BACK).await?;
+    cmds::seek_relative(SEEK_BACK).await?;
     let back = await_state(Duration::from_secs(8), |s| {
         s.behind_live >= before.behind_live + 3.0
     })
@@ -390,7 +391,7 @@ async fn run(app: &tauri::AppHandle) -> Result<String, String> {
     note(app, "seeked-back").await;
 
     // --- back to live -----------------------------------------------------
-    cmds::seek_live(app.clone()).await?;
+    cmds::seek_live().await?;
     let live = await_state(Duration::from_secs(10), |s| s.behind_live < LIVE).await;
     note(app, "seeked-live").await;
     if live.behind_live >= LIVE {
@@ -405,7 +406,7 @@ async fn run(app: &tauri::AppHandle) -> Result<String, String> {
     // Arriving at the edge is only half of it. Landing with nothing buffered
     // ahead plays for a few seconds and then stalls to refill. Watched for
     // long enough to see the stall a thin buffer produces.
-    let (stalls, thinnest) = watch_for_stalls(app, Duration::from_secs(AFTER_LIVE)).await?;
+    let (stalls, thinnest) = watch_for_stalls(Duration::from_secs(AFTER_LIVE)).await?;
     note(app, "after-live").await;
     if stalls > 0 {
         return Err(format!(
@@ -424,7 +425,7 @@ async fn run(app: &tauri::AppHandle) -> Result<String, String> {
     if let Ok(list) = std::env::var("ZAPPER_ZAP_TO") {
         for id in list.split(',').map(str::trim).filter(|s| !s.is_empty()) {
             let id: i64 = id.parse().map_err(|_| format!("ZAPPER_ZAP_TO: {id} is not an id"))?;
-            cmds::play(app.clone(), id).await?;
+            cmds::play(id).await?;
             let opened = await_state(Duration::from_secs(25), |s| s.state != PlaybackState::Opening).await;
             if opened.state != PlaybackState::Playing {
                 return Err(format!(
@@ -450,7 +451,7 @@ async fn run(app: &tauri::AppHandle) -> Result<String, String> {
     }
 
     // --- stop -------------------------------------------------------------
-    cmds::stop(app.clone()).await?;
+    cmds::stop().await?;
     let stopped = cmds::player_state().await?;
     if stopped.state != PlaybackState::Stopped {
         return Err(format!("stop() left the player in {:?}", stopped.state));
@@ -476,7 +477,7 @@ async fn run(app: &tauri::AppHandle) -> Result<String, String> {
 /// "When a channel opens" from `ZAPPER_LIVE_START` (`wait`, `catchUp`,
 /// `stay`), for any run; left as a fresh install has it when unset.
 #[cfg(target_os = "linux")]
-async fn live_start_from_env(app: &tauri::AppHandle) -> Result<(), String> {
+async fn live_start_from_env() -> Result<(), String> {
     use zapper_lib::ipc::types::LiveStart;
     let Ok(mode) = std::env::var("ZAPPER_LIVE_START") else {
         return Ok(());
@@ -484,7 +485,7 @@ async fn live_start_from_env(app: &tauri::AppHandle) -> Result<(), String> {
     let mut settings = zapper_lib::catalog::settings::load_or_default();
     settings.live_start = LiveStart::from(mode.clone());
     println!("[start] live start: {:?} (from {mode:?})", settings.live_start);
-    zapper_lib::ipc::player_cmds::apply_playback_settings(app.clone(), settings).await
+    zapper_lib::player::api::apply_playback_settings(settings).await
 }
 
 /// The `--keeps-playing <secs>` run: a channel that must play, and not be
@@ -496,20 +497,20 @@ async fn live_start_from_env(app: &tauri::AppHandle) -> Result<(), String> {
 /// the channel opened straight from there: the first heartbeats of the
 /// channel must not judge the movie's cache as the channel's.
 #[cfg(target_os = "linux")]
-async fn run_keeps_playing(app: &tauri::AppHandle, secs: u64, after_movie: bool) -> Result<String, String> {
+async fn run_keeps_playing(secs: u64, after_movie: bool) -> Result<String, String> {
     use std::time::{Duration, Instant};
-    use zapper_lib::ipc::player_cmds as cmds;
+    use zapper_lib::player::api as cmds;
     use zapper_lib::ipc::types::PlaybackState;
 
     let mut before = String::new();
     if after_movie {
-        cmds::play_movie(app.clone(), 2, None, None).await?;
+        cmds::play_movie(2, None, None).await?;
         let s = await_state(Duration::from_secs(25), |s| {
             s.state == PlaybackState::Playing && s.on_demand.is_some_and(|o| o.duration.is_some())
         })
         .await;
         let length = s.on_demand.and_then(|o| o.duration).ok_or("the movie never played")?;
-        cmds::seek_to(app.clone(), (length - 6.0).max(0.0)).await?;
+        cmds::seek_to((length - 6.0).max(0.0)).await?;
         let near = await_state(Duration::from_secs(10), |s| {
             s.on_demand.is_some_and(|o| o.position >= length - 8.0)
         })
@@ -525,7 +526,7 @@ async fn run_keeps_playing(app: &tauri::AppHandle, secs: u64, after_movie: bool)
 
     let stream_id = resolve_stream_id().await?;
     let started = Instant::now();
-    cmds::play(app.clone(), stream_id).await?;
+    cmds::play(stream_id).await?;
     let mut playing_at = None;
     while started.elapsed() < Duration::from_secs(secs) {
         let s = cmds::player_state().await.unwrap_or_default();
@@ -558,9 +559,9 @@ async fn run_keeps_playing(app: &tauri::AppHandle, secs: u64, after_movie: bool)
 /// The `--pause-then-play` run: mpv's pause outlives a file, and a Play the
 /// viewer presses must play regardless.
 #[cfg(target_os = "linux")]
-async fn run_pause_then_play(app: &tauri::AppHandle) -> Result<String, String> {
+async fn run_pause_then_play() -> Result<String, String> {
     use std::time::Duration;
-    use zapper_lib::ipc::player_cmds as cmds;
+    use zapper_lib::player::api as cmds;
     use zapper_lib::ipc::types::{PlaybackState, PlayerStateDto};
 
     // A title's own clock; a channel's is the picture kept behind the playhead.
@@ -585,8 +586,8 @@ async fn run_pause_then_play(app: &tauri::AppHandle) -> Result<String, String> {
         println!("[pause-then-play] {what} plays: {first:.1}s -> {later:.1}s");
         Ok(())
     }
-    async fn pause(app: &tauri::AppHandle, what: &str) -> Result<(), String> {
-        cmds::toggle_pause(app.clone()).await?;
+    async fn pause(what: &str) -> Result<(), String> {
+        cmds::toggle_pause().await?;
         let s = await_state(Duration::from_secs(5), |s| s.state == PlaybackState::Paused).await;
         if s.state != PlaybackState::Paused {
             return Err(format!("{what} would not pause: {:?}", s.state));
@@ -594,30 +595,30 @@ async fn run_pause_then_play(app: &tauri::AppHandle) -> Result<String, String> {
         Ok(())
     }
 
-    cmds::play_movie(app.clone(), 1, None, None).await?;
+    cmds::play_movie(1, None, None).await?;
     plays("the first movie").await?;
-    pause(app, "the first movie").await?;
-    cmds::stop(app.clone()).await?;
-    cmds::play_movie(app.clone(), 2, None, None).await?;
+    pause("the first movie").await?;
+    cmds::stop().await?;
+    cmds::play_movie(2, None, None).await?;
     plays("a movie after a pause and a stop").await?;
-    pause(app, "the second movie").await?;
+    pause("the second movie").await?;
     let stream_id = resolve_stream_id().await?;
-    cmds::play(app.clone(), stream_id).await?;
+    cmds::play(stream_id).await?;
     plays("a channel after a paused movie").await?;
     Ok("a movie played after a paused one was stopped, and a channel after a paused movie".into())
 }
 
 /// The `--ending <kind>` run: a channel that stops by itself, and how.
 #[cfg(target_os = "linux")]
-async fn run_ending(app: &tauri::AppHandle, want: &str) -> Result<String, String> {
+async fn run_ending(want: &str) -> Result<String, String> {
     use std::time::{Duration, Instant};
     use zapper_lib::ipc::ending::{EndingKind, OFF_AIR_REASON, OFF_AIR_WINDOW};
-    use zapper_lib::ipc::player_cmds as cmds;
+    use zapper_lib::player::api as cmds;
     use zapper_lib::ipc::types::PlaybackState;
 
     let stream_id = resolve_stream_id().await?;
     let started = Instant::now();
-    cmds::play(app.clone(), stream_id).await?;
+    cmds::play(stream_id).await?;
 
     // Watched closely until it stops: anything that would show a skip ahead
     // (a reported jump, a playhead far from where the stream began) or a
@@ -721,9 +722,9 @@ async fn run_ending(app: &tauri::AppHandle, want: &str) -> Result<String, String
 /// The `--movie` run: a title opens, reports its length, seeks both ways,
 /// pauses and stops.
 #[cfg(target_os = "linux")]
-async fn run_movie(app: &tauri::AppHandle) -> Result<String, String> {
+async fn run_movie() -> Result<String, String> {
     use std::time::Duration;
-    use zapper_lib::ipc::player_cmds as cmds;
+    use zapper_lib::player::api as cmds;
     use zapper_lib::ipc::types::{PlaybackState, PlayerStateDto};
 
     // The title's own clock, which is what a seek moves.
@@ -731,7 +732,7 @@ async fn run_movie(app: &tauri::AppHandle) -> Result<String, String> {
         s.on_demand.map_or(-1.0, |o| o.position)
     }
 
-    cmds::play_movie(app.clone(), 1, None, None).await?;
+    cmds::play_movie(1, None, None).await?;
     let opened = await_state(Duration::from_secs(25), |s| {
         s.state == PlaybackState::Playing && s.on_demand.is_some_and(|o| o.duration.is_some())
     })
@@ -754,13 +755,13 @@ async fn run_movie(app: &tauri::AppHandle) -> Result<String, String> {
         return Err(format!("the film is about 120s long, but it reported {length}s"));
     }
 
-    cmds::seek_to(app.clone(), 60.0).await?;
+    cmds::seek_to(60.0).await?;
     let there = await_state(Duration::from_secs(8), |s| (58.0..=63.0).contains(&at(s))).await;
     if !(58.0..=63.0).contains(&at(&there)) {
         return Err(format!("seek_to(60) landed at {:.1}s", at(&there)));
     }
 
-    cmds::seek_relative(app.clone(), -10.0).await?;
+    cmds::seek_relative(-10.0).await?;
     let back = await_state(Duration::from_secs(8), |s| at(s) < at(&there) - 8.0).await;
     if at(&back) >= at(&there) - 8.0 {
         return Err(format!(
@@ -772,22 +773,22 @@ async fn run_movie(app: &tauri::AppHandle) -> Result<String, String> {
 
     // Before what the demuxer kept: a film can be read from any part of it,
     // so this is not clamped to the buffer as a live stream's seek is.
-    cmds::seek_to(app.clone(), 30.0).await?;
+    cmds::seek_to(30.0).await?;
     await_state(Duration::from_secs(8), |s| (28.0..=33.0).contains(&at(s))).await;
-    cmds::seek_relative(app.clone(), -20.0).await?;
+    cmds::seek_relative(-20.0).await?;
     let early = await_state(Duration::from_secs(8), |s| at(s) < 15.0).await;
     if at(&early) >= 15.0 {
         return Err(format!("a 20s seek back from 30s landed at {:.1}s", at(&early)));
     }
 
-    cmds::toggle_pause(app.clone()).await?;
+    cmds::toggle_pause().await?;
     let paused = await_state(Duration::from_secs(5), |s| s.state == PlaybackState::Paused).await;
     if paused.state != PlaybackState::Paused {
         return Err(format!("toggle_pause() left the player in {:?}", paused.state));
     }
-    cmds::toggle_pause(app.clone()).await?;
+    cmds::toggle_pause().await?;
 
-    cmds::stop(app.clone()).await?;
+    cmds::stop().await?;
     let stopped = cmds::player_state().await?;
     if stopped.state != PlaybackState::Stopped || stopped.on_demand.is_some() {
         return Err(format!("stop() left the player in {:?}", stopped.state));
@@ -803,9 +804,9 @@ async fn run_movie(app: &tauri::AppHandle) -> Result<String, String> {
 
 /// The `--held` run; see the top of the file.
 #[cfg(target_os = "linux")]
-async fn run_held(app: &tauri::AppHandle) -> Result<String, String> {
+async fn run_held() -> Result<String, String> {
     use std::time::Duration;
-    use zapper_lib::ipc::player_cmds as cmds;
+    use zapper_lib::player::api as cmds;
     use zapper_lib::ipc::types::{PlaybackState, PlayerStateDto};
 
     fn at(s: &PlayerStateDto) -> f64 {
@@ -814,8 +815,8 @@ async fn run_held(app: &tauri::AppHandle) -> Result<String, String> {
     fn failure(what: &str, s: &PlayerStateDto) -> String {
         format!("{what} ended in {:?}: {}", s.state, s.error.as_deref().unwrap_or("no reason given"))
     }
-    async fn held_at_30(app: &tauri::AppHandle, what: &str) -> Result<f64, String> {
-        cmds::play_movie(app.clone(), 2, Some(30.0), Some(true)).await?;
+    async fn held_at_30(what: &str) -> Result<f64, String> {
+        cmds::play_movie(2, Some(30.0), Some(true)).await?;
         let s = await_state(Duration::from_secs(5), |s| {
             s.state == PlaybackState::Paused && (28.0..=32.0).contains(&at(s))
         })
@@ -852,18 +853,18 @@ async fn run_held(app: &tauri::AppHandle) -> Result<String, String> {
         Ok((first, at(&s)))
     }
 
-    let held = held_at_30(app, "the first held open").await?;
+    let held = held_at_30("the first held open").await?;
     // Resume, sent twice (a double press): asking twice is asking once.
-    cmds::set_paused(app.clone(), false).await?;
-    cmds::set_paused(app.clone(), false).await?;
+    cmds::set_paused(false).await?;
+    cmds::set_paused(false).await?;
     let (from, to) = plays_on("Resume").await?;
     if !(28.0..=34.0).contains(&from) {
         return Err(format!("Resume played on from {from:.1}s, not where it was held"));
     }
-    held_at_30(app, "the second held open").await?;
-    cmds::play_movie(app.clone(), 2, None, None).await?;
+    held_at_30("the second held open").await?;
+    cmds::play_movie(2, None, None).await?;
     let (again, later) = plays_on("an open after an unanswered held one").await?;
-    cmds::stop(app.clone()).await?;
+    cmds::stop().await?;
     Ok(format!(
         "held paused at {held:.1}s; Resume played {from:.1}s -> {to:.1}s; held again, the next open \
          played {again:.1}s -> {later:.1}s"
@@ -873,16 +874,16 @@ async fn run_held(app: &tauri::AppHandle) -> Result<String, String> {
 /// The `--episode` run: an episode opens as an episode (not a channel, not
 /// a movie), reports its length, seeks, pauses and stops.
 #[cfg(target_os = "linux")]
-async fn run_episode(app: &tauri::AppHandle) -> Result<String, String> {
+async fn run_episode() -> Result<String, String> {
     use std::time::Duration;
-    use zapper_lib::ipc::player_cmds as cmds;
+    use zapper_lib::player::api as cmds;
     use zapper_lib::ipc::types::{OnDemandKind, PlaybackState, PlayerStateDto};
 
     fn at(s: &PlayerStateDto) -> f64 {
         s.on_demand.map_or(-1.0, |o| o.position)
     }
 
-    cmds::play_episode(app.clone(), 100_111, None, None).await?;
+    cmds::play_episode(100_111, None, None).await?;
     let opened = await_state(Duration::from_secs(25), |s| {
         s.state == PlaybackState::Playing && s.on_demand.is_some_and(|o| o.duration.is_some())
     })
@@ -906,20 +907,20 @@ async fn run_episode(app: &tauri::AppHandle) -> Result<String, String> {
         return Err(format!("the episode is about 120s long, but it reported {length}s"));
     }
 
-    cmds::seek_to(app.clone(), 60.0).await?;
+    cmds::seek_to(60.0).await?;
     let there = await_state(Duration::from_secs(8), |s| (58.0..=62.0).contains(&at(s))).await;
     if !(58.0..=62.0).contains(&at(&there)) {
         return Err(format!("seek_to(60) landed at {:.1}s", at(&there)));
     }
 
-    cmds::toggle_pause(app.clone()).await?;
+    cmds::toggle_pause().await?;
     let paused = await_state(Duration::from_secs(5), |s| s.state == PlaybackState::Paused).await;
     if paused.state != PlaybackState::Paused {
         return Err(format!("toggle_pause() left the player in {:?}", paused.state));
     }
-    cmds::toggle_pause(app.clone()).await?;
+    cmds::toggle_pause().await?;
 
-    cmds::stop(app.clone()).await?;
+    cmds::stop().await?;
     let stopped = cmds::player_state().await?;
     if stopped.state != PlaybackState::Stopped || stopped.on_demand.is_some() {
         return Err(format!("stop() left the player in {:?}", stopped.state));
@@ -939,9 +940,9 @@ async fn run_episode(app: &tauri::AppHandle) -> Result<String, String> {
 /// again (the toggle) and switching from English to French (the menu) keep
 /// the title playing.
 #[cfg(target_os = "linux")]
-async fn run_subtitles(app: &tauri::AppHandle) -> Result<String, String> {
+async fn run_subtitles() -> Result<String, String> {
     use std::time::Duration;
-    use zapper_lib::ipc::player_cmds as cmds;
+    use zapper_lib::player::api as cmds;
     use zapper_lib::ipc::types::{
         OnDemandKind, PlaybackState, PlayerOptionsDto, PlayerStateDto, SettingsDto,
     };
@@ -949,18 +950,18 @@ async fn run_subtitles(app: &tauri::AppHandle) -> Result<String, String> {
     /// Opens episode `id` (the fixture's `movie.mkv`: English and French
     /// subtitles) and returns its options once its tracks are known and
     /// have had a moment to be chosen.
-    async fn open(app: &tauri::AppHandle, id: i64) -> Result<PlayerOptionsDto, String> {
+    async fn open(id: i64) -> Result<PlayerOptionsDto, String> {
         // Stopped first, until the last title's tracks are gone: every id
         // plays the same file, so its tracks cannot tell the two apart. A
         // Stop changes nothing about the subtitles chosen.
-        cmds::stop(app.clone()).await?;
+        cmds::stop().await?;
         for _ in 0..50 {
             if cmds::player_options().await?.subtitles.is_empty() {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
-        cmds::play_episode(app.clone(), id, None, None).await?;
+        cmds::play_episode(id, None, None).await?;
         let playing = |s: &PlayerStateDto| {
             s.state == PlaybackState::Playing
                 && s.on_demand.is_some_and(|o| o.kind == OnDemandKind::Episode && o.id == id)
@@ -1016,7 +1017,7 @@ async fn run_subtitles(app: &tauri::AppHandle) -> Result<String, String> {
 
     // Off, as a fresh install has them: none shown, though a track is
     // chosen (hidden), so turning them on is never a switch.
-    let first = open(app, 100_111).await?;
+    let first = open(100_111).await?;
     if let Some(lang) = shown(&first) {
         return Err(format!("subtitles were off, but the first title showed {lang}"));
     }
@@ -1028,19 +1029,19 @@ async fn run_subtitles(app: &tauri::AppHandle) -> Result<String, String> {
         .id;
 
     // Mid-play, the toggle: on (the track chosen, shown), then off.
-    cmds::set_subtitle_track(app.clone(), Some(hidden)).await?;
+    cmds::set_subtitle_track(Some(hidden)).await?;
     plays_on("turning subtitles on").await?;
     let on = cmds::player_options().await?;
     if shown(&on).is_none() {
         return Err("turning subtitles on did not show them".into());
     }
-    cmds::set_subtitle_track(app.clone(), None).await?;
+    cmds::set_subtitle_track(None).await?;
     plays_on("turning subtitles off").await?;
     let off = cmds::player_options().await?;
     if shown(&off).is_some() || chosen(&off).is_none() {
         return Err(format!("turning subtitles off left {:?} shown, {:?} chosen", shown(&off), chosen(&off)));
     }
-    cmds::set_subtitle_track(app.clone(), Some(hidden)).await?;
+    cmds::set_subtitle_track(Some(hidden)).await?;
     plays_on("turning subtitles on again").await?;
     if shown(&cmds::player_options().await?).is_none() {
         return Err("turning subtitles on again did not show them".into());
@@ -1070,20 +1071,20 @@ async fn run_subtitles(app: &tauri::AppHandle) -> Result<String, String> {
         Some(_) => {}
         None => return Err("the fixture server did not say what it does with idle connections".into()),
     }
-    cmds::set_subtitle_track(app.clone(), Some(french)).await?;
+    cmds::set_subtitle_track(Some(french)).await?;
     plays_on("switching from English to French").await?;
     let switched = cmds::player_options().await?;
     if shown(&switched).as_deref() != Some("fra") {
         return Err(format!("switched to French, the title showed {:?}", shown(&switched)));
     }
-    let second = open(app, 100_112).await?;
+    let second = open(100_112).await?;
     if shown(&second).as_deref() != Some("fra") {
         return Err(format!("French was chosen, but the next title showed {:?}", shown(&second)));
     }
 
     // Off, chosen by hand: the next stays off, with French chosen, hidden.
-    cmds::set_subtitle_track(app.clone(), None).await?;
-    let third = open(app, 100_113).await?;
+    cmds::set_subtitle_track(None).await?;
+    let third = open(100_113).await?;
     if let Some(lang) = shown(&third) {
         return Err(format!("subtitles were turned off, but the next title showed {lang}"));
     }
@@ -1097,13 +1098,13 @@ async fn run_subtitles(app: &tauri::AppHandle) -> Result<String, String> {
         subtitle_language: Some("eng".into()),
         ..SettingsDto::default()
     };
-    cmds::apply_playback_settings(app.clone(), settings).await?;
-    let fourth = open(app, 100_114).await?;
+    cmds::apply_playback_settings(settings).await?;
+    let fourth = open(100_114).await?;
     if shown(&fourth).as_deref() != Some("eng") {
         return Err(format!("the settings said English, but the title showed {:?}", shown(&fourth)));
     }
 
-    cmds::stop(app.clone()).await?;
+    cmds::stop().await?;
     Ok("off by default (a track chosen, hidden) though a track is flagged default; mid-play on, \
         off and on again played on; a mid-play switch from English to French played on and showed \
         French, as did the next title; off chosen stayed off on the next, French hidden; the \
@@ -1195,7 +1196,7 @@ async fn external_subtitle(
 async fn run_find_subtitles(app: &tauri::AppHandle) -> Result<String, String> {
     use std::time::{Duration, Instant};
     use zapper_lib::ipc::online_cmds as online;
-    use zapper_lib::ipc::player_cmds as cmds;
+    use zapper_lib::player::api as cmds;
     use zapper_lib::ipc::types::{
         OnDemandKind, PlaybackState, PlayerStateDto, SubtitleDownloadDto, SubtitleSearchDto,
     };
@@ -1221,7 +1222,7 @@ async fn run_find_subtitles(app: &tauri::AppHandle) -> Result<String, String> {
     };
 
     seed_film(FILM_TMDB)?;
-    cmds::play_movie(app.clone(), 1, None, None).await?;
+    cmds::play_movie(1, None, None).await?;
     let opened = await_state(Duration::from_secs(25), playing).await;
     if !playing(&opened) {
         return Err(format!(
@@ -1271,7 +1272,7 @@ async fn run_find_subtitles(app: &tauri::AppHandle) -> Result<String, String> {
     }
     let title = format!("Downloaded · {RELEASE}");
     let added =
-        online::add_subtitle_file(app.clone(), OnDemandKind::Movie, 1, FILE, title.clone(), "en".into())
+        online::add_subtitle_file(OnDemandKind::Movie, 1, FILE, title.clone(), "en".into())
             .await?;
     if !added.subtitles_visible {
         return Err("adding the file left subtitles hidden".into());
@@ -1338,8 +1339,8 @@ async fn run_find_subtitles(app: &tauri::AppHandle) -> Result<String, String> {
     }
 
     // Stopped, there is nothing to add the file to.
-    cmds::stop(app.clone()).await?;
-    match online::add_subtitle_file(app.clone(), OnDemandKind::Movie, 1, FILE, title, "en".into()).await {
+    cmds::stop().await?;
+    match online::add_subtitle_file(OnDemandKind::Movie, 1, FILE, title, "en".into()).await {
         Err(e) if e == "That title is no longer playing." => {}
         other => return Err(format!("adding the file once stopped answered {other:?}")),
     }
@@ -1402,7 +1403,7 @@ fn keep_alive(port: u16) -> Option<(f64, i64)> {
 #[cfg(target_os = "linux")]
 async fn run_captions(app: &tauri::AppHandle) -> Result<String, String> {
     use std::time::{Duration, Instant};
-    use zapper_lib::ipc::player_cmds as cmds;
+    use zapper_lib::player::api as cmds;
     use zapper_lib::ipc::types::PlaybackState;
 
     /// What mpv says, read on the main thread: the caption text and the
@@ -1433,7 +1434,7 @@ async fn run_captions(app: &tauri::AppHandle) -> Result<String, String> {
     // mpv's own values, before anything is played.
     let before = read(app).await.ok_or("could not read mpv's properties")?;
     let id = resolve_stream_id().await?;
-    cmds::play(app.clone(), id).await?;
+    cmds::play(id).await?;
     let opened = await_state(Duration::from_secs(25), |s| s.state == PlaybackState::Playing).await;
     if opened.state != PlaybackState::Playing {
         return Err(format!("the captioned channel ended in {:?}", opened.state));
@@ -1449,7 +1450,7 @@ async fn run_captions(app: &tauri::AppHandle) -> Result<String, String> {
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
     let track = caption_track.ok_or("no caption track was listed")?;
-    cmds::set_subtitle_track(app.clone(), Some(track)).await?;
+    cmds::set_subtitle_track(Some(track)).await?;
 
     // The fixture loops three captions: top left, centred at the bottom, and
     // on the right. Each one's placement, once mpv draws it.
@@ -1500,7 +1501,7 @@ async fn run_captions(app: &tauri::AppHandle) -> Result<String, String> {
             }
             let (pos, margin, w, ml, mr) = (num(&v[2]), num(&v[4]), num(&v[5]), num(&v[6]), num(&v[7]));
             // Where mpv puts a side caption's edge, in the window's pixels
-            // (see ipc::captions): inside the picture, never in a band.
+            // (see player::captions): inside the picture, never in a band.
             let edge = margin * (w - ml - mr) / 960.0;
             match what {
                 "top-left" if !(pos < 40.0 && edge > ml + 1.0) => {
@@ -1525,7 +1526,7 @@ async fn run_captions(app: &tauri::AppHandle) -> Result<String, String> {
     }
 
     // Off: hidden, the caption track kept, and the channel plays on.
-    cmds::set_subtitle_track(app.clone(), None).await?;
+    cmds::set_subtitle_track(None).await?;
     tokio::time::sleep(Duration::from_millis(1200)).await;
     let o = cmds::player_options().await?;
     if o.subtitles_visible || !o.subtitles.iter().any(|t| t.selected && t.id == track) {
@@ -1535,7 +1536,7 @@ async fn run_captions(app: &tauri::AppHandle) -> Result<String, String> {
         return Err("turning captions off stopped the channel".into());
     }
     // No captions track any more (stopped): mpv's own values back.
-    cmds::stop(app.clone()).await?;
+    cmds::stop().await?;
     tokio::time::sleep(Duration::from_millis(1200)).await;
     let v = read(app).await.ok_or("could not read mpv's properties")?;
     // The placement only: how a channel's subtitles are styled
@@ -1553,9 +1554,9 @@ async fn run_captions(app: &tauri::AppHandle) -> Result<String, String> {
 
 /// The `--up-next` run; see the top of the file.
 #[cfg(target_os = "linux")]
-async fn run_up_next(app: &tauri::AppHandle, drop: bool, past_end: bool) -> Result<String, String> {
+async fn run_up_next(drop: bool, past_end: bool) -> Result<String, String> {
     use std::time::Duration;
-    use zapper_lib::ipc::player_cmds as cmds;
+    use zapper_lib::player::api as cmds;
     use zapper_lib::catalog::vod_store::ItemKind;
     use zapper_lib::ipc::types::{OnDemandKind, PlaybackState, PlayerStateDto};
 
@@ -1581,7 +1582,7 @@ async fn run_up_next(app: &tauri::AppHandle, drop: bool, past_end: bool) -> Resu
         format!("{what} ended in {:?}: {}", s.state, s.error.as_deref().unwrap_or("no reason given"))
     };
 
-    cmds::play_episode(app.clone(), A, None, None).await?;
+    cmds::play_episode(A, None, None).await?;
     let opened = await_state(Duration::from_secs(25), playing(A)).await;
     if !playing(A)(&opened) {
         return Err(failure("play_episode(A)", &opened));
@@ -1589,7 +1590,7 @@ async fn run_up_next(app: &tauri::AppHandle, drop: bool, past_end: bool) -> Resu
 
     if drop {
         // Past what the server sends before it cuts the file short.
-        cmds::seek_to(app.clone(), 90.0).await?;
+        cmds::seek_to(90.0).await?;
         let ended = await_state(Duration::from_secs(60), |s| {
             matches!(s.state, PlaybackState::Failed | PlaybackState::Stopped)
         })
@@ -1604,14 +1605,14 @@ async fn run_up_next(app: &tauri::AppHandle, drop: bool, past_end: bool) -> Resu
         if ended.finished.is_some() {
             return Err("an episode cut short was reported as finished".into());
         }
-        if cmds::play_next_episode(app.clone(), A, B).await.is_ok() {
+        if cmds::play_next_episode(A, B).await.is_ok() {
             return Err("moving on from an episode cut short was not refused".into());
         }
         let after = cmds::player_state().await?;
         if after.state != PlaybackState::Failed || episode(after.on_demand) != Some(A) {
             return Err(format!("a refused move on left the player in {:?}", after.state));
         }
-        cmds::stop(app.clone()).await?;
+        cmds::stop().await?;
         return Ok(format!(
             "an episode cut short failed ({}), with no finished title, and moving on was refused",
             ended.error.as_deref().unwrap_or("no reason")
@@ -1624,14 +1625,14 @@ async fn run_up_next(app: &tauri::AppHandle, drop: bool, past_end: bool) -> Resu
     // Played to its end: from near it, or by skipping past it (the
     // credits), which ends the file before a heartbeat reads the new place.
     if past_end {
-        cmds::seek_to(app.clone(), 85.0).await?;
+        cmds::seek_to(85.0).await?;
         let there = await_state(Duration::from_secs(8), |s| (84.0..=90.0).contains(&at(s))).await;
         if !(84.0..=90.0).contains(&at(&there)) {
             return Err(format!("seek_to(85) left A at {:.1}s", at(&there)));
         }
-        cmds::seek_relative(app.clone(), 60.0).await?;
+        cmds::seek_relative(60.0).await?;
     } else {
-        cmds::seek_to(app.clone(), 115.0).await?;
+        cmds::seek_to(115.0).await?;
     }
     let ended = await_state(Duration::from_secs(30), |s| s.state != PlaybackState::Playing).await;
     if ended.state != PlaybackState::Stopped {
@@ -1642,7 +1643,7 @@ async fn run_up_next(app: &tauri::AppHandle, drop: bool, past_end: bool) -> Resu
     }
 
     // Moving on from it.
-    cmds::play_next_episode(app.clone(), A, B).await?;
+    cmds::play_next_episode(A, B).await?;
     let next = await_state(Duration::from_secs(25), playing(B)).await;
     if !playing(B)(&next) {
         return Err(failure("play_next_episode(A, B)", &next));
@@ -1655,8 +1656,8 @@ async fn run_up_next(app: &tauri::AppHandle, drop: bool, past_end: bool) -> Resu
     }
 
     // Moving on from one still playing, asked twice: opened once.
-    cmds::set_subtitle_track(app.clone(), Some(1)).await?;
-    cmds::seek_to(app.clone(), 105.0).await?;
+    cmds::set_subtitle_track(Some(1)).await?;
+    cmds::seek_to(105.0).await?;
     let near = await_state(Duration::from_secs(8), |s| at(s) >= 104.0).await;
     if at(&near) < 104.0 || near.state != PlaybackState::Playing {
         return Err(format!("seek_to(105) left B at {:.1}s, {:?}", at(&near), near.state));
@@ -1669,8 +1670,8 @@ async fn run_up_next(app: &tauri::AppHandle, drop: bool, past_end: bool) -> Resu
     .map_err(|e| format!("writing C's place in the scratch catalogue: {e}"))?;
     // At once, as a countdown running out under a press would.
     let (first, second) = tokio::join!(
-        cmds::play_next_episode(app.clone(), B, C),
-        cmds::play_next_episode(app.clone(), B, C)
+        cmds::play_next_episode(B, C),
+        cmds::play_next_episode(B, C)
     );
     match (first, second) {
         (Ok(()), Err(_)) | (Err(_), Ok(())) => {}
@@ -1703,18 +1704,18 @@ async fn run_up_next(app: &tauri::AppHandle, drop: bool, past_end: bool) -> Resu
 
     // Moving on from one paused (Play now on a paused picture): the next
     // opens playing, not paused as the last one was left.
-    cmds::toggle_pause(app.clone()).await?;
+    cmds::toggle_pause().await?;
     let paused = await_state(Duration::from_secs(5), |s| s.state == PlaybackState::Paused).await;
     if paused.state != PlaybackState::Paused || episode(paused.on_demand) != Some(C) {
         return Err(format!("toggle_pause() left C in {:?}", paused.state));
     }
-    cmds::play_next_episode(app.clone(), C, D).await?;
+    cmds::play_next_episode(C, D).await?;
     let resumed = await_state(Duration::from_secs(25), playing(D)).await;
     if !playing(D)(&resumed) {
         return Err(failure("play_next_episode(C, D) from a paused C", &resumed));
     }
 
-    cmds::stop(app.clone()).await?;
+    cmds::stop().await?;
     let most = streams.stop()?;
     if most >= 2 {
         return Err(format!("a second stream lingered on the fixture server ({most} open)"));
@@ -1841,7 +1842,7 @@ async fn note(app: &tauri::AppHandle, stage: &str) {
     if let Ok(d) = rx.recv_timeout(std::time::Duration::from_secs(5)) {
         println!("[{stage}] {d}");
     }
-    if let Ok(s) = zapper_lib::ipc::player_cmds::player_state().await {
+    if let Ok(s) = zapper_lib::player::api::player_state().await {
         println!(
             "[{stage}] state={:?} behind_live={:.1} buffered_back={:.1}",
             s.state, s.behind_live, s.buffered_back
@@ -1861,7 +1862,7 @@ async fn await_state(
 
     let deadline = Instant::now() + limit;
     loop {
-        let s = zapper_lib::ipc::player_cmds::player_state()
+        let s = zapper_lib::player::api::player_state()
             .await
             .unwrap_or_default();
         if done(&s) || Instant::now() >= deadline {
@@ -1890,7 +1891,7 @@ async fn resolve_stream_id() -> Result<i64, String> {
     if !zapper_lib::harness::real_account_allowed() {
         return Err("no fixture and no permission to use the real account".into());
     }
-    let channels = zapper_lib::ipc::player_cmds::xtream()?
+    let channels = zapper_lib::player::controller::xtream()?
         .channels()
         .await
         .map_err(|e| format!("asking the server for a channel: {e}"))?;
@@ -1932,9 +1933,9 @@ fn decode_base64(s: &str) -> Vec<u8> {
 
 /// `--trickplay-vod`; see the module's comment.
 #[cfg(target_os = "linux")]
-async fn run_trickplay_vod(app: &tauri::AppHandle) -> Result<String, String> {
+async fn run_trickplay_vod() -> Result<String, String> {
     use std::time::{Duration, Instant};
-    use zapper_lib::ipc::player_cmds as cmds;
+    use zapper_lib::player::api as cmds;
     use zapper_lib::ipc::types::PlaybackState;
     use zapper_lib::surface::{mpv as zmpv, title_thumbs, trickplay};
 
@@ -1966,7 +1967,7 @@ async fn run_trickplay_vod(app: &tauri::AppHandle) -> Result<String, String> {
     let fill_secs = env_num("ZAPPER_TRICKPLAY_FILL_SECS", 4);
     mpv.set_property("demuxer-max-bytes", env_num("ZAPPER_TRICKPLAY_CACHE_MB", 6) as i64 * 1024 * 1024)
         .map_err(|e| format!("demuxer-max-bytes: {e}"))?;
-    cmds::play_movie(app.clone(), 1, None, None).await?;
+    cmds::play_movie(1, None, None).await?;
     let opened = await_state(Duration::from_secs(25), |s| s.state == PlaybackState::Playing).await;
     if opened.state != PlaybackState::Playing {
         return Err(format!("play_movie() ended in {:?}", opened.state));
@@ -1974,7 +1975,7 @@ async fn run_trickplay_vod(app: &tauri::AppHandle) -> Result<String, String> {
     let length = opened.on_demand.and_then(|o| o.duration).unwrap_or(120.0);
     tokio::time::sleep(Duration::from_secs(10)).await;
     // Paused, so the buffer and the playhead hold still while they are read.
-    cmds::set_paused(app.clone(), true).await?;
+    cmds::set_paused(true).await?;
     tokio::time::sleep(Duration::from_secs(fill_secs)).await;
     let (head, rs, times) = (pos(), ranges(), trickplay::title_times());
     let end = rs
@@ -2025,10 +2026,10 @@ async fn run_trickplay_vod(app: &tauri::AppHandle) -> Result<String, String> {
     ));
 
     // A seek ahead, past the buffer: the new stretch fills too.
-    cmds::seek_to(app.clone(), 80.0).await?;
-    cmds::set_paused(app.clone(), false).await?;
+    cmds::seek_to(80.0).await?;
+    cmds::set_paused(false).await?;
     tokio::time::sleep(Duration::from_secs(5)).await;
-    cmds::set_paused(app.clone(), true).await?;
+    cmds::set_paused(true).await?;
     tokio::time::sleep(Duration::from_secs(fill_secs)).await;
     let (head2, rs2) = (pos(), ranges());
     let stride = title_thumbs::stats().stride.max(1);
@@ -2050,7 +2051,7 @@ async fn run_trickplay_vod(app: &tauri::AppHandle) -> Result<String, String> {
 
     // The same title opened again keeps them.
     let before = trickplay::title_times().len();
-    cmds::play_movie(app.clone(), 1, None, None).await?;
+    cmds::play_movie(1, None, None).await?;
     let kept = trickplay::title_times().len();
     if kept < before {
         return Err(format!("opening the same film again dropped its frames: {before} -> {kept}"));
@@ -2066,9 +2067,9 @@ async fn run_trickplay_vod(app: &tauri::AppHandle) -> Result<String, String> {
         mpv.set_property("hwdec", hwdec.as_str())
             .map_err(|e| format!("hwdec: {e}"))?;
     }
-    cmds::play_movie(app.clone(), 1, Some(0.0), None).await?;
+    cmds::play_movie(1, Some(0.0), None).await?;
     await_state(Duration::from_secs(25), |s| s.state == PlaybackState::Playing).await;
-    cmds::set_paused(app.clone(), false).await?;
+    cmds::set_paused(false).await?;
     tokio::time::sleep(Duration::from_secs(6)).await;
     let secs: u64 = std::env::var("ZAPPER_TRICKPLAY_MEASURE_SECS")
         .ok()
@@ -2080,7 +2081,7 @@ async fn run_trickplay_vod(app: &tauri::AppHandle) -> Result<String, String> {
     for (i, on) in [false, true, false].into_iter().enumerate() {
         title_thumbs::set_enabled(on);
         // From near the start each time, so every phase plays the same pictures.
-        cmds::seek_to(app.clone(), 2.0).await?;
+        cmds::seek_to(2.0).await?;
         tokio::time::sleep(Duration::from_secs(2)).await;
         let (vo0, dec0) = (count("frame-drop-count"), count("decoder-frame-drop-count"));
         let s0 = title_thumbs::stats();
@@ -2145,7 +2146,7 @@ async fn run_trickplay_vod(app: &tauri::AppHandle) -> Result<String, String> {
         idle_worker |= on && slots == 0;
     }
     title_thumbs::set_enabled(true);
-    cmds::stop(app.clone()).await?;
+    cmds::stop().await?;
     tokio::time::sleep(Duration::from_millis(600)).await;
     // The excerpts' folder, in this run's scratch cache.
     let excerpts = zapper_lib::paths::cache_dir().join("previews");

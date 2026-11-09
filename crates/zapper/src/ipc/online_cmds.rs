@@ -3,17 +3,16 @@
 //! and added to the title playing.
 //!
 //! The work is [`crate::online::subtitles`]'; adding a file to the player
-//! is `player_cmds`'. What reads or writes a file (the settings, the kept
+//! is `player::controller`'. What reads or writes a file (the settings, the kept
 //! files' rows) runs off the async threads. Every error passes
 //! [`scrub`]: none carries a password, a token or a link.
 
 use std::path::PathBuf;
 
-use tauri::AppHandle;
 
 use crate::catalog::sync_engine::scrub;
 use crate::catalog::vod_store::VodItem;
-use crate::ipc::player_cmds;
+use crate::player::controller;
 use crate::ipc::types::{
     KeptSubtitleDto, OnDemandKind, OnlineServicesDto, PlayerOptionsDto, SubtitleDownloadDto,
     SubtitleSearchDto,
@@ -109,7 +108,6 @@ fn kept_file(
 /// selected and shown; `title` names the track and `lang` is its language.
 #[tauri::command]
 pub async fn add_subtitle_file(
-    app: AppHandle,
     kind: OnDemandKind,
     id: i64,
     file_id: i64,
@@ -117,7 +115,7 @@ pub async fn add_subtitle_file(
     lang: String,
 ) -> Result<PlayerOptionsDto, String> {
     let path = blocking(move || kept_file(subtitles::kept_path, kind, id, file_id)).await?;
-    scrubbed(player_cmds::add_external_subtitle(&app, kind, id, &path, &title, &lang).await)
+    scrubbed(controller::add_external_subtitle(kind, id, &path, &title, &lang).await)
 }
 
 #[cfg(test)]

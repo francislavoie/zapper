@@ -1,6 +1,6 @@
 //! What the player controller asks of a player, and the one installed.
 //!
-//! The controller (`ipc::player_cmds`) and the title preview worker
+//! The controller (`player::controller`) and the title preview worker
 //! (`surface::title_thumbs`) reach the player only through
 //! [`PlayerBackend`], from whichever thread they are on: a Tauri command's
 //! worker, the heartbeat's own thread, the preview worker. A backend is

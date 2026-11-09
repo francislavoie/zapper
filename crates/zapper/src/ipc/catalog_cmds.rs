@@ -476,7 +476,7 @@ pub async fn account() -> Result<AccountDto, String> {
 /// credentials are the thing a refused sync was waiting for.
 fn save(candidate: AccountCandidateDto) -> Result<(), String> {
     account_form::save(candidate)?;
-    crate::ipc::player_cmds::forget_source();
+    crate::player::controller::forget_source();
     sync_engine::request_now();
     Ok(())
 }
@@ -537,7 +537,7 @@ pub async fn set_tvheadend_account(
 /// Asks the account in use who we are, through the client playback uses.
 #[tauri::command]
 pub async fn test_account() -> Result<String, String> {
-    account_form::probe(crate::ipc::player_cmds::source()?).await
+    account_form::probe(crate::player::controller::source()?).await
 }
 
 /// Tests an account as typed, without saving it or touching the one in use.

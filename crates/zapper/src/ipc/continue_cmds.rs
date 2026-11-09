@@ -3,7 +3,7 @@
 //!
 //! All answer from SQLite, off the async threads (`spawn_blocking`), and
 //! never ask the provider; see [`crate::catalog::continue_reads`]. Playing
-//! an entry is `player_cmds`'.
+//! an entry is `player::controller`'.
 
 use crate::catalog::continue_reads;
 use crate::ipc::types::{ContinueItemDto, ContinueKind, MarksDto};

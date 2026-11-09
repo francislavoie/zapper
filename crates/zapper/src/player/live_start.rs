@@ -27,7 +27,7 @@
 
 use std::collections::VecDeque;
 
-use crate::ipc::player_cmds::LIVE_CUSHION;
+use super::LIVE_CUSHION;
 
 /// Brings a channel that started in the past up to live once its connect
 /// burst is over.

@@ -339,7 +339,7 @@ pub fn classify(how: How, shown: bool, clues: Clues) -> Ending {
 /// are also how a provider refuses a connection over the account's limit
 /// (a bare 403, a `200` with a line of text), and taking that for the
 /// archive would hide "Watch here anyway". So they are put down to the
-/// archive only for a request `near_edge` (see `player_cmds::CatchUp`).
+/// archive only for a request `near_edge` (see `player::controller::CatchUp`).
 /// A refusal that names a limit (in words, or as 429 or 509) is always the
 /// limit, and anything after a frame was shown is left as it was.
 pub fn for_catchup(e: Ending, shown: bool, near_edge: bool) -> Ending {

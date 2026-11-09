@@ -1,7 +1,7 @@
 //! The picture menu's half of the player: the stream's audio and subtitle
 //! tracks, and how the picture is fitted and deinterlaced.
 //!
-//! Pure. The commands are in `player_cmds`; this is what they translate
+//! Pure. The commands are in `player::controller`; this is what they translate
 //! between mpv's vocabulary and the contract's.
 
 use crate::ipc::types::{AspectMode, DeinterlaceMode, TrackDto};

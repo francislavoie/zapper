@@ -473,7 +473,7 @@ fn play(mpv: &libmpv2::Mpv, url: &str) -> Result<Outcome, String> {
                 let how = error.map_or(How::Eof, How::Error);
                 // mpv hands out queued events before the log lines beside
                 // them, and the app reads a heartbeat's lines first
-                // (`player_cmds::logs_first`): the lines that explain this
+                // (`player::controller::logs_first`): the lines that explain this
                 // end may still be waiting. Read them as the app would.
                 let until = Instant::now() + Duration::from_millis(100);
                 while Instant::now() < until {

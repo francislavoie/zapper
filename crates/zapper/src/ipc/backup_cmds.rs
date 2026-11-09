@@ -106,7 +106,7 @@ pub async fn import_backup_account() -> Result<(), String> {
         .take()
         .ok_or("no account to import: open the backup again")?;
     credentials::save_portable(&staged).map_err(|e| e.to_string())?;
-    crate::ipc::player_cmds::forget_source();
+    crate::player::controller::forget_source();
     sync_engine::request_now();
     Ok(())
 }
