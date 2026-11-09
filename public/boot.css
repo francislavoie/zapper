@@ -1,6 +1,6 @@
-/* Held back until the zoom mechanism has settled (boot.js). Under Tauri the
-   real one is WebKit's page zoom, which is reached over async IPC, so without
-   this the first frame paints at 100% and visibly snaps. The window is dark
+/* Held back until the zoom mechanism has settled (boot.js). Where the zoom
+   is the window's own page zoom, reached asynchronously, without this the
+   first frame paints at 100% and visibly snaps. The window is dark
    and undecorated, so a few milliseconds of nothing reads as the app opening
    rather than as a flash.
 

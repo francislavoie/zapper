@@ -4,55 +4,28 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish = false
-# Verification harnesses live alongside the app, so a bare `cargo run`
-# (which is what `tauri dev` issues) cannot tell which to launch.
-default-run = "zapper"
 
-# The harnesses are not part of the product.
-#
-# `tauri build` bundles whatever binaries cargo produced, so without this the
-# .deb would install `seek_bench` into /usr/bin beside the app. They are
-# behind a feature that is off by default: `cargo build` for the app does not
-# build them, and tools/check_all.sh asks for them by name.
+# The harnesses are not part of the product. They are behind a feature that
+# is off by default: `cargo build` does not build them, and
+# tools/check_all.sh asks for them by name.
 [features]
-# The desktop app: Tauri, the webview, libmpv and the toolkit under them. On
-# by default, so `cargo build`, `tauri dev` and `tauri build` are the app and
-# nothing changes for them.
-#
-# `--no-default-features --features server` builds `zapper-server`, the
-# recording service, on the same catalogue, sources and guide code with none
-# of the GUI stack linked: a headless box needs no WebKit, GTK or libmpv.
-# A feature rather than a workspace of crates because the core modules are
-# shared by path (`crate::catalog`, `crate::source`, ...) throughout, and
-# splitting them out would move every file other work is editing.
-default = ["gui"]
-gui = [
-    "dep:tauri",
-    "dep:tauri-build",
-    "dep:tauri-plugin-dialog",
-    "dep:libmpv2",
-    "dep:libmpv2-sys",
-    "dep:souvlaki",
-    "dep:gtk",
-    "dep:glib",
-    "dep:webkit2gtk",
-    "dep:cairo-rs",
-    # `_exit`, for the quit watchdog (lib.rs).
-    "dep:libc",
-    # The seek bar's previews of a title, a small C file against the FFmpeg
-    # libmpv loads (see build.rs).
-    "dep:cc",
-    "dep:pkg-config",
-]
-# The recording service's own pieces: its HTTP API and the remuxer, a small C
-# file against libavformat (see build.rs). Not in the app's build.
+# The core alone: catalogue, sources, guide, the player's controller (driven
+# through a stand-in in tests), the updater. What `cargo test --lib` checks.
+default = []
+# libmpv, the one player (`surface`), and the seek bar's previews of a title:
+# a small C file against the FFmpeg libmpv loads (`player/thumbframe.c`, see
+# build.rs).
+mpv = ["dep:libmpv2", "dep:libmpv2-sys", "dep:cc", "dep:pkg-config"]
+# `zapper-server`, the recording service, on the same catalogue, sources and
+# guide code: its HTTP API, the web interface it serves, and the remuxer, a
+# small C file against libavformat (see build.rs). No libmpv: a headless box
+# needs none.
 server = [
     "dep:axum",
     "dep:bytes",
     "dep:cc",
     "dep:futures-core",
     "dep:getrandom",
-    "dep:libc",
     "dep:pkg-config",
     "dep:argon2",
     "dep:hyper",
@@ -70,13 +43,6 @@ server = [
 ]
 harness = []
 
-[[bin]]
-name = "zapper"
-path = "src/main.rs"
-required-features = ["gui"]
-
-# The recording service (docs/recording.md). Built on its own, without the
-# GUI: `cargo build --no-default-features --features server --bin zapper-server`.
 [[bin]]
 name = "zapper-server"
 path = "src/bin/zapper_server.rs"
@@ -103,7 +69,7 @@ required-features = ["harness", "server"]
 [[bin]]
 name = "handover_check"
 path = "src/bin/handover_check.rs"
-required-features = ["harness", "gui"]
+required-features = ["harness", "mpv"]
 
 # Installs the recording service as Settings > Recording does (the sign-in
 # task on Windows, the LaunchAgent on macOS, the systemd user unit on Linux),
@@ -115,78 +81,58 @@ path = "src/bin/service_check.rs"
 required-features = ["harness", "server"]
 
 [[bin]]
-name = "ipc_check"
-path = "src/bin/ipc_check.rs"
-required-features = ["harness", "gui"]
-
-[[bin]]
 name = "player_check"
 path = "src/bin/player_check.rs"
-required-features = ["harness", "gui"]
+required-features = ["harness", "mpv"]
 
 [[bin]]
 name = "catchup_check"
 path = "src/bin/catchup_check.rs"
-required-features = ["harness", "gui"]
+required-features = ["harness", "mpv"]
 
-# The player in a window mpv makes itself (`surface::host`), with no Tauri:
-# plays a film, takes scrollback thumbnails, survives a seek storm.
+# The player in a window mpv makes itself (`surface::host`): plays a film, takes scrollback thumbnails, survives a seek storm.
 [[bin]]
 name = "host_smoke"
 path = "src/bin/host_smoke.rs"
-required-features = ["harness", "gui"]
-
-[[bin]]
-name = "shot_check"
-path = "src/bin/shot_check.rs"
-required-features = ["harness", "gui"]
-
-[[bin]]
-name = "surface_check"
-path = "src/bin/surface_check.rs"
-required-features = ["harness", "gui"]
+required-features = ["harness", "mpv"]
 
 [[bin]]
 name = "seek_bench"
 path = "src/bin/seek_bench.rs"
-required-features = ["harness", "gui"]
+required-features = ["harness", "mpv"]
 
 [[bin]]
 name = "filter_bench"
 path = "src/bin/filter_bench.rs"
-required-features = ["harness", "gui"]
+required-features = ["harness", "mpv"]
 
 [[bin]]
 name = "open_bench"
 path = "src/bin/open_bench.rs"
-required-features = ["harness", "gui"]
+required-features = ["harness", "mpv"]
 
 [[bin]]
 name = "ending_check"
 path = "src/bin/ending_check.rs"
-required-features = ["harness", "gui"]
+required-features = ["harness", "mpv"]
 
 [[bin]]
 name = "live_start_bench"
 path = "src/bin/live_start_bench.rs"
-required-features = ["harness", "gui"]
+required-features = ["harness", "mpv"]
 
 [lib]
 name = "zapper_lib"
-crate-type = ["lib", "cdylib", "staticlib"]
 
 [build-dependencies]
-tauri-build = { version = "2", features = [], optional = true }
 # The remuxer's C file, compiled against the libavformat pkg-config finds.
 cc = { version = "1", optional = true }
 pkg-config = { version = "0.3", optional = true }
 # On Windows, the Visual C++ runtime linked in rather than loaded from
-# vcruntime140.dll, which a fresh Windows does not have: what tauri-build does
-# for the app, done for zapper-server too, which is built without it.
+# vcruntime140.dll, which a fresh Windows does not have.
 static_vcruntime = "3"
 
 [dependencies]
-tauri = { version = "2", features = [], optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs"] }
@@ -206,7 +152,7 @@ libmpv2 = { version = "7", optional = true }
 # the tree under libmpv2, and covered by the same license entry.
 libmpv2-sys = { version = "4", optional = true }
 # The updater's check of a downloaded package against the release's
-# SHA256SUMS. Already in the tree through Tauri; named here so it is ours.
+# SHA256SUMS.
 sha2 = "0.10"
 # The chunks a shared connection hands to each recording on it
 # (`recording::hub`). Already in the tree under reqwest and hyper.
@@ -250,40 +196,14 @@ md-5 = "0.10"
 # Gzipped XMLTV guides (and the odd gzipped playlist). Already in the tree
 # through the PNG stack; named here so it is ours.
 flate2 = "1"
-# The save and open dialogs for Settings › Data's backups (MIT/Apache-2.0).
-# Opened from Rust only: the window has no `dialog:` permission, so the
-# webview can neither open one nor name a path to read or write.
-tauri-plugin-dialog = { version = "2", optional = true }
-
-# The desktop's media controls (Settings › Playback, off by default): MPRIS on
-# Linux, the System Media Transport Controls on Windows. MIT. Its D-Bus
-# backend is the `dbus` crate tao already links, and its Windows one the same
-# `windows` 0.62, so on both it is the one crate plus `dbus-crossroads`.
-[target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
-souvlaki = { version = "0.9", optional = true }
-
-[target.'cfg(target_os = "linux")'.dependencies]
-gtk = { version = "0.18", optional = true }
-glib = { version = "0.18", optional = true }
-# v2_40 for `terminate_web_process` (2.34) and `evaluate_javascript` (2.40),
-# which quitting relies on. wry already asks for v2_40; this says so for
-# zapper itself.
-webkit2gtk = { version = "2.0", optional = true, features = ["v2_40"] }
-cairo-rs = { version = "0.18", features = ["png"], optional = true }
-
-# Symbols out of the already-loaded C library and OpenGL: `setlocale` and libGL for
-# the Linux surface, OpenGL for the macOS one. (`localtime_r` is linked directly:
-# the static zapper-server cannot load anything at run time.)
 [target.'cfg(unix)'.dependencies]
-libloading = "0.8"
-# `statvfs`, for the free space the recording service reports, and `_exit`
-# for the app's quit watchdog. Already in the tree under nearly everything.
-libc = { version = "0.2", optional = true }
+# `statvfs`, for the free space the recording service reports, the terminal
+# zapper-server reads a password from, and the title previews' thread
+# priority and processor time. Already in the tree under nearly everything.
+libc = "0.2"
 
-# The Windows surface: a child window for mpv to draw into (WindowsAndMessaging,
-# Gdi for its black brush, Shell for subclassing the main window so the child
-# follows its size), and the local UTC offset (System_Time). The same 0.62
-# that tauri, tao and wry already build, so this adds features, not a crate.
+# Windows: the local UTC offset (System_Time), and what the recording
+# service needs below.
 [target.'cfg(windows)'.dependencies]
 # Com, Ole, Variant and TaskScheduler: the recording service's sign-in task
 # (recording::service). Console, Security and Storage_FileSystem:
@@ -315,23 +235,3 @@ windows = { version = "0.62", features = [
 # stopping and deleting it through the Service Control Manager. MIT OR
 # Apache-2.0, on the windows-sys 0.61 already in the tree; adds widestring.
 windows-service = "0.8"
-
-# The macOS surface: a Core Animation OpenGL layer beneath the WKWebView, in
-# AppKit's view hierarchy, that mpv's render API draws into. The objc2
-# bindings tao and wry already build (Zlib OR Apache-2.0 OR MIT), with the
-# features this needs; objc2-open-gl is CGL's, for the layer's pixel format.
-[target.'cfg(target_os = "macos")'.dependencies]
-objc2 = "0.6"
-block2 = "0.6"
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSDate", "NSEnumerator", "NSGeometry", "NSObject", "NSRunLoop", "NSString", "NSTimer", "NSUserDefaults", "block2"] }
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSResponder", "NSView", "NSWindow", "NSGraphics", "objc2-quartz-core"] }
-objc2-quartz-core = { version = "0.3", default-features = false, features = ["std", "CALayer", "CAOpenGLLayer", "CATransaction", "objc2-core-video", "objc2-open-gl"] }
-objc2-open-gl = { version = "0.3", default-features = false, features = ["std", "CGLTypes"] }
-objc2-core-video = { version = "0.3", default-features = false, features = ["std", "CVBase", "objc2"] }
-dispatch2 = "0.3"
-
-# The MPRIS round trip in `media_keys`'s ignored test, which talks to the
-# registration as a desktop would. Already in the tree under tao. Not for musl:
-# the static zapper-server's tests run there, with no libdbus to link.
-[target.'cfg(all(target_os = "linux", target_env = "gnu"))'.dev-dependencies]
-dbus = "0.9"

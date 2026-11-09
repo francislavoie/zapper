@@ -15,7 +15,7 @@ declare global {
 }
 
 /** `?now=<unix seconds>` freezes the clock, the same way `?backend=broken`
- *  fakes a dead backend. There is no query string under Tauri. */
+ *  fakes a dead backend. */
 function frozen(): number | null {
   if (typeof window === "undefined") return null;
   if (typeof window.__zapperNow === "number") return window.__zapperNow;

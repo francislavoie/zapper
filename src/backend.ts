@@ -70,10 +70,9 @@ export const passwordsInClear: boolean =
   typeof location !== "undefined" &&
   passwordInClear(location.protocol, location.hostname);
 
-/** The mock matches the web backend; it is cast, as it always was, because
- *  it keeps a few extras for drivers. */
+/** The mock matches the web backend, and keeps a few extras for drivers. */
 export const backend: Backend =
-  backendKind === "web" ? webBackend : (mockBackend as unknown as Backend);
+  backendKind === "web" ? webBackend : (mockBackend satisfies Backend);
 
 /** Signs this browser out of the recording service. Only offered where
  *  `capabilities.signOut`. */

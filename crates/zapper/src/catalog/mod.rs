@@ -5,6 +5,7 @@
 
 pub mod account_form;
 pub mod activity;
+pub mod backup_file;
 pub mod continue_reads;
 pub mod continue_store;
 pub mod credentials;

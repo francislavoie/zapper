@@ -3,7 +3,7 @@
 // A title's previews are filed in slots a fixed spacing apart in its own
 // time, at most one frame each, and the bar shows the frame of the slot under
 // the pointer when there is one; elsewhere the time alone. The app's backend
-// keeps them (crates/zapper/src/surface/trickplay.rs, by the same rules, which
+// keeps them (crates/zapper/src/player/trickplay.rs, by the same rules, which
 // are spelled the same way here); a browser keeps the frames it has played
 // itself (src/webVod.ts), with the rules below.
 

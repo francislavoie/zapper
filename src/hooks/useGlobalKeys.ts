@@ -60,8 +60,7 @@ import type { Dispatch } from "react";
 const BUTTON_EVENTS = ["pointerdown", "mousedown", "pointerup", "mouseup", "auxclick"] as const;
 
 /** What the desktop app's Linux webview dispatches on the window for a side
- *  button's release, with `detail` "back" or "forward"
- *  (crates/zapper/src/surface/linux/overlay.rs). */
+ *  button's release, with `detail` "back" or "forward". */
 const SIDE_BUTTON_EVENT = "zapper:side-button";
 
 export function useGlobalKeys(
@@ -372,7 +371,7 @@ export function useGlobalKeys(
       };
 
       // The desktop app on Linux: the webview's GTK handler takes buttons 8
-      // and 9 before wry's (surface/linux/overlay.rs) and says which was
+      // and 9 before the webview's own and says which was
       // released with this event. Through the same latch, so a DOM release
       // of the same press arriving as well cannot act twice.
       const onSideButton = (e: Event) => {

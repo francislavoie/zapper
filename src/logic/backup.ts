@@ -1,7 +1,8 @@
 // Settings › Data's backups: the file format, checking a file someone hands
 // us, and saying what importing it would change. Pure; checked in
 // src/__checks__/backup.test.mjs. The wiring is src/components/BackupPane.tsx
-// and the file dialogs are the backend's (crates/zapper/src/ipc/backup_cmds.rs).
+// and the file dialogs are the desktop app's (the file itself:
+// crates/zapper/src/catalog/backup_file.rs).
 //
 // A backup is one JSON object:
 //

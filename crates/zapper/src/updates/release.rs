@@ -69,7 +69,7 @@ pub fn newest_update<'a>(releases: &'a [GhRelease], current: &Version) -> Option
         .max_by(|a, b| a.1.cmp(&b.1))
 }
 
-/// The Debian architecture of this build, as Tauri names the `.deb`.
+/// The Debian architecture of this build, as the `.deb` is named.
 const DEB_ARCH: &str = if cfg!(target_arch = "aarch64") { "arm64" } else { "amd64" };
 /// The RPM architecture, likewise.
 const RPM_ARCH: &str = if cfg!(target_arch = "aarch64") { "aarch64" } else { "x86_64" };
@@ -79,7 +79,7 @@ const PACMAN_ARCH: &str = RPM_ARCH;
 const DMG_ARCH: &str = if cfg!(target_arch = "aarch64") { "aarch64" } else { "x64" };
 
 /// The asset a `kind` install takes from the release of `version`. These are
-/// the names Tauri's bundler gives each package, kept as they are:
+/// the names each package has always had, kept as they are:
 ///
 /// - deb: `zapper_<version>_amd64.deb`;
 /// - rpm: `zapper-<version>-1.x86_64.rpm` (the SemVer form in the file name,

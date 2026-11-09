@@ -1,6 +1,6 @@
 //! Records what a player is watching on an account of one connection,
 //! through a real `zapper-server`, as the app does it (docs/recording.md,
-//! "Recording what you watch"; `recording::handover`, `ipc::handover`).
+//! "Recording what you watch"; `recording::handover`, `player::handover`).
 //!
 //! ```text
 //! cargo build --features harness,server --bin zapper-server --bin handover_check

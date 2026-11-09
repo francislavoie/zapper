@@ -1,6 +1,6 @@
-//! Settings → Account's form, wherever it is filled in: the app's own
-//! window (`ipc::catalog_cmds`) and a browser signed in to the recording
-//! service (`recording::account`, `/api/account`). One set of rules for
+//! Settings → Account's form, wherever it is filled in: an app's own
+//! window (`player::api::save_account`) and a browser signed in to the
+//! recording service (`recording::account`, `/api/account`). One set of rules for
 //! both, so the two cannot disagree about what Save keeps.
 //!
 //! **Secrets are write-only.** [`view`] says whether a password is on file,

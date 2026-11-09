@@ -19,8 +19,8 @@
 //! administrator's permission (recording::service::winsvc). That service
 //! runs this program as `--service NAME`, with the person's folders named
 //! by `--config-dir`, `--data-dir`, `--cache-dir` and `--recordings-dir`,
-//! and the permission prompt runs it as `--install-boot-service …`. `--busy` and `--stop-for-setup` are the
-//! installers' (packaging/windows/): whether the service on this computer is
+//! and the permission prompt runs it as `--install-boot-service …`. `--busy` and `--stop-for-setup` are for
+//! installers: whether the service on this computer is
 //! recording, and stopping it cleanly before files are replaced, asking
 //! first with `--ask` when it is.
 //!

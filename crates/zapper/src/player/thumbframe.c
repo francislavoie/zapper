@@ -1,6 +1,6 @@
 /*
  * One picture from a short excerpt of a title, for the seek bar's preview:
- * src/surface/title_thumbs.rs asks mpv to write a tenth of a second of what
+ * src/player/title_thumbs.rs asks mpv to write a tenth of a second of what
  * it has already buffered (`dump-cache`), which mpv writes as whole groups of
  * pictures from the keyframe at or before that moment, and this decodes that
  * keyframe, the first picture in the file, and shrinks it to the preview's

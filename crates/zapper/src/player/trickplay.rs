@@ -13,18 +13,10 @@
 //!
 //! This file is the portable half: the store, the clock that says when the
 //! next one is due, and the encoding the scrubber receives. Taking the copy
-//! is the platform's job, because it depends on how the frame was drawn:
-//!
-//! - Linux (`surface::linux::thumbs`): the frame is on the GPU in GTK's GL
-//!   framebuffer, so it is blitted down to 160x90 there and only that is read
-//!   back — 57KB, where reading a fullscreen surface back to shrink it on the
-//!   CPU would move about 14MB and stall the pipeline.
-//! - Windows (`surface::windows`): mpv draws into its own window, so there is
-//!   no framebuffer of ours to read. mpv's `screenshot-raw` hands over the
-//!   current frame instead, off the main thread, and [`shrink_bgr0`] reduces
-//!   it here.
-//! - The host (`surface::host`): mpv draws into a window it made itself, and
-//!   the frame comes the same way as on Windows, from the host's own thread.
+//! is the job of whatever shows the picture. mpv in a window of its own
+//! (`surface::host`) has no framebuffer of ours to read, so mpv's
+//! `screenshot-raw` hands over the current frame, off the main thread, and
+//! [`shrink_bgr0`] reduces it here.
 //!
 //! The store is a plain mutex rather than a thread-local, because the capture
 //! happens on one thread and the lookup answers an IPC command on another.
@@ -38,7 +30,7 @@
 //! most one per slot, and kept for as long as that title is open: reopening
 //! the same title keeps them, anything else clears them. Two things fill the
 //! slots: the frames drawn while it plays, exactly as for a channel, and
-//! `surface::title_thumbs`, which reads what mpv has already buffered ahead
+//! `player::title_thumbs`, which reads what mpv has already buffered ahead
 //! and behind and decodes one picture per empty slot. That second path is the
 //! one place a frame is decoded twice, which is why it is paced, one at a
 //! time, and gives way whenever playback needs the machine.
@@ -86,7 +78,7 @@ enum Img {
     Rgba(Vec<u8>),
     /// A JPEG of the same picture. A title can hold up to
     /// [`TITLE_MAX_SLOTS`], so its frames are compressed off the main thread
-    /// (`surface::title_thumbs`): a few kilobytes each instead of 57KB.
+    /// (`player::title_thumbs`): a few kilobytes each instead of 57KB.
     Jpeg(Vec<u8>),
 }
 
@@ -195,8 +187,8 @@ static STORE: Mutex<Option<Store>> = Mutex::new(None);
 
 /// Bumped by every [`clear`], under the store's lock.
 ///
-/// A capture that runs off the main thread (Windows takes its screenshot on
-/// a worker) can finish after the channel has changed, and would otherwise
+/// A capture that runs off the main thread (the host takes its screenshot on
+/// a thread of its own) can finish after the channel has changed, and would otherwise
 /// file the previous channel's picture into the new channel's buffer. It
 /// carries the generation it started in and is dropped if that has passed.
 static GENERATION: AtomicU64 = AtomicU64::new(0);
@@ -388,7 +380,7 @@ fn encoded(img: &Img) -> (&'static str, Vec<u8>) {
     match img {
         Img::Rgba(rgba) => (
             "image/png",
-            crate::surface::png::png_bytes(THUMB_W as u32, THUMB_H as u32, rgba),
+            crate::player::png::png_bytes(THUMB_W as u32, THUMB_H as u32, rgba),
         ),
         Img::Jpeg(jpeg) => ("image/jpeg", jpeg.clone()),
     }

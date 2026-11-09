@@ -1,8 +1,8 @@
 // Invisible handles along the window's edges and corners, because the window
 // is undecorated and nothing else reliably resizes it.
 //
-// Tauri does attach a native handler for this on Linux, but it is not enough
-// here. It sits on the webview's button-press signal and only ever covers the
+// A desktop shell may attach a native handler for this on Linux, but it is
+// not enough here. It sits on the webview's button-press signal and only ever covers the
 // outer 5px; WebKit owns the cursor, so the pointer never changes to say an
 // edge is there; and under the overlay stack that puts the video beneath the
 // page, a grab it starts does not reliably follow the pointer. Handles in the
@@ -34,8 +34,7 @@ export function ResizeEdges({ fullscreen }: { fullscreen: boolean }) {
   const maximised = useMaximised();
   // A maximised or fullscreen window has no edge to grab, and a strip of
   // resize cursor along the screen's border would only be in the way. A Mac's
-  // window is decorated (crates/zapper/tauri.macos.conf.json) and AppKit resizes
-  // it from its own edges.
+  // window is decorated and AppKit resizes it from its own edges.
   if (maximised || fullscreen || IS_MAC) return null;
   return (
     <div className="resize-edges" aria-hidden>

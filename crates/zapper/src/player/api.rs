@@ -1,15 +1,20 @@
-//! The player's commands, one per command the window sends, under the same
-//! names and with the same parameters: what any front end calls to drive
-//! playback. The state they act on is [`super::controller`]'s.
+//! The player's commands, under the names and with the parameters the
+//! interface has always used: what any front end calls to drive playback.
+//! The state they act on is [`super::controller`]'s. Also what a change of
+//! account means for the player ([`save_account`], [`import_backup_account`]).
 
+use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 
 use super::controller::*;
 use super::{tracks, LIVE_CUSHION};
 use crate::catalog::activity;
+use crate::catalog::sync_engine::scrub;
+use crate::catalog::vod_store::VodItem;
 use crate::connections::{self, Limit};
 use crate::ipc::types::{
-    AspectMode, ConnectionsDto, DeinterlaceMode, PlaybackState, PlayerOptionsDto, PlayerStateDto,
+    AccountCandidateDto, AspectMode, ConnectionsDto, DeinterlaceMode, OnDemandKind, PlaybackState,
+    PlayerOptionsDto, PlayerStateDto,
 };
 use crate::source::{Playable, Source};
 
@@ -225,8 +230,8 @@ pub async fn play_catchup(stream_id: i64, start: i64, duration_minutes: u32) -> 
 }
 
 pub async fn stop() -> Result<(), String> {
-    crate::surface::title_thumbs::stop();
-    crate::surface::trickplay::clear();
+    crate::player::title_thumbs::stop();
+    crate::player::trickplay::clear();
     // Where a movie or an episode got to, before the title is forgotten.
     let place = PROGRESS.lock().ok().and_then(|mut p| p.flush());
     if let Some(w) = place {
@@ -448,11 +453,11 @@ pub async fn thumbnail_at(
             return Ok(None);
         };
         Ok(
-            crate::surface::trickplay::nearest_png(edge - behind_live).map(|(at, png)| {
+            crate::player::trickplay::nearest_png(edge - behind_live).map(|(at, png)| {
                 crate::ipc::types::ThumbnailDto {
                     data_url: format!(
                         "data:image/png;base64,{}",
-                        crate::surface::trickplay::base64(&png)
+                        crate::player::trickplay::base64(&png)
                     ),
                     behind_live: (edge - at).max(0.0),
                 }
@@ -472,11 +477,11 @@ pub async fn thumbnail_for_title(
     at: f64,
 ) -> Result<Option<crate::ipc::types::TitleThumbnailDto>, String> {
     Ok(
-        crate::surface::trickplay::title_frame(at).map(|(at, mime, bytes)| {
+        crate::player::trickplay::title_frame(at).map(|(at, mime, bytes)| {
             crate::ipc::types::TitleThumbnailDto {
                 data_url: format!(
                     "data:{mime};base64,{}",
-                    crate::surface::trickplay::base64(&bytes)
+                    crate::player::trickplay::base64(&bytes)
                 ),
                 at,
             }
@@ -488,7 +493,7 @@ pub async fn thumbnail_for_title(
 ///
 /// Polled rather than pushed: it is far more than the state feed needs, and
 /// nothing should pay for it while the panel is closed. The history is the
-/// exception and is collected continuously — see `ipc::health` for why, and
+/// exception and is collected continuously — see `player::health` for why, and
 /// for how little it costs — but it still only crosses the boundary when
 /// somebody asks, which is what makes one call enough to draw the panel.
 pub async fn player_stats() -> Result<crate::ipc::types::StatsDto, String> {
@@ -519,8 +524,8 @@ pub async fn player_stats() -> Result<crate::ipc::types::StatsDto, String> {
             avsync: s.avsync,
             behind_live: probe.behind_live,
             buffered_back: probe.buffered_back,
-            history: crate::ipc::health::samples(),
-            stalls: crate::ipc::health::stalls(),
+            history: crate::player::health::samples(),
+            stalls: crate::player::health::stalls(),
         })
     })
     .await
@@ -630,12 +635,102 @@ pub async fn apply_playback_settings(
     on_player(move |p| apply_properties(p, &props)).await
 }
 
-/// What the desktop's media controls show: the channel, its programme and
-/// whether it is playing, or `None` with nothing on. Accepted whether or not
-/// the controls are on, so turning them on shows what is already playing.
-pub async fn set_media_session(
-    session: Option<crate::ipc::types::MediaSessionDto>,
-) -> Result<(), String> {
-    crate::media_keys::set_session(session);
+/// Adds kept file `file_id` to the title, which must be the one playing,
+/// selected and shown; `title` names the track and `lang` is its language.
+/// Errors are scrubbed: none carries a password, a token or a link.
+pub async fn add_subtitle_file(
+    kind: OnDemandKind,
+    id: i64,
+    file_id: i64,
+    title: String,
+    lang: String,
+) -> Result<PlayerOptionsDto, String> {
+    let path = tokio::task::spawn_blocking(move || {
+        kept_file(crate::online::subtitles::kept_path, kind, id, file_id)
+    })
+    .await
+    .map_err(|e| format!("the read did not finish: {e}"))?
+    .map_err(|e| scrub(&e))?;
+    add_external_subtitle(kind, id, &path, &title, &lang)
+        .await
+        .map_err(|e| scrub(&e))
+}
+
+fn on_demand_item(kind: OnDemandKind, id: i64) -> VodItem {
+    match kind {
+        OnDemandKind::Movie => VodItem::movie(id),
+        OnDemandKind::Episode => VodItem::episode(id),
+    }
+}
+
+/// The kept file `file_id` of the title, as `lookup` finds it.
+fn kept_file(
+    lookup: impl FnOnce(VodItem, i64) -> Result<Option<PathBuf>, String>,
+    kind: OnDemandKind,
+    id: i64,
+    file_id: i64,
+) -> Result<PathBuf, String> {
+    lookup(on_demand_item(kind, id), file_id)?
+        .ok_or_else(|| "that subtitle is not kept for this title".to_owned())
+}
+
+// ------------------------------------------------------------- the account
+//
+// The form's rules are `catalog::account_form`'s, shared with the recording
+// service's `/api/account`; what is the player's is dropping its cached
+// client, so the next request goes to the new account without a restart.
+
+/// After the account on file changed: drops the cached client and asks for
+/// a pass, since new credentials are what a refused sync was waiting for.
+fn account_changed() {
+    forget_source();
+    crate::catalog::sync_engine::request_now();
+}
+
+/// Saves the account form and makes it the account in use. An empty
+/// password keeps the one already on file.
+pub fn save_account(candidate: AccountCandidateDto) -> Result<(), String> {
+    crate::catalog::account_form::save(candidate)?;
+    account_changed();
     Ok(())
+}
+
+/// Asks the account in use who we are, through the client playback uses.
+pub async fn test_account() -> Result<String, String> {
+    crate::catalog::account_form::probe(source()?).await
+}
+
+/// Writes the account from the backup opened last
+/// (`catalog::backup_file::open`), replacing the one on file, and refreshes
+/// the catalogue from it.
+pub fn import_backup_account() -> Result<(), String> {
+    crate::catalog::backup_file::import_account()?;
+    account_changed();
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn add_needs_a_kept_file() {
+        let mut asked = None;
+        let r = kept_file(
+            |item, file_id| {
+                asked = Some((item, file_id));
+                Ok(None)
+            },
+            OnDemandKind::Episode,
+            7,
+            7_999_999,
+        );
+        assert_eq!(r, Err("that subtitle is not kept for this title".to_owned()));
+        assert_eq!(asked, Some((VodItem::episode(7), 7_999_999)));
+        let found = PathBuf::from("/d/subtitles/7000001.srt");
+        let r = kept_file(|_, _| Ok(Some(found.clone())), OnDemandKind::Movie, 7, 7_000_001);
+        assert_eq!(r, Ok(found));
+        let r = kept_file(|_, _| Err("no catalogue".to_owned()), OnDemandKind::Movie, 7, 1);
+        assert_eq!(r, Err("no catalogue".to_owned()));
+    }
 }

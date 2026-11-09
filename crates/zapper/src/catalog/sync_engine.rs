@@ -49,7 +49,7 @@ impl Mirror for AppMirror {
 }
 
 /// Where a phase's status goes. A trait so the phase sequencing can be tested
-/// without a Tauri application to emit from.
+/// without a bus to emit on.
 pub trait StatusSink {
     fn publish(&self, status: SyncStatusDto);
 }
@@ -1102,7 +1102,6 @@ async fn wait_or_wake(d: Duration) -> bool {
 /// The interval is re-read each cycle rather than captured once, so changing
 /// it in settings takes effect without a restart. Failed passes back off
 /// (see [`backoff`]); `request_now` cuts any wait short.
-#[cfg(feature = "gui")]
 pub fn spawn_periodic() {
     tokio::spawn(periodic(BusSink));
 }

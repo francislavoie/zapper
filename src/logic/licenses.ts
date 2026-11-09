@@ -41,7 +41,7 @@ export function noticeLabel(name: string): { label: string; detail: string | nul
 }
 
 /** Whether a fetched notice is really the app's index.html: a path the app doesn't have is
- *  answered with the page (Tauri's asset protocol, and Vite's dev server), not a 404, so a
+ *  answered with the page (the service's web interface, and Vite's dev server), not a 404, so a
  *  missing file would otherwise show up as a screenful of HTML. */
 export function isPageFallback(contentType: string | null, body: string): boolean {
   return (contentType ?? "").includes("text/html") || /^\s*<!doctype html/i.test(body);

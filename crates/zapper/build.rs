@@ -2,11 +2,12 @@ use std::path::{Path, PathBuf};
 
 fn main() {
     let bundle = bundle();
-    #[cfg(feature = "gui")]
-    {
-        libmpv(bundle.as_deref());
-        tauri_build::build();
-    }
+    println!("cargo:rustc-check-cfg=cfg(zapper_no_thumbframe)");
+    #[cfg(feature = "mpv")]
+    libmpv(bundle.as_deref());
+    // Without libmpv there is no buffer to preview a title from.
+    #[cfg(not(feature = "mpv"))]
+    println!("cargo:rustc-cfg=zapper_no_thumbframe");
     #[cfg(feature = "server")]
     {
         remuxer(bundle.as_deref());
@@ -14,12 +15,12 @@ fn main() {
         notices();
     }
     let _ = bundle;
-    // Windows (MSVC) only; tauri-build does the same for the app.
+    // Windows (MSVC) only.
     static_vcruntime::metabuild();
 }
 
 /// The web interface zapper-server serves (`recording::web`): the frontend's build in `../../dist`,
-/// the same files the app's window shows, compiled into the binary. One file to install and
+/// compiled into the binary. One file to install and
 /// nothing beside it to go missing or out of step with the API it talks to.
 ///
 /// Writes `$OUT_DIR/web_assets.rs`, a list of `(path, include_bytes!(…))`; `include_bytes!`
@@ -77,15 +78,14 @@ fn collect(root: &Path, dir: &Path, files: &mut Vec<(String, String)>) {
 /// zapper's own LGPL libmpv and FFmpeg: the archive `scripts/fetch-libmpv.sh` (or, on Windows,
 /// `tools/fetch-libmpv.ps1`) unpacks into `lib/<platform>/`, made by `scripts/build-libmpv.sh`
 /// (docs/licensing.md), or another directory of the same shape named by `ZAPPER_LIBMPV_DIR`.
-/// The app links libmpv from it, and zapper-server's remuxer FFmpeg's libraries.
+/// The `mpv` feature links libmpv from it, and zapper-server's remuxer FFmpeg's libraries.
 ///
 /// When it is there, its `link/` goes first on the link path (libmpv2-sys only asks for `mpv`,
 /// the remuxer for `avformat` and the rest), and the executables are told where its `runtime/`
 /// libraries will be when they run:
 ///
-/// - Linux: `$ORIGIN/../lib/zapper`, where the .deb, .rpm and Arch package install them beside
-///   `/usr/bin/zapper` and `/usr/bin/zapper-server`;
-/// - macOS: `@executable_path/../Frameworks`, the app bundle's;
+/// - Linux: `$ORIGIN/../lib/zapper`, where a package installs them beside `/usr/bin/zapper-server`;
+/// - macOS: `@executable_path/../Frameworks`, an app bundle's;
 /// - Windows: beside the executable, where Windows looks first anyway.
 ///
 /// So that `cargo run`, the harnesses and a release binary run from `target/` too, the runtime
@@ -169,7 +169,7 @@ fn bundle() -> Option<PathBuf> {
 /// With nothing fetched, a debug build falls back to the system's libmpv or FFmpeg, with a
 /// warning; a release build refuses, unless `ZAPPER_SYSTEM_LIBMPV=1` says linking the system's
 /// is the point (a distribution's own package).
-#[cfg(any(feature = "gui", feature = "server"))]
+#[cfg(any(feature = "mpv", feature = "server"))]
 fn without_bundle(what: &str) {
     if std::env::var("ZAPPER_SYSTEM_LIBMPV").as_deref() == Ok("1") {
         return;
@@ -182,20 +182,19 @@ fn without_bundle(what: &str) {
     println!("cargo:warning={msg}; linking the system's instead");
 }
 
-/// libmpv for the app: libmpv2-sys asks for `mpv`, which [`bundle`] has put on the link path.
+/// libmpv: libmpv2-sys asks for `mpv`, which [`bundle`] has put on the link path.
 ///
-/// And the seek bar's previews of a title (`src/surface/thumbframe.c`, one picture decoded
+/// And the seek bar's previews of a title (`src/player/thumbframe.c`, one picture decoded
 /// from an excerpt of mpv's buffer), compiled against the FFmpeg that libmpv already loads:
 /// the bundle's libavformat, libavcodec, libswscale and libavutil, its headers in `include/`,
 /// or with none fetched whatever pkg-config finds. Nothing is added to what ships.
 ///
 /// With none fetched and pkg-config unable to find them (a Mac without FFmpeg's development
-/// files, say), the app is built without that file, with a warning: `zapper_no_thumbframe`
+/// files, say), it is built without that file, with a warning: `zapper_no_thumbframe`
 /// set, a title's seek bar previews only the frames drawn while it played.
-#[cfg(feature = "gui")]
+#[cfg(feature = "mpv")]
 fn libmpv(bundle: Option<&Path>) {
-    println!("cargo:rustc-check-cfg=cfg(zapper_no_thumbframe)");
-    let src = "src/surface/thumbframe.c";
+    let src = "src/player/thumbframe.c";
     println!("cargo:rerun-if-changed={src}");
     let mut build = cc::Build::new();
     build.file(src).warnings(true).flag_if_supported("-std=c11");

@@ -8,7 +8,7 @@
 // must not switch tracks while a title plays, which makes the player go back
 // through the file. Choosing in the picture's menu, the transport's toggle
 // or with C is what changes them. The app's player makes the same choice in
-// Rust (`subtitle_choice` in crates/zapper/src/ipc/player_cmds.rs); the
+// Rust (`subtitle_choice` in crates/zapper/src/player/controller.rs); the
 // browser's and the mock's make it here.
 //
 // Pure. Checked in src/__checks__/subtitles.test.mjs.

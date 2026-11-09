@@ -1,6 +1,6 @@
 // The UI's third-party notices (docs/licensing.md): every npm package with code in the production
-// bundle, found from the bundle's own module list, so devDependencies (Vite, TypeScript, the Tauri
-// CLI) and tree-shaken packages never appear and nothing bundled is missed. Each package is held
+// bundle, found from the bundle's own module list, so devDependencies (Vite, TypeScript) and
+// tree-shaken packages never appear and nothing bundled is missed. Each package is held
 // to the allow-list in ../about.toml, the one the Rust notices use. The build writes
 // dist/licenses/THIRD-PARTY-NOTICES-ui.txt, copies in the other notices (noticeFiles: zapper's
 // LICENSE, libmpv's, the Rust crates'), lists them all in dist/licenses/index.json for Settings >

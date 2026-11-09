@@ -3,7 +3,7 @@
 // click that maximises, minimise/maximise/close — is drawn and handled here.
 //
 // Except on a Mac, where the window keeps the system's title bar, transparent
-// and under this one (`titleBarStyle: "Overlay"`, crates/zapper/tauri.macos.conf.json):
+// and under this one (`titleBarStyle: "Overlay"`):
 // the traffic lights are AppKit's, in the bar's top-left corner, so the bar
 // draws no window buttons there, leaves the lights their room before the
 // hamburger, and does what the system's bar would on a double click.
@@ -31,7 +31,7 @@
 // Two rules that are not obvious:
 //
 //  1. Nothing interactive touches the window edge. The window is undecorated,
-//     so Tauri's own resize handler owns the outer few pixels, and a button
+//     so the shell's own resize handler owns the outer few pixels, and a button
 //     flush against the top or the side would eat the grab. The bar keeps a
 //     padding ring and every control lives inside it.
 //  2. The bar is opaque chrome and is allowed to be, but it is never over the

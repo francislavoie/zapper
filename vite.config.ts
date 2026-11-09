@@ -15,9 +15,9 @@ export default defineConfig({
   clearScreen: false,
   server: {
     port: 5180,
-    // Refuse to start rather than quietly moving to 5181: tauri.conf.json
-    // points `devUrl` at this exact port, so a silent move means the window
-    // opens on whatever was already there — or on nothing.
+    // Refuse to start rather than quietly moving to 5181: the checks and the
+    // docs open the mock at this exact port, so a silent move means they
+    // drive whatever was already there — or nothing.
     strictPort: true,
     // `VITE_ZAPPER_BACKEND=web npm run dev` runs the interface against a running zapper-server
     // instead of the mock (src/backend.ts): its API is passed through, so the page and the API

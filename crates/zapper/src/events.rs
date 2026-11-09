@@ -1,5 +1,5 @@
-//! One bus for what the core tells whoever is listening: the Tauri webview
-//! today (through a forwarder), other front ends later. A broadcast channel,
+//! One bus for what the core tells whoever is listening: the recording
+//! service's browsers and any front end. A broadcast channel,
 //! so a producer never waits for a slow listener and never fails for lack of one.
 
 use std::sync::OnceLock;

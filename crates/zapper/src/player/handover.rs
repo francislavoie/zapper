@@ -1,9 +1,10 @@
 //! Recording what the player is watching (docs/recording.md, "Recording
-//! what you watch"), the app's side: Record on the channel the player shows
-//! moves the player onto the recording service's connection when the
+//! what you watch"), the player's side: Record on the channel the player
+//! shows moves the player onto the recording service's connection when the
 //! account has none to spare, and hands the service what the player had
 //! already received of the programme. The decisions are
-//! `recording::handover`'s; this does them, with mpv and the service's API.
+//! `recording::handover`'s; this does them, with the player's cache
+//! ([`PlayerBackend::dump_cache`]) and the service's API.
 //!
 //! It also remembers which channels the service is recording, from the
 //! list the interface fetches anyway, so that tuning to one of them joins
@@ -36,6 +37,14 @@ static CAPTURED: Mutex<Option<(Instant, Vec<i64>)>> = Mutex::new(None);
 
 /// Recordings the player was already moved for, or tried to be: once each.
 static MOVED_FOR: Mutex<Option<HashSet<i64>>> = Mutex::new(None);
+
+/// The service's recordings, noticed as they are fetched ([`noticed`]).
+pub async fn recordings() -> Result<Vec<RecordingDto>, String> {
+    let client = Client::local().map_err(|e| format!("{e:#}"))?;
+    let list = client.list().await.map_err(|e| format!("{e:#}"))?;
+    noticed(&list);
+    Ok(list)
+}
 
 /// Whether the service on this computer is recording `stream_id` now, by
 /// the last list fetched.
@@ -75,7 +84,7 @@ pub fn noticed(list: &[RecordingDto]) {
     if !first {
         return;
     }
-    tauri::async_runtime::spawn(async move {
+    controller::rt().spawn(async move {
         let Ok(client) = Client::local() else { return };
         let facts = Facts {
             watching_direct: true,
@@ -198,26 +207,23 @@ struct Kept {
     first_ms: i64,
 }
 
-/// Writes out what mpv's cache holds of a programme recorded from `from`
+/// Writes out what the player's cache holds of a programme recorded from `from`
 /// (Unix seconds, its padded start; or as far back as the cache reaches) up
 /// to `until` (where the recording's own parts begin, if they have), while
 /// `p` plays one of the recording's channels (`feeds`). `None` when the
-/// cache has nothing worth keeping, or mpv could not write it.
+/// cache has nothing worth keeping, or the player could not write it.
 async fn keep_buffer(p: NowPlaying, feeds: &[i64], from: i64, until: Option<i64>) -> Option<Kept> {
     if !feeds.contains(&p.stream_id) {
         return None;
     }
-    let mpv = crate::surface::mpv::handle()?;
-    let span = crate::surface::mpv::cache_span(mpv)?;
+    let player = crate::player::backend().filter(|b| b.capabilities().cache_dump)?;
+    let span = crate::player::backend::cache_span(&player.get_string("demuxer-cache-state")?)?;
     let k = handover::keep(span, now_ms(), from, until)?;
     let dir = crate::paths::cache_dir();
     let _ = std::fs::create_dir_all(&dir);
     let path = dir.join(format!("record-buffer-{}-{}.ts", now_ms(), std::process::id()));
     let out = path.clone();
-    let written = tokio::task::spawn_blocking(move || {
-        crate::surface::mpv::dump_cache(mpv, k.start, k.end, &out)
-    })
-    .await;
+    let written = tokio::task::spawn_blocking(move || player.dump_cache(k.start, k.end, &out)).await;
     match written {
         Ok(Ok(())) if std::fs::metadata(&path).is_ok_and(|m| m.len() > 0) => {
             tracing::info!("kept {:.0} s of the player's buffer", k.end - k.start);
@@ -239,7 +245,7 @@ async fn keep_buffer(p: NowPlaying, feeds: &[i64], from: i64, until: Option<i64>
 /// Hands the buffer to the service as the recording's first part, in the
 /// background (it is read through once there), and deletes it here.
 fn hand_buffer_over(client: Client, id: i64, k: Kept) {
-    tauri::async_runtime::spawn(async move {
+    controller::rt().spawn(async move {
         if let Err(e) = client.prelude(id, &k.path, k.first_ms).await {
             tracing::warn!("recording {id}: the player's buffer was not taken: {e:#}");
         }

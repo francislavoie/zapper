@@ -1,5 +1,5 @@
 // The interface's backend in a browser, served by the recording service:
-// the same calls the desktop app once made through Tauri, made to the service's
+// the same calls the desktop app makes in-process, made to the service's
 // HTTP API on the same origin instead (docs/recording.md, "Web access").
 //
 // Signed in, the browser holds a cookie its scripts cannot read; this file

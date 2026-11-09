@@ -2,7 +2,7 @@
 //!
 //! Shared by the service, which answers with these, and the app, which
 //! forwards them to the frontend unchanged — so they are also mirrored in
-//! `src/types.ts`. camelCase on the wire, like the Tauri DTOs.
+//! `src/types.ts`. camelCase on the wire, like the DTOs in `crate::ipc`.
 
 use serde::{Deserialize, Serialize};
 

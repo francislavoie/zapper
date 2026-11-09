@@ -1,11 +1,10 @@
-// A fake backend, used only when Tauri is absent (i.e. `vite dev` in a plain
-// browser). It exists so the UI can be driven and screenshotted without mpv or
+// A fake backend, used under `vite dev` in a plain browser (the default
+// there; `VITE_ZAPPER_BACKEND=web` asks for a running zapper-server instead). It exists so the UI can be driven and screenshotted without mpv or
 // the Rust side, and so layout is exercised at a realistic scale — tens of
 // thousands of channels across hundreds of categories is the whole reason the
 // list is virtualized, and a 20-row fixture would hide every bug that matters.
 //
-// Shapes here mirror src/types.ts exactly. Nothing in this file is imported by
-// the Tauri path at runtime beyond the module load itself.
+// Shapes here mirror src/types.ts exactly.
 
 import { auditLightSurfaces, auditOverVideo } from "./audit";
 import { alternatives } from "./logic/searchQuery";
@@ -959,7 +958,7 @@ function startBufferClock() {
 }
 
 /** What playing a channel added to its record, as the backend reports it;
- *  see `remember` in ipc/player_cmds.rs. */
+ *  see `remember` in player/controller.rs. */
 const qualityEmitter = new Emitter<ChannelQualityDto>({ streamId: -1, quality: null });
 
 /** The backend's ledger, in miniature: the row's record is updated in place,
@@ -2521,10 +2520,10 @@ export const mockApi = {
 
 // ------------------------------------------------------------------ window
 
-/** The undecorated window's own controls. The real ones are Tauri calls that
- *  reject outright in a plain browser, which would make the toolbar — the one
- *  piece of chrome that is always on screen — the one piece that cannot be
- *  driven without Tauri. So they are faked, and every call is recorded on
+/** The undecorated window's own controls. The desktop app's are calls into
+ *  its window, which a plain browser does not have, and the toolbar — the one
+ *  piece of chrome that is always on screen — must still be driven here. So
+ *  they are faked, and every call is recorded on
  *  `globalThis.__windowCalls` so a driver can prove the button did something
  *  rather than only that it was clickable.
  *

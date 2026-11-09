@@ -541,8 +541,9 @@ case $family in
     leaked=$(for f in "$stage"/runtime/lib[as][vw]*; do nm -D --defined-only "$f" | awk '{print $3}'; done |
       grep -E '^(dav1d_|pl_|ass_|FT_|hb_|fribidi_)' || true)
     [ -z "$leaked" ] || die "FFmpeg's libraries export what is linked into them: $(echo $leaked | head -c 300)"
-    # What they may take from the system: the libraries the 0.4 packages' Depends named
-    # (tauri.conf.json on main-tauri), besides each other. Anything else is a dependency that crept in.
+    # What they may take from the system: the ordinary libraries docs/licensing.md lists (what
+    # the 0.4 packages' Depends named), besides each other. Anything else is a dependency that
+    # crept in.
     allowed=" libc.so.6 libm.so.6 libstdc++.so.6 libgcc_s.so.1 libz.so.1 libssl.so.3 libcrypto.so.3
       libva.so.2 libva-drm.so.2 libva-wayland.so.2 libdrm.so.2 libEGL.so.1 libwayland-client.so.0
       libwayland-cursor.so.0 libwayland-egl.so.1 libxkbcommon.so.0 libasound.so.2 libpulse.so.0
@@ -699,8 +700,7 @@ zapper loads whichever ones sit where these do.
   component        version      license                    home
 EOF
   cat "$notices.list"
-  # The same, counted by license, in the shape the other notices files have (the Arch package
-  # reads its license field from these summaries, as the Arch package on main-tauri did).
+  # The same, counted by license, in the shape the other notices files have.
   printf '\n\nSummary\n-------\n'
   awk '{ n[$3]++ } END { for (l in n) printf "  %-20s %3d\n", l, n[l] }' "$notices.list" | sort -k2,2nr -k1,1
   printf '\n'

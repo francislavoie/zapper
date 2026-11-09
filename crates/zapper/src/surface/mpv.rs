@@ -1,17 +1,13 @@
 //! libmpv: the one player, its tuned options, its event queue, and the
 //! properties the interface reads.
 //!
-//! Portable. How the picture reaches the screen is the platform's business
-//! and enters here in exactly two places: the `video_out` options handed to
-//! [`Player::new`] (Linux asks for `vo=libmpv` and renders through GL itself;
-//! Windows gives mpv a window to draw into), and the readiness gate in
-//! [`Player::load`].
+//! Portable. How the picture reaches the screen enters here in one place:
+//! the `video_out` options handed to [`Player::new`] (the host asks mpv for
+//! a window of its own, `super::host`).
 //!
-//! [`Player`] is the app's [`PlayerBackend`]: the platform's surface creates
-//! it and installs it (`crate::player::install`), and the controller calls it
-//! from whichever thread it is on. libmpv's client API is thread-safe; only
-//! the render context, which draws, belongs to one thread, and that lives in
-//! the platform's module, not here.
+//! [`Player`] is the [`PlayerBackend`]: the host creates it and installs it
+//! (`crate::player::install`), and the controller calls it from whichever
+//! thread it is on. libmpv's client API is thread-safe.
 
 use anyhow::{anyhow, Context, Result};
 use libmpv2::Mpv;
@@ -22,60 +18,19 @@ use std::sync::{Mutex, OnceLock, PoisonError};
 use crate::player::{BackendCaps, PlayerBackend};
 pub use crate::player::{Health, Probe, Signal, Stats};
 
-/// The process's mpv. Leaked deliberately: Linux's render context borrows it
-/// for `'static`, and the player outlives everything anyway, so a
-/// self-referential struct is avoided. `Mpv` is `Send + Sync` (libmpv's
+/// The process's mpv. Leaked deliberately: the player outlives everything
+/// anyway, and the harnesses borrow it for `'static`. `Mpv` is `Send + Sync` (libmpv's
 /// client API is thread-safe), which is what lets it be a plain static.
 static MPV: OnceLock<&'static Mpv> = OnceLock::new();
-
-/// A URL asked for before the surface could show it. See [`Player::load`].
-///
-/// A lock rather than a thread's local: a load is asked for on a command's
-/// thread and let go on the surface's. Every `loadfile` is sent under it,
-/// with the readiness check before it, so a surface that becomes ready
-/// meanwhile cannot miss the URL (it sets its readiness before
-/// [`load_pending`] takes this), and a held URL cannot be sent after a newer
-/// one.
-static PENDING: Mutex<Option<String>> = Mutex::new(None);
 
 /// One pump at a time: `mpv_wait_event` must not run on two threads at once
 /// for the same handle.
 static PUMPING: Mutex<()> = Mutex::new(());
 
-/// Set when mpv presents video in a window of its own (`surface::host`):
-/// there is no platform surface to wait for, so a load is never held. See
-/// [`Player::load_now_or_later`].
-static OWN_WINDOW: AtomicBool = AtomicBool::new(false);
-
-/// Says mpv draws into a window it made itself. Called by the host before it
-/// installs the player.
-pub(crate) fn set_own_window() {
-    OWN_WINDOW.store(true, Ordering::Release);
-}
-
-/// FFmpeg's HTTP options that would open a stream again by themselves.
-///
-/// mpv turns `reconnect` on for every HTTP stream, and FFmpeg then quietly
-/// reconnects when a seekable response — a catch-up programme, say — is cut
-/// off. When the provider cut it off because another device took the
-/// account's connection, that reconnect ends the other device's stream in
-/// turn, and the two take it from each other until somebody gives up. A
-/// stream the provider ended stays ended; the interface says so and offers
-/// Retry (see `ipc::ending`). The other two are off by default in FFmpeg and
-/// are named so that stays true whatever a build's defaults are.
-///
-/// Measured against a server that cuts a seekable response off a third of
-/// the way through: mpv's defaults made 80 requests before giving up; with
-/// these, 3 — the open, and the two seeks any seekable file costs.
-///
-/// `ytdl` is switched off in [`Player::new`] for the same reason, and it was
-/// the worse of the two. mpv's built-in youtube-dl hook runs whenever a
-/// stream fails to open, and where `yt-dlp` is installed it asks the server
-/// for the same URL again, as a browser — so every refused open was two
-/// requests, the second a fresh connection to a provider that had just said
-/// no. Measured with `ending_check`, which counts them. Live TV has no use
-/// for the hook in the first place.
-pub const NO_RECONNECT: &str = "reconnect=0,reconnect_streamed=0,reconnect_at_eof=0";
+/// The player's FFmpeg options against reconnecting by itself
+/// ([`crate::player::NO_RECONNECT`]), here too for the harnesses that run
+/// an mpv of their own.
+pub use crate::player::NO_RECONNECT;
 
 /// Asks mpv for its warnings and errors as events.
 ///
@@ -99,18 +54,17 @@ pub const DEMUXER_MAX_BYTES: i64 = 256 * 1024 * 1024;
 
 /// A handle to the process-wide mpv instance.
 ///
-/// Zero-sized: the real state is the static above, plus whatever the
-/// platform's surface keeps on its own thread. `Send + Sync`, so the surface
-/// installs it as the process's [`PlayerBackend`].
+/// Zero-sized: the real state is the static above. `Send + Sync`, so the
+/// host installs it as the process's [`PlayerBackend`].
 pub struct Player;
 
 impl Player {
     /// Creates the mpv handle with zapper's options, then `video_out`'s.
     ///
-    /// `video_out` is the platform's say in how video is presented — the
-    /// `vo`, and whatever goes with it — applied after the shared options so
-    /// that a platform can override one of them where it must. Called by the
-    /// platform's surface, never by command code.
+    /// `video_out` is the host's say in how video is presented — the `vo`,
+    /// and whatever goes with it — applied after the shared options so that
+    /// the host can override one of them where it must. Called by the host,
+    /// never by command code.
     pub fn new(
         video_out: impl FnOnce(&libmpv2::MpvInitializer) -> libmpv2::Result<()>,
     ) -> Result<Self> {
@@ -194,32 +148,6 @@ impl Player {
         handle().ok_or_else(|| anyhow!("mpv is not initialised"))
     }
 
-    /// Starts playback, deferring if the surface is not ready yet.
-    ///
-    /// mpv initialises its video output as soon as a file opens. On Linux,
-    /// if that happens before the render context exists, the VO fails
-    /// outright - "Error opening/initializing the selected video_out (--vo)
-    /// device" - and nothing ever decodes. A network stream hides this by
-    /// taking a second to open, which is long enough for the first frame to
-    /// have been drawn; a local file opens instantly and fails every time. So
-    /// a load requested before the surface is ready is held until it is (see
-    /// [`load_pending`]). Windows hands mpv a window up front and is always
-    /// ready.
-    fn load_now_or_later(url: &str) -> Result<()> {
-        let mut pending = PENDING.lock().unwrap_or_else(PoisonError::into_inner);
-        if !OWN_WINDOW.load(Ordering::Acquire) && !crate::surface::platform::video_ready() {
-            *pending = Some(url.to_owned());
-            drop(pending);
-            crate::surface::platform::request_frame();
-            return Ok(());
-        }
-        // This one is newer than anything still held.
-        *pending = None;
-        Self::mpv()?
-            .command("loadfile", &[url, "replace"])
-            .context("loadfile")
-    }
-
     /// The decoded video's pixel dimensions, or `None` before the first frame.
     pub fn dimensions(&self) -> Option<(i64, i64)> {
         let m = Self::mpv().ok()?;
@@ -230,9 +158,8 @@ impl Player {
     }
 }
 
-/// The mpv handle, for the platform's surface: Linux's render context is
-/// created from it, and Windows takes thumbnails through it off the main
-/// thread. `None` before [`Player::new`].
+/// The mpv handle, for the thumbnails and the harnesses. `None` before
+/// [`Player::new`].
 pub fn handle() -> Option<&'static Mpv> {
     MPV.get().copied()
 }
@@ -249,15 +176,7 @@ pub fn created() -> Option<Player> {
 /// has data.
 pub fn cache_span(mpv: &Mpv) -> Option<(f64, f64)> {
     let raw = mpv.get_property::<String>("demuxer-cache-state").ok()?;
-    let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    let start = v
-        .get("seekable-ranges")
-        .and_then(|r| r.as_array())
-        .and_then(|r| r.first())
-        .and_then(|r| r.get("start"))
-        .and_then(|x| x.as_f64())?;
-    let end = v.get("cache-end").and_then(|x| x.as_f64())?;
-    (end > start).then_some((start, end))
+    crate::player::backend::cache_span(&raw)
 }
 
 /// Writes what the cache holds from `start` to `end` (the stream's time, as
@@ -277,13 +196,12 @@ pub fn dump_cache(mpv: &Mpv, start: f64, end: f64, path: &Path) -> Result<()> {
 }
 
 /// mpv's current video frame, shrunk to a scrollback thumbnail
-/// ([`crate::surface::trickplay::shrink_bgr0`]) through `screenshot-raw`.
+/// ([`crate::player::trickplay::shrink_bgr0`]) through `screenshot-raw`.
 /// `None` when mpv has no frame (between channels) or hands back a format
 /// this does not read.
 ///
-/// For a surface with no framebuffer of its own to copy from: Windows, where
-/// mpv draws into a window it was given, and the host (`surface::host`),
-/// where it draws into one it made. Blocks until mpv has the frame, so never
+/// For a surface with no framebuffer of its own to copy from: the host
+/// (`surface::host`), where mpv draws into a window it made. Blocks until mpv has the frame, so never
 /// on a thread that draws or answers the interface.
 pub fn screenshot_thumbnail() -> Option<Vec<u8>> {
     use libmpv2_sys::{
@@ -360,21 +278,7 @@ unsafe fn shrink_node(node: &libmpv2_sys::mpv_node) -> Option<Vec<u8>> {
         return None;
     }
     let bytes = unsafe { std::slice::from_raw_parts(data.data as *const u8, data.size) };
-    crate::surface::trickplay::shrink_bgr0(bytes, w, h, stride)
-}
-
-/// Opens the URL held back by [`Player::load`], now that the surface can show
-/// it. Called by the platform once its video output can succeed, after it has
-/// made its `video_ready` true.
-pub fn load_pending() {
-    let mut pending = PENDING.lock().unwrap_or_else(PoisonError::into_inner);
-    let Some(url) = pending.take() else {
-        return;
-    };
-    let Some(mpv) = handle() else { return };
-    if let Err(e) = mpv.command("loadfile", &[&url, "replace"]) {
-        tracing::error!("deferred loadfile: {e}");
-    }
+    crate::player::trickplay::shrink_bgr0(bytes, w, h, stride)
 }
 
 // ---------------------------------------------------------------------------
@@ -382,9 +286,7 @@ pub fn load_pending() {
 // [`PlayerBackend`].
 //
 // Callable from any thread: libmpv's client API is thread-safe, and the
-// handle is a process-wide static. What stays on the platform's own thread is
-// the drawing (the render context, in `linux::render` and `macos`), which
-// never comes through here.
+// handle is a process-wide static.
 // ---------------------------------------------------------------------------
 
 /// One mpv event as a [`Signal`], or `None` for the ones nothing reads.
@@ -467,10 +369,10 @@ impl PlayerBackend for Player {
         }
     }
 
-    /// Starts playback, deferring if the surface is not ready yet: see
-    /// [`Player::load_now_or_later`].
     fn load(&self, url: &str) -> Result<()> {
-        Self::load_now_or_later(url)
+        Self::mpv()?
+            .command("loadfile", &[url, "replace"])
+            .context("loadfile")
     }
 
     fn set_property(&self, key: &str, value: &str) -> Result<()> {

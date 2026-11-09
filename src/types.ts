@@ -370,11 +370,6 @@ export type MediaPlayback = "playing" | "paused" | "stopped";
 /** A media key, pushed as `EVENTS.mediaKey`. Mirrors `MediaKey`. */
 export type MediaKey = "play" | "pause" | "toggle" | "next" | "previous" | "stop";
 
-/** An item chosen in the macOS app menu that the interface carries out,
- *  pushed as `EVENTS.menu`. Mirrors `MenuCommand`. Quit is not one: Rust
- *  closes the window itself, the same close every other way out takes. */
-export type MenuCommand = "settings" | "about";
-
 /** Where a programme found by search sits relative to now, which decides what
  *  choosing it does. `catchup` is finished but still in the channel's
  *  archive; finished programmes nothing can play are never search results. */
@@ -418,7 +413,6 @@ export const EVENTS = {
   playerOptions: "zapper://player-options",
   update: "zapper://update",
   mediaKey: "zapper://media-key",
-  menu: "zapper://menu",
   channelQuality: "zapper://channel-quality",
 } as const;
 
@@ -549,7 +543,7 @@ export interface StatsDto {
   stalls: number;
 }
 
-/** One point on a diagnostics graph. Mirrors `ipc::health::SampleDto`. */
+/** One point on a diagnostics graph. Mirrors `player::health::SampleDto`. */
 export interface StatsSampleDto {
   /** Seconds of demuxed data ahead of the playhead. */
   buffer: number;

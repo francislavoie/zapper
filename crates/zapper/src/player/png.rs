@@ -1,9 +1,8 @@
 //! A minimal PNG encoder, so neither verification nor the scrubber needs an
 //! image dependency.
 //!
-//! Portable on purpose: it began inside the GTK capture code, but the
-//! scrollback thumbnails are encoded with it on every platform, and an
-//! encoder has no business knowing which toolkit drew the pixels.
+//! The scrollback thumbnails are encoded with it, and an encoder has no
+//! business knowing what drew the pixels.
 //!
 //! Stored (uncompressed) deflate blocks: larger than a real encoder's output,
 //! which does not matter for a 160x90 thumbnail or a debug capture.

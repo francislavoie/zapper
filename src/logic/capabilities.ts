@@ -1,5 +1,5 @@
 // What the interface can do where it is running, as one object rather than
-// checks for "in Tauri" scattered through the components.
+// checks for where it is running scattered through the components.
 //
 // The same interface runs in three places: the app's own window (everything),
 // the browser mock under `vite dev` (stands in for the app, so everything),

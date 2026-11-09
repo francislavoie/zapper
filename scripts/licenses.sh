@@ -13,8 +13,7 @@
 #
 # The crate graph is the one of the platform it runs on: Linux's (about.toml's target), Windows'
 # in Git for Windows' bash (`just package-windows`, the release workflow; Python as $PYTHON), or
-# this Mac's. It is the app's and the recording service's together (`--features server` on top of
-# the default `gui`), since the packages ship both binaries.
+# this Mac's. It is the recording service's (`--features server`), the binary this line ships.
 #
 # --if-changed (`just package`): does nothing when the files in out-dir were made from the same
 # inputs (Cargo.lock, Cargo.toml, about.toml, LICENSE, these scripts, the target) and haven't
