@@ -132,7 +132,7 @@ catchup() {
   python3 tools/fake_stream.py --port 8789 --panel-utc-offset 1 --archive-days 3 >"$TMP/catchup.log" 2>&1 &
   local cs=$!
   sleep 2
-  ( export ZAPPER_FIXTURE_BASE=http://127.0.0.1:8789 TZ=America/New_York; on_host catchup_check )
+  ( export ZAPPER_PANEL_BASE=http://127.0.0.1:8789 TZ=America/New_York; on_host catchup_check )
   local rc=$?
   kill "$cs" 2>/dev/null
   return $rc
@@ -165,7 +165,7 @@ if [[ $HOST -eq 1 ]]; then
   step "player: episode"            pc ZAPPER_FIXTURE_EPISODE=$EPISODE -- --episode
   step "player: up next"            pc ZAPPER_FIXTURE_EPISODE=$EPISODE -- --up-next
   step "player: subtitles"          pc ZAPPER_FIXTURE_EPISODE=$EPISODE -- --subtitles
-  step "player: find subtitles"     pc ZAPPER_FIXTURE_MOVIE=movie/u/p/1.mkv ZAPPER_OPENSUBTITLES_URL=http://127.0.0.1:19641 -- --find-subtitles
+  step "player: find subtitles"     pc ZAPPER_FIXTURE_MOVIE=movie/u/p/1.mkv ZAPPER_OPENSUBTITLES_URL=http://127.0.0.1:19641/api/v1 -- --find-subtitles
   step "player: captions"           pc ZAPPER_FIXTURE_NAME=captions169.ts -- --captions
   step "catch-up"                   catchup
   # Windowless libmpv: no host needed, but they play, so they run with the rest that do.
