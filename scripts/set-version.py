@@ -2,8 +2,8 @@
 """Usage: scripts/set-version.py <version>  (part of `just release`)
 
 Sets zapper's version everywhere it's recorded, editing only the version lines (no
-reformatting): src-tauri/tauri.conf.json (what the packages are named after), [package] in
-src-tauri/Cargo.toml and zapper's own entry in src-tauri/Cargo.lock (what the updater compares
+reformatting): crates/zapper/tauri.conf.json (what the packages are named after), [workspace.package] in
+Cargo.toml (zapper's crate inherits it) and zapper's own entry in Cargo.lock (what the updater compares
 against: CARGO_PKG_VERSION), package.json, and package-lock.json's two copies. Each file is
 parsed again afterwards and must differ from the original only in those versions. Errors exit
 with status 2 before any file is written.
@@ -56,7 +56,7 @@ def main(argv):
         raise Fail(f"unexpected characters in {version!r}")
     writes = []
 
-    writes.append(json_edit("src-tauri/tauri.conf.json", version,
+    writes.append(json_edit("crates/zapper/tauri.conf.json", version,
                             [(r'^(  "version": ")([^"]*)(")', ["version"])]))
     writes.append(json_edit("package.json", version, [(r'^(  "version": ")([^"]*)(")', ["version"])]))
     writes.append(json_edit("package-lock.json", version, [
@@ -64,28 +64,26 @@ def main(argv):
         (r'^(    "": \{\n(?:      .*\n)*?      "version": ")([^"]*)(")', ["packages", "", "version"]),
     ]))
 
-    cargo_toml = os.path.join(ROOT, "src-tauri/Cargo.toml")
+    cargo_toml = os.path.join(ROOT, "Cargo.toml")
     text = open(cargo_toml, encoding="utf-8").read()
     want = tomllib.loads(text)
-    if want["package"]["name"] != CRATE:
-        raise Fail(f"src-tauri/Cargo.toml's package is {want['package']['name']!r}, not {CRATE!r}")
-    want["package"]["version"] = version
-    text = sub_once(text, r'^(\[package\]\n(?:[^\[\n].*\n|\n)*?version = ")([^"]*)(")', version,
-                    "[package] version in src-tauri/Cargo.toml")
+    want["workspace"]["package"]["version"] = version
+    text = sub_once(text, r'^(\[workspace\.package\]\n(?:[^\[\n].*\n|\n)*?version = ")([^"]*)(")', version,
+                    "[workspace.package] version in Cargo.toml")
     if tomllib.loads(text) != want:
-        raise Fail("editing src-tauri/Cargo.toml changed more than its version")
+        raise Fail("editing Cargo.toml changed more than its version")
     writes.append((cargo_toml, text))
 
-    lock_path = os.path.join(ROOT, "src-tauri/Cargo.lock")
+    lock_path = os.path.join(ROOT, "Cargo.lock")
     text = open(lock_path, encoding="utf-8").read()
     want = tomllib.loads(text)
     for p in want["package"]:
         if p["name"] == CRATE and "source" not in p:
             p["version"] = version
     text = sub_once(text, rf'^(\[\[package\]\]\nname = "{CRATE}"\nversion = ")([^"]*)(")', version,
-                    f"{CRATE} in src-tauri/Cargo.lock")
+                    f"{CRATE} in Cargo.lock")
     if tomllib.loads(text) != want:
-        raise Fail("editing src-tauri/Cargo.lock changed more than zapper's version")
+        raise Fail("editing Cargo.lock changed more than zapper's version")
     writes.append((lock_path, text))
 
     for path, text in writes:

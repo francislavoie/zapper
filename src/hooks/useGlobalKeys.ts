@@ -61,7 +61,7 @@ const BUTTON_EVENTS = ["pointerdown", "mousedown", "pointerup", "mouseup", "auxc
 
 /** What the desktop app's Linux webview dispatches on the window for a side
  *  button's release, with `detail` "back" or "forward"
- *  (src-tauri/src/surface/linux/overlay.rs). */
+ *  (crates/zapper/src/surface/linux/overlay.rs). */
 const SIDE_BUTTON_EVENT = "zapper:side-button";
 
 export function useGlobalKeys(

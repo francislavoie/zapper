@@ -40,8 +40,8 @@ step() {
   else printf '\033[31m   FAIL\033[0m %s\n' "$label"; FAIL=$((FAIL+1)); fi
 }
 
-rust_tests()  { (cd src-tauri && cargo test --lib -q 2>&1 | tail -3); }
-rust_clippy() { (cd src-tauri && cargo clippy --lib --bins -q -- -D warnings 2>&1 | tail -3); }
+rust_tests()  { (cd crates/zapper && cargo test --lib -q 2>&1 | tail -3); }
+rust_clippy() { (cd crates/zapper && cargo clippy --lib --bins -q -- -D warnings 2>&1 | tail -3); }
 # The Node in .nvmrc, through nvm when it is installed; otherwise whatever is on PATH.
 use_node()    { [[ -s "$HOME/.nvm/nvm.sh" ]] || return 0; . "$HOME/.nvm/nvm.sh" && nvm use >/dev/null 2>&1; }
 front_build() { use_node && npm run build 2>&1 | tail -2; }
@@ -57,11 +57,11 @@ front_checks(){
   echo "$out" | grep -E '(pass|fail) [0-9]+' | head -2
   return $rc
 }
-ipc_check()   { (cd src-tauri && cargo run -q --features harness --bin ipc_check 2>&1 | grep -E '^(PASS|FAIL|  FAIL)'); }
+ipc_check()   { (cd crates/zapper && cargo run -q --features harness --bin ipc_check 2>&1 | grep -E '^(PASS|FAIL|  FAIL)'); }
 # A provider ending and refusing streams, imitated by fake_stream.py (which it
 # starts itself), each one explained and none reopened behind the viewer.
 ending_check(){
-  (cd src-tauri && ./target/debug/ending_check 2>&1 | grep -E '^(PASS|FAIL|  FAIL)'
+  (cd crates/zapper && ../../target/debug/ending_check 2>&1 | grep -E '^(PASS|FAIL|  FAIL)'
    exit "${PIPESTATUS[0]}")
 }
 
@@ -80,7 +80,7 @@ start_fixtures() {
 stop_fixtures() { [[ -n "$SRV" ]] && kill "$SRV" 2>/dev/null; SRV=""; }
 TMP=$(mktemp -d)
 # Config, data and cache for every harness and the app: empty, and gone with
-# $TMP when this script exits. See src-tauri/src/paths.rs.
+# $TMP when this script exits. See crates/zapper/src/paths.rs.
 export ZAPPER_HOME="$TMP/home"
 mkdir -p "$ZAPPER_HOME"
 # The session's Wayland socket, with the usual defaults for a shell that wasn't
@@ -93,11 +93,11 @@ trap 'stop_fixtures; rm -rf "$TMP"' EXIT
 # a desktop crash dialog. Poll, then kill by PID.
 run_windowed() {
   local bin="$1" secs="$2" log; log=$(mktemp)
-  ( cd src-tauri && WAYLAND_DISPLAY=$WL XDG_RUNTIME_DIR=$XRD \
+  ( cd crates/zapper && WAYLAND_DISPLAY=$WL XDG_RUNTIME_DIR=$XRD \
       GDK_BACKEND=wayland ZAPPER_HARNESS=1 ZAPPER_FIXTURE_BASE=http://127.0.0.1:8788 \
       ZAPPER_FIXTURE_NAME=sample1080.ts ZAPPER_STREAM_ID=1 \
       ZAPPER_STREAM_URL=http://127.0.0.1:8788/sample1080.ts \
-      ./target/debug/"$bin" >"$log" 2>&1 & echo $! >"$TMP/win.pid" )
+      ../../target/debug/"$bin" >"$log" 2>&1 & echo $! >"$TMP/win.pid" )
   local pid; pid=$(cat "$TMP/win.pid")
   for _ in $(seq 1 "$secs"); do
     sleep 1
@@ -122,8 +122,8 @@ run_windowed() {
 # and no panic on the way, is the entire question.
 app_starts() {
   local log; log=$(mktemp)
-  ( cd src-tauri && WAYLAND_DISPLAY=$WL XDG_RUNTIME_DIR=$XRD \
-      GDK_BACKEND=wayland ZAPPER_HARNESS=1 ./target/debug/zapper >"$log" 2>&1 & echo $! >"$TMP/app.pid" )
+  ( cd crates/zapper && WAYLAND_DISPLAY=$WL XDG_RUNTIME_DIR=$XRD \
+      GDK_BACKEND=wayland ZAPPER_HARNESS=1 ../../target/debug/zapper >"$log" 2>&1 & echo $! >"$TMP/app.pid" )
   local pid; pid=$(cat "$TMP/app.pid")
   sleep 6
   local alive=0
@@ -149,7 +149,7 @@ step "release scripts"      scripts/test-scripts.sh
 step "catalogue over a fixture mirror" ipc_check
 
 if [[ $WINDOWED -eq 1 ]]; then
-  (cd src-tauri && cargo build -q --bins --features harness 2>&1 | tail -2)
+  (cd crates/zapper && cargo build -q --bins --features harness 2>&1 | tail -2)
   step "fixture server"     start_fixtures
   step "the app starts"        app_starts
   step "surface: GL + decode"  run_windowed surface_check 40

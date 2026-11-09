@@ -23,7 +23,7 @@ window), so there are no engine notices to carry.
 
 - The `.deb` installs them in `/usr/share/doc/zapper/`; the `.rpm` in
   `/usr/share/licenses/zapper/` (Fedora's place for them), without `copyright`. Both from the
-  `files` maps in `src-tauri/tauri.conf.json`; `scripts/check-deb.sh` fails if one is missing
+  `files` maps in `crates/zapper/tauri.conf.json`; `scripts/check-deb.sh` fails if one is missing
   or empty. Both packages also say `License: MIT` (`bundle.license`).
 - The Arch package is the `.deb`'s payload, so the same files in `/usr/share/doc/zapper/`, with
   `/usr/share/licenses/zapper` (Arch's place for them) a link to that folder. Its `license`
@@ -49,14 +49,14 @@ copyright lines are printed separately, each with the packages that use it.
 `just licenses` generates everything; `just package` (and `package-windows`, `package-macos`)
 run the same steps around their build, so the notices can't go stale.
 
-1. **`scripts/licenses.sh`** writes `src-tauri/target/licenses/`: `cargo about generate`
+1. **`scripts/licenses.sh`** writes `target/licenses/`: `cargo about generate`
    (cargo-about 0.9.2) produces JSON for zapper's graph on this platform
    (`x86_64-unknown-linux-gnu`; Windows' in Git for Windows' bash; this Mac's on macOS), without
    build-time, dev-only or harness crates, and `scripts/notices.py` turns it into
    `THIRD-PARTY-NOTICES-rust.txt`, and `LICENSE` into the `.deb`'s `copyright`. With
    `--if-changed` (what the package recipes pass) it does nothing when `Cargo.lock`,
    `Cargo.toml`, `about.toml`, `LICENSE` and the scripts are as they were for the last run (key
-   in `src-tauri/target/licenses.key`); `ZAPPER_REBUILD=1` regenerates. Install cargo-about once:
+   in `target/licenses.key`); `ZAPPER_REBUILD=1` regenerates. Install cargo-about once:
    `cargo install cargo-about --version 0.9.2 --locked --features cli`. The release workflow
    installs it with `taiki-e/install-action`.
 2. **The UI build** (`npm run build`, which `tauri build` runs) writes
@@ -66,7 +66,7 @@ run the same steps around their build, so the notices can't go stale.
    helpers (Vite's preload helper, Rolldown's runtime) are credited to their packages. It then
    copies in `LICENSE`, `packaging/licenses/MPV-FFMPEG-NOTICE.txt`, the Rust notices when they
    exist, and libmpv's `THIRD-PARTY-NOTICES-libmpv.txt` from the archive `just fetch-libmpv`
-   unpacked into `src-tauri/lib/<platform>/` (below), when it has.
+   unpacked into `crates/zapper/lib/<platform>/` (below), when it has.
 3. **libmpv's notices** are made with the library itself, by `scripts/build-libmpv.sh`, from the
    license files in each source it builds; the packages take them from the fetched archive.
 
@@ -104,7 +104,7 @@ Every package ships libmpv and FFmpeg's libraries, built by zapper's own
 `--enable-gpl`, `--enable-version3` or `--enable-nonfree`. They are therefore LGPL-2.1-or-later.
 The app plays through libmpv, which uses FFmpeg, and decodes a title's seek-bar previews through
 FFmpeg's libavformat, libavcodec, libswscale and libavutil directly
-(`src-tauri/src/surface/thumbframe.c`); the recording service,
+(`crates/zapper/src/surface/thumbframe.c`); the recording service,
 zapper-server, remuxes through FFmpeg's libavformat directly (docs/recording.md). They are shared libraries, separate
 from both programs, and the user can replace them with their own builds
 (`packaging/licenses/MPV-FFMPEG-NOTICE.txt` says so, and where):
@@ -112,7 +112,7 @@ from both programs, and the user can replace them with their own builds
 | Platform | Libraries | Installed as |
 | --- | --- | --- |
 | Linux (`.deb`, `.rpm`, Arch) | `libmpv.so.2`, `libavcodec.so.62`, `libavformat.so.62`, `libavutil.so.60`, `libavfilter.so.11`, `libavdevice.so.62`, `libswscale.so.9`, `libswresample.so.6` | `/usr/lib/zapper/`, each finding the others through a RUNPATH of `$ORIGIN`; `/usr/bin/zapper` and `/usr/bin/zapper-server` find them through theirs, `$ORIGIN/../lib/zapper` |
-| Windows | `libmpv-2.dll`, `avcodec-62.dll`, `avformat-62.dll` and the rest | beside `zapper.exe` and `zapper-server.exe` (`src-tauri/tauri.windows.conf.json`) |
+| Windows | `libmpv-2.dll`, `avcodec-62.dll`, `avformat-62.dll` and the rest | beside `zapper.exe` and `zapper-server.exe` (`crates/zapper/tauri.windows.conf.json`) |
 | macOS | `libmpv.2.dylib`, `libavcodec.62.dylib` and the rest | `zapper.app/Contents/Frameworks/`, as `@rpath/…`, each finding the others through an rpath of `@loader_path`; `zapper` finds them through `@executable_path/../Frameworks` (`packaging/macos/dmg.conf.json`) |
 
 The names carry FFmpeg's major versions: moving FFmpeg to a new major changes them, in the
@@ -170,7 +170,7 @@ What it leaves out, because it is GPL:
   through the render node.
 
 On Linux the library also takes a few ordinary system libraries, which the `.deb` and `.rpm`
-depend on (`src-tauri/tauri.conf.json`): VA-API (libva, libva-drm, libva-wayland), libdrm, EGL,
+depend on (`crates/zapper/tauri.conf.json`): VA-API (libva, libva-drm, libva-wayland), libdrm, EGL,
 Wayland client, cursor and EGL, xkbcommon, ALSA, PulseAudio, PipeWire, OpenSSL 3, FreeType,
 HarfBuzz, FriBidi, Fontconfig, zlib and libstdc++. FreeType, HarfBuzz, FriBidi and Fontconfig
 come from the system there rather than being built in because GTK already loads them into the
@@ -195,7 +195,7 @@ archives and every source tarball they were built from (exactly the files in
 `packaging/libmpv/sources.txt`, checked against its SHA-256s), with `SHA256SUMS` and build
 provenance attestations. `THIRD-PARTY-NOTICES-libmpv.txt` names that release's address. The tag
 is not a version and the release is a pre-release, so the updater never offers it
-(`src-tauri/src/updates/release.rs`).
+(`crates/zapper/src/updates/release.rs`).
 
 ### How builds get it
 
@@ -203,8 +203,8 @@ is not a version and the release is a pre-release, so the updater never offers i
 SHA-256. `just fetch-libmpv` (`scripts/fetch-libmpv.sh`; `tools/fetch-libmpv.ps1` on Windows,
 which also makes the import libraries MSVC links with, `mpv.lib`, `avformat.lib` and the rest,
 from the archive's export lists) downloads this platform's, checks it and unpacks it into
-`src-tauri/lib/<platform>/`: `runtime/` (the libraries that ship), `link/` (what a link needs),
-`include/` (mpv's and FFmpeg's headers). `src-tauri/build.rs` then puts `link/` first on the
+`crates/zapper/lib/<platform>/`: `runtime/` (the libraries that ship), `link/` (what a link needs),
+`include/` (mpv's and FFmpeg's headers). `crates/zapper/build.rs` then puts `link/` first on the
 link path and sets the RUNPATH, so libmpv2-sys's `-lmpv` and the remuxer's and previews' `-lavformat` resolve
 to the bundle, compiles the remuxer and the previews against `include/`, and copies `runtime/` beside cargo's
 output; the package configs take the libraries and their notices from there. The package

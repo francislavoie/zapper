@@ -63,7 +63,6 @@ jobs:
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: src-tauri
           key: ci
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
@@ -76,11 +75,11 @@ jobs:
       - run: npm ci
 
       - name: Rust unit tests
-        working-directory: src-tauri
+        working-directory: crates/zapper
         run: cargo test --lib -q
 
       - name: Clippy
-        working-directory: src-tauri
+        working-directory: crates/zapper
         run: cargo clippy --lib --bins -q -- -D warnings
 
       - name: Frontend build
@@ -124,7 +123,6 @@ jobs:
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: src-tauri
           key: server
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
@@ -139,9 +137,9 @@ jobs:
         run: npm run build
 
       - name: Rust tests, server feature
-        working-directory: src-tauri
+        working-directory: crates/zapper
         run: cargo test --lib --no-default-features --features server
 
       - name: Clippy, server feature
-        working-directory: src-tauri
+        working-directory: crates/zapper
         run: cargo clippy --lib --bins --no-default-features --features server -- -D warnings

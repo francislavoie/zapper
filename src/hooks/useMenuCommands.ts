@@ -1,6 +1,6 @@
 // The macOS app menu's items that the interface carries out: zapper ›
 // Settings… (⌘,) and About zapper. The menu itself is Rust's
-// (src-tauri/src/chrome.rs); Quit there closes the window directly, and the
+// (crates/zapper/src/chrome.rs); Quit there closes the window directly, and the
 // Edit menu's items are the system's. Elsewhere there is no app menu and this
 // never hears anything.
 

@@ -11,6 +11,6 @@ Keywords=iptv;tv;xtream;live;
 StartupNotify=true
 # The link between the running window and this file. On Wayland the
 # compositor pairs the toplevel's app_id with a desktop file, and that is
-# the only way the window gets an icon — see APP_ID in src-tauri/src/lib.rs,
+# the only way the window gets an icon — see APP_ID in crates/zapper/src/lib.rs,
 # which sets the app_id to exactly this.
 StartupWMClass=zapper

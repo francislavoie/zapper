@@ -2,10 +2,10 @@
 // and its check of a custom pattern before it is sent.
 //
 // The recording service decides the real names
-// (src-tauri/src/recording/naming.rs) and refuses a pattern it cannot use;
+// (crates/zapper/src/recording/naming.rs) and refuses a pattern it cannot use;
 // this is the same logic, rule for rule, so what the preview shows is what
 // the service writes. Both are checked against
-// src-tauri/src/recording/naming_cases.json, and this one in
+// crates/zapper/src/recording/naming_cases.json, and this one in
 // src/__checks__/naming.test.mjs.
 //
 // A pattern is text with tokens such as {show} and {date}; `/` (or `\`)

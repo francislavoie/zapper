@@ -18,7 +18,7 @@
 #             exact tarballs this platform was built from
 #
 # FFmpeg's libraries are shared, because two programs use them: libmpv, and zapper-server's
-# remuxer (src-tauri/src/recording/remux.c). Every other dependency (libplacebo, libass, dav1d,
+# remuxer (crates/zapper/src/recording/remux.c). Every other dependency (libplacebo, libass, dav1d,
 # the text stack, the shader compilers) is a static library linked into the one that needs it,
 # with every symbol but that library's API hidden, so nothing can collide with a same-named
 # library the system has already loaded into the process (GTK's FreeType). What the libraries
@@ -407,7 +407,7 @@ unpack ffmpeg
 # not here. Protocols, parsers, bitstream filters and filters are left at FFmpeg's full set,
 # which here means its LGPL set. Encoders: PNG and MJPEG for mpv's screenshots, and FFmpeg's own
 # AAC encoder (LGPL), which zapper-server uses to turn sound a browser can't play (AC-3, MP2)
-# into AAC while a browser watches (src-tauri/src/recording/livemux.c).
+# into AAC while a browser watches (crates/zapper/src/recording/livemux.c).
 #
 # The names are configure's (allcodecs.c's ff_<name>_decoder), not the codecs' own: MP4's text
 # subtitles are movtext, though FFmpeg calls the codec mov_text. A name configure doesn't know is
@@ -542,7 +542,7 @@ case $family in
       grep -E '^(dav1d_|pl_|ass_|FT_|hb_|fribidi_)' || true)
     [ -z "$leaked" ] || die "FFmpeg's libraries export what is linked into them: $(echo $leaked | head -c 300)"
     # What they may take from the system: the libraries the .deb's and .rpm's Depends name
-    # (src-tauri/tauri.conf.json), besides each other. Anything else is a dependency that crept in.
+    # (crates/zapper/tauri.conf.json), besides each other. Anything else is a dependency that crept in.
     allowed=" libc.so.6 libm.so.6 libstdc++.so.6 libgcc_s.so.1 libz.so.1 libssl.so.3 libcrypto.so.3
       libva.so.2 libva-drm.so.2 libva-wayland.so.2 libdrm.so.2 libEGL.so.1 libwayland-client.so.0
       libwayland-cursor.so.0 libwayland-egl.so.1 libxkbcommon.so.0 libasound.so.2 libpulse.so.0

@@ -6,7 +6,7 @@
 #
 #   - named zapper, with WebKitGTK and GTK among its Depends and no libmpv;
 #   - /usr/bin/zapper and /usr/bin/zapper-server (the recording service) and nothing else in
-#     /usr/bin: the harness binaries once shipped there (src-tauri/Cargo.toml, [features]);
+#     /usr/bin: the harness binaries once shipped there (crates/zapper/Cargo.toml, [features]);
 #   - the bundled libmpv and FFmpeg in /usr/lib/zapper, zapper's own LGPL build, what both
 #     programs load (through their RUNPATH), with everything they link from the system in
 #     Depends;
@@ -14,7 +14,7 @@
 #     build from source and never offers to update it;
 #   - the license notices in /usr/share/doc/zapper/, none empty (docs/licensing.md);
 #   - a prerm that stops a running zapper-server on removal (packaging/linux/deb-prerm);
-#   - one desktop entry, with StartupWMClass=zapper (the window's app_id, src-tauri/src/lib.rs),
+#   - one desktop entry, with StartupWMClass=zapper (the window's app_id, crates/zapper/src/lib.rs),
 #     valid by desktop-file-validate when that is installed.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)

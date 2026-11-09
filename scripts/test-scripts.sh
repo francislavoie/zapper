@@ -51,17 +51,18 @@ grep -qx '## \[Unreleased\]' "$root/CHANGELOG.md" || fail "CHANGELOG.md has no U
 
 # --- set-version.py, on copies laid out like the repository
 copy=$tmp/repo
-mkdir -p "$copy/scripts" "$copy/src-tauri"
+mkdir -p "$copy/scripts" "$copy/crates/zapper"
 cp "$here/set-version.py" "$copy/scripts/"
 cp "$root/package.json" "$root/package-lock.json" "$copy/"
-cp "$root/src-tauri/tauri.conf.json" "$root/src-tauri/Cargo.toml" "$root/src-tauri/Cargo.lock" "$copy/src-tauri/"
+cp "$root/crates/zapper/tauri.conf.json" "$copy/crates/zapper/"
+cp "$root/Cargo.toml" "$root/Cargo.lock" "$copy/"
 python3 "$copy/scripts/set-version.py" 9.8.7-rc.1 >/dev/null
-[ "$(jq -r .version "$copy/src-tauri/tauri.conf.json")" = 9.8.7-rc.1 ] || fail "tauri.conf.json"; ok
+[ "$(jq -r .version "$copy/crates/zapper/tauri.conf.json")" = 9.8.7-rc.1 ] || fail "tauri.conf.json"; ok
 [ "$(jq -r .version "$copy/package.json")" = 9.8.7-rc.1 ] || fail "package.json"; ok
 [ "$(jq -r '.version + " " + .packages[""].version' "$copy/package-lock.json")" = "9.8.7-rc.1 9.8.7-rc.1" ] || fail "package-lock.json"; ok
-grep -q '^version = "9.8.7-rc.1"$' "$copy/src-tauri/Cargo.toml" || fail "Cargo.toml"; ok
-[ "$(grep -A1 '^name = "zapper"$' "$copy/src-tauri/Cargo.lock" | tail -1)" = 'version = "9.8.7-rc.1"' ] || fail "Cargo.lock"; ok
-for f in package.json package-lock.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock; do
+grep -q '^version = "9.8.7-rc.1"$' "$copy/Cargo.toml" || fail "Cargo.toml"; ok
+[ "$(grep -A1 '^name = "zapper"$' "$copy/Cargo.lock" | tail -1)" = 'version = "9.8.7-rc.1"' ] || fail "Cargo.lock"; ok
+for f in package.json package-lock.json crates/zapper/tauri.conf.json Cargo.toml Cargo.lock; do
   changed=$(diff "$root/$f" "$copy/$f" | grep -c '^>' || true)
   [ "$changed" -ge 1 ] && [ "$changed" -le 2 ] || fail "$f: $changed lines changed, expected only the version"; ok
 done

@@ -40,7 +40,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FATAL = ("SIGSEGV", "SIGABRT", "SIGBUS", "SIGILL", "SIGFPE", "SIGTRAP", "SIGSYS")
 
 ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-ap.add_argument("--bin", default=f"{ROOT}/src-tauri/target/release/zapper")
+ap.add_argument("--bin", default=f"{ROOT}/target/release/zapper")
 ap.add_argument("--runs", type=int, default=30)
 ap.add_argument("--quit-min", type=float, default=6.0, help="earliest close, in seconds")
 ap.add_argument("--quit-max", type=float, default=10.0, help="latest close, in seconds")

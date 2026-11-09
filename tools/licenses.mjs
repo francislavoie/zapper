@@ -336,15 +336,15 @@ export function buildUiNotices(opts) {
  * with no extension with index.html). Paths are from the repository root. A file that doesn't
  * exist (the Rust notices before `just licenses` has run, libmpv's before `just fetch-libmpv`)
  * is left out, and the pane lists what's there. libmpv's are this platform's: the ones inside
- * the archive scripts/fetch-libmpv.sh unpacked into src-tauri/lib/<platform>/, the library the
- * packages ship (or ZAPPER_LIBMPV_DIR's, as src-tauri/build.rs takes it).
+ * the archive scripts/fetch-libmpv.sh unpacked into crates/zapper/lib/<platform>/, the library the
+ * packages ship (or ZAPPER_LIBMPV_DIR's, as crates/zapper/build.rs takes it).
  * @param {{ licensesDir?: string, libmpvDir?: string, platform?: string, arch?: string }} [env]
  */
 export function noticeFiles({
-  licensesDir = process.env.ZAPPER_LICENSES_DIR ?? "src-tauri/target/licenses",
+  licensesDir = process.env.ZAPPER_LICENSES_DIR ?? "target/licenses",
   platform = process.env.ZAPPER_LICENSES_PLATFORM ?? process.platform,
   arch = process.arch,
-  libmpvDir = process.env.ZAPPER_LIBMPV_DIR ?? `src-tauri/lib/${libmpvPlatform(platform, arch)}`,
+  libmpvDir = process.env.ZAPPER_LIBMPV_DIR ?? `crates/zapper/lib/${libmpvPlatform(platform, arch)}`,
 } = {}) {
   return [
     { name: "LICENSE.txt", path: "LICENSE" },

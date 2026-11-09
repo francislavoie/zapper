@@ -9,7 +9,7 @@ tried on a real Mac yet and is not released: there is no published macOS libmpv 
 ## How video is drawn
 
 The same arrangement as on Linux, in AppKit's terms
-([src-tauri/src/surface/macos/mod.rs](../src-tauri/src/surface/macos/mod.rs)):
+([crates/zapper/src/surface/macos/mod.rs](../crates/zapper/src/surface/macos/mod.rs)):
 
 - a view of zapper's own sits beneath the WKWebView in the window, and holds a view whose frame
   is the rect the page asks for (the same `VideoRect` as on the other platforms);
@@ -26,11 +26,11 @@ blitted down from the frame just drawn, as on Linux.
 ## The window and the keyboard
 
 On a Mac the window keeps the system's title bar, transparent and under zapper's own
-(`titleBarStyle: "Overlay"` in `src-tauri/tauri.macos.conf.json`; Linux and Windows stay
+(`titleBarStyle: "Overlay"` in `crates/zapper/tauri.macos.conf.json`; Linux and Windows stay
 undecorated). The traffic lights are AppKit's, in the bar's top-left corner, so the bar draws
 no window buttons there and starts the hamburger to their right; the rest of it drags the
 window, and a double click on it does what System Settings › Desktop & Dock says
-(`src-tauri/src/chrome.rs`). Full screen is the system's, from the green button, View › Enter
+(`crates/zapper/src/chrome.rs`). Full screen is the system's, from the green button, View › Enter
 Full Screen (⌃⌘F) or zapper's F, and zapper's bar is not drawn there.
 
 Shortcuts use ⌘ where Linux and Windows use Ctrl, and are written the Mac way (⌘P, ⇧⌘F):
@@ -55,13 +55,13 @@ just dev          # a development build
 just test         # Rust, interface and release-script checks
 ```
 
-The app bundle and the `.dmg` (into `src-tauri/target/release/bundle/`), with the license
+The app bundle and the `.dmg` (into `target/release/bundle/`), with the license
 notices (`cargo-about` 0.9.2), and the bundle's checks:
 
 ```sh
 scripts/licenses.sh
 npx tauri build --config packaging/macos/dmg.conf.json
-scripts/check-macos-app.sh src-tauri/target/release/bundle/macos/zapper.app
+scripts/check-macos-app.sh target/release/bundle/macos/zapper.app
 ```
 
 `just package-macos` does the same once the manifest names a published macOS libmpv. The bundle

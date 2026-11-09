@@ -1,6 +1,6 @@
 // Settings › Recording › Network access: what the box checks before it asks
 // the recording service, and how it words what the service answers. The
-// service checks the same things itself (src-tauri/src/recording/access.rs
+// service checks the same things itself (crates/zapper/src/recording/access.rs
 // and config.rs); these say so sooner, beside the field.
 //
 // Checked in src/__checks__/network.test.mjs.

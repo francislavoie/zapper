@@ -69,7 +69,7 @@ if packaged && [[ $force -eq 0 ]]; then
   exit 1
 fi
 
-binary="$here/src-tauri/target/$profile/zapper"
+binary="$here/target/$profile/zapper"
 if [[ ! -x "$binary" ]]; then
   echo "no binary at $binary — build it first (npm run app, or cargo build)" >&2
   exit 1
@@ -77,10 +77,10 @@ fi
 
 mkdir -p "$apps"
 # The sizes the theme looks for, from the same PNGs the bundle uses.
-install -Dm644 "$here/src-tauri/icons/32x32.png"     "$icons/32x32/apps/zapper.png"
-install -Dm644 "$here/src-tauri/icons/128x128.png"   "$icons/128x128/apps/zapper.png"
-install -Dm644 "$here/src-tauri/icons/128x128@2x.png" "$icons/256x256/apps/zapper.png"
-install -Dm644 "$here/src-tauri/icons/icon.svg"      "$icons/scalable/apps/zapper.svg"
+install -Dm644 "$here/crates/zapper/icons/32x32.png"     "$icons/32x32/apps/zapper.png"
+install -Dm644 "$here/crates/zapper/icons/128x128.png"   "$icons/128x128/apps/zapper.png"
+install -Dm644 "$here/crates/zapper/icons/128x128@2x.png" "$icons/256x256/apps/zapper.png"
+install -Dm644 "$here/crates/zapper/icons/icon.svg"      "$icons/scalable/apps/zapper.svg"
 
 # Exec has to be the absolute path: nothing named `zapper` is on PATH when
 # it is being run out of a build tree.

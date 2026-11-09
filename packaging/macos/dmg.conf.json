@@ -2,12 +2,12 @@
   "bundle": {
     "targets": ["app", "dmg"],
     "resources": {
-      "../packaging/install-kind-dmg": "install-kind",
-      "../LICENSE": "licenses/LICENSE.txt",
-      "../packaging/licenses/MPV-FFMPEG-NOTICE.txt": "licenses/MPV-FFMPEG-NOTICE.txt",
+      "../../packaging/install-kind-dmg": "install-kind",
+      "../../LICENSE": "licenses/LICENSE.txt",
+      "../../packaging/licenses/MPV-FFMPEG-NOTICE.txt": "licenses/MPV-FFMPEG-NOTICE.txt",
       "lib/macos-arm64/THIRD-PARTY-NOTICES-libmpv.txt": "licenses/THIRD-PARTY-NOTICES-libmpv.txt",
-      "target/licenses/THIRD-PARTY-NOTICES-rust.txt": "licenses/THIRD-PARTY-NOTICES-rust.txt",
-      "../dist/licenses/THIRD-PARTY-NOTICES-ui.txt": "licenses/THIRD-PARTY-NOTICES-ui.txt"
+      "../../target/licenses/THIRD-PARTY-NOTICES-rust.txt": "licenses/THIRD-PARTY-NOTICES-rust.txt",
+      "../../dist/licenses/THIRD-PARTY-NOTICES-ui.txt": "licenses/THIRD-PARTY-NOTICES-ui.txt"
     },
     "macOS": {
       "minimumSystemVersion": "11.0",

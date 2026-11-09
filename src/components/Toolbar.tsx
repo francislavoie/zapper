@@ -3,7 +3,7 @@
 // click that maximises, minimise/maximise/close — is drawn and handled here.
 //
 // Except on a Mac, where the window keeps the system's title bar, transparent
-// and under this one (`titleBarStyle: "Overlay"`, src-tauri/tauri.macos.conf.json):
+// and under this one (`titleBarStyle: "Overlay"`, crates/zapper/tauri.macos.conf.json):
 // the traffic lights are AppKit's, in the bar's top-left corner, so the bar
 // draws no window buttons there, leaves the lights their room before the
 // hamburger, and does what the system's bar would on a double click.

@@ -20,7 +20,7 @@ cd "$(git -C "$here" rev-parse --show-toplevel)"
 python3 scripts/version.py check "$v" || exit 1
 repo=$(scripts/releases-repo.sh) || exit 1
 case "$repo" in
-  OWNER/*) fail "RELEASES_REPO in src-tauri/src/updates/mod.rs is still the placeholder '$repo'; set it first (docs/releasing.md, One-time setup)" ;;
+  OWNER/*) fail "RELEASES_REPO in crates/zapper/src/updates/mod.rs is still the placeholder '$repo'; set it first (docs/releasing.md, One-time setup)" ;;
 esac
 branch=$(git symbolic-ref -q --short HEAD) || branch="(detached HEAD)"
 [ "$branch" = main ] || fail "not on main (on $branch); releases are cut from main"
@@ -34,7 +34,7 @@ while read -r tag; do
   [ "$(python3 scripts/version.py cmp "$v" "${tag#v}")" = 1 ] || fail "$v is not newer than $tag"
 done < <(git tag -l 'v*')
 
-files=(src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock package.json package-lock.json CHANGELOG.md)
+files=(crates/zapper/tauri.conf.json Cargo.toml Cargo.lock package.json package-lock.json CHANGELOG.md)
 committed=
 trap '[ -n "$committed" ] || git checkout -q -- "${files[@]}"' EXIT
 python3 scripts/set-version.py "$v"

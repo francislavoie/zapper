@@ -347,7 +347,7 @@ select option {
 }
 
 /* A Mac's traffic lights: AppKit draws them over the bar's top-left corner
-   (`trafficLightPosition` in src-tauri/tauri.macos.conf.json puts the first
+   (`trafficLightPosition` in crates/zapper/tauri.macos.conf.json puts the first
    14px in, centred on the bar), and this keeps the hamburger clear of them.
    In px, not rem, because they are the system's and do not grow with the
    interface zoom. Pressing between them drags the window. */

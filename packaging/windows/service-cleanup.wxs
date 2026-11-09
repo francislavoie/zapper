@@ -6,7 +6,7 @@
 
   Settings > Recording installs the service as a scheduled task per user,
   zapper-server-<user>, with "zapper" as its author
-  (src-tauri/src/recording/service.rs). They are the users' own tasks, so
+  (crates/zapper/src/recording/service.rs). They are the users' own tasks, so
   only a process running as SYSTEM sees them all: a deferred action that does
   not impersonate. On a full removal only, never on the removal half of an
   upgrade (UPGRADINGPRODUCTCODE), it stops and deletes every such task, before

@@ -4,10 +4,10 @@
 ; The NSIS installer and the MSI are bundled from one build with the same
 ; resources, so both carry install-kind = msi. POSTINSTALL rewrites it to nsis
 ; after the files are in place, which is how the updater tells the two apart
-; and downloads the right installer (src-tauri/src/updates/install.rs).
+; and downloads the right installer (crates/zapper/src/updates/install.rs).
 ;
 ; The recording service, when Settings > Recording installed it, is a
-; scheduled task, zapper-server-<user> (src-tauri/src/recording/service.rs,
+; scheduled task, zapper-server-<user> (crates/zapper/src/recording/service.rs,
 ; task_name), running zapper-server.exe from this folder. A file in use cannot
 ; be replaced or removed, so zapper-server.exe is stopped before files are
 ; written or deleted, and the task, if there is one, started again once the

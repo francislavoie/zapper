@@ -18,7 +18,7 @@
     (scripts/build-libmpv.sh, published by .github/workflows/libmpv.yml): the
     archive packaging/libmpv/manifest.json names for windows-x86_64, checked
     against the manifest's SHA-256. This script unpacks it into
-    src-tauri/lib/windows-x86_64/ (ignored by git), which build.rs adds to the
+    crates/zapper/lib/windows-x86_64/ (ignored by git), which build.rs adds to the
     link search path and tauri.windows.conf.json bundles from, and makes an
     import library for each export list in link\ (mpv.def, avformat.def, ...)
     with the MSVC `lib` tool, found through vswhere. Does nothing when that
@@ -29,14 +29,14 @@
     you built with scripts/build-libmpv.sh).
 
 .PARAMETER Dest
-    Where to put the result. Defaults to src-tauri/lib/windows-x86_64.
+    Where to put the result. Defaults to crates/zapper/lib/windows-x86_64.
 
 .EXAMPLE
     powershell -NoProfile -ExecutionPolicy Bypass -File tools\fetch-libmpv.ps1
 #>
 param(
     [string]$Archive = "",
-    [string]$Dest = (Join-Path $PSScriptRoot "..\src-tauri\lib\windows-x86_64")
+    [string]$Dest = (Join-Path $PSScriptRoot "..\crates\zapper\lib\windows-x86_64")
 )
 
 $ErrorActionPreference = "Stop"

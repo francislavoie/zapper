@@ -4,7 +4,7 @@
   "version": "0.4.0",
   "identifier": "dev.lavoie.zapper",
   "build": {
-    "frontendDist": "../dist",
+    "frontendDist": "../../dist",
     "devUrl": "http://localhost:5180",
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build"
@@ -42,8 +42,8 @@
     "longDescription": "A live-TV client for Xtream Codes servers, M3U playlists, HDHomeRun tuners and Tvheadend: instant channel switching, a full guide, catch-up, and a picture that keeps playing while you browse.",
     "linux": {
       "deb": {
-        "desktopTemplate": "../packaging/zapper.desktop.hbs",
-        "preRemoveScript": "../packaging/linux/deb-prerm",
+        "desktopTemplate": "../../../packaging/zapper.desktop.hbs",
+        "preRemoveScript": "../../../packaging/linux/deb-prerm",
         "depends": [
           "libwebkit2gtk-4.1-0 (>= 2.40)",
           "libgtk-3-0",
@@ -69,8 +69,8 @@
           "zlib1g"
         ],
         "files": {
-          "/usr/lib/zapper/install-kind": "../packaging/install-kind-deb",
-          "/usr/bin/zapper-server": "target/release/zapper-server",
+          "/usr/lib/zapper/install-kind": "../../packaging/install-kind-deb",
+          "/usr/bin/zapper-server": "../../target/release/zapper-server",
           "/usr/lib/zapper/libmpv.so.2": "lib/linux-x86_64/runtime/libmpv.so.2",
           "/usr/lib/zapper/libavutil.so.60": "lib/linux-x86_64/runtime/libavutil.so.60",
           "/usr/lib/zapper/libavcodec.so.62": "lib/linux-x86_64/runtime/libavcodec.so.62",
@@ -79,17 +79,17 @@
           "/usr/lib/zapper/libavdevice.so.62": "lib/linux-x86_64/runtime/libavdevice.so.62",
           "/usr/lib/zapper/libswscale.so.9": "lib/linux-x86_64/runtime/libswscale.so.9",
           "/usr/lib/zapper/libswresample.so.6": "lib/linux-x86_64/runtime/libswresample.so.6",
-          "/usr/share/doc/zapper/copyright": "target/licenses/copyright",
-          "/usr/share/doc/zapper/LICENSE": "../LICENSE",
-          "/usr/share/doc/zapper/MPV-FFMPEG-NOTICE.txt": "../packaging/licenses/MPV-FFMPEG-NOTICE.txt",
+          "/usr/share/doc/zapper/copyright": "../../target/licenses/copyright",
+          "/usr/share/doc/zapper/LICENSE": "../../LICENSE",
+          "/usr/share/doc/zapper/MPV-FFMPEG-NOTICE.txt": "../../packaging/licenses/MPV-FFMPEG-NOTICE.txt",
           "/usr/share/doc/zapper/THIRD-PARTY-NOTICES-libmpv.txt": "lib/linux-x86_64/THIRD-PARTY-NOTICES-libmpv.txt",
-          "/usr/share/doc/zapper/THIRD-PARTY-NOTICES-rust.txt": "target/licenses/THIRD-PARTY-NOTICES-rust.txt",
-          "/usr/share/doc/zapper/THIRD-PARTY-NOTICES-ui.txt": "../dist/licenses/THIRD-PARTY-NOTICES-ui.txt"
+          "/usr/share/doc/zapper/THIRD-PARTY-NOTICES-rust.txt": "../../target/licenses/THIRD-PARTY-NOTICES-rust.txt",
+          "/usr/share/doc/zapper/THIRD-PARTY-NOTICES-ui.txt": "../../dist/licenses/THIRD-PARTY-NOTICES-ui.txt"
         }
       },
       "rpm": {
-        "desktopTemplate": "../packaging/zapper.desktop.hbs",
-        "preRemoveScript": "../packaging/linux/rpm-preun",
+        "desktopTemplate": "../../../packaging/zapper.desktop.hbs",
+        "preRemoveScript": "../../../packaging/linux/rpm-preun",
         "depends": [
           "libwebkit2gtk-4.1.so.0()(64bit)",
           "libgtk-3.so.0()(64bit)",
@@ -116,8 +116,8 @@
           "libz.so.1()(64bit)"
         ],
         "files": {
-          "/usr/lib/zapper/install-kind": "../packaging/install-kind-rpm",
-          "/usr/bin/zapper-server": "target/release/zapper-server",
+          "/usr/lib/zapper/install-kind": "../../packaging/install-kind-rpm",
+          "/usr/bin/zapper-server": "../../target/release/zapper-server",
           "/usr/lib/zapper/libmpv.so.2": "lib/linux-x86_64/runtime/libmpv.so.2",
           "/usr/lib/zapper/libavutil.so.60": "lib/linux-x86_64/runtime/libavutil.so.60",
           "/usr/lib/zapper/libavcodec.so.62": "lib/linux-x86_64/runtime/libavcodec.so.62",
@@ -126,11 +126,11 @@
           "/usr/lib/zapper/libavdevice.so.62": "lib/linux-x86_64/runtime/libavdevice.so.62",
           "/usr/lib/zapper/libswscale.so.9": "lib/linux-x86_64/runtime/libswscale.so.9",
           "/usr/lib/zapper/libswresample.so.6": "lib/linux-x86_64/runtime/libswresample.so.6",
-          "/usr/share/licenses/zapper/LICENSE": "../LICENSE",
-          "/usr/share/licenses/zapper/MPV-FFMPEG-NOTICE.txt": "../packaging/licenses/MPV-FFMPEG-NOTICE.txt",
+          "/usr/share/licenses/zapper/LICENSE": "../../LICENSE",
+          "/usr/share/licenses/zapper/MPV-FFMPEG-NOTICE.txt": "../../packaging/licenses/MPV-FFMPEG-NOTICE.txt",
           "/usr/share/licenses/zapper/THIRD-PARTY-NOTICES-libmpv.txt": "lib/linux-x86_64/THIRD-PARTY-NOTICES-libmpv.txt",
-          "/usr/share/licenses/zapper/THIRD-PARTY-NOTICES-rust.txt": "target/licenses/THIRD-PARTY-NOTICES-rust.txt",
-          "/usr/share/licenses/zapper/THIRD-PARTY-NOTICES-ui.txt": "../dist/licenses/THIRD-PARTY-NOTICES-ui.txt"
+          "/usr/share/licenses/zapper/THIRD-PARTY-NOTICES-rust.txt": "../../target/licenses/THIRD-PARTY-NOTICES-rust.txt",
+          "/usr/share/licenses/zapper/THIRD-PARTY-NOTICES-ui.txt": "../../dist/licenses/THIRD-PARTY-NOTICES-ui.txt"
         }
       }
     }

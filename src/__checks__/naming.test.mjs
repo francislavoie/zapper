@@ -19,7 +19,7 @@ import {
 // The cases the recording service's own tests read too, so the preview and
 // the names on disk cannot drift apart.
 const cases = JSON.parse(
-  readFileSync(new URL("../../src-tauri/src/recording/naming_cases.json", import.meta.url), "utf8"),
+  readFileSync(new URL("../../crates/zapper/src/recording/naming_cases.json", import.meta.url), "utf8"),
 );
 
 const civil = ([year, month, day, hour, minute]) => ({ year, month, day, hour, minute });

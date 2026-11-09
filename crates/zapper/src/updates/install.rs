@@ -426,7 +426,7 @@ mod tests {
 
     #[test]
     fn the_markers_in_the_repository_say_what_their_names_say() {
-        let packaging = Path::new(env!("CARGO_MANIFEST_DIR")).join("../packaging");
+        let packaging = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packaging");
         for (file, kind) in [
             ("install-kind-deb", InstallKind::Deb),
             ("install-kind-rpm", InstallKind::Rpm),

@@ -18,7 +18,7 @@
 # Needs, from the host: the interface built (`npm run build`, compiled in; its notices in
 # dist/licenses) and the Rust notices (scripts/licenses.sh). The FFmpeg build, cargo's
 # downloads and its target folder are kept in ZAPPER_STATIC_CACHE (default
-# src-tauri/target/static), so a second run rebuilds only what changed.
+# target/static), so a second run rebuilds only what changed.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(dirname "$here")
@@ -31,10 +31,10 @@ checks=
 # the binary.
 image=rust:1.98.1-alpine3.23@sha256:94a43bda4fd9b71fa3a74621c0982a646f83c7d1a3ba52bb4b7ddfd76d4dca93
 engine=$(command -v docker || command -v podman) || die "Docker or Podman is needed"
-version=$(sed -n 's/^version = "\(.*\)"$/\1/p' "$root/src-tauri/Cargo.toml" | head -1)
-cache=${ZAPPER_STATIC_CACHE:-$root/src-tauri/target/static}
+version=$(sed -n 's/^version = "\(.*\)"$/\1/p' "$root/Cargo.toml" | head -1)
+cache=${ZAPPER_STATIC_CACHE:-$root/target/static}
 notices_ui=$root/dist/licenses/THIRD-PARTY-NOTICES-ui.txt
-notices_rust=$root/src-tauri/target/licenses/THIRD-PARTY-NOTICES-rust.txt
+notices_rust=$root/target/licenses/THIRD-PARTY-NOTICES-rust.txt
 [ -f "$root/dist/index.html" ] || die "no dist/index.html: run npm run build first"
 for f in "$notices_ui" "$notices_rust"; do
   [ -s "$f" ] || die "$f is missing or empty (npm run build, scripts/licenses.sh)"
@@ -48,8 +48,8 @@ cp "$root/packaging/licenses/MUSL-COPYRIGHT.txt" "$cache/notices/3-MUSL-COPYRIGH
 
 harness=
 [ -n "$checks" ] && harness='apk add --no-cache -q ffmpeg
-cargo test --release --locked --manifest-path /src/src-tauri/Cargo.toml --no-default-features --features server --lib recording::livemux -- --nocapture
-cargo build --release --locked --manifest-path /src/src-tauri/Cargo.toml --no-default-features --features server,harness --bin recording_check'
+cargo test --release --locked --manifest-path /src/crates/zapper/Cargo.toml --no-default-features --features server --lib recording::livemux -- --nocapture
+cargo build --release --locked --manifest-path /src/crates/zapper/Cargo.toml --no-default-features --features server,harness --bin recording_check'
 
 "$engine" run --rm -i \
   -v "$root:/src" -v "$cache:/cache" \
@@ -64,7 +64,7 @@ apk add --no-cache -q bash build-base nasm perl xz curl cmake linux-headers file
 trap 'chown -R "$OWNER" /cache' EXIT
 bash /src/scripts/build-ffmpeg-static.sh /cache/ffmpeg /cache/sources
 cp /cache/ffmpeg/FFMPEG-NOTICE.txt /cache/notices/2-FFMPEG-NOTICE.txt
-cargo build --release --locked --manifest-path /src/src-tauri/Cargo.toml \
+cargo build --release --locked --manifest-path /src/crates/zapper/Cargo.toml \
   --no-default-features --features server --bin zapper-server
 file /cache/target/release/zapper-server
 if [ -n "$HARNESS" ]; then sh -ec "$HARNESS"; fi

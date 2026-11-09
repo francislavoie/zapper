@@ -1379,7 +1379,7 @@ const mockRecordingApi = {
     list.push(rec);
     return rec;
   },
-  // The service plays the schedule through its rules (src-tauri/src/
+  // The service plays the schedule through its rules (crates/zapper/src/
   // recording/sharing.rs); this is a rough likeness on one stream: two
   // channels whose windows overlap clash, the earlier one keeping its
   // programme and the later one losing what overlaps it.
@@ -1408,7 +1408,7 @@ const mockRecordingApi = {
     return out;
   },
   // The service ranks channels on the same guide channel, then the same
-  // programme elsewhere (src-tauri/src/recording/backup.rs). The mock has no
+  // programme elsewhere (crates/zapper/src/recording/backup.rs). The mock has no
   // guide channels, so its neighbours in the category stand in.
   recordingBackups: async (id: number): Promise<BackupsDto> => {
     await delay(50);

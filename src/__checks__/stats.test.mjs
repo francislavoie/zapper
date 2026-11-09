@@ -44,7 +44,7 @@ test("the hover cursor finds the sample under the pointer, both ways round", () 
 // The sampling itself — the delta arithmetic, the ring, the reset on a new
 // stream — lives in the backend, which records continuously so the panel
 // opens onto a full graph rather than starting one. It is tested there, in
-// src-tauri/src/ipc/health.rs. What is left on this side is drawing.
+// crates/zapper/src/ipc/health.rs. What is left on this side is drawing.
 
 test("the sparkline puts the newest sample on the right edge", () => {
   // A short history is drawn at the right-hand end rather than stretched,
