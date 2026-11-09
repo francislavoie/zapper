@@ -2,7 +2,7 @@
 //! that it runs and answers, then removes it and checks that it is gone.
 //!
 //! ```text
-//! cargo build --features harness,server --bin zapper-server --bin service_check
+//! cargo build -p zapper-server --features harness --bin zapper-server --bin service_check
 //! target/debug/service_check
 //! ```
 //!

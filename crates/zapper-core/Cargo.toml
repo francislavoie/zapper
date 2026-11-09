@@ -57,20 +57,16 @@ libc = "0.2"
 # service needs below.
 [target.'cfg(windows)'.dependencies]
 # Com, Ole, Variant and TaskScheduler: the recording service's sign-in task
-# (recording::service). Console, Security and Storage_FileSystem:
-# zapper-server finding its terminal's console. Services,
-# Security_Authorization and Threading: the boot-time Windows service's
+# (recording::service). Security, Security_Authorization, Services and
+# Threading: the boot-time Windows service's
 # permissions, this user's SID, and asking for elevation to install it
-# (recording::service::winsvc); Registry, which ShellExecuteExW needs.
+# (ShellExecuteExW: Shell, and WindowsAndMessaging for SW_HIDE)
+# in recording::service::winsvc; Registry, which ShellExecuteExW needs.
 windows = { version = "0.62", features = [
     "Win32_Foundation",
-    "Win32_Graphics_Gdi",
     "Win32_Security",
     "Win32_Security_Authorization",
-    "Win32_Storage_FileSystem",
     "Win32_System_Com",
-    "Win32_System_Console",
-    "Win32_System_LibraryLoader",
     "Win32_System_Ole",
     "Win32_System_Registry",
     "Win32_System_Services",

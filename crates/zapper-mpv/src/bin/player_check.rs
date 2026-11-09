@@ -1,16 +1,16 @@
 //! Verifies the player *commands* against a real stream.
 //!
-//! `surface_check` proves the GL surface draws. This proves the layer above
-//! it: that `play` reaches `Playing` with measured dimensions, that a relative
+//! The unit tests prove the controller against a stand-in. This proves it
+//! against mpv: that `play` reaches `Playing` with measured dimensions, that a relative
 //! seek moves into the buffered past, that `seek_live` comes back to the edge,
 //! and that `stop` stops. None of that is unit-testable - the whole point of
 //! these commands is mpv's real answers.
 //!
-//! The player is mpv in a window of its own (`surface::host`), with no
+//! The player is mpv in a window of its own (`zapper_mpv::host`), with no
 //! webview: run it inside a desktop session, the headless gnome-shell for
 //! anything unattended.
 //!
-//! Usage: `tools/fake_stream.py &` then `cargo run --bin player_check`. It
+//! Usage: `tools/fake_stream.py &` then `cargo run -p zapper-mpv --features harness --bin player_check`. It
 //! plays a local fixture (`ZAPPER_FIXTURE_BASE`, default
 //! `http://127.0.0.1:8788`, and `ZAPPER_FIXTURE_NAME`, default
 //! `sample1080.ts`) on a scratch account: never the account on this machine.
@@ -139,6 +139,11 @@ async fn quiesce() {
 /// harness.
 #[cfg(target_os = "linux")]
 fn finish(code: i32) -> ! {
+    // As a front end quits: progress saved, the player let go of, bounded.
+    // Only once the player exists, which is after this run was isolated.
+    if zapper_core::player::backend().is_some() {
+        zapper_core::player::shutdown();
+    }
     use std::io::Write;
     let _ = std::io::stdout().flush();
     let _ = std::io::stderr().flush();

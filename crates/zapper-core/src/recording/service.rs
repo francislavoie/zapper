@@ -275,7 +275,7 @@ pub fn install(linger: bool) -> Result<()> {
         bail!(why);
     }
     let exe = find_binary().ok_or_else(|| {
-        anyhow!("zapper-server was not found beside zapper or on PATH; build it with `cargo build --no-default-features --features server --bin zapper-server`")
+        anyhow!("zapper-server was not found beside zapper or on PATH; build it with `cargo build -p zapper-server --bin zapper-server`")
     })?;
     // A home of the app's own (ZAPPER_HOME) goes to the service too.
     let home = std::env::var_os(crate::paths::HOME_OVERRIDE)

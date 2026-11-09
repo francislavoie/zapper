@@ -1,4 +1,4 @@
-//! The headless host (`surface::host`) against a real stream: mpv in a
+//! The headless host (`zapper_mpv::host`) against a real stream: mpv in a
 //! window of its own, driven through the installed backend directly, with no
 //! controller and no webview.
 //!
@@ -12,7 +12,7 @@
 //! it plays on.
 //!
 //! Usage: `tools/fake_stream.py --movies 2 &`, then
-//! `cargo run --features harness --bin host_smoke` inside a desktop session
+//! `cargo run -p zapper-mpv --features harness --bin host_smoke` inside a desktop session
 //! (the headless gnome-shell for anything unattended). The film is
 //! `ZAPPER_FIXTURE_MOVIE` (default `movie/u/p/2.mp4`, 120 s) on
 //! `ZAPPER_FIXTURE_BASE` (default `http://127.0.0.1:8788`), on a scratch
@@ -30,6 +30,11 @@ use zapper_mpv::{backend, host};
 /// Exits without unwinding: mpv's threads, its window among them, are still
 /// running, and nothing in a one-shot harness is worth cleaning up.
 fn finish(code: i32) -> ! {
+    // As a front end quits: progress saved, the player let go of, bounded.
+    // Only once the player exists, which is after this run was isolated.
+    if zapper_core::player::backend().is_some() {
+        zapper_core::player::shutdown();
+    }
     use std::io::Write;
     let _ = std::io::stdout().flush();
     let _ = std::io::stderr().flush();

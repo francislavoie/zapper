@@ -9,14 +9,14 @@
 //!
 //! ```sh
 //! tools/fake_stream.py --port 8788 --panel-utc-offset 1 --archive-days 3 &
-//! TZ=America/New_York cargo run --features harness --bin catchup_check
+//! TZ=America/New_York cargo run -p zapper-mpv --features harness --bin catchup_check
 //! ```
 //!
 //! `ZAPPER_PANEL_BASE` moves the server (default `http://127.0.0.1:8788`);
 //! it must be on this machine. The run is on a scratch account whose
 //! server is that one: never the account on this machine, and never a
 //! provider. Audio is off (`ao=null`) before anything is loaded. The player
-//! is mpv in a window of its own (`surface::host`): run it inside a desktop
+//! is mpv in a window of its own (`zapper_mpv::host`): run it inside a desktop
 //! session, the headless gnome-shell for anything unattended.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
@@ -31,6 +31,11 @@ fn main() {
 /// window among them, are still running.
 #[cfg(target_os = "linux")]
 fn finish(code: i32) -> ! {
+    // As a front end quits: progress saved, the player let go of, bounded.
+    // Only once the player exists, which is after this run was isolated.
+    if zapper_core::player::backend().is_some() {
+        zapper_core::player::shutdown();
+    }
     use std::io::Write;
     let _ = std::io::stdout().flush();
     let _ = std::io::stderr().flush();

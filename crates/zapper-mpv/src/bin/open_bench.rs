@@ -17,7 +17,7 @@
 //!
 //! Usage:
 //!   tools/fake_stream.py &
-//!   cargo run --bin open_bench -- http://127.0.0.1:8788/sample1080.ts
+//!   cargo run -p zapper-mpv --features harness --bin open_bench -- http://127.0.0.1:8788/sample1080.ts
 
 use std::time::{Duration, Instant};
 

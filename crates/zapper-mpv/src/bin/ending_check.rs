@@ -14,7 +14,7 @@
 //! the run takes a minute rather than ten. It counts the stream requests
 //! the server saw: one per open, never a quiet extra one.
 //!
-//! Usage: `cargo run --features harness --bin ending_check` (fixtures from
+//! Usage: `cargo run -p zapper-mpv --features harness --bin ending_check` (fixtures from
 //! `tools/make_fixtures.sh`). Silent, windowless, and local: the only server
 //! it talks to is the one it starts, plus one name under `.invalid`, which
 //! by definition resolves nowhere.

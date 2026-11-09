@@ -5,7 +5,8 @@
 # Checks the static zapper-server for Linux (scripts/build-server-static.sh) where its README
 # says it runs, with Docker or Podman and the network to pull the images:
 #
-#   - here: `file` and `ldd` call it statically linked, it says its version, and --licenses
+#   - here: `file` and `ldd` call it statically linked, it was not built with zapper-core's
+#     test-support feature, it says its version, and --licenses
 #     prints its notices (zapper's, FFmpeg's LGPL, musl's, the crates' and the interface's);
 #   - in bare debian:stable-slim and alpine containers, with nothing installed: --version and
 #     --licenses, then the service started on a scratch home answering GET /api/version and its
@@ -38,6 +39,10 @@ echo "  file: $desc"
 ld=$(ldd "$bin" 2>&1 || true)
 grep -Eq 'not a dynamic executable|statically linked' <<<"$ld" || fail "ldd says: $ld"
 echo "  ldd: $(head -1 <<<"$ld" | xargs)"
+# A tripwire: zapper-core's `test-support` feature (the unit tests' sandboxed directories, never
+# the real ones) must never reach a release. Its test root's name is in no other build.
+! grep -aq 'zapper-unit-tests' "$bin" || fail "built with zapper-core's test-support feature"
+echo "  no test-support"
 [ "$("$bin" --version)" = "zapper-server $version" ] || fail "--version says '$("$bin" --version)'"
 lic=$("$bin" --licenses)
 for want in "MIT License" "GNU LESSER GENERAL PUBLIC LICENSE" "FFmpeg" "musl as a whole is licensed" \
