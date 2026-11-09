@@ -129,6 +129,13 @@ name = "catchup_check"
 path = "src/bin/catchup_check.rs"
 required-features = ["harness", "gui"]
 
+# The player in a window mpv makes itself (`surface::host`), with no Tauri:
+# plays a film, takes scrollback thumbnails, survives a seek storm.
+[[bin]]
+name = "host_smoke"
+path = "src/bin/host_smoke.rs"
+required-features = ["harness", "gui"]
+
 [[bin]]
 name = "shot_check"
 path = "src/bin/shot_check.rs"

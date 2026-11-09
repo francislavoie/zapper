@@ -42,6 +42,17 @@ static PENDING: Mutex<Option<String>> = Mutex::new(None);
 /// for the same handle.
 static PUMPING: Mutex<()> = Mutex::new(());
 
+/// Set when mpv presents video in a window of its own (`surface::host`):
+/// there is no platform surface to wait for, so a load is never held. See
+/// [`Player::load_now_or_later`].
+static OWN_WINDOW: AtomicBool = AtomicBool::new(false);
+
+/// Says mpv draws into a window it made itself. Called by the host before it
+/// installs the player.
+pub(crate) fn set_own_window() {
+    OWN_WINDOW.store(true, Ordering::Release);
+}
+
 /// FFmpeg's HTTP options that would open a stream again by themselves.
 ///
 /// mpv turns `reconnect` on for every HTTP stream, and FFmpeg then quietly
@@ -196,7 +207,7 @@ impl Player {
     /// ready.
     fn load_now_or_later(url: &str) -> Result<()> {
         let mut pending = PENDING.lock().unwrap_or_else(PoisonError::into_inner);
-        if !crate::surface::platform::video_ready() {
+        if !OWN_WINDOW.load(Ordering::Acquire) && !crate::surface::platform::video_ready() {
             *pending = Some(url.to_owned());
             drop(pending);
             crate::surface::platform::request_frame();
@@ -263,6 +274,93 @@ pub fn dump_cache(mpv: &Mpv, start: f64, end: f64, path: &Path) -> Result<()> {
         &[&format!("{start:.3}"), &format!("{end:.3}"), path],
     )
     .context("dump-cache")
+}
+
+/// mpv's current video frame, shrunk to a scrollback thumbnail
+/// ([`crate::surface::trickplay::shrink_bgr0`]) through `screenshot-raw`.
+/// `None` when mpv has no frame (between channels) or hands back a format
+/// this does not read.
+///
+/// For a surface with no framebuffer of its own to copy from: Windows, where
+/// mpv draws into a window it was given, and the host (`surface::host`),
+/// where it draws into one it made. Blocks until mpv has the frame, so never
+/// on a thread that draws or answers the interface.
+pub fn screenshot_thumbnail() -> Option<Vec<u8>> {
+    use libmpv2_sys::{
+        mpv_command_ret, mpv_format_MPV_FORMAT_NODE_MAP, mpv_free_node_contents, mpv_node,
+    };
+
+    let handle = handle()?;
+    // `video`: the decoded picture at its own size, without subtitles or
+    // OSD, which is what a thumbnail is of. The format is left to mpv's
+    // default, `bgr0`, which every version that has `screenshot-raw` speaks.
+    let mut args = [c"screenshot-raw".as_ptr(), c"video".as_ptr(), std::ptr::null()];
+    // SAFETY: a zeroed node is mpv's empty one (`MPV_FORMAT_NONE`), which
+    // `mpv_command_ret` fills in; the arguments are NUL-terminated statics
+    // ending in a null pointer, and the handle lives as long as the process.
+    let mut node: mpv_node = unsafe { std::mem::zeroed() };
+    let rc = unsafe { mpv_command_ret(handle.ctx.as_ptr(), args.as_mut_ptr(), &mut node) };
+    if rc < 0 {
+        return None;
+    }
+    let out = if node.format == mpv_format_MPV_FORMAT_NODE_MAP {
+        // SAFETY: the map mpv has just returned, freed only below.
+        unsafe { shrink_node(&node) }
+    } else {
+        None
+    };
+    // SAFETY: the node mpv filled in, freed once.
+    unsafe { mpv_free_node_contents(&mut node) };
+    out
+}
+
+/// Reads `screenshot-raw`'s map — `w`, `h`, `stride`, `format`, `data` — and
+/// shrinks the frame it describes.
+///
+/// # Safety
+/// `node` must be a `MPV_FORMAT_NODE_MAP` returned by mpv and not yet freed.
+unsafe fn shrink_node(node: &libmpv2_sys::mpv_node) -> Option<Vec<u8>> {
+    use libmpv2_sys::{
+        mpv_format_MPV_FORMAT_BYTE_ARRAY, mpv_format_MPV_FORMAT_INT64,
+        mpv_format_MPV_FORMAT_STRING,
+    };
+    use std::ffi::CStr;
+
+    let list = unsafe { node.u.list.as_ref() }?;
+    let (mut w, mut h, mut stride) = (None, None, None);
+    let (mut format, mut data) = (None, None);
+    for i in 0..usize::try_from(list.num).ok()? {
+        let key = unsafe { CStr::from_ptr(*list.keys.add(i)) }.to_bytes();
+        let value = unsafe { &*list.values.add(i) };
+        match (key, value.format) {
+            (b"w", f) if f == mpv_format_MPV_FORMAT_INT64 => w = Some(unsafe { value.u.int64 }),
+            (b"h", f) if f == mpv_format_MPV_FORMAT_INT64 => h = Some(unsafe { value.u.int64 }),
+            (b"stride", f) if f == mpv_format_MPV_FORMAT_INT64 => {
+                stride = Some(unsafe { value.u.int64 })
+            }
+            (b"format", f) if f == mpv_format_MPV_FORMAT_STRING => {
+                format = Some(unsafe { CStr::from_ptr(value.u.string) }.to_bytes().to_vec())
+            }
+            (b"data", f) if f == mpv_format_MPV_FORMAT_BYTE_ARRAY => {
+                data = unsafe { value.u.ba.as_ref() }
+            }
+            _ => {}
+        }
+    }
+    if format.as_deref() != Some(b"bgr0".as_slice()) {
+        return None;
+    }
+    let (w, h, stride) = (
+        usize::try_from(w?).ok()?,
+        usize::try_from(h?).ok()?,
+        usize::try_from(stride?).ok()?,
+    );
+    let data = data?;
+    if data.data.is_null() {
+        return None;
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(data.data as *const u8, data.size) };
+    crate::surface::trickplay::shrink_bgr0(bytes, w, h, stride)
 }
 
 /// Opens the URL held back by [`Player::load`], now that the surface can show

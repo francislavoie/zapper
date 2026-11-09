@@ -32,7 +32,11 @@
 //! [`mpv`] asks from any thread are the exceptions, and are written so:
 //! whether the video output can open a file yet, and a request for a frame.
 //! The player itself is reached from any thread (`crate::player`).
+//!
+//! [`host`] is the one exception to all of the above: no window of ours and
+//! no toolkit, mpv in a window it makes itself.
 
+pub mod host;
 pub mod mpv;
 pub mod png;
 pub mod title_thumbs;
