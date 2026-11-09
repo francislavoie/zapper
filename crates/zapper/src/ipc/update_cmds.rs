@@ -4,20 +4,17 @@
 
 use std::sync::Arc;
 
-use tauri::{Emitter, Manager};
+use tauri::Manager;
 
-use crate::ipc::types::{events, InstallOutcomeDto, InstallWhen, UpdateStatusDto};
+use crate::ipc::types::{InstallOutcomeDto, InstallWhen, UpdateStatusDto};
 use crate::updates::{self, install::detect_install_kind, Updates};
 
 /// Builds the updater, makes it the app's state, and starts the automatic
 /// check. Infallible: an updater that cannot be built (no HTTP client) leaves
 /// the app running with updates reported as not configured.
 pub fn install(app: &tauri::AppHandle) {
-    let emitter = app.clone();
-    let emit: updates::Emit = Arc::new(move |status: UpdateStatusDto| {
-        if let Err(e) = emitter.emit(events::UPDATE, status) {
-            tracing::warn!("could not emit the update state: {e}");
-        }
+    let emit: updates::Emit = Arc::new(|status: UpdateStatusDto| {
+        crate::events::bus().emit(crate::events::Event::Update(status));
     });
     let quitter = app.clone();
     let runner = Arc::new(updates::SystemRunner {

@@ -54,14 +54,12 @@ pub trait StatusSink {
     fn publish(&self, status: SyncStatusDto);
 }
 
-#[cfg(feature = "gui")]
-impl StatusSink for tauri::AppHandle {
+/// Status onto the event bus; nobody listening is not a sync failure.
+pub struct BusSink;
+
+impl StatusSink for BusSink {
     fn publish(&self, status: SyncStatusDto) {
-        use tauri::Emitter;
-        // A window that has gone away is not a sync failure.
-        if let Err(e) = self.emit(crate::ipc::types::events::SYNC_STATUS, status) {
-            tracing::debug!("sync status not delivered: {e}");
-        }
+        crate::events::bus().emit(crate::events::Event::SyncStatus(status));
     }
 }
 
@@ -1020,16 +1018,14 @@ pub async fn watch_elsewhere<S: StatusSink>(sink: S, on_account: impl Fn()) {
 }
 
 /// [`watch_elsewhere`] on the app's runtime, telling its window.
-#[cfg(feature = "gui")]
-pub fn spawn_watch_elsewhere(app: tauri::AppHandle, on_account: impl Fn() + Send + 'static) {
-    tauri::async_runtime::spawn(watch_elsewhere(app, on_account));
+pub fn spawn_watch_elsewhere(on_account: impl Fn() + Send + 'static) {
+    tokio::spawn(watch_elsewhere(BusSink, on_account));
 }
 
 /// Fire and forget, for callers with no periodic loop (the harnesses).
-#[cfg(feature = "gui")]
-pub fn spawn(app: tauri::AppHandle) {
-    tauri::async_runtime::spawn(async move {
-        if let Err(e) = run_once(&app).await {
+pub fn spawn() {
+    tokio::spawn(async move {
+        if let Err(e) = run_once(&BusSink).await {
             tracing::warn!("sync aborted: {}", scrub(&format!("{e:#}")));
         }
     });
@@ -1107,8 +1103,8 @@ async fn wait_or_wake(d: Duration) -> bool {
 /// it in settings takes effect without a restart. Failed passes back off
 /// (see [`backoff`]); `request_now` cuts any wait short.
 #[cfg(feature = "gui")]
-pub fn spawn_periodic(app: tauri::AppHandle) {
-    tauri::async_runtime::spawn(periodic(app));
+pub fn spawn_periodic() {
+    tokio::spawn(periodic(BusSink));
 }
 
 /// The loop [`spawn_periodic`] runs, for a caller with its own runtime (the

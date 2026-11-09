@@ -438,7 +438,7 @@ impl Updates {
         let snapshot = self.snapshot(&inner);
         drop(inner);
         let me = self.clone();
-        tauri::async_runtime::spawn(async move { me.download(id, found, url, asset, cancel).await });
+        tokio::spawn(async move { me.download(id, found, url, asset, cancel).await });
         Ok(snapshot)
     }
 
@@ -951,7 +951,7 @@ pub fn spawn_periodic(updates: Arc<Updates>) {
         tracing::info!("updates: {RELEASES_REPO} is a placeholder; not checking");
         return;
     }
-    tauri::async_runtime::spawn(async move {
+    tokio::spawn(async move {
         tokio::time::sleep(FIRST_CHECK_DELAY).await;
         loop {
             let on = crate::catalog::settings::load_or_default().check_for_updates;
