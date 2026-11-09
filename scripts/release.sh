@@ -20,7 +20,7 @@ cd "$(git -C "$here" rev-parse --show-toplevel)"
 python3 scripts/version.py check "$v" || exit 1
 repo=$(scripts/releases-repo.sh) || exit 1
 case "$repo" in
-  OWNER/*) fail "RELEASES_REPO in crates/zapper/src/updates/mod.rs is still the placeholder '$repo'; set it first (docs/releasing.md, One-time setup)" ;;
+  OWNER/*) fail "RELEASES_REPO in crates/zapper-core/src/updates/mod.rs is still the placeholder '$repo'; set it first (docs/releasing.md, One-time setup)" ;;
 esac
 branch=$(git symbolic-ref -q --short HEAD) || branch="(detached HEAD)"
 [ "$branch" = main ] || fail "not on main (on $branch); releases are cut from main"

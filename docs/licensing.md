@@ -56,7 +56,7 @@ so the notices can't go stale.
    helpers (Vite's preload helper, Rolldown's runtime) are credited to their packages. It then
    copies in `LICENSE`, `packaging/licenses/MPV-FFMPEG-NOTICE.txt`, the Rust notices when they
    exist, and libmpv's `THIRD-PARTY-NOTICES-libmpv.txt` from the archive `just fetch-libmpv`
-   unpacked into `crates/zapper/lib/<platform>/` (below), when it has.
+   unpacked into `lib/<platform>/` (below), when it has.
 3. **libmpv's notices** are made with the library itself, by `scripts/build-libmpv.sh`, from the
    license files in each source it builds; the builds take them from the fetched archive.
 
@@ -91,9 +91,9 @@ on crates.io: `THIRD-PARTY-NOTICES-rust.txt` ends with both addresses.
 zapper uses libmpv and FFmpeg's libraries built by zapper's own
 `scripts/build-libmpv.sh` with nothing under the GPL: mpv `-Dgpl=false`, FFmpeg without
 `--enable-gpl`, `--enable-version3` or `--enable-nonfree`. They are therefore LGPL-2.1-or-later.
-The player (the `mpv` feature) plays through libmpv, which uses FFmpeg, and decodes a title's
+The player (zapper-mpv) plays through libmpv, which uses FFmpeg, and decodes a title's
 seek-bar previews through FFmpeg's libavformat, libavcodec, libswscale and libavutil directly
-(`crates/zapper/src/player/thumbframe.c`); the recording service, zapper-server, remuxes through
+(`crates/zapper-mpv/src/thumbframe.c`); the recording service, zapper-server, remuxes through
 FFmpeg's libavformat directly (docs/recording.md). Where they ship as shared libraries they are
 separate from the program, and the user can replace them with their own builds
 (`packaging/licenses/MPV-FFMPEG-NOTICE.txt` says so, and where):
@@ -176,7 +176,7 @@ archives and every source tarball they were built from (exactly the files in
 `packaging/libmpv/sources.txt`, checked against its SHA-256s), with `SHA256SUMS` and build
 provenance attestations. `THIRD-PARTY-NOTICES-libmpv.txt` names that release's address. The tag
 is not a version and the release is a pre-release, so the updater never offers it
-(`crates/zapper/src/updates/release.rs`).
+(`crates/zapper-core/src/updates/release.rs`).
 
 ### How builds get it
 
@@ -184,9 +184,10 @@ is not a version and the release is a pre-release, so the updater never offers i
 SHA-256. `just fetch-libmpv` (`scripts/fetch-libmpv.sh`; `tools/fetch-libmpv.ps1` on Windows,
 which also makes the import libraries MSVC links with, `mpv.lib`, `avformat.lib` and the rest,
 from the archive's export lists) downloads this platform's, checks it and unpacks it into
-`crates/zapper/lib/<platform>/`: `runtime/` (the libraries that ship), `link/` (what a link needs),
-`include/` (mpv's and FFmpeg's headers). `crates/zapper/build.rs` then puts `link/` first on the
-link path and sets the RUNPATH, so libmpv2-sys's `-lmpv` and the remuxer's and previews' `-lavformat` resolve
+`lib/<platform>/`: `runtime/` (the libraries that ship), `link/` (what a link needs),
+`include/` (mpv's and FFmpeg's headers). zapper-mpv's and zapper-server's build scripts (through
+`packaging/libmpv/bundle.rs`) then put `link/` first on the
+link path and set the RUNPATH, so libmpv2-sys's `-lmpv` and the remuxer's and previews' `-lavformat` resolve
 to the bundle, compiles the remuxer and the previews against `include/`, and copies `runtime/` beside cargo's
 output; the release workflow takes the libraries and their notices from there, and fetches it
 first. A debug build with nothing fetched links the

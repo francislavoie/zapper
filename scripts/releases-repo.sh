@@ -2,11 +2,11 @@
 # Usage: scripts/releases-repo.sh
 #
 # Prints the `owner/repo` the updater takes its releases from: RELEASES_REPO in
-# crates/zapper/src/updates/mod.rs, the one place it is set. Read here so `just release` and the
+# crates/zapper-core/src/updates/mod.rs, the one place it is set. Read here so `just release` and the
 # release workflow can refuse a build whose updater points at the placeholder, or at a
 # repository other than the one publishing it.
 set -euo pipefail
-src="$(cd "$(dirname "$0")/.." && pwd)/crates/zapper/src/updates/mod.rs"
+src="$(cd "$(dirname "$0")/.." && pwd)/crates/zapper-core/src/updates/mod.rs"
 repo=$(sed -n 's/^pub const RELEASES_REPO: &str = "\([^"]*\)";.*$/\1/p' "$src")
 [ -n "$repo" ] || { echo "releases-repo: no RELEASES_REPO in $src" >&2; exit 1; }
 [ "$(printf '%s\n' "$repo" | wc -l | tr -d ' ')" = 1 ] || { echo "releases-repo: more than one RELEASES_REPO in $src" >&2; exit 1; }

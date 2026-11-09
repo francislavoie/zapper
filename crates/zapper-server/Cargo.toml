@@ -1,0 +1,124 @@
+[package]
+name = "zapper-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# `zapper-server`, the recording service, on zapper-core's catalogue, sources
+# and guide: its HTTP API, the web interface it serves, and the remuxers,
+# small C files against libavformat (see build.rs). No libmpv: a headless box
+# needs none.
+
+[lib]
+name = "zapper_server"
+
+# The harnesses are not part of the product. They are behind a feature that
+# is off by default: `cargo build` does not build them, and
+# tools/check_all.sh asks for them by name.
+[features]
+default = []
+harness = ["zapper-core/harness"]
+
+[[bin]]
+name = "zapper-server"
+path = "src/bin/zapper_server.rs"
+
+# Records from the fixture server through a real zapper-server, with a forced
+# switch to the backup feed, and checks what it wrote.
+[[bin]]
+name = "recording_check"
+path = "src/bin/recording_check.rs"
+required-features = ["harness"]
+
+# A channel the fixture server answers with a placeholder clip, through a
+# real zapper-server: a recording retries and keeps none of the clip, a
+# browser's viewer ends as off air, and the other-sources route.
+[[bin]]
+name = "offair_check"
+path = "src/bin/offair_check.rs"
+required-features = ["harness"]
+
+# Installs the recording service as Settings > Recording does (the sign-in
+# task on Windows, the LaunchAgent on macOS, the systemd user unit on Linux),
+# on a scratch home, checks
+# that it answers, and removes it.
+[[bin]]
+name = "service_check"
+path = "src/bin/service_check.rs"
+required-features = ["harness"]
+
+[build-dependencies]
+# The remuxer's C file, compiled against the libavformat pkg-config finds.
+cc = "1"
+pkg-config = "0.3"
+# On Windows, the Visual C++ runtime linked in rather than loaded from
+# vcruntime140.dll, which a fresh Windows does not have.
+static_vcruntime = "3"
+
+[dependencies]
+zapper-core = { path = "../zapper-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "net", "io-util", "signal"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "rustls-native-certs", "stream", "json"] }
+rusqlite = { version = "0.41", features = ["bundled", "functions"] }
+anyhow = "1"
+tracing = "0.1"
+sha2 = "0.10"
+# The chunks a shared connection hands to each recording on it
+# (`recording::hub`). Already in the tree under reqwest and hyper.
+bytes = "1"
+# The `Stream` a browser's live stream is answered with (`recording::watch`).
+# Already in the tree under axum and reqwest.
+futures-core = "0.3"
+# The recording service's API token. Already in the tree under rustls.
+getrandom = "0.3"
+# zapper-server's HTTP API (MIT), on the hyper and tower the HTTP client
+# already brings.
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "query"] }
+# The service's own accept loop (`recording::listen`), which decides per
+# connection between plain HTTP and TLS and restarts its listeners without
+# restarting the service: hyper's HTTP/1 connection, tower's `oneshot` and
+# socket2's IPV6_V6ONLY, all already under axum and tokio.
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio", "service"] }
+tower = { version = "0.5", default-features = false, features = ["util"] }
+socket2 = "0.6"
+# HTTPS for other devices on the network: rustls and its tokio adapter are the
+# ones reqwest already builds (on aws-lc-rs), and rcgen (MIT/Apache-2.0) makes
+# the self-signed certificate on the same crypto. `time` for its validity,
+# already in the tree.
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["aws_lc_rs", "tls12"] }
+rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "crypto", "pem"] }
+time = "0.3"
+# The sign-in password for other devices, kept as an Argon2id hash
+# (RustCrypto, MIT/Apache-2.0). 0.5, on the same `digest` 0.10 as sha2 and
+# md-5; the salt comes from getrandom.
+argon2 = { version = "0.5", default-features = false, features = ["alloc", "password-hash"] }
+# The addresses other devices can reach the service at, listed in Settings
+# (MIT/BSD-3-Clause; libc on Unix, the windows-sys already in the tree on
+# Windows).
+if-addrs = "0.15"
+
+[target.'cfg(unix)'.dependencies]
+# The terminal zapper-server reads a password from, and the host's name for
+# its certificate.
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+# Console and Storage_FileSystem: zapper-server finding its terminal's
+# console; WindowsAndMessaging, its message boxes.
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    "Win32_UI_WindowsAndMessaging",
+] }
+# The boot-time Windows service's entry point and control handler
+# (recording::service::winsvc in zapper-core creates it).
+windows-service = "0.8"
+
+[dev-dependencies]
+zapper-core = { path = "../zapper-core", features = ["test-support"] }

@@ -24,7 +24,7 @@ own LGPL build of both (docs/licensing.md, "mpv and FFmpeg"), published as a
 pre-release of this repository and named in `packaging/libmpv/manifest.json`.
 libmpv2-sys asks the linker for `mpv`, and the remuxer for `avformat` and
 the rest, which MSVC resolves to *import libraries* (`mpv.lib`,
-`avformat.lib`, ...) for the DLLs. None of it is committed (`crates/zapper/lib/`
+`avformat.lib`, ...) for the DLLs. None of it is committed (`lib/`
 is ignored).
 
 ```powershell
@@ -32,7 +32,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\fetch-libmpv.ps1
 ```
 
 That downloads the manifest's `libmpv-windows-x86_64.zip`, checks it against
-the manifest's SHA-256, and leaves in `crates\zapper\lib\windows-x86_64\`:
+the manifest's SHA-256, and leaves in `lib\windows-x86_64\`:
 
 | Path | What it is |
 |---|---|
@@ -73,7 +73,7 @@ FFmpeg. Not yet checked by a person: video on screen through Direct3D 11.
 npm ci
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\fetch-libmpv.ps1
 npm run build
-cargo build --release -p zapper --features server --bin zapper-server
+cargo build --release -p zapper-server --bin zapper-server
 ```
 
 `zapper-server.exe` has no window and no console of its own, so that the
@@ -150,20 +150,20 @@ service's settings and its list of recordings stay.
 home, with no window:
 
 ```powershell
-cargo build --manifest-path crates\zapper\Cargo.toml --features harness,server --bin zapper-server --bin service_check
+cargo build -p zapper-server --features harness --bin zapper-server --bin service_check
 target\debug\service_check.exe
 ```
 
 ### The harnesses on Windows
 
-`ending_check` (the `mpv` feature), `recording_check` and
+`ending_check` (zapper-mpv), `recording_check` and
 `service_check` run on Windows as on Linux, headless and silent. They need the
 fixtures (copy them from a Linux `tools/make_fixtures.sh` run and point
 `ZAPPER_FIXTURES` at the folder) and Python, ffprobe and ffmpeg on `PATH`, or
 named by `ZAPPER_PYTHON3`, `ZAPPER_FFPROBE` and `ZAPPER_FFMPEG`. A scoop shim
 on `PATH` is fine: the harnesses start the program it points at.
 `player_check`, `catchup_check` and `host_smoke` play in a window mpv makes
-itself (`surface::host`) and are Linux-only for now.
+itself (`zapper_mpv::host`) and are Linux-only for now.
 
 ## Where things are kept
 
@@ -173,4 +173,4 @@ itself (`surface::host`) and are Linux-only for now.
 | Catalogue database | `%LOCALAPPDATA%\zapper\zapper.db` |
 | The recording service's log | `%LOCALAPPDATA%\zapper\zapper-server.log`, with the one before as `zapper-server.old.log` |
 
-See `crates/zapper/src/paths.rs` for every platform's rules.
+See `crates/zapper-core/src/paths.rs` for every platform's rules.

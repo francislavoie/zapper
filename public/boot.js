@@ -3,7 +3,7 @@
 //
 // A file rather than a script inside index.html: the recording service serves
 // this interface to browsers under a policy that runs no inline script (see
-// crates/zapper/src/recording/web.rs), and the app's window loads it the same way.
+// crates/zapper-server/src/recording/web.rs), and the app's window loads it the same way.
 //
 // The key and the bounds are duplicated from src/logic/zoom.ts because nothing
 // importable exists this early. src/__checks__/zoom.test.mjs asserts the two

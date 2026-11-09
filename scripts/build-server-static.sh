@@ -7,7 +7,7 @@
 #
 # Built in a pinned Rust image on Alpine (musl is its C library), with Docker or Podman:
 #   1. scripts/build-ffmpeg-static.sh: the minimal static LGPL FFmpeg it links;
-#   2. cargo build --release for the `server` feature, with ZAPPER_FFMPEG_STATIC naming that
+#   2. cargo build --release of zapper-server, with ZAPPER_FFMPEG_STATIC naming that
 #      FFmpeg and ZAPPER_SERVER_NOTICES the licence notices it carries (`--licenses`): zapper's
 #      LICENSE, FFmpeg's notice, musl's COPYRIGHT, the Rust crates' and the interface's notices.
 # With --with-checks, also: the browser feed's tests (recording::livemux, which transcode an
@@ -48,8 +48,8 @@ cp "$root/packaging/licenses/MUSL-COPYRIGHT.txt" "$cache/notices/3-MUSL-COPYRIGH
 
 harness=
 [ -n "$checks" ] && harness='apk add --no-cache -q ffmpeg
-cargo test --release --locked --manifest-path /src/crates/zapper/Cargo.toml --no-default-features --features server --lib recording::livemux -- --nocapture
-cargo build --release --locked --manifest-path /src/crates/zapper/Cargo.toml --no-default-features --features server,harness --bin recording_check'
+cargo test --release --locked --manifest-path /src/crates/zapper-server/Cargo.toml --lib recording::livemux -- --nocapture
+cargo build --release --locked --manifest-path /src/crates/zapper-server/Cargo.toml --features harness --bin recording_check'
 
 "$engine" run --rm -i \
   -v "$root:/src" -v "$cache:/cache" \
@@ -64,8 +64,8 @@ apk add --no-cache -q bash build-base nasm perl xz curl cmake linux-headers file
 trap 'chown -R "$OWNER" /cache' EXIT
 bash /src/scripts/build-ffmpeg-static.sh /cache/ffmpeg /cache/sources
 cp /cache/ffmpeg/FFMPEG-NOTICE.txt /cache/notices/2-FFMPEG-NOTICE.txt
-cargo build --release --locked --manifest-path /src/crates/zapper/Cargo.toml \
-  --no-default-features --features server --bin zapper-server
+cargo build --release --locked --manifest-path /src/crates/zapper-server/Cargo.toml \
+  --bin zapper-server
 file /cache/target/release/zapper-server
 if [ -n "$HARNESS" ]; then sh -ec "$HARNESS"; fi
 EOF

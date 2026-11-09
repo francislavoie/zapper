@@ -33,7 +33,7 @@ or the workflow itself; or when the pull request carries the `macos` label. A sm
 
 - builds the LGPL libmpv for macos-arm64 with `scripts/build-libmpv.sh`, cached until the script
   or `packaging/libmpv/sources.txt` changes;
-- runs Rust's unit tests (the core, the `mpv` feature, the `server` feature) and clippy (the
+- runs Rust's unit tests (zapper-core, zapper-mpv, zapper-server) and clippy (the
   harnesses too), builds zapper-server and the interface, and runs the interface's checks;
 - installs the built zapper-server as a LaunchAgent (`zapper-server --install-service`), on a
   scratch home and port, checks the plist with `plutil -lint`, that `launchctl print` says it

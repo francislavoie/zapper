@@ -2,8 +2,9 @@
 """Usage: scripts/set-version.py <version>  (part of `just release`)
 
 Sets zapper's version everywhere it's recorded, editing only the version lines (no
-reformatting): [workspace.package] in Cargo.toml (zapper's crate inherits it) and zapper's own entry in Cargo.lock (what the updater compares
-against: CARGO_PKG_VERSION), package.json, and package-lock.json's two copies. Each file is
+reformatting): [workspace.package] in Cargo.toml (zapper's crates inherit it) and their own
+entries in Cargo.lock (zapper-core's is what the updater compares against: CARGO_PKG_VERSION;
+zapper-server's is what `--version` says), package.json, and package-lock.json's two copies. Each file is
 parsed again afterwards and must differ from the original only in those versions. Errors exit
 with status 2 before any file is written.
 """
@@ -14,7 +15,7 @@ import sys
 import tomllib
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CRATE = "zapper"
+CRATES = ("zapper-core", "zapper-mpv", "zapper-server")
 
 
 class Fail(Exception):
@@ -75,12 +76,13 @@ def main(argv):
     text = open(lock_path, encoding="utf-8").read()
     want = tomllib.loads(text)
     for p in want["package"]:
-        if p["name"] == CRATE and "source" not in p:
+        if p["name"] in CRATES and "source" not in p:
             p["version"] = version
-    text = sub_once(text, rf'^(\[\[package\]\]\nname = "{CRATE}"\nversion = ")([^"]*)(")', version,
-                    f"{CRATE} in Cargo.lock")
+    for crate in CRATES:
+        text = sub_once(text, rf'^(\[\[package\]\]\nname = "{crate}"\nversion = ")([^"]*)(")', version,
+                        f"{crate} in Cargo.lock")
     if tomllib.loads(text) != want:
-        raise Fail("editing Cargo.lock changed more than zapper's version")
+        raise Fail("editing Cargo.lock changed more than zapper's crates' versions")
     writes.append((lock_path, text))
 
     for path, text in writes:

@@ -6,16 +6,29 @@ browser interface. A new desktop app (egui and mpv) will sit on top of the same 
 
 ## Crates
 
-One crate today, `crates/zapper` (package `zapper`, library `zapper_lib`), in a workspace whose
-root `Cargo.toml` holds the version (`[workspace.package]`, read by `scripts/version.py current`).
-Its features, all off by default, mark the seams where it will be split into three crates:
+Three crates in one workspace, whose root `Cargo.toml` holds the version (`[workspace.package]`,
+read by `scripts/version.py current`, bumped with each crate's `Cargo.lock` entry by
+`scripts/set-version.py`):
 
-| Feature | What it adds | Becomes |
+| Crate | What it holds | Depends on |
 |---|---|---|
-| none | catalogue, sources (Xtream, M3U, HDHomeRun, Tvheadend), online services, the player controller and its tracks and captions, the event bus, paths, updates | `zapper-core`: no native libraries |
-| `mpv` | the libmpv backend, the headless host, the preview frames of a title's seek bar | `zapper-mpv` |
-| `server` | the recording service, its HTTP API and the browser interface compiled in, the remuxers (FFmpeg) | `zapper-server`, which does not depend on `zapper-mpv` |
-| `harness` | the check programs' helpers (`bin/*_check.rs`, `bin/*_bench.rs`) | each crate's own bins |
+| `zapper-core` (`zapper_core`) | catalogue, sources (Xtream, M3U, HDHomeRun, Tvheadend), online services, the player controller and its tracks, captions, trickplay store and title-preview worker, the event bus, paths, updates, the interface's contract (`api`), and what the recording service shares with a front end (`recording`: its API, client, config, store and pure decisions) | no libmpv, no FFmpeg, no build script of its own |
+| `zapper-mpv` (`zapper_mpv`) | the libmpv backend (`backend`), the headless host (`host`), the title previews' decoder (`thumbframe`, a C file against the FFmpeg libmpv loads); the player checks and benches | `zapper-core` |
+| `zapper-server` (`zapper_server`, bin `zapper-server`) | the recording service: capture, shared connections, its HTTP API and the browser interface compiled in, the remuxers (FFmpeg); its checks | `zapper-core` only, never `zapper-mpv` |
+
+Features, all off by default: `harness` (in each crate; the check programs and, in the core, the
+`harness` module and the player's stand-in `player::fake`), and the core's `test-support`, which
+only the other crates' dev-dependencies turn on, for their unit tests: `paths` keeps every
+directory under a test root there as it does in the core's own tests, and the in-memory catalogue
+and the HTTP stand-ins are reachable.
+
+`zapper-core` builds without a C compiler of its own, but two of its dependencies compile C:
+SQLite (rusqlite's `bundled`) and aws-lc (rustls, under reqwest). `cargo tree -p zapper-core`
+lists `cc` and `pkg-config` only as their build dependencies; libmpv2 and axum never.
+
+The libmpv bundle (`just fetch-libmpv`) unpacks into `lib/<platform>/` at the top of the
+workspace; `zapper-mpv` and `zapper-server` find it through the same code
+(`packaging/libmpv/bundle.rs`, included by both build scripts).
 
 ## The event bus
 
@@ -33,13 +46,25 @@ the newest event still held.
 The controller (`player/`) is what the interface's commands call: play, seek, pause, tracks,
 captions, endings, resume points. It calls mpv only through the `PlayerBackend` trait
 (`player/backend.rs`), from any thread: libmpv's client API is thread-safe, so there is no main
-thread to hop onto. `surface/mpv.rs` implements it over libmpv; `player/fake.rs` implements it for
-tests, recording every call and answering with scripted signals. `BackendCaps` says what a backend
-can do (rewind buffer, cache dump, audio filters, caption geometry).
+thread to hop onto. `zapper_mpv::backend` implements it over libmpv; `player/fake.rs` implements it
+for tests, recording every call and answering with scripted signals. `BackendCaps` says what a
+backend can do (rewind buffer, cache dump, audio filters, caption geometry).
+
+The seek bar's previews of a movie or an episode are filled by a worker in the core
+(`player::title_thumbs`), which decides which moments to fill and when playback can spare the
+machine; decoding a picture and compressing it is FFmpeg's, so it calls a `Decoder` that
+`zapper_mpv::thumbframe` installs with the player. That keeps the core free of C, and the worker's
+scheduling with the controller it serves; a front end with no decoder installed (a stand-in
+player, a build without FFmpeg's development files) keeps the frames drawn while a title plays.
+
+A front end opens the core with `player::startup` once its backend is installed: the saved
+settings applied, the controller started on its runtime, the catalogue's periodic sync and its
+watch for changes made elsewhere, and the recording service resumed after an update (Windows).
+The player checks call it with the player alone (`Startup::PLAYER_ONLY`).
 
 ## The host
 
-A backend needs somewhere to run. `surface/host.rs` is the headless one: `open_host` makes an mpv
+A backend needs somewhere to run. `zapper_mpv::host` is the headless one: `open_host` makes an mpv
 that opens its own window (`force-window`, `vo=gpu-next`), installs it as the backend and feeds
 drawn-frame thumbnails to the live trickplay store. The player checks (`player_check`,
 `catchup_check`) drive the controller with it, so they need no app; because mpv opens a window,
@@ -48,11 +73,23 @@ windowless libmpv checks (`ending_check`, `handover_check`, the benches) need no
 
 ## The server
 
-`zapper-server` (`bin/zapper_server.rs`) hosts the recording service: it syncs the catalogue,
-records, serves the HTTP API and the browser interface (the frontend's build, embedded by
-`build.rs`), and installs itself as a service. The browser talks to it as the app did, so the same
-interface runs in both. `recording_check`, `offair_check` and `service_check` run it for real on
-fixture streams.
+`zapper-server` (`crates/zapper-server`, `src/bin/zapper_server.rs`) hosts the recording service:
+it syncs the catalogue, records, serves the HTTP API and the browser interface (the frontend's
+build, embedded by its `build.rs`), and installs itself as a service. The browser talks to it as
+the app did, so the same interface runs in both. `recording_check`, `offair_check` and
+`service_check` run it for real on fixture streams.
+
+## Notes for the desktop app
+
+- The egui app will need mpv's load gate again for a render-API `vo` (the picture drawn into the
+  app's own surface rather than a window mpv makes): a load has to wait until the render context
+  exists. The headless host does not need it, so this line has none.
+- `player::handover::recordings()` and `noticed()` have no caller until a front end fetches the
+  service's recordings through them, so tuning to a channel the service records joins its
+  connection (`player::captured`) only once one does: dormant on this line.
+- The release zip's licence notices are checked on the Windows build (`--licenses` prints them);
+  the node checks of the app package's notices went with the Tauri app. A server-side check of
+  the zip's notices against `scripts/licenses.sh`'s output is still to write.
 
 ## What stays the same
 

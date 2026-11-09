@@ -21,7 +21,7 @@ dist-app/
 
 # The bundled libmpv, as scripts/fetch-libmpv.sh (tools/fetch-libmpv.ps1 on Windows) unpacks
 # it, and `just build-libmpv`'s build trees: never committed. See docs/licensing.md.
-/crates/zapper/lib/
+/lib/
 /target-libmpv/
 
 # Python bytecode, written when the stand-in servers under tools/ are run or checked.

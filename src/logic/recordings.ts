@@ -402,7 +402,7 @@ export function pollDelay(
   return shown ? POLL_OPEN_MS : POLL_IDLE_MS;
 }
 
-/** The service's defaults (crates/zapper/src/recording/config.rs), for the ↺
+/** The service's defaults (crates/zapper-core/src/recording/config.rs), for the ↺
  *  beside each of Settings › Recording's rows. The folder's default comes
  *  from the service itself, since it depends on the machine. */
 export const RECORDING_DEFAULTS = {

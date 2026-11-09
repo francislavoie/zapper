@@ -2,7 +2,7 @@
 // us, and saying what importing it would change. Pure; checked in
 // src/__checks__/backup.test.mjs. The wiring is src/components/BackupPane.tsx
 // and the file dialogs are the desktop app's (the file itself:
-// crates/zapper/src/catalog/backup_file.rs).
+// crates/zapper-core/src/catalog/backup_file.rs).
 //
 // A backup is one JSON object:
 //

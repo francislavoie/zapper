@@ -82,9 +82,9 @@ test("libmpv's notices are this platform's archive's, and nothing ships the GPL'
   }
   const libmpv = (platform, arch) =>
     noticeFiles({ platform, arch }).find((f) => f.name === "THIRD-PARTY-NOTICES-libmpv.txt").path;
-  assert.equal(libmpv("linux", "x64"), "crates/zapper/lib/linux-x86_64/THIRD-PARTY-NOTICES-libmpv.txt");
-  assert.equal(libmpv("win32", "x64"), "crates/zapper/lib/windows-x86_64/THIRD-PARTY-NOTICES-libmpv.txt");
-  assert.equal(libmpv("darwin", "arm64"), "crates/zapper/lib/macos-arm64/THIRD-PARTY-NOTICES-libmpv.txt");
+  assert.equal(libmpv("linux", "x64"), "lib/linux-x86_64/THIRD-PARTY-NOTICES-libmpv.txt");
+  assert.equal(libmpv("win32", "x64"), "lib/windows-x86_64/THIRD-PARTY-NOTICES-libmpv.txt");
+  assert.equal(libmpv("darwin", "arm64"), "lib/macos-arm64/THIRD-PARTY-NOTICES-libmpv.txt");
   assert.equal(
     noticeFiles({ libmpvDir: "/m", platform: "linux" }).find((f) => f.name === "THIRD-PARTY-NOTICES-libmpv.txt").path,
     "/m/THIRD-PARTY-NOTICES-libmpv.txt",

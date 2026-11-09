@@ -93,7 +93,7 @@ test("the no-account test matches what the backend actually says", () => {
   // Tied to the text rather than trusted: rewording the Rust error without
   // this would quietly bring "retry" back on a first run.
   const rs = readFileSync(
-    new URL("../../crates/zapper/src/catalog/credentials.rs", import.meta.url),
+    new URL("../../crates/zapper-core/src/catalog/credentials.rs", import.meta.url),
     "utf8",
   );
   const said = rs.match(/fn load_account\(\)[\s\S]*?anyhow!\("([^"]+)"/);

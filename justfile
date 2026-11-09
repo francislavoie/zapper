@@ -13,7 +13,7 @@ default: test
 test: test-rust test-ui test-scripts
 
 test-rust:
-    cargo test -p zapper --lib -q
+    cargo test -p zapper-core --lib -q
 
 test-ui:
     node --test src/__checks__/*.test.mjs
@@ -23,9 +23,9 @@ test-scripts:
     scripts/test-scripts.sh
 
 lint:
-    cargo clippy -p zapper --lib --bins -q -- -D warnings
-    cargo clippy -p zapper --lib --bins --features harness,mpv -q -- -D warnings
-    cargo clippy -p zapper --lib --bins --no-default-features --features server -q -- -D warnings
+    cargo clippy -p zapper-core --lib --features harness -q -- -D warnings
+    cargo clippy -p zapper-mpv --lib --bins --features harness -q -- -D warnings
+    cargo clippy -p zapper-server --lib --bins --features harness -q -- -D warnings
     npx tsc --noEmit
 
 # Everything, as tools/check_all.sh runs it (`just check --host` adds the player checks, which
@@ -39,10 +39,10 @@ check-host:
     tools/check_all.sh --host
 
 # zapper-server with the browser interface compiled in (the interface is built first:
-# crates/zapper/build.rs embeds dist/). Run it with target/release/zapper-server; see README.md.
+# crates/zapper-server/build.rs embeds dist/). Run it with target/release/zapper-server; see README.md.
 server:
     npm run build
-    cargo build --release -p zapper --no-default-features --features server --bin zapper-server
+    cargo build --release -p zapper-server --bin zapper-server
 
 # The browser interface on its own, against the mock backend (http://localhost:5180).
 dev:
@@ -50,7 +50,7 @@ dev:
 
 # The libmpv zapper links and ships (docs/licensing.md): the LGPL build of libmpv and FFmpeg
 # that packaging/libmpv/manifest.json names for this platform, downloaded, checked against its
-# SHA-256 and unpacked into crates/zapper/lib/<platform>/. `just fetch-libmpv --archive <file>`
+# SHA-256 and unpacked into lib/<platform>/. `just fetch-libmpv --archive <file>`
 # takes one built by `just build-libmpv` instead. On Windows: tools/fetch-libmpv.ps1.
 fetch-libmpv *args:
     scripts/fetch-libmpv.sh {{args}}

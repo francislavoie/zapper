@@ -2603,7 +2603,50 @@ dependencies = [
 ]
 
 [[package]]
-name = "zapper"
+name = "zapper-core"
+version = "0.4.0"
+dependencies = [
+ "anyhow",
+ "flate2",
+ "libc",
+ "md-5",
+ "nucleo",
+ "quick-xml",
+ "reqwest",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "windows",
+ "windows-service",
+]
+
+[[package]]
+name = "zapper-mpv"
+version = "0.4.0"
+dependencies = [
+ "anyhow",
+ "cc",
+ "libmpv2",
+ "libmpv2-sys",
+ "pkg-config",
+ "reqwest",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "static_vcruntime",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "zapper-core",
+]
+
+[[package]]
+name = "zapper-server"
 version = "0.4.0"
 dependencies = [
  "anyhow",
@@ -2611,19 +2654,13 @@ dependencies = [
  "axum",
  "bytes",
  "cc",
- "flate2",
  "futures-core",
  "getrandom 0.3.4",
  "hyper",
  "hyper-util",
  "if-addrs",
  "libc",
- "libmpv2",
- "libmpv2-sys",
- "md-5",
- "nucleo",
  "pkg-config",
- "quick-xml",
  "rcgen",
  "reqwest",
  "rusqlite",
@@ -2633,15 +2670,14 @@ dependencies = [
  "sha2",
  "socket2",
  "static_vcruntime",
- "thiserror 2.0.21",
  "time",
  "tokio",
  "tokio-rustls",
  "tower",
  "tracing",
- "tracing-subscriber",
  "windows",
  "windows-service",
+ "zapper-core",
 ]
 
 [[package]]
