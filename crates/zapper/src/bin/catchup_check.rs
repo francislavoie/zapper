@@ -15,18 +15,20 @@
 //! `ZAPPER_PANEL_BASE` moves the server (default `http://127.0.0.1:8788`);
 //! it must be on this machine. The run is on a scratch account whose
 //! server is that one: never the account on this machine, and never a
-//! provider. Audio is off (`ao=null`) before anything is loaded.
+//! provider. Audio is off (`ao=null`) before anything is loaded. The player
+//! is mpv in a window of its own (`surface::host`): run it inside a desktop
+//! session, the headless gnome-shell for anything unattended.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 #[cfg(not(target_os = "linux"))]
 fn main() {
-    eprintln!("catchup_check only runs on Linux/GTK");
+    eprintln!("catchup_check only runs on Linux");
     std::process::exit(2);
 }
 
-/// Exits without unwinding, as `player_check` does: mpv and GTK objects
-/// owned by the main thread cannot be torn down safely from here.
+/// Exits without unwinding, as `player_check` does: mpv's threads, its
+/// window among them, are still running.
 #[cfg(target_os = "linux")]
 fn finish(code: i32) -> ! {
     use std::io::Write;
@@ -37,9 +39,6 @@ fn finish(code: i32) -> ! {
 
 #[cfg(target_os = "linux")]
 fn main() {
-    use tauri::Manager;
-    use zapper_lib::player::PlayerBackend;
-
     tracing_subscriber::fmt::init();
     // Never the real account: this run saves one of its own.
     if zapper_lib::harness::real_account_allowed() {
@@ -56,43 +55,46 @@ fn main() {
         std::process::exit(2);
     }
 
-    tauri::Builder::default()
-        .setup(move |app| {
-            let window = app.get_webview_window("main").unwrap();
-            let ov = zapper_lib::surface::linux::overlay::install(&window)?;
-            let player = zapper_lib::surface::linux::render::new_player(&ov.gl_area)?;
-            player.set_property("ao", "null")?;
-            let tick = ov.gl_area.clone();
-            gtk::glib::timeout_add_local(std::time::Duration::from_millis(16), move || {
-                use gtk::prelude::GLAreaExt;
-                tick.queue_render();
-                gtk::glib::ControlFlow::Continue
-            });
-            gtk::glib::timeout_add_seconds_local(180, || {
-                eprintln!("FAIL: the run did not finish within 180s");
-                std::process::exit(1);
-            });
-            // The player's heartbeat, as the app starts it.
-            zapper_lib::player::start(tauri::async_runtime::handle().inner());
-            tauri::async_runtime::spawn(async move {
-                let verdict = run(&base).await;
-                let _ = zapper_lib::player::api::stop().await;
-                tokio::time::sleep(std::time::Duration::from_millis(400)).await;
-                match verdict {
-                    Ok(msg) => {
-                        println!("PASS: {msg}");
-                        finish(0);
-                    }
-                    Err(e) => {
-                        eprintln!("FAIL: {e}");
-                        finish(1);
-                    }
-                }
-            });
-            Ok(())
-        })
-        .run(tauri::generate_context!())
-        .expect("catchup_check failed to run");
+    std::thread::spawn(|| {
+        std::thread::sleep(std::time::Duration::from_secs(180));
+        eprintln!("FAIL: the run did not finish within 180s");
+        finish(1);
+    });
+    // mpv in a window of its own, installed as the player, with no audio
+    // output at all (`ao=null`).
+    let opened = zapper_lib::surface::host::open_host(zapper_lib::surface::host::HostOptions {
+        title: "zapper catchup_check".to_owned(),
+        muted: true,
+    });
+    if let Err(e) = opened {
+        eprintln!("FAIL: opening the player: {e}");
+        finish(1);
+    }
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap_or_else(|e| {
+            eprintln!("FAIL: starting the runtime: {e}");
+            finish(1)
+        });
+    // The player's heartbeat, as the app starts it.
+    zapper_lib::player::start(rt.handle());
+    let verdict = rt.block_on(async {
+        let verdict = run(&base).await;
+        let _ = zapper_lib::player::api::stop().await;
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        verdict
+    });
+    match verdict {
+        Ok(msg) => {
+            println!("PASS: {msg}");
+            finish(0);
+        }
+        Err(e) => {
+            eprintln!("FAIL: {e}");
+            finish(1);
+        }
+    }
 }
 
 /// The channel played, and how deep its archive is said to be.
