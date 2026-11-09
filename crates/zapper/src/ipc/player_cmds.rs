@@ -17,7 +17,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
-use tauri::{AppHandle, Emitter};
+use tauri::AppHandle;
+
+use crate::events::{bus, Event};
 
 use crate::catalog::activity::{self, Accumulator};
 use crate::catalog::credentials;
@@ -29,7 +31,7 @@ use crate::ipc::ending::{self, Clues, Ending, EndingKind, Flow, How};
 use crate::ipc::live_start::{Join, Settle};
 use crate::ipc::{captions, tracks};
 use crate::ipc::types::{
-    events, AspectMode, ChannelQualityDto, ConnectionsDto, DeinterlaceMode, LiveJumpDto,
+    AspectMode, ChannelQualityDto, ConnectionsDto, DeinterlaceMode, LiveJumpDto,
     LiveStart, OnDemandDto, OnDemandKind, PlaybackState, PlayerOptionsDto, PlayerStateDto,
     ReconnectDto, TrackDto,
 };
@@ -1576,8 +1578,7 @@ fn persist(earned: activity::Earned) {
 /// dims or un-dims the row and its badge says what was just measured
 /// without waiting for its page to be fetched again. A failure to write is
 /// logged and dropped, as watch time's is.
-fn remember(app: &AppHandle, ledger: Ledger, reading: Option<store::Reading>) {
-    let app = app.clone();
+fn remember(_app: &AppHandle, ledger: Ledger, reading: Option<store::Reading>) {
     tauri::async_runtime::spawn_blocking(move || {
         let at = activity::now_secs();
         let r = crate::catalog::db::with_db(|c| {
@@ -1608,7 +1609,7 @@ fn remember(app: &AppHandle, ledger: Ledger, reading: Option<store::Reading>) {
         });
         match r {
             Ok(news) => {
-                let _ = app.emit(events::CHANNEL_QUALITY, news);
+                bus().emit(Event::ChannelQuality(news));
             }
             Err(e) => tracing::warn!("could not record what playing a channel showed: {e}"),
         }
@@ -1616,7 +1617,7 @@ fn remember(app: &AppHandle, ledger: Ledger, reading: Option<store::Reading>) {
 }
 
 /// Mutates the state and emits `PLAYER_STATE` if anything visible changed.
-fn commit(app: &AppHandle, f: impl FnOnce(&mut Machine)) {
+fn commit(_app: &AppHandle, f: impl FnOnce(&mut Machine)) {
     let (payload, holding) = {
         let mut m = STATE.lock().expect("player state mutex poisoned");
         f(&mut m);
@@ -1624,7 +1625,7 @@ fn commit(app: &AppHandle, f: impl FnOnce(&mut Machine)) {
     };
     connections::set_held(connections::Use::Player, holding);
     if let Some(p) = payload {
-        let _ = app.emit(events::PLAYER_STATE, p);
+        bus().emit(Event::PlayerState(p));
     }
 }
 
@@ -2212,7 +2213,7 @@ fn tick(app: &AppHandle, p: &Player) {
         remember(app, l, reading);
     }
     if let Some(payload) = payload {
-        let _ = app.emit(events::PLAYER_STATE, payload);
+        bus().emit(Event::PlayerState(payload));
     }
 }
 
@@ -3516,7 +3517,7 @@ static OPTIONS: LazyLock<Mutex<PlayerOptionsDto>> =
     LazyLock::new(|| Mutex::new(PlayerOptionsDto::default()));
 
 /// Changes the picture menu's state and pushes it if anything moved.
-fn commit_options(app: &AppHandle, f: impl FnOnce(&mut PlayerOptionsDto)) -> PlayerOptionsDto {
+fn commit_options(_app: &AppHandle, f: impl FnOnce(&mut PlayerOptionsDto)) -> PlayerOptionsDto {
     let (now, changed) = {
         let mut o = OPTIONS.lock().expect("player options mutex poisoned");
         let before = o.clone();
@@ -3524,7 +3525,7 @@ fn commit_options(app: &AppHandle, f: impl FnOnce(&mut PlayerOptionsDto)) -> Pla
         (o.clone(), *o != before)
     };
     if changed {
-        let _ = app.emit(events::PLAYER_OPTIONS, now.clone());
+        bus().emit(Event::PlayerOptions(now.clone()));
     }
     now
 }

@@ -34,6 +34,7 @@ fn set_app_id() {}
 // The core: everything the recording service shares with the app.
 pub mod catalog;
 pub mod connections;
+pub mod events;
 pub mod harness;
 pub mod hdhomerun;
 pub mod ipc;
@@ -227,14 +228,35 @@ pub fn run() {
             // Infallible and non-blocking; already on the main thread.
             ipc::player_cmds::apply_saved_settings(app.handle());
 
-            catalog::sync_engine::spawn_periodic(app.handle().clone());
+            // The bus's spawns are plain tokio ones; run them on Tauri's runtime.
+            let _runtime = tauri::async_runtime::handle().inner().enter();
+            // The one place the bus meets the webview: every event goes out
+            // under the name it always had.
+            {
+                use tauri::Emitter;
+                let app = app.handle().clone();
+                let mut rx = events::bus().subscribe();
+                tokio::spawn(async move {
+                    while let Some(e) = events::recv_latest(&mut rx).await {
+                        let sent = match &e {
+                            events::Event::SyncStatus(p) => app.emit(e.name(), p),
+                            events::Event::PlayerState(p) => app.emit(e.name(), p),
+                            events::Event::PlayerOptions(p) => app.emit(e.name(), p),
+                            events::Event::ChannelQuality(p) => app.emit(e.name(), p),
+                            events::Event::Update(p) => app.emit(e.name(), p),
+                        };
+                        // A window that has gone away is not a failure.
+                        if let Err(err) = sent {
+                            tracing::debug!("{} not delivered: {err}", e.name());
+                        }
+                    }
+                });
+            }
+            catalog::sync_engine::spawn_periodic();
             // The recording service on this computer shares the account file
             // and the catalogue, and a browser signed in to it can change
             // either: the window hears of both from here.
-            catalog::sync_engine::spawn_watch_elsewhere(
-                app.handle().clone(),
-                ipc::player_cmds::forget_source,
-            );
+            catalog::sync_engine::spawn_watch_elsewhere(ipc::player_cmds::forget_source);
 
             // Before the frontend can ask: its first `update_status` needs
             // the state to exist. The first check itself waits a minute.
