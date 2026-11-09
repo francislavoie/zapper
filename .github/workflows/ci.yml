@@ -164,7 +164,8 @@ jobs:
         run: npm run build
 
       - name: Rust tests, server feature
-        run: cargo test -p zapper --lib --no-default-features --features server
+        # CI=1, as GitHub sets anyway: a missing fixture, decoder or encoder fails rather than skips.
+        run: CI=1 cargo test -p zapper --lib --no-default-features --features server
 
       - name: Clippy, server feature
         run: cargo clippy -p zapper --lib --bins --no-default-features --features server -- -D warnings

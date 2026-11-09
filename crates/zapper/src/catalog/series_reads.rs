@@ -1,6 +1,5 @@
 //! The shows' reads and marks, as the interface asks for them: one place
-//! for the app's commands (`ipc::series_cmds`) and the recording service's
-//! web API to answer from, as [`crate::catalog::reads`] is for channels and
+//! for any front end and the recording service's web API to answer from, as [`crate::catalog::reads`] is for channels and
 //! movies.
 //!
 //! Every read answers from SQLite alone. The one thing here that may ask
@@ -384,5 +383,34 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(s.requests().len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod marks_tests {
+    use super::*;
+    use crate::catalog::db;
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn set_series_marks_round_trips() {
+        let _catalogue = db::movie_catalogue();
+        db::install_test_db();
+        db::with_db(|c| {
+            c.execute(
+                "INSERT OR REPLACE INTO series (series_id, name, clean_name, added)
+                 VALUES (9851, 'Round', 'Round', 0)",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        let on = set_series_marks(9851, Some(true), None).await.unwrap();
+        assert!(on.favourite && !on.watched);
+        let off = set_series_marks(9851, Some(false), None).await.unwrap();
+        assert!(!off.favourite);
+        assert_eq!(off.id, 9851);
+        let gone = format!("{:#}", playing_episode(-7).unwrap_err());
+        assert_eq!(gone, "that episode is not in the catalogue any more");
     }
 }

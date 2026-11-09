@@ -1,6 +1,6 @@
 // Whether the window is fullscreen, as one value every component shares.
 //
-// There is no DOM event for this. Under Tauri fullscreen is a *window*
+// There is no DOM event for this. In the desktop app fullscreen is a *window*
 // property — the video is drawn by mpv beneath the webview, so making a DOM
 // element fullscreen would achieve nothing — and asking the window to go
 // fullscreen does not fire `fullscreenchange`. The player bar listened for
@@ -41,7 +41,7 @@ function start(): void {
   started = true;
   // The browser mock uses the document API, which does fire this.
   document.addEventListener("fullscreenchange", refresh);
-  // Tauri's does not, but the window changes size, which is observable.
+  // A desktop window's does not, but the window changes size, which is observable.
   window.addEventListener("resize", refresh);
   refresh();
 }

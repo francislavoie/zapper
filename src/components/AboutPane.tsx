@@ -48,8 +48,8 @@ export function AboutPane({ onLicenses }: { onLicenses?: (open: boolean) => void
       <p className="about-license">MIT License · © 2026 Francis Lavoie</p>
       <p>
         Video is played by mpv and decoded by FFmpeg, free software under the GNU LGPL and GPL.
-        zapper is built with Tauri, React and the other open source projects whose notices are
-        listed here.
+        zapper is built with React and the other open source projects whose notices are listed
+        here.
       </p>
       <div className="about-pane-actions">
         <button className="ctl" onClick={() => show(true)}>

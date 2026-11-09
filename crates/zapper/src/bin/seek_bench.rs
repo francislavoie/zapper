@@ -1,6 +1,6 @@
 //! Times a backward seek, so "rewind feels slow" becomes a number.
 //!
-//! Headless: `vo=null`, `ao=null`, no GTK and no render context. The thing
+//! Headless: `vo=null`, `ao=null`, no window and no render context. The thing
 //! being measured is mpv's demuxer and decoder, not our surface, and leaving
 //! the window out makes the figure reproducible and silent.
 //!

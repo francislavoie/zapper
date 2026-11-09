@@ -1,6 +1,5 @@
-//! The movie catalogue over HTTP, for the web interface: what the app asks
-//! its own Rust side for through Tauri's commands ([`crate::ipc::vod_cmds`]),
-//! answered from the same reads ([`crate::catalog::reads`]), behind the same
+//! The movie catalogue over HTTP, for the web interface, answered from the
+//! same reads ([`crate::catalog::reads`]), behind the same
 //! sign-in as [`super::browse`] (docs/recording.md, "API").
 //!
 //! Provider addresses do not leave the service, as with logos: a poster is

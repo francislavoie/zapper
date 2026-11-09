@@ -1,14 +1,11 @@
-//! A player in a window mpv makes itself: no Tauri, no webview, no toolkit.
+//! A player in a window mpv makes itself: no webview, no toolkit.
 //!
-//! The platform surfaces put the picture under a webview (`linux`, `macos`,
-//! `windows`). The host has no webview to go under. mpv opens its own window
-//! (`force-window`) and presents into it with its own renderer (`gpu-next`),
-//! exactly as the mpv program does, and everything else is the same
-//! [`mpv::Player`], installed as the process's [`PlayerBackend`]. The player
-//! checks run on it, inside a headless desktop.
+//! mpv opens its own window (`force-window`) and presents into it with its
+//! own renderer (`gpu-next`), exactly as the mpv program does, and
+//! everything else is the same [`mpv::Player`], installed as the process's
+//! [`PlayerBackend`]. The player checks run on it, inside a headless desktop.
 //!
-//! Scrollback thumbnails come as they do on Windows, where there is no
-//! framebuffer of ours to copy either: mpv's `screenshot-raw`, shrunk on the
+//! Scrollback thumbnails come from mpv's `screenshot-raw`, shrunk on the
 //! CPU ([`mpv::screenshot_thumbnail`]), on the host's own thread, at the
 //! trickplay clock's pace (one every [`trickplay`]'s four seconds, 160x90).
 //!
@@ -20,7 +17,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::player::PlayerBackend;
-use crate::surface::{mpv, trickplay};
+use crate::player::trickplay;
+use crate::surface::mpv;
 
 /// What the host's window is called, and whether it may make a sound.
 #[derive(Debug, Clone)]
@@ -36,7 +34,7 @@ pub struct HostOptions {
 }
 
 /// How often the thumbnail clock is looked at. The clock itself decides when
-/// one is due; this only bounds how late that can be noticed. As on Windows.
+/// one is due; this only bounds how late that can be noticed.
 const THUMB_POLL: Duration = Duration::from_secs(1);
 
 /// Creates the player in a window of its own, installs it
@@ -58,9 +56,6 @@ pub fn open_host(opts: HostOptions) -> Result<Arc<dyn PlayerBackend>, String> {
         .name("zapper-host-thumbs".into())
         .spawn(thumbnails)
         .map_err(|e| format!("starting the thumbnail thread: {e}"))?;
-    // Before it is installed: nothing can ask it to load before the gate is
-    // open.
-    mpv::set_own_window();
     let player: Arc<dyn PlayerBackend> = Arc::new(player);
     crate::player::install(player.clone());
     tracing::info!("video surface: mpv's own window");
@@ -70,12 +65,12 @@ pub fn open_host(opts: HostOptions) -> Result<Arc<dyn PlayerBackend>, String> {
 /// mpv's options for presenting in a window of its own, after the shared
 /// ones (`mpv::Player::new`).
 ///
-/// - `vo=gpu-next`, as on Windows: mpv's own renderer, here on its Wayland
+/// - `vo=gpu-next`: mpv's own renderer, here on its Wayland
 ///   (or X11) EGL context, whichever the desktop offers.
 /// - `force-window=yes`: the window from the start, not only once a file
 ///   with video opens, so a load has somewhere to go and the desktop sees
 ///   one window for the life of the player.
-/// - mpv's own keyboard and mouse bindings off, as on Windows: whatever
+/// - mpv's own keyboard and mouse bindings off: whatever
 ///   drives the player owns its controls, and a stray key reaching mpv's
 ///   window must not pause or seek behind its back.
 /// - `ao=null` when muted: nothing later (a volume or mute change) can undo

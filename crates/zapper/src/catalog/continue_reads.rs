@@ -1,6 +1,6 @@
 //! Continue watching and a title's marks, as the interface asks for them:
-//! one place for the app's commands (`ipc::continue_cmds`) and the recording
-//! service's web API to answer from, as [`crate::catalog::reads`] is for
+//! one place for any front end and the recording service's web API to
+//! answer from, as [`crate::catalog::reads`] is for
 //! movies.
 //!
 //! Every read answers from SQLite alone and never asks the provider (see
@@ -83,4 +83,118 @@ pub fn movie_marks(id: i64) -> Result<Option<MarksDto>> {
 /// catalogue.
 pub fn episode_marks(id: i64) -> Result<Option<MarksDto>> {
     db::with_db(|c| marks(c, ItemKind::Episode, id))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ipc::types::ContinueKind;
+    use crate::catalog::{db, reads};
+
+    fn a_movie(id: i64) {
+        db::with_db(|c| {
+            c.execute(
+                "INSERT OR REPLACE INTO movies (movie_id, category_id, name, clean_name, added)
+                 VALUES (?1, 'cmd', 'A Film', 'A Film', 0)",
+                [id],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    /// Leaves the shared test catalogue as it was.
+    fn forget(id: i64) {
+        db::with_db(|c| {
+            c.execute(
+                "DELETE FROM vod_marks WHERE kind = 'movie' AND item_id = ?1",
+                [id],
+            )?;
+            c.execute("DELETE FROM movies WHERE movie_id = ?1", [id])?;
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn what_progress_wrote_is_what_the_app_lists() {
+        let _catalogue = db::movie_catalogue();
+        db::install_test_db();
+        a_movie(9811);
+        reads::save_movie_progress(9811, 30.0, Some(100.0)).unwrap();
+        let list = continue_watching(10).unwrap();
+        let found = list.iter().find_map(|item| match item {
+            ContinueItemDto::Movie {
+                movie,
+                last_watched,
+            } if movie.movie_id == 9811 => Some((movie.clone(), *last_watched)),
+            _ => None,
+        });
+        forget(9811);
+        let (movie, last_watched) = found.expect("listed");
+        assert_eq!(movie.position, Some(30.0));
+        assert_eq!(movie.duration, Some(100.0));
+        assert!(last_watched > 0);
+        assert_eq!(movie.played_at, Some(last_watched));
+    }
+
+    #[test]
+    fn marks_read_back_with_when_they_were_played() {
+        let _catalogue = db::movie_catalogue();
+        db::install_test_db();
+        a_movie(9812);
+        let before = movie_marks(9812).unwrap().unwrap();
+        reads::save_movie_progress(9812, 30.0, Some(100.0)).unwrap();
+        let after = movie_marks(9812).unwrap().unwrap();
+        forget(9812);
+        assert_eq!(before.played_at, None);
+        assert_eq!(after.id, 9812);
+        assert_eq!(after.position, Some(30.0));
+        assert!(after.played_at.is_some_and(|t| t > 0));
+    }
+
+    #[test]
+    fn removing_from_the_app_hides_it() {
+        let _catalogue = db::movie_catalogue();
+        db::install_test_db();
+        a_movie(9813);
+        // Played a minute ago, so the removal (now) is later.
+        db::with_db(|c| {
+            crate::catalog::vod_store::record_progress(
+                c,
+                crate::catalog::vod_store::ItemKind::Movie,
+                9813,
+                30.0,
+                Some(100.0),
+                reads::now() - 60,
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        let listed = |list: &[ContinueItemDto]| {
+            list.iter().any(
+                |i| matches!(i, ContinueItemDto::Movie { movie, .. } if movie.movie_id == 9813),
+            )
+        };
+        let was = listed(&continue_watching(100).unwrap());
+        let removed = remove_from_continue(ContinueKind::Movie, 9813).unwrap();
+        let is = listed(&continue_watching(100).unwrap());
+        let unknown = remove_from_continue(ContinueKind::Movie, 989_813).unwrap();
+        let place = movie_marks(9813).unwrap().unwrap().position;
+        forget(9813);
+        assert!(was);
+        assert!(removed);
+        assert!(!is);
+        assert_eq!(place, Some(30.0), "the place is kept");
+        assert!(!unknown, "not in the catalogue");
+    }
+
+    #[test]
+    fn an_unknown_episode_has_no_marks() {
+        db::install_test_db();
+        let e = episode_marks(989_814).unwrap();
+        assert!(e.is_none(), "not in the catalogue: {e:?}");
+        let e = movie_marks(989_814).unwrap();
+        assert!(e.is_none(), "not in the catalogue: {e:?}");
+    }
 }

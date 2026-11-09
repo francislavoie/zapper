@@ -300,7 +300,8 @@ jobs:
           if ($say.Trim() -ne "zapper-server $env:VERSION") { throw "--version says '$say', not 'zapper-server $env:VERSION'" }
           $licenses = (& $exe --licenses) -join "`n"
           if ($LASTEXITCODE -or $licenses.Length -lt 1000) { throw "zapper-server.exe --licenses printed no notices" }
-          foreach ($dll in 'libmpv-2.dll', 'avcodec-62.dll', 'avformat-62.dll') {
+          # By name without FFmpeg's major version, so moving FFmpeg to a new major needs no edit here.
+          foreach ($dll in 'libmpv-*.dll', 'avcodec-*.dll', 'avformat-*.dll') {
             if (-not (Test-Path "check/zapper-server-$env:VERSION-windows-x86_64/$dll")) { throw "the zip lacks $dll" }
           }
           "ok: $say"

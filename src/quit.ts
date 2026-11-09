@@ -2,7 +2,7 @@
 //
 // The desktop app does not navigate the page away when it quits: it asks the
 // page to say goodbye through `window.__zapperQuit`, waits for the promise,
-// and only then ends the page's process (crates/zapper/src/surface/linux). So the
+// and only then ends the page's process. So the
 // goodbye has to cover everything that would otherwise be lost: `pagehide`
 // for whatever saves on it (the session, a debounced settings or recording
 // settings change), and

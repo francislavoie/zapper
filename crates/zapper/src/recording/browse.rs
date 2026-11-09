@@ -1,7 +1,6 @@
 //! The catalogue over HTTP, for the web interface: categories, channel
 //! pages, search, other sources for a channel, the guide, favourites and the
-//! sync's status — what the app
-//! asks its own Rust side for through Tauri's commands, answered from the
+//! sync's status, answered from the
 //! same reads ([`crate::catalog::reads`]) out of the catalogue the service
 //! keeps (docs/recording.md, "API").
 //!

@@ -967,5 +967,105 @@ pub fn spawn_periodic(updates: Arc<Updates>) {
     });
 }
 
+/// Builds the updater and starts the automatic check (on the current tokio
+/// runtime); `quit` ends the app for an install that replaces it. Its status
+/// goes out on the event bus. Infallible: an updater that cannot be built (no
+/// HTTP client) is reported as not configured.
+pub fn start(quit: Arc<dyn Fn() + Send + Sync>) -> Arc<Updates> {
+    let emit: Emit = Arc::new(|status: UpdateStatusDto| {
+        crate::events::bus().emit(crate::events::Event::Update(status));
+    });
+    let runner = Arc::new(SystemRunner { quit });
+    let exe = std::env::current_exe().ok();
+    let kind = install::detect_install_kind(exe.as_deref());
+    let source = github::GitHubReleases::github(RELEASES_REPO);
+    let configured = repo_configured(RELEASES_REPO) && source.is_ok();
+    if let Err(e) = &source {
+        tracing::error!("updates disabled: {e}");
+    }
+    let source: Arc<dyn UpdateSource> = match source {
+        Ok(s) => Arc::new(s),
+        Err(_) => Arc::new(Unavailable),
+    };
+    tracing::info!(
+        "updates: {} install, releases from {}{}",
+        kind.as_str(),
+        RELEASES_REPO,
+        if configured { "" } else { " (not configured)" }
+    );
+    let u = Arc::new(Updates::new(
+        UpdateConfig {
+            source,
+            runner,
+            dir: cache_dir().join("updates"),
+            kind,
+            exe,
+            configured,
+            releases_page: format!("{}/{}/releases", github::GITHUB_WEB, RELEASES_REPO),
+            emit,
+        },
+        APP_VERSION,
+    ));
+    spawn_periodic(u.clone());
+    u
+}
+
+/// Stands in when no HTTP client could be built. Never called: the updater
+/// is marked not configured in that case and makes no request.
+struct Unavailable;
+
+impl UpdateSource for Unavailable {
+    fn releases(&self) -> BoxFuture<'_, Vec<GhRelease>> {
+        Box::pin(async { Err("updates are unavailable".to_string()) })
+    }
+    fn fetch<'a>(&'a self, _url: &'a str, _cancel: Arc<AtomicBool>) -> BoxFuture<'a, Vec<u8>> {
+        Box::pin(async { Err("updates are unavailable".to_string()) })
+    }
+    fn download<'a>(
+        &'a self,
+        _url: &'a str,
+        _dest: &'a Path,
+        _progress: Progress,
+        _cancel: Arc<AtomicBool>,
+    ) -> BoxFuture<'a, u64> {
+        Box::pin(async { Err("updates are unavailable".to_string()) })
+    }
+}
+
+/// Opens the offered release's page, or the list of releases, in the
+/// browser. The URL comes from the updater's own state, never from a page,
+/// and always starts with the configured repository's address.
+pub fn open_release_page(updates: &Updates) -> Result<(), String> {
+    let url = updates
+        .release_page()
+        .ok_or("Updates aren't configured for this build, so there's no release page to open.")?;
+    open_in_browser(&url).map_err(|e| format!("Couldn't open {url}: {e}"))
+}
+
+/// Opens `url` in the desktop's browser. Only for addresses fixed in the
+/// app or taken from the updater's state.
+pub fn open_in_browser(url: &str) -> std::io::Result<()> {
+    let mut c = if cfg!(target_os = "macos") {
+        let mut c = std::process::Command::new("open");
+        c.arg(url);
+        c
+    } else if cfg!(windows) {
+        // Not `cmd /c start`, which would read `&` in a query string as a
+        // command separator.
+        let mut c = std::process::Command::new("rundll32");
+        c.args(["url.dll,FileProtocolHandler", url]);
+        c
+    } else {
+        let mut c = std::process::Command::new("xdg-open");
+        c.arg(url);
+        c
+    };
+    c.stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map(|_| ())
+}
+
 #[cfg(test)]
 mod tests;

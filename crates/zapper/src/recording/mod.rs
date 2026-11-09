@@ -37,6 +37,7 @@ pub mod config;
 pub mod fallback;
 pub mod handover;
 pub mod lifecycle;
+pub mod local;
 pub mod naming;
 pub mod schedule;
 pub mod sharing;

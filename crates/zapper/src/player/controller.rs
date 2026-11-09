@@ -38,12 +38,12 @@ use crate::ipc::types::{
 };
 use crate::recording::client::{Client, PlayerWatch, Watching};
 use crate::player::{self, PlayerBackend, Probe, Signal};
-use crate::surface::mpv;
+use super::NO_RECONNECT;
 use crate::source::{Playable, Source};
 use crate::xtream::XtreamClient;
 
 /// How long a stream gets to produce its first frame before it is called dead.
-/// Matches mpv's own `network-timeout`, set in [`mpv::Player::new`].
+/// Matches mpv's own `network-timeout`, set in `surface::mpv::Player::new`.
 const FIRST_FRAME_DEADLINE: Duration = Duration::from_secs(8);
 
 /// State-feed heartbeat. Fast enough that a channel change feels instant,
@@ -2227,7 +2227,7 @@ fn tick(p: &dyn PlayerBackend) {
         m.changed()
     };
     if loaded {
-        crate::ipc::health::observe(health);
+        crate::player::health::observe(health);
     }
     connections::set_held(connections::Use::Player, holding);
     if let Some((d, token, id)) = due {
@@ -2387,7 +2387,7 @@ pub(super) async fn play_channel(stream_id: i64) -> Result<(), String> {
     // A channel the recording service on this computer is recording: a
     // place on its connection, which costs the account nothing, rather than
     // a second connection to the same channel.
-    if crate::ipc::handover::captured(stream_id) {
+    if crate::player::handover::captured(stream_id) {
         if let Some((target, via)) = through_service_target(stream_id).await {
             return open_as(Opened::Channel(stream_id), target, OpenKind::Live, None, via, TrackChoice::Fresh, OpenAt::BEGINNING).await;
         }
@@ -2523,7 +2523,7 @@ fn service_target(client: &Client, w: &Watching) -> (Playable, Via) {
     )
 }
 
-/// What the player shows now, for Record (`ipc::handover`).
+/// What the player shows now, for Record (`player::handover`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NowPlaying {
     pub stream_id: i64,
@@ -2847,14 +2847,14 @@ pub(super) async fn open_as(
     // A title's are its own, by its own time: the same title opened again
     // keeps them, and the previews of what it buffers start filling.
     if what.is_on_demand() {
-        crate::surface::trickplay::open_title(&format!("{what:?}"));
-        crate::surface::title_thumbs::start();
+        crate::player::trickplay::open_title(&format!("{what:?}"));
+        crate::player::title_thumbs::start();
     } else {
-        crate::surface::title_thumbs::stop();
-        crate::surface::trickplay::clear();
+        crate::player::title_thumbs::stop();
+        crate::player::trickplay::clear();
     }
     // Same reasoning, for the same reason: the graphs describe one stream.
-    crate::ipc::health::clear();
+    crate::player::health::clear();
     let mode = live_start_mode();
     let mut was_holding = false;
     let mut join = false;
@@ -3075,7 +3075,7 @@ pub(super) fn commit_options(f: impl FnOnce(&mut PlayerOptionsDto)) -> PlayerOpt
 }
 
 /// FFmpeg's HTTP options for an open of `kind`: never reconnecting by
-/// itself to a stream that was cut off ([`mpv::NO_RECONNECT`]), and for a
+/// itself to a stream that was cut off ([`NO_RECONNECT`]), and for a
 /// movie or an episode, a seek's request made again, once, on a fresh
 /// connection when the one it was made on has gone.
 ///
@@ -3097,9 +3097,9 @@ fn stream_options(kind: OpenKind) -> String {
     match kind {
         OpenKind::OnDemand => format!(
             "{},multiple_requests=1,reconnect_on_network_error=1,reconnect_max_retries=1",
-            mpv::NO_RECONNECT
+            NO_RECONNECT
         ),
-        OpenKind::Live | OpenKind::CatchUp(_) => mpv::NO_RECONNECT.to_owned(),
+        OpenKind::Live | OpenKind::CatchUp(_) => NO_RECONNECT.to_owned(),
     }
 }
 
@@ -4604,13 +4604,13 @@ mod tests {
     #[test]
     fn only_a_title_makes_a_seeks_request_again_on_a_fresh_connection() {
         let title = stream_options(OpenKind::OnDemand);
-        assert!(title.starts_with(mpv::NO_RECONNECT));
+        assert!(title.starts_with(NO_RECONNECT));
         assert!(title.contains(",multiple_requests=1"));
         // Once: a provider refusing is not asked again and again.
         assert!(title.ends_with(",reconnect_on_network_error=1,reconnect_max_retries=1"));
-        assert_eq!(stream_options(OpenKind::Live), mpv::NO_RECONNECT);
+        assert_eq!(stream_options(OpenKind::Live), NO_RECONNECT);
         let catch_up = OpenKind::CatchUp(CatchUp { near_edge: false });
-        assert_eq!(stream_options(catch_up), mpv::NO_RECONNECT);
+        assert_eq!(stream_options(catch_up), NO_RECONNECT);
     }
 
     #[test]

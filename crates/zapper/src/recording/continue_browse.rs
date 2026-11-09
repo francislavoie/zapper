@@ -1,6 +1,5 @@
-//! Continue watching over HTTP, for the web interface: what the app asks its
-//! own Rust side for through Tauri's commands ([`crate::ipc::continue_cmds`]),
-//! answered from the same reads ([`crate::catalog::continue_reads`]), behind
+//! Continue watching over HTTP, for the web interface, answered from the
+//! same reads ([`crate::catalog::continue_reads`]), behind
 //! the same sign-in as [`super::browse`] (docs/recording.md, "API").
 //!
 //! One list for the app and every signed-in browser: it is built from the

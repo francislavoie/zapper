@@ -16,9 +16,8 @@ export const failed = <T,>(message: string): Async<T> => ({
   message,
 });
 
-/** Tauri rejects with a plain string; the browser rejects with an Error; a
- *  missing Tauri bridge rejects with something else again. Normalise all
- *  three into one line a human can read. */
+/** A backend may reject with a plain string, an Error, or something else
+ *  again. Normalise all three into one line a human can read. */
 export function errorMessage(e: unknown): string {
   if (typeof e === "string") return e;
   if (e instanceof Error) return e.message;

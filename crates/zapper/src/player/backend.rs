@@ -1,15 +1,15 @@
 //! What the player controller asks of a player, and the one installed.
 //!
 //! The controller (`player::controller`) and the title preview worker
-//! (`surface::title_thumbs`) reach the player only through
-//! [`PlayerBackend`], from whichever thread they are on: a Tauri command's
+//! (`player::title_thumbs`) reach the player only through
+//! [`PlayerBackend`], from whichever thread they are on: a command's
 //! worker, the heartbeat's own thread, the preview worker. A backend is
 //! `Send + Sync` and every method takes `&self`, so it is shared as an
 //! `Arc` rather than kept in a thread's locals.
 //!
 //! mpv-shaped for now: the methods are the ones the controller already
-//! called on mpv, with mpv's property names. Where a picture is drawn stays
-//! the platform surface's business, and on its own thread.
+//! called on mpv, with mpv's property names. Where a picture is drawn is
+//! the host's business.
 
 use std::path::Path;
 use std::sync::{Arc, PoisonError, RwLock};
@@ -18,7 +18,7 @@ use anyhow::Result;
 
 /// The diagnostics graphs' four numbers, as [`PlayerBackend::health`] reads
 /// them.
-pub use crate::ipc::health::Reading as Health;
+pub use crate::player::health::Reading as Health;
 
 /// What a backend can do beyond playing, for a caller deciding whether to
 /// offer it.
@@ -82,6 +82,22 @@ pub trait PlayerBackend: Send + Sync {
     /// to `path`. Blocks until the file is written, so never on a thread that
     /// draws or answers the interface.
     fn dump_cache(&self, start: f64, end: f64, path: &Path) -> Result<()>;
+}
+
+/// What the demuxer cache holds, in the stream's own time, from mpv's
+/// `demuxer-cache-state` (as [`PlayerBackend::get_string`] reads it, JSON):
+/// from the oldest moment that can be read back to the newest packet.
+/// `None` before a stream has data.
+pub fn cache_span(state: &str) -> Option<(f64, f64)> {
+    let v: serde_json::Value = serde_json::from_str(state).ok()?;
+    let start = v
+        .get("seekable-ranges")
+        .and_then(|r| r.as_array())
+        .and_then(|r| r.first())
+        .and_then(|r| r.get("start"))
+        .and_then(|x| x.as_f64())?;
+    let end = v.get("cache-end").and_then(|x| x.as_f64())?;
+    (end > start).then_some((start, end))
 }
 
 /// The installed backend. A read lock is all a caller takes, and only long

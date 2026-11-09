@@ -2,7 +2,7 @@
 //
 // WebKitGTK animates every wheel event over several frames, and since 2.4x
 // its threaded scrolling ignores the `enable-smooth-scrolling` setting the
-// overlay turns off (see tune_scrolling in surface/linux/overlay.rs) for
+// desktop app turns off for
 // scrollable boxes like the category rail and the channel list. One notch
 // reads as the list lagging the wheel; a fast spin of a free-spinning wheel
 // is worse, because each new event restarts the glide from wherever the last

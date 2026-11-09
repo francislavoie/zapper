@@ -43,9 +43,9 @@ test("chooseLicense takes the earliest accepted alternative, and needs every par
 
 test("packageDirOf finds the package a bundled module is from, scoped or not", () => {
   assert.deepEqual(packageDirOf("/r/node_modules/react/index.js"), { dir: "/r/node_modules/react", name: "react" });
-  assert.deepEqual(packageDirOf("/r/node_modules/@tauri-apps/api/core.js?v=1"), {
-    dir: "/r/node_modules/@tauri-apps/api",
-    name: "@tauri-apps/api",
+  assert.deepEqual(packageDirOf("/r/node_modules/@scope/pkg/core.js?v=1"), {
+    dir: "/r/node_modules/@scope/pkg",
+    name: "@scope/pkg",
   });
   assert.equal(packageDirOf("/r/src/App.tsx"), null);
 });
@@ -115,64 +115,8 @@ test("a missing notice answered with the app's page is recognised, not shown as 
   assert.equal(isPageFallback("text/plain", "MIT License"), false);
 });
 
-// Each package carries every notice that applies to it, from where the build leaves it.
-test("the .deb, the .rpm, the Windows installers and the macOS app all carry the notices", () => {
-  const conf = JSON.parse(read("crates/zapper/tauri.conf.json"));
-  const everywhere = [
-    "LICENSE",
-    "MPV-FFMPEG-NOTICE.txt",
-    "THIRD-PARTY-NOTICES-libmpv.txt",
-    "THIRD-PARTY-NOTICES-rust.txt",
-    "THIRD-PARTY-NOTICES-ui.txt",
-  ];
-  const deb = conf.bundle.linux.deb.files;
-  for (const f of [...everywhere, "copyright"]) assert.ok(deb[`/usr/share/doc/zapper/${f}`], `.deb: ${f}`);
-  const rpm = conf.bundle.linux.rpm.files;
-  for (const f of everywhere) assert.ok(rpm[`/usr/share/licenses/zapper/${f}`], `.rpm: ${f}`);
-
-  const resources = (p) => Object.values(JSON.parse(read(p)).bundle.resources);
-  const win = resources("packaging/windows/installers.conf.json");
-  const txt = ["LICENSE.txt", "MPV-FFMPEG-NOTICE.txt", "THIRD-PARTY-NOTICES-libmpv.txt", "THIRD-PARTY-NOTICES-rust.txt", "THIRD-PARTY-NOTICES-ui.txt"];
-  for (const f of txt) assert.ok(win.includes(`licenses/${f}`), `Windows: ${f}`);
-  const mac = resources("packaging/macos/dmg.conf.json");
-  for (const f of txt) assert.ok(mac.includes(`licenses/${f}`), `macOS: ${f}`);
-});
-
-// The libmpv each package carries is the one scripts/fetch-libmpv.sh unpacked (the LGPL build),
-// never the distribution's.
-test("every package carries the bundled libmpv and FFmpeg, and zapper-server, and none depends on the system's", () => {
-  // The same libraries everywhere: libmpv, and FFmpeg's seven, each under its platform's name.
-  const ffmpeg = ["avutil", "avcodec", "avformat", "avfilter", "avdevice", "swscale", "swresample"];
-  const conf = JSON.parse(read("crates/zapper/tauri.conf.json"));
-  const { deb, rpm } = conf.bundle.linux;
-  for (const files of [deb.files, rpm.files]) {
-    const libs = Object.keys(files).filter((k) => k.startsWith("/usr/lib/zapper/lib"));
-    assert.deepEqual(
-      libs.map((k) => k.replace(/^\/usr\/lib\/zapper\/lib(.*?)\.so\.\d+$/, "$1")).sort(),
-      ["mpv", ...ffmpeg].sort(),
-    );
-    for (const k of libs) assert.equal(files[k], `lib/linux-x86_64/runtime/${k.slice("/usr/lib/zapper/".length)}`);
-    assert.equal(files["/usr/bin/zapper-server"], "../../target/release/zapper-server");
-  }
-  for (const d of [...deb.depends, ...rpm.depends]) assert.doesNotMatch(d, /mpv|libav|libsw/, d);
-  const win = JSON.parse(read("crates/zapper/tauri.windows.conf.json")).bundle.resources;
-  assert.deepEqual(
-    Object.values(win).map((n) => n.replace(/^(?:lib)?(.*?)-\d+\.dll$/, "$1")).sort(),
-    ["mpv", ...ffmpeg].sort(),
-  );
-  for (const [src, dst] of Object.entries(win)) assert.equal(src, `lib/windows-x86_64/runtime/${dst}`);
-  const installers = JSON.parse(read("packaging/windows/installers.conf.json")).bundle.resources;
-  assert.equal(installers["../../target/release/zapper-server.exe"], "zapper-server.exe");
-  const mac = JSON.parse(read("packaging/macos/dmg.conf.json")).bundle.macOS.frameworks;
-  assert.deepEqual(
-    mac.map((p) => p.replace(/^lib\/macos-arm64\/runtime\/lib(.*?)\.\d+\.dylib$/, "$1")).sort(),
-    ["mpv", ...ffmpeg].sort(),
-  );
-});
-
 test("zapper is MIT everywhere it says so", () => {
   assert.match(read("LICENSE"), /^MIT License\n\nCopyright \(c\) 2026 Francis Lavoie\n/);
   assert.equal(JSON.parse(read("package.json")).license, "MIT");
   assert.match(read("Cargo.toml"), /^license = "MIT"$/m);
-  assert.equal(JSON.parse(read("crates/zapper/tauri.conf.json")).bundle.license, "MIT");
 });

@@ -5,8 +5,8 @@
 // shortcut, by the window manager, or by double-clicking our own drag handle,
 // and a local boolean would be wrong after any of those. Every one of them
 // changes the window's size, so the DOM resize event is the trigger to ask
-// again — no extra Tauri event permission needed for what is already
-// observable from the page.
+// again — no extra window event needed for what is already observable from
+// the page.
 
 import { useEffect, useState } from "react";
 import { windowControls } from "../window";

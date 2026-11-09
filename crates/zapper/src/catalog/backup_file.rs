@@ -5,22 +5,19 @@
 //! The format itself — its version, what each section may hold, what an
 //! import changes — is the frontend's (`src/logic/backup.ts`), since most of
 //! what it carries lives there. What is here is what must not be: the file
-//! dialogs, so the webview never names a path to read or write, and the
-//! account, so its password never crosses into the webview. On export the
+//! (its path comes from the desktop's own dialog, never from the page), and
+//! the account, so its password never crosses into the page. On export the
 //! account is added to the document after it arrives; on import it is taken
 //! out before the document goes back, kept here, and written only when the
 //! import is applied.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Mutex;
 
 use serde_json::Value;
-use tauri::{AppHandle, Manager};
-use tauri_plugin_dialog::DialogExt;
 
 use crate::catalog::credentials::{self, Portable};
-use crate::catalog::{db, store, sync_engine};
-use crate::ipc::types::{ActivityRowDto, BackupAccountDto, BackupFileDto};
+use crate::ipc::types::{BackupAccountDto, BackupFileDto};
 
 /// What the file says it is. Mirrored by `BACKUP_FORMAT` in
 /// `src/logic/backup.ts`.
@@ -34,48 +31,23 @@ static STAGED: Mutex<Option<Portable>> = Mutex::new(None);
 /// and is not read into memory to find out.
 const MAX_BYTES: u64 = 32 * 1024 * 1024;
 
-#[tauri::command]
-pub async fn activity_rows() -> Result<Vec<ActivityRowDto>, String> {
-    db::with_db(store::activity_rows).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub async fn import_activity(rows: Vec<ActivityRowDto>) -> Result<u32, String> {
-    db::with_db(|c| store::merge_activity(c, &rows))
-        .map(|n| n as u32)
-        .map_err(|e| e.to_string())
-}
-
-/// Asks where to save, then writes `document` there, with the account added
-/// when `include_account`. `None` when the dialog was cancelled; otherwise
-/// the name of the file written.
-#[tauri::command]
-pub async fn export_backup(
-    app: AppHandle,
-    document: Value,
-    include_account: bool,
-    file_name: String,
-) -> Result<Option<String>, String> {
+/// Writes `document` to `path`, with the account added when
+/// `include_account`. The name of the file written.
+pub fn export(path: &Path, document: Value, include_account: bool) -> Result<String, String> {
     let account = if include_account {
         credentials::portable().map_err(|e| e.to_string())?
     } else {
         None
     };
     let body = assemble(document, account)?;
-    let Some(path) = save_dialog(&app, &file_name).await else {
-        return Ok(None);
-    };
-    write(&path, &body, include_account).map_err(|e| format!("writing {}: {e}", path.display()))?;
-    Ok(Some(display_name(&path)))
+    write(path, &body, include_account).map_err(|e| format!("writing {}: {e}", path.display()))?;
+    Ok(display_name(path))
 }
 
-/// Asks for a backup and reads it. `None` when the dialog was cancelled.
-#[tauri::command]
-pub async fn open_backup(app: AppHandle) -> Result<Option<BackupFileDto>, String> {
-    let Some(path) = open_dialog(&app).await else {
-        return Ok(None);
-    };
-    let text = read(&path).map_err(|e| format!("reading {}: {e}", path.display()))?;
+/// Reads the backup at `path`: its document for the page, and its account
+/// kept here until [`import_account`] (or the next file opened).
+pub fn open(path: &Path) -> Result<BackupFileDto, String> {
+    let text = read(path).map_err(|e| format!("reading {}: {e}", path.display()))?;
     let (document, account) = split(&text)?;
     let (account, account_error) = match account.map(credentials::parse_portable) {
         None => (None, None),
@@ -88,27 +60,24 @@ pub async fn open_backup(app: AppHandle) -> Result<Option<BackupFileDto>, String
         has_secret: p.has_secret(),
     });
     *STAGED.lock().unwrap_or_else(|e| e.into_inner()) = account;
-    Ok(Some(BackupFileDto {
-        name: display_name(&path),
+    Ok(BackupFileDto {
+        name: display_name(path),
         document,
         account: summary,
         account_error,
-    }))
+    })
 }
 
 /// Writes the account from the backup opened last, replacing the one on
-/// file, and refreshes the catalogue from it.
-#[tauri::command]
-pub async fn import_backup_account() -> Result<(), String> {
+/// file. The caller then drops what it built on the old one and asks for a
+/// sync (`player::api::import_backup_account`).
+pub fn import_account() -> Result<(), String> {
     let staged = STAGED
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .take()
         .ok_or("no account to import: open the backup again")?;
-    credentials::save_portable(&staged).map_err(|e| e.to_string())?;
-    crate::player::controller::forget_source();
-    sync_engine::request_now();
-    Ok(())
+    credentials::save_portable(&staged).map_err(|e| e.to_string())
 }
 
 /// The document to write: the frontend's, with the account in place of any
@@ -183,39 +152,6 @@ fn write(path: &Path, body: &str, secret: bool) -> std::io::Result<()> {
     }
     f.write_all(body.as_bytes())?;
     f.write_all(b"\n")
-}
-
-async fn save_dialog(app: &AppHandle, file_name: &str) -> Option<PathBuf> {
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    let mut dialog = app
-        .dialog()
-        .file()
-        .set_title("Export settings")
-        .add_filter("zapper backup", &["json"])
-        .set_file_name(file_name);
-    if let Some(w) = app.get_webview_window("main") {
-        dialog = dialog.set_parent(&w);
-    }
-    dialog.save_file(move |p| {
-        let _ = tx.send(p);
-    });
-    rx.await.ok().flatten().and_then(|p| p.into_path().ok())
-}
-
-async fn open_dialog(app: &AppHandle) -> Option<PathBuf> {
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    let mut dialog = app
-        .dialog()
-        .file()
-        .set_title("Import settings")
-        .add_filter("zapper backup", &["json"]);
-    if let Some(w) = app.get_webview_window("main") {
-        dialog = dialog.set_parent(&w);
-    }
-    dialog.pick_file(move |p| {
-        let _ = tx.send(p);
-    });
-    rx.await.ok().flatten().and_then(|p| p.into_path().ok())
 }
 
 #[cfg(test)]

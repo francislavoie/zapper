@@ -5,7 +5,7 @@
 // difference. So the panel draws a history — and does not gather one. That
 // happens in the backend, on the player's own heartbeat, so the graphs are
 // full the moment the panel opens instead of starting from nothing at the
-// one moment somebody wanted to look. See `ipc::health` on the Rust side.
+// one moment somebody wanted to look. See `player::health` on the Rust side.
 //
 // What is left here is presentation: turning a list of samples into a path,
 // and numbers into words. All pure, and checked in
@@ -24,7 +24,7 @@ export const STATS_POLL_MS = 500;
 /** How many readings the graphs hold. At the sample rate, one minute — long
  *  enough to see a drain and short enough to still be about now.
  *
- *  Mirrored by `HISTORY_LENGTH` in `crates/zapper/src/ipc/health.rs`, which is
+ *  Mirrored by `HISTORY_LENGTH` in `crates/zapper/src/player/health.rs`, which is
  *  what actually bounds the ring. This one sizes the horizontal axis: a
  *  sample is one slot wide, so the two have to agree or a full history draws
  *  a line that stops short of the edge of its box. */
@@ -66,7 +66,7 @@ export function sparkline(
 }
 
 /** Seconds between graph samples: two heartbeats of 250ms (TICKS_PER_SAMPLE
- *  in crates/zapper/src/ipc/health.rs). */
+ *  in crates/zapper/src/player/health.rs). */
 export const SAMPLE_SECONDS = 0.5;
 
 /** Where sample `index` of `count` sits across a graph, 0-1. The inverse of

@@ -1,9 +1,10 @@
 # tools
 
-> **On this line** (the rewrite; the Tauri app is on `main-tauri`) `surface_check`, `shot_check`,
-> `ipc_check`, `quit_check.py` and `shot.py` belong to the app they checked (the first three bins are removed), and the sections
-> below that describe them are the 0.4.x app's. `player_check` and `catchup_check` run on a headless
-> mpv host instead of a Tauri window (see Checking everything), with the same flags.
+> **On this line** (the rewrite) there is no desktop app. The checks and tools that drove the Tauri
+> app's window (`surface_check`, `shot_check`, `ipc_check`, `quit_check.py`, `shot.py`,
+> `install-desktop.sh`) are on the [`main-tauri`](https://github.com/francislavoie/zapper/tree/main-tauri)
+> branch. `player_check` and `catchup_check` run on a headless mpv host (see Checking everything),
+> with the same flags.
 
 ## Test against a local stream
 
@@ -14,7 +15,8 @@ short synthetic stream from a local server instead:
 ```sh
 tools/make_fixtures.sh                    # once: generates the fixtures with ffmpeg
 tools/fake_stream.py &                    # serves them on 127.0.0.1:8788
-ZAPPER_STREAM_URL=http://127.0.0.1:8788/sample1080.ts cargo run --bin surface_check
+ZAPPER_STREAM_URL=http://127.0.0.1:8788/sample1080.ts \
+  cargo run -p zapper --features harness,mpv --bin seek_bench
 ```
 
 Fixtures live in `~/.cache/zapper/fixtures` (`ZAPPER_FIXTURES` overrides it),
@@ -172,7 +174,7 @@ prints how it ended. `ZAPPER_ENDING_ONLY=stall` runs only the scenarios with
 that in their name; `ZAPPER_ENDING_DEBUG=1` prints mpv's warnings, and
 `ZAPPER_ENDING_LOG=debug` asks mpv for more of its log than the app does.
 
-### Driving the app itself at a fixture
+### Driving the player at a fixture
 
 `play()` resolves stream ids through the configured source, so env vars redirect
 it:
@@ -185,48 +187,9 @@ ZAPPER_STREAM_ID=1 cargo run --bin player_check
 ```
 
 `player_check` sets the first two itself when they are unset (to the server
-above and `sample1080.ts`). In the app they are inert when unset, and the
-configured source is used. Play, seek back, return to live and stop all work
-this way with no account at all, so nothing about the surface, player or
-interface needs a provider to test.
-
-The app itself, muted and at a fixture:
-
-```sh
-ZAPPER_MUTE=1 ZAPPER_FIXTURE_BASE=http://127.0.0.1:8788 \
-ZAPPER_FIXTURE_NAME=sample1080.ts ZAPPER_AUTOPLAY=1 cargo run
-```
-
-### Quitting cleanly
-
-`ZAPPER_QUIT_AFTER=<seconds>` closes the window that long after startup, through
-the same call as its close button. It works only in an unattended run (one of
-the variables above, or `ZAPPER_HARNESS`).
-
-`tools/quit_check.py` uses it to open and quit a release build over and over
-(`--runs 30` by default) while it plays a fixture, and checks how zapper and
-every process it started ended: an exit status or a signal, still running
-long after zapper had gone, or a segfault in the kernel log. It runs entirely
-in a headless GNOME Shell on a private session bus, so nothing shows on the
-desktop, and with a core size limit of one byte, which keeps any crash away
-from the desktop's crash reporter. It starts `fake_stream.py` itself:
-
-```sh
-npm run build
-(cd crates/zapper && cargo build --release --features tauri/custom-protocol)
-tools/quit_check.py --runs 30 --port 19601
-```
-
-It also requires exactly one web process per run, ended by WebKit at zapper's
-request (zapper's log says `TerminatedByApi`; `--baseline` drops that, for a
-build from before the orderly quit), and checks that what the page writes as
-it closes reaches local storage. With `ZAPPER_QUIT_NONCE` set, the hook
-registers a `pagehide` handler that stores the nonce, opens Settings ›
-Playback, and 150 ms before the close (inside both 400 ms write delays) folds
-the rail away and turns hardware decoding off. Each run has its own XDG
-directories; the check reads the nonce and the session back from WebKit's
-local-storage database, and the setting from zapper's own. `--quit-by
-sigterm` ends each run with SIGTERM instead of the close.
+above and `sample1080.ts`). Unset, they are inert, and the configured source
+is used. Play, seek back, return to live and stop all work this way with no
+account at all, so nothing about the player needs a provider to test.
 
 ## OpenSubtitles, without OpenSubtitles
 
@@ -260,9 +223,8 @@ path.
 
 Many providers allow one connection per account, and end the older one when
 another device opens a stream. A test that plays through the account on this
-machine takes the stream from whoever is watching on it. So no harness, and no
-unattended run of the app, uses the real account or catalogue unless told to
-in so many words:
+machine takes the stream from whoever is watching on it. So no harness uses
+the real account or catalogue unless told to in so many words:
 
 ```sh
 ZAPPER_ALLOW_REAL_ACCOUNT=1     # exactly 1; nothing else counts
@@ -271,14 +233,8 @@ ZAPPER_ALLOW_REAL_ACCOUNT=1     # exactly 1; nothing else counts
 Without it:
 
 - `player_check` plays the fixture server, on a scratch account.
-- `surface_check`, `shot_check`, `open_bench`, `seek_bench` and
-  `filter_bench` default to `http://127.0.0.1:8788/sample1080.ts`, and refuse
+- `open_bench`, `seek_bench` and `filter_bench` default to `http://127.0.0.1:8788/sample1080.ts`, and refuse
   a URL that is not on this machine (loopback or a file).
-- `ipc_check` builds a fixture catalogue (600 categories, 12,000 channels, a
-  guide around now) in a scratch directory and checks the commands over that.
-- The app run with `ZAPPER_HARNESS`, `ZAPPER_AUTOPLAY`, `ZAPPER_CAPTURE` or
-  `ZAPPER_MUTE` set gets a scratch config, data and cache directory: no
-  account, so no sync and nothing to play but a fixture.
 - `tools/check_all.sh` points everything at a scratch `ZAPPER_HOME`, and
   unsets the opt-in even if the calling shell exported it.
 
@@ -290,37 +246,9 @@ they resolve into a sandbox in the system's temporary directory
 
 ## Screenshots
 
-`shot.py` finds a window by title and captures it with ffmpeg's x11grab.
-
-It works on an X11 session or against Xvfb, not under a GNOME Wayland
-session: Wayland-native windows capture black, and under XWayland there is no
-shared framebuffer for x11grab to read, so the result is a flat colour.
-
-For interface work, drive the frontend in a browser instead: `npm run dev`
-with the mock backend, then Playwright. That gives true screenshots of
-everything except video compositing.
-
-## Seeing the real window
-
-`cargo run --bin shot_check -- out.png [seconds]` reconstructs what the window
-is showing and writes a PNG.
-
-It composites two layers rather than screenshotting: the video read back from
-the GL framebuffer with `glReadPixels`, and the interface rendered through
-Cairo, which preserves per-pixel alpha exactly. That is necessary because
-GNOME refuses D-Bus screenshots to unauthorised callers, Wayland-native
-windows capture black, and XWayland has no shared framebuffer for x11grab.
-
-It is a reconstruction, not a screenshot — it cannot prove the compositor puts
-the result on screen. It does catch the failures that matter: a black surface,
-an inverted picture, chrome painting opaque over video, a video rect in the
-wrong place.
-
-```sh
-tools/fake_stream.py &
-ZAPPER_STREAM_URL=http://127.0.0.1:8788/motion1080p.ts \
-  cargo run --bin shot_check -- /tmp/shot.png 12
-```
+For interface work, drive the frontend in a browser: `npm run dev` with the
+mock backend, then a headless Playwright script. That gives true screenshots
+of everything except video.
 
 ## Checking everything
 
@@ -339,8 +267,6 @@ player or the mpv backend changed, not on every edit.
 
 ## Other tools
 
-- `install-desktop.sh`: a per-user desktop entry and icons for a build run
-  from this tree (README-install.md explains when, and when not, to use it).
 - `fetch-libmpv.ps1`: the bundled libmpv and its import library for Windows
   builds (docs/windows.md); `scripts/fetch-libmpv.sh` elsewhere.
 - `licenses.mjs`: the Vite plugin that writes the interface's third-party

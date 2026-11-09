@@ -6,17 +6,15 @@
 //! one it arrived in. Each package says so instead, in a one-word file the app reads
 //! at run time, `install-kind`:
 //!
-//! - Linux: `/usr/lib/zapper/install-kind`, shipped by tauri.conf.json's
-//!   `bundle.linux.deb.files` (`deb`) and `bundle.linux.rpm.files` (`rpm`);
-//!   `scripts/package-arch.sh` makes the Arch package from the `.deb` and
-//!   writes `arch` there (packaging/install-kind-arch).
+//! - Linux: `/usr/lib/zapper/install-kind`, shipped in the `.deb` (`deb`),
+//!   the `.rpm` (`rpm`) and the Arch package (`arch`).
 //!   Not beside the binary, which is `/usr/bin/zapper`: a stray file in
 //!   `/usr/bin` would be a command.
 //! - Windows (not built yet): beside `zapper.exe`. The MSI carries a file
 //!   saying `msi` as a bundle resource, and the NSIS installer's post-install
-//!   hook overwrites it with `nsis` (packaging/windows/).
+//!   hook overwrites it with `nsis`.
 //! - macOS (not built yet): `zapper.app/Contents/Resources/install-kind`,
-//!   `dmg`, added only by the release build (packaging/macos/), so a `.app`
+//!   `dmg`, added only by the release build, so a `.app`
 //!   bundled locally counts as a build from source.
 //!
 //! No file: a build from source, which is only ever offered the release page.
@@ -30,7 +28,7 @@ use std::path::{Path, PathBuf};
 pub const INSTALL_KIND_FILE: &str = "install-kind";
 
 /// The bundle the `.dmg` holds at its top level, and the name an update
-/// replaces. Tauri names it after `productName`.
+/// replaces.
 pub const BUNDLE_NAME: &str = "zapper.app";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

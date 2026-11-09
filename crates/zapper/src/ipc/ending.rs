@@ -1039,7 +1039,7 @@ mod tests {
         assert!(!Flow::default().stalled(), "no data at all is no stall");
     }
 
-    #[cfg(feature = "gui")]
+    #[cfg(feature = "mpv")]
     #[test]
     fn the_forward_budget_is_the_players() {
         assert_eq!(DEMUXER_MAX_BYTES, crate::surface::mpv::DEMUXER_MAX_BYTES);

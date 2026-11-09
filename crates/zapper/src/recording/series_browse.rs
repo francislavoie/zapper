@@ -1,6 +1,4 @@
-//! The shows over HTTP, for the web interface: what the app asks its own
-//! Rust side for through Tauri's commands ([`crate::ipc::series_cmds`]),
-//! answered from the same reads ([`crate::catalog::series_reads`],
+//! The shows over HTTP, for the web interface, answered from the same reads ([`crate::catalog::series_reads`],
 //! [`crate::catalog::series_details`]), behind the same sign-in as
 //! [`super::browse`] (docs/recording.md, "API").
 //!

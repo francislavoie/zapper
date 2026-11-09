@@ -1,6 +1,5 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readdirSync, readFileSync, statSync } from "node:fs";
 import {
   BROWSER,
   MOCK_DESKTOP,
@@ -106,23 +105,4 @@ test("the menu and the palette offer only what can be done here", () => {
   for (const gone of ["previous", "pause", "stop", "live", "sleep30"]) {
     assert.ok(!cannot.includes(gone), gone);
   }
-});
-
-// What the interface can do is asked of `capabilities`, not worked out from
-// where it is running: only the switch itself knows which backend it is, and
-// nothing asks for a Tauri bridge any more.
-test("nothing asks whether it is in Tauri", () => {
-  const allowed = new Set();
-  const root = new URL("../", import.meta.url);
-  const walk = (dir) =>
-    readdirSync(dir).flatMap((name) => {
-      const path = new URL(name, dir);
-      if (statSync(path).isDirectory()) return name === "__checks__" ? [] : walk(new URL(`${name}/`, dir));
-      return /\.(ts|tsx)$/.test(name) ? [[path, path.pathname.slice(root.pathname.length)]] : [];
-    });
-  const offenders = walk(root)
-    .filter(([, rel]) => !allowed.has(rel))
-    .filter(([path]) => /\binTauri\b|__TAURI|@tauri-apps/.test(readFileSync(path, "utf8")))
-    .map(([, rel]) => rel);
-  assert.deepEqual(offenders, []);
 });

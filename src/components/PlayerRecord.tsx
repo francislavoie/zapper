@@ -6,7 +6,7 @@
 // On the desktop the app keeps what the player has already received of the
 // programme, and on an account with no connection to spare moves the
 // player onto the recording service's connection, which the recording
-// shares (docs/recording.md, "Recording what you watch"; ipc::handover). In
+// shares (docs/recording.md, "Recording what you watch"; player::handover). In
 // a browser the picture already comes through the service, so the
 // recording simply joins it.
 

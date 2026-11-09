@@ -1,4 +1,4 @@
-//! DTOs crossing the Tauri boundary.
+//! The DTOs the interface speaks.
 //!
 //! This file is the contract between the Rust backend and the React frontend
 //! and is written once, up front, so that work on either side can proceed in
@@ -328,7 +328,7 @@ pub enum AspectMode {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum DeinterlaceMode {
-    /// What [`crate::surface::mpv::Player::new`] sets, so the player starts
+    /// What `surface::mpv::Player::new` sets, so the player starts
     /// here. Free on progressive video: mpv checks each frame's interlaced
     /// flag and builds no filter for a frame without it.
     #[default]
@@ -866,8 +866,8 @@ pub struct StatsDto {
     /// The last minute of buffer, throughput, drops and starvation, oldest
     /// first. Collected on the player heartbeat rather than by whoever is
     /// asking, so the graphs are already drawn when the panel opens — see
-    /// `crate::ipc::health`.
-    pub history: Vec<crate::ipc::health::SampleDto>,
+    /// `crate::player::health`.
+    pub history: Vec<crate::player::health::SampleDto>,
     /// Times playback stopped to wait for data since the stream started. A
     /// stall drops no frames, so this is the only number that counts the
     /// stutter a viewer notices most.

@@ -1,5 +1,5 @@
-//! The catalogue's reads, as the interface asks for them: one place for the
-//! app's commands (`ipc::catalog_cmds`) and the recording service's web API
+//! The catalogue's reads, as the interface asks for them: one place for any
+//! front end and the recording service's web API
 //! (`recording::browse`) to answer from, so a channel page or a guide row is
 //! the same whichever of the two draws it.
 //!
@@ -446,5 +446,357 @@ mod movie_tests {
         assert!(movies_note(Some(Kind::Xtream), 0)
             .unwrap()
             .contains("next refresh"));
+    }
+}
+
+#[cfg(test)]
+mod read_tests {
+    use super::*;
+    use crate::catalog::settings as settings_store;
+    use crate::ipc::types::SettingsDto;
+
+    /// Ids are namespaced per test: the process shares one in-memory database
+    /// and tests run in parallel.
+    fn seed(base: i64, category: &str) {
+        db::install_test_db();
+        db::with_db(|c| {
+            c.execute(
+                "INSERT INTO categories (id, name, sort) VALUES (?1, ?1, 0)",
+                [category],
+            )?;
+            for (n, name) in [(1i64, "Alpha"), (2, "Beta")] {
+                c.execute(
+                    "INSERT INTO channels (stream_id, category_id, name, clean_name, num,
+                                           epg_channel_id)
+                     VALUES (?1,?2,?3,?3,?4,?5)",
+                    rusqlite::params![base + n, category, name, n, format!("epg-{}", base + n)],
+                )?;
+            }
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn channels_page_carries_what_is_on_air() {
+        seed(1000, "cmd-channels");
+        let t = now();
+        db::with_db(|c| {
+            c.execute(
+                "INSERT INTO epg (channel_ref, start, stop, title, description)
+                 VALUES ('epg-1001', ?1, ?2, 'On now', NULL),
+                        ('epg-1002', ?3, ?4, 'Long over', NULL)",
+                rusqlite::params![t - 60, t + 60, t - 7200, t - 3600],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+        let page = channels(Some("cmd-channels".into()), 0, 10).unwrap();
+        assert_eq!(page.len(), 2);
+        assert_eq!(
+            page[0].now_playing.as_ref().map(|p| p.title.as_str()),
+            Some("On now")
+        );
+        // A programme that finished an hour ago is not what is on.
+        assert!(page[1].now_playing.is_none());
+    }
+
+    #[test]
+    fn categories_reports_its_channel_count() {
+        seed(2000, "cmd-categories");
+        let cats = categories().unwrap();
+        let mine = cats
+            .iter()
+            .find(|c| c.id == "cmd-categories")
+            .expect("seeded category missing");
+        assert_eq!(mine.channel_count, 2);
+    }
+
+    #[test]
+    fn a_blank_query_finds_nothing_rather_than_everything() {
+        db::install_test_db();
+        assert!(search("".into(), 20).unwrap().is_empty());
+        assert!(search("   ".into(), 20).unwrap().is_empty());
+    }
+
+    #[test]
+    fn search_answers_from_the_mirror_before_any_sync() {
+        seed(3000, "cmd-search");
+        db::with_db(|c| {
+            c.execute(
+                "UPDATE channels SET name = 'ZZ Quixotic', clean_name = 'ZZ Quixotic'
+                 WHERE stream_id = 3001",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        // Forced, not left to `search`: the index is process-wide, and a
+        // rebuild triggered by an earlier test would predate this row.
+        db::with_db(index::rebuild).unwrap();
+
+        let hits = search("quixotic".into(), 20).unwrap();
+        assert_eq!(hits.first().map(|c| c.stream_id), Some(3001));
+    }
+
+    #[test]
+    fn guide_returns_a_row_per_requested_channel() {
+        seed(4000, "cmd-guide");
+        db::with_db(|c| {
+            c.execute(
+                "INSERT INTO epg (channel_ref, start, stop, title, description)
+                 VALUES ('epg-4001', 100, 200, 'Show', NULL)",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+        let g = guide(&[4002, 4001], 0, 1000).unwrap();
+        assert_eq!(g.iter().map(|(id, _)| *id).collect::<Vec<_>>(), [4002, 4001]);
+        assert!(g[0].1.is_empty());
+        assert_eq!(g[1].1.len(), 1);
+    }
+
+    #[test]
+    fn guide_rows_carry_the_channel_beside_its_programmes() {
+        seed(5000, "cmd-guide-rows");
+        db::with_db(|c| {
+            c.execute(
+                "INSERT INTO epg (channel_ref, start, stop, title, description)
+                 VALUES ('epg-5001', 100, 200, 'Show', NULL)",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+        let rows = guide_rows(&[5002, 5001], 0, 1000).unwrap();
+        assert_eq!(
+            rows.iter().map(|r| r.stream_id).collect::<Vec<_>>(),
+            [5002, 5001]
+        );
+        // The row exists even with nothing on it, or the grid's rows and its
+        // header stop lining up.
+        assert!(rows[0].programmes.is_empty());
+        assert_eq!(rows[0].name, "Beta");
+        assert_eq!(rows[1].programmes.len(), 1);
+        assert_eq!(rows[1].programmes[0].title, "Show");
+    }
+
+    #[test]
+    fn programme_search_reaches_the_guide_through_its_index() {
+        seed(12000, "cmd-programmes");
+        let t = now();
+        db::with_db(|c| {
+            c.execute(
+                "INSERT INTO epg (channel_ref, start, stop, title, description)
+                 VALUES ('epg-12002', ?1, ?2, 'Zygomorphic Hour', NULL)",
+                rusqlite::params![t + 3600, t + 7200],
+            )?;
+            // What every guide writer does before committing.
+            guide_search::index_changes(c)?;
+            Ok(())
+        })
+        .unwrap();
+
+        let hits = search_programmes("zygomorph".into(), 0, 10).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].channel.stream_id, 12002);
+        assert_eq!(hits[0].airing, crate::ipc::types::AiringDto::Upcoming);
+        assert!(search_programmes("  ".into(), 0, 10).unwrap().is_empty());
+
+        // And the guide can find the row it is on.
+        assert_eq!(
+            channel_index(Some("cmd-programmes".into()), 12002).unwrap(),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn settings_default_before_anything_is_saved_and_round_trip_after() {
+        db::install_test_db();
+        let _lock = settings_store::test_lock();
+        // The key is process-wide, so this is the only test that writes the
+        // guide's hours; the others that write settings leave them alone.
+        let first = settings_store::load_or_default();
+        assert_eq!(first.guide_hours, SettingsDto::default().guide_hours);
+
+        let want = SettingsDto {
+            guide_hours: 9,
+            rewind_mb: 1500,
+            ..Default::default()
+        };
+        db::with_db(|c| settings_store::save(c, &want)).unwrap();
+
+        let got = settings_store::load_or_default();
+        assert_eq!(got.guide_hours, 9);
+        assert_eq!(got.rewind_mb, 1500);
+    }
+
+    #[test]
+    fn favourites_rank_by_recency_weighted_watch_time() {
+        seed(6000, "cmd-favourites");
+        let t = now();
+        db::with_db(|c| {
+            // Alpha: a long binge two months ago. Beta: an hour this week.
+            store::record_activity(c, 6001, 20 * 3600, true, t - 56 * 86_400)?;
+            store::record_activity(c, 6002, 2 * 3600, true, t - 86_400)?;
+            Ok(())
+        })
+        .unwrap();
+
+        // A generous limit deliberately: the process shares one in-memory
+        // database and tests run in parallel, so this assertion is about the
+        // order of *these* two rows, not about the whole table.
+        let top = favourites(500).unwrap();
+        let mine: Vec<i64> = top
+            .iter()
+            .map(|f| f.channel.stream_id)
+            .filter(|id| (6000..7000).contains(id))
+            .collect();
+        assert_eq!(mine, [6002, 6001], "March must not outrank this week");
+        let beta = top.iter().find(|f| f.channel.stream_id == 6002).unwrap();
+        assert_eq!(beta.watch_seconds, 2 * 3600);
+        assert_eq!(beta.open_count, 1);
+        assert_eq!(beta.channel.clean_name, "Beta");
+    }
+
+    #[test]
+    fn recently_watched_is_newest_first() {
+        seed(13000, "cmd-recent");
+        let t = now();
+        db::with_db(|c| {
+            store::record_activity(c, 13001, 20 * 3600, true, t - 3 * 86_400)?;
+            store::record_activity(c, 13002, 60, true, t - 3600)?;
+            Ok(())
+        })
+        .unwrap();
+
+        // Shared database: assert the order of these two rows only.
+        let ids: Vec<i64> = recently_watched(500)
+            
+            .unwrap()
+            .iter()
+            .map(|f| f.channel.stream_id)
+            .filter(|id| (13000..14000).contains(id))
+            .collect();
+        assert_eq!(ids, [13002, 13001]);
+    }
+
+    #[test]
+    fn favourites_is_empty_rather_than_failing_before_anything_is_watched() {
+        db::install_test_db();
+        // Nothing has ever been watched on *this* channel, and the command
+        // must not be the thing that says so with an error.
+        seed(7000, "cmd-favourites-empty");
+        let top = favourites(50).unwrap();
+        assert!(!top.iter().any(|f| (7000..8000).contains(&f.channel.stream_id)));
+    }
+
+    #[test]
+    fn favourites_never_offers_a_separator_or_a_deleted_channel() {
+        seed(8000, "cmd-favourites-hidden");
+        let t = now();
+        db::with_db(|c| {
+            c.execute(
+                "INSERT INTO channels (stream_id, category_id, name, clean_name, is_separator)
+                 VALUES (8003, 'cmd-favourites-hidden', '###### X ######', 'X', 1)",
+                [],
+            )?;
+            c.execute(
+                "UPDATE channels SET deleted_at = 1 WHERE stream_id = 8002",
+                [],
+            )?;
+            for id in [8001i64, 8002, 8003] {
+                store::record_activity(c, id, 4 * 3600, true, t - 60)?;
+            }
+            Ok(())
+        })
+        .unwrap();
+
+        let ids: Vec<i64> = favourites(50)
+            
+            .unwrap()
+            .iter()
+            .map(|f| f.channel.stream_id)
+            .filter(|id| (8000..9000).contains(id))
+            .collect();
+        assert_eq!(ids, [8001]);
+    }
+
+    #[test]
+    fn favourites_carry_what_is_on_air() {
+        seed(9000, "cmd-favourites-epg");
+        let t = now();
+        db::with_db(|c| {
+            c.execute(
+                "INSERT INTO epg (channel_ref, start, stop, title, description)
+                 VALUES ('epg-9001', ?1, ?2, 'On now', NULL)",
+                rusqlite::params![t - 60, t + 60],
+            )?;
+            store::record_activity(c, 9001, 3600, true, t - 60)?;
+            Ok(())
+        })
+        .unwrap();
+
+        let top = favourites(50).unwrap();
+        let mine = top.iter().find(|f| f.channel.stream_id == 9001).unwrap();
+        assert_eq!(
+            mine.channel.now_playing.as_ref().map(|p| p.title.as_str()),
+            Some("On now")
+        );
+    }
+
+    #[test]
+    fn forget_activity_drops_one_channel_and_leaves_the_rest() {
+        seed(11000, "cmd-forget");
+        let t = now();
+        db::with_db(|c| {
+            store::record_activity(c, 11001, 40 * 3600, true, t - 60)?;
+            store::record_activity(c, 11002, 3600, true, t - 60)?;
+            Ok(())
+        })
+        .unwrap();
+
+        forget_activity(11001).unwrap();
+        let ids: Vec<i64> = favourites(50)
+            
+            .unwrap()
+            .iter()
+            .map(|f| f.channel.stream_id)
+            .filter(|id| (11000..12000).contains(id))
+            .collect();
+        assert_eq!(ids, [11002]);
+        // Twice is fine: forgetting what is already forgotten is not an error.
+        forget_activity(11001).unwrap();
+    }
+
+    #[test]
+    fn sync_status_answers_without_a_network() {
+        db::install_test_db();
+        let s = status::snapshot();
+        assert!(s.channels_total >= 0);
+    }
+
+    #[test]
+    fn set_movie_marks_round_trips() {
+        let _catalogue = db::movie_catalogue();
+        db::install_test_db();
+        db::with_db(|c| {
+            c.execute(
+                "INSERT INTO movies (movie_id, category_id, name, clean_name, added)
+                 VALUES (9801, 'cmd', 'Round', 'Round', 0)",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        let on = set_movie_marks(9801, Some(true), None).unwrap();
+        assert!(on.favourite && !on.watched);
+        let off = set_movie_marks(9801, Some(false), None).unwrap();
+        assert!(!off.favourite);
+        assert_eq!(off.id, 9801);
     }
 }
