@@ -8,8 +8,8 @@ use std::time::Duration;
 use tauri::AppHandle;
 
 use crate::ipc::types::{
-    AspectMode, ConnectionsDto, DeinterlaceMode, MediaSessionDto, PlayerOptionsDto,
-    PlayerStateDto, SettingsDto, StatsDto, SubtitleStyleDto, ThumbnailDto, TitleThumbnailDto,
+    AspectMode, ConnectionsDto, DeinterlaceMode, MediaSessionDto, PlayerOptionsDto, PlayerStateDto,
+    SettingsDto, StatsDto, SubtitleStyleDto, ThumbnailDto, TitleThumbnailDto,
 };
 use crate::player::api;
 use crate::surface::VideoRect;
@@ -55,12 +55,20 @@ pub async fn play(stream_id: i64) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn play_movie(movie_id: i64, start: Option<f64>, held: Option<bool>) -> Result<(), String> {
+pub async fn play_movie(
+    movie_id: i64,
+    start: Option<f64>,
+    held: Option<bool>,
+) -> Result<(), String> {
     api::play_movie(movie_id, start, held).await
 }
 
 #[tauri::command]
-pub async fn play_episode(episode_id: i64, start: Option<f64>, held: Option<bool>) -> Result<(), String> {
+pub async fn play_episode(
+    episode_id: i64,
+    start: Option<f64>,
+    held: Option<bool>,
+) -> Result<(), String> {
     api::play_episode(episode_id, start, held).await
 }
 

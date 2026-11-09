@@ -17,7 +17,6 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-
 use crate::connections;
 use crate::player::controller::{self, NowPlaying};
 use crate::recording::api::{RecordingDto, RecordingState, ScheduleRequest};

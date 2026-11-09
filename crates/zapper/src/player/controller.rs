@@ -1864,7 +1864,16 @@ pub(super) fn start(rt: &tokio::runtime::Handle) {
 /// one's back. Off the main thread, so the thread that draws the picture
 /// and runs the interface never waits on mpv for it.
 fn ensure_ticker() {
-    if RUNTIME.get().is_none() || TICKER_STARTED.swap(true, Ordering::AcqRel) {
+    if RUNTIME.get().is_none() {
+        // Nothing would turn the player's events into states, so an open
+        // would sit at Opening. Said once, for whoever forgot `start`.
+        static WARNED: AtomicBool = AtomicBool::new(false);
+        if !WARNED.swap(true, Ordering::AcqRel) {
+            tracing::warn!("a player open before player::start: no heartbeat, so its state will not advance");
+        }
+        return;
+    }
+    if TICKER_STARTED.swap(true, Ordering::AcqRel) {
         return;
     }
     let spawned = std::thread::Builder::new()
@@ -6520,6 +6529,13 @@ mod tests {
             if let Ok(mut saver) = PROGRESS.lock() {
                 *saver = ProgressSaver::new();
             }
+            if let Ok(mut last) = LAST_OPEN.lock() {
+                *last = None;
+            }
+            if let Ok(mut o) = OPTIONS.lock() {
+                *o = PlayerOptionsDto::default();
+            }
+            THROUGH_SERVICE.store(false, Ordering::Release);
             player::uninstall();
         }
 
@@ -6574,7 +6590,10 @@ mod tests {
                 let m = STATE.lock().unwrap();
                 (m.holding(), m.dto.clone())
             };
-            let seen = states(&mut rx, |_| true);
+            // This title's states, and those with nothing open: the stop's.
+            let seen = states(&mut rx, |s| {
+                s.on_demand.map_or(s.stream_id.is_none(), |o| o.id == ID)
+            });
             let stopped_mpv = fake.calls().contains(&"command stop".to_owned());
             reset();
             assert_eq!(shown, PlaybackState::Paused, "a held title shows its first frame paused");
@@ -6617,9 +6636,11 @@ mod tests {
         async fn tick_without_backend_is_idle() {
             let _registry = registry();
             player::uninstall();
-            let mut rx = bus().subscribe();
+            let now = || serde_json::to_string(&STATE.lock().unwrap().dto).unwrap();
+            let before = now();
             assert!(!beat(), "no player, no heartbeat");
-            assert_eq!(states(&mut rx, |_| true), []);
+            // Nothing moved: the state is as it was, so nothing went out.
+            assert_eq!(now(), before);
         }
     }
 }
