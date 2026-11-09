@@ -29,6 +29,10 @@ pub struct HostOptions {
     pub title: String,
     /// No audio output at all (`ao=null`). Also implied by `ZAPPER_MUTE`.
     pub muted: bool,
+    /// A window of this size (width, height) that keeps it whatever the
+    /// video's shape, the picture banded inside it. `None`: mpv's own
+    /// choice, a window sized to the video's aspect.
+    pub window: Option<(u32, u32)>,
 }
 
 /// How often the thumbnail clock is looked at. The clock itself decides when
@@ -40,7 +44,7 @@ const THUMB_POLL: Duration = Duration::from_secs(1);
 /// there is one mpv.
 pub fn open_host(opts: HostOptions) -> Result<Arc<dyn PlayerBackend>, String> {
     let muted = opts.muted || mute_asked(std::env::var_os("ZAPPER_MUTE"));
-    let options = window_options(&opts.title, muted);
+    let options = window_options(&opts.title, muted, opts.window);
     let player = mpv::Player::new(|init| {
         for (key, value) in &options {
             init.set_property(key, value.clone())?;
@@ -76,10 +80,17 @@ pub fn open_host(opts: HostOptions) -> Result<Arc<dyn PlayerBackend>, String> {
 ///   window must not pause or seek behind its back.
 /// - `ao=null` when muted: nothing later (a volume or mute change) can undo
 ///   it, as for the app's unattended runs.
+/// - With a `window` size, `geometry` at that size and `keepaspect-window=no`:
+///   mpv otherwise reshapes its window to each video's aspect, and a 4:3
+///   picture would never be banded.
 ///
 /// `keep-open` is left at mpv's default, as everywhere else: the controller
 /// reads the end of a title from `end-file`.
-fn window_options(title: &str, muted: bool) -> Vec<(&'static str, String)> {
+fn window_options(
+    title: &str,
+    muted: bool,
+    window: Option<(u32, u32)>,
+) -> Vec<(&'static str, String)> {
     let mut o = vec![
         ("vo", "gpu-next".to_owned()),
         ("force-window", "yes".to_owned()),
@@ -89,6 +100,10 @@ fn window_options(title: &str, muted: bool) -> Vec<(&'static str, String)> {
     ];
     if muted {
         o.push(("ao", "null".to_owned()));
+    }
+    if let Some((w, h)) = window {
+        o.push(("geometry", format!("{w}x{h}")));
+        o.push(("keepaspect-window", "no".to_owned()));
     }
     o
 }
@@ -137,17 +152,26 @@ mod tests {
 
     #[test]
     fn the_host_window_is_mpvs_own() {
-        let o = window_options("zapper", false);
+        let o = window_options("zapper", false, None);
         assert_eq!(get(&o, "vo"), Some("gpu-next"));
         assert_eq!(get(&o, "force-window"), Some("yes"));
         assert_eq!(get(&o, "title"), Some("zapper"));
         assert_eq!(get(&o, "input-default-bindings"), Some("no"));
         assert_eq!(get(&o, "ao"), None);
+        assert_eq!(get(&o, "geometry"), None);
+        assert_eq!(get(&o, "keepaspect-window"), None);
+    }
+
+    #[test]
+    fn a_sized_host_window_keeps_its_size() {
+        let o = window_options("t", false, Some((1920, 1080)));
+        assert_eq!(get(&o, "geometry"), Some("1920x1080"));
+        assert_eq!(get(&o, "keepaspect-window"), Some("no"));
     }
 
     #[test]
     fn a_muted_host_has_no_audio_output() {
-        assert_eq!(get(&window_options("t", true), "ao"), Some("null"));
+        assert_eq!(get(&window_options("t", true, None), "ao"), Some("null"));
         assert!(mute_asked(Some("1".into())));
         assert!(!mute_asked(Some("".into())));
         assert!(!mute_asked(None));

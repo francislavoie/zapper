@@ -188,6 +188,9 @@ fn main() {
     let opened = zapper_lib::surface::host::open_host(zapper_lib::surface::host::HostOptions {
         title: "zapper player_check".to_owned(),
         muted: true,
+        // The size of the app's window on a 1080p screen, kept whatever the
+        // video's shape: a 4:3 picture is banded, as `--captions` needs.
+        window: Some((1920, 1080)),
     });
     if let Err(e) = opened {
         eprintln!("FAIL: opening the player: {e}");
@@ -1391,9 +1394,13 @@ async fn run_captions() -> Result<String, String> {
         "osd-dimensions/mr",
         "sub-visibility",
     ];
+    /// `None` when there is no player, or mpv does not answer within 5 s.
     async fn read() -> Option<[String; 9]> {
-        let p = zapper_lib::player::backend()?;
-        Some(KEYS.map(|k| p.get_string(k).unwrap_or_default()))
+        let reading = tokio::task::spawn_blocking(|| {
+            let p = zapper_lib::player::backend()?;
+            Some(KEYS.map(|k| p.get_string(k).unwrap_or_default()))
+        });
+        tokio::time::timeout(Duration::from_secs(5), reading).await.ok()?.ok()?
     }
     let num = |s: &str| s.parse::<f64>().unwrap_or(f64::NAN);
 
@@ -1469,6 +1476,14 @@ async fn run_captions() -> Result<String, String> {
             // Where mpv puts a side caption's edge, in the window's pixels
             // (see player::captions): inside the picture, never in a band.
             let edge = margin * (w - ml - mr) / 960.0;
+            // A 4:3 picture in the 16:9 window is banded: with no bands, the
+            // edge checks below would say nothing about them.
+            let bands = ml + mr;
+            if tag.contains("43") && (bands.is_nan() || bands <= 0.0) {
+                return Err(format!(
+                    "the 4:3 picture has no bands ({ml}/{mr}px of {w}): the window took the video's shape"
+                ));
+            }
             match what {
                 "top-left" if !(pos < 40.0 && edge > ml + 1.0) => {
                     return Err(format!("top left placed at sub-pos {pos}, its edge {edge:.0}px with a {ml}px band"));
