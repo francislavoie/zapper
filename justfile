@@ -1,5 +1,5 @@
 set shell := ["bash", "-cu"]
-# Only `package-windows` is meant for Windows: PowerShell there, never WSL's bash.
+# Recipes are for Linux and macOS; on Windows the release workflow runs the same commands in PowerShell.
 set windows-shell := ["powershell.exe", "-NoLogo", "-NoProfile", "-Command"]
 
 # Builds use 8 jobs unless told otherwise, not every core: a cargo build at full width makes
@@ -13,7 +13,7 @@ default: test
 test: test-rust test-ui test-scripts
 
 test-rust:
-    cd crates/zapper && cargo test --lib -q
+    cargo test -p zapper --lib -q
 
 test-ui:
     node --test src/__checks__/*.test.mjs
@@ -23,17 +23,30 @@ test-scripts:
     scripts/test-scripts.sh
 
 lint:
-    cd crates/zapper && cargo clippy --lib --bins -q -- -D warnings
+    cargo clippy -p zapper --lib --bins -q -- -D warnings
+    cargo clippy -p zapper --lib --bins --features harness,mpv -q -- -D warnings
+    cargo clippy -p zapper --lib --bins --no-default-features --features server -q -- -D warnings
     npx tsc --noEmit
 
-# Everything, as tools/check_all.sh runs it (`just check --windowed` adds the GL and playback
-# harnesses, which open windows and play video).
+# Everything, as tools/check_all.sh runs it (`just check --host` adds the player checks, which
+# play video in mpv on a headless host).
 check *args:
     tools/check_all.sh {{args}}
 
-# A development build with the Vite dev server (npm run app).
+# The player checks alone, each flag against the fixture streams, on a headless mpv host: the
+# same as `just check --host` after its unit suites.
+check-host:
+    tools/check_all.sh --host
+
+# zapper-server with the browser interface compiled in (the interface is built first:
+# crates/zapper/build.rs embeds dist/). Run it with target/release/zapper-server; see README.md.
+server:
+    npm run build
+    cargo build --release -p zapper --no-default-features --features server --bin zapper-server
+
+# The browser interface on its own, against the mock backend (http://localhost:5180).
 dev:
-    npm run app
+    npm run dev
 
 # The libmpv zapper links and ships (docs/licensing.md): the LGPL build of libmpv and FFmpeg
 # that packaging/libmpv/manifest.json names for this platform, downloaded, checked against its
@@ -54,59 +67,6 @@ build-libmpv platform="linux-x86_64":
 release version:
     @scripts/release.sh "{{version}}"
 
-# The Linux packages, into target/release/bundle/: the .deb (its Version made
-# Debian's by scripts/fix-deb.sh, then checked by scripts/check-deb.sh) and the .rpm, from one
-# build, then the Arch package made from the .deb (`just package-arch`). Through `npx tauri`, the project's own Tauri 2 CLI: a `cargo tauri` on PATH may be
-# another major version.
-#
-# ZAPPER_RELEASE_VERSION=<version> (the release workflow) must be a release version equal to
-# tauri.conf.json's, and is checked against the package's Version; unset, the package is
-# whatever tauri.conf.json says.
-package:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    v=$(jq -er .version crates/zapper/tauri.conf.json)
-    if [ -n "${ZAPPER_RELEASE_VERSION:-}" ]; then
-      python3 scripts/version.py check "$ZAPPER_RELEASE_VERSION"
-      [ "$ZAPPER_RELEASE_VERSION" = "$v" ] || { echo "package: ZAPPER_RELEASE_VERSION=$ZAPPER_RELEASE_VERSION doesn't match tauri.conf.json's $v" >&2; exit 1; }
-    fi
-    # The bundled libmpv and FFmpeg the packages carry in /usr/lib/zapper (docs/licensing.md).
-    scripts/fetch-libmpv.sh linux-x86_64
-    # The license notices the packages ship (docs/licensing.md): the Rust crates' and the .deb's
-    # copyright file into target/licenses, unless Cargo.lock, the manifest, about.toml
-    # and LICENSE are as they were for the last ones; the interface's come from the UI build.
-    # Either fails the build on a license outside about.toml's allow-list.
-    scripts/licenses.sh --if-changed
-    # The interface, before zapper-server: the service compiles it in to serve it to browsers
-    # (crates/zapper/build.rs). `tauri build` builds it again for the app, to the same files.
-    npm run build
-    # zapper-server, the recording service the packages install as /usr/bin/zapper-server, built
-    # against that FFmpeg (crates/zapper/build.rs).
-    cargo build --release --manifest-path crates/zapper/Cargo.toml --no-default-features --features server --bin zapper-server
-    # Old packages first, so the globs below match only this build's.
-    rm -f target/release/bundle/deb/zapper_*.deb target/release/bundle/rpm/zapper-*.rpm
-    npx tauri build --bundles deb,rpm
-    deb=(target/release/bundle/deb/zapper_*.deb)
-    [ ${#deb[@]} = 1 ] || { echo "package: expected one .deb, found: ${deb[*]}" >&2; exit 1; }
-    scripts/fix-deb.sh "${deb[0]}"
-    scripts/check-deb.sh "${deb[0]}" "$v"
-    scripts/package-arch.sh "${deb[0]}" target/release/bundle/arch
-    ls -l target/release/bundle/deb/zapper_*.deb target/release/bundle/rpm/zapper-*.rpm \
-      target/release/bundle/arch/zapper-*-x86_64.pkg.tar.zst
-
-# The Arch package (target/release/bundle/arch/zapper-<pkgver>-1-x86_64.pkg.tar.zst),
-# made from the .deb of `just package` without makepkg: the same payload with the install-kind
-# marker saying arch, pacman's .PKGINFO and .MTREE, and Depends mapped through the table in
-# scripts/arch-pkg.py. `just package` already runs it; this redoes it from the last .deb.
-package-arch:
-    scripts/package-arch.sh target/release/bundle/deb/zapper_*.deb target/release/bundle/arch
-
-# Installs that package in a throwaway archlinux:latest container and checks it (needs Docker and
-# the network, so `just package` doesn't run it): dependencies, pacman -Qkk, the marker, the
-# license notices, ldd and a headless launch. See scripts/check-arch-pkg.sh.
-check-arch-pkg:
-    scripts/check-arch-pkg.sh target/release/bundle/arch/zapper-*-x86_64.pkg.tar.zst
-
 # zapper-server for Linux as one static file (docs/recording.md, "Without the app"):
 # target/release/bundle/server/zapper-server-<version>-linux-x86_64, built for musl
 # with a minimal static LGPL FFmpeg and its licence notices built in, in a pinned Rust image on
@@ -123,30 +83,10 @@ package-server:
 check-server-binary:
     scripts/check-server-binary.sh target/release/bundle/server/zapper-server-*-linux-x86_64 target/release/bundle/server/checks
 
-# On Windows (builds; not yet tested on screen or released): the NSIS installer and the MSI,
-# with the install-kind markers the updater reads and the license notices in licenses\ beside
-# zapper.exe (packaging/windows/). The notices come from scripts/licenses.sh run by Git for
-# Windows' bash, with Windows' crate graph; it needs cargo-about and Python.
-package-windows:
-    & ./tools/fetch-libmpv.ps1; if ($LASTEXITCODE) { exit $LASTEXITCODE }
-    $env:PYTHON = 'python'; & "$env:ProgramFiles\Git\bin\bash.exe" scripts/licenses.sh --if-changed; if ($LASTEXITCODE) { exit $LASTEXITCODE }
-    npm run build; if ($LASTEXITCODE) { exit $LASTEXITCODE }
-    cargo build --release --manifest-path crates/zapper/Cargo.toml --no-default-features --features server --bin zapper-server; if ($LASTEXITCODE) { exit $LASTEXITCODE }
-    npx tauri build --config packaging/windows/installers.conf.json
-
-# On macOS (Apple Silicon; not released yet, docs/macos.md): zapper.app and the .dmg, with
-# libmpv in Contents/Frameworks and the install-kind marker and license notices in
-# Contents/Resources (packaging/macos/dmg.conf.json), then scripts/check-macos-app.sh on it.
-package-macos:
-    scripts/fetch-libmpv.sh
-    scripts/licenses.sh --if-changed
-    npx tauri build --config packaging/macos/dmg.conf.json
-    scripts/check-macos-app.sh target/release/bundle/macos/zapper.app
-
-# The third-party license notices the packages ship (docs/licensing.md): the Rust crates' into
+# The third-party license notices the server ships (docs/licensing.md): the Rust crates' into
 # target/licenses (scripts/licenses.sh, needs cargo-about), then the UI build, which
-# writes dist/licenses/ with the interface's and copies the rest in beside it for Settings >
-# About. Fails on a license outside the allow-list in about.toml. `just package` runs the same.
+# writes dist/licenses/ with the interface's and copies the rest in beside it. Fails on a
+# license outside the allow-list in about.toml. `just package-server` runs the same.
 licenses:
     scripts/licenses.sh
     npm run build

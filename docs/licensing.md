@@ -1,5 +1,12 @@
 # Licensing and third-party notices
 
+> **This line is the rewrite:** it ships `zapper-server` (a static Linux binary and a Windows zip),
+> not `.deb`, `.rpm`, Arch or installer packages. The notices, the libmpv and FFmpeg build and the
+> allow-list below apply to it unchanged; the package checks named here (`scripts/check-deb.sh`,
+> `scripts/package-arch.sh`, `scripts/check-macos-app.sh`) belong to the 0.4.x app on the
+> [`main-tauri`](https://github.com/francislavoie/zapper/tree/main-tauri) branch.
+
+
 zapper is MIT licensed (`LICENSE`, © 2026 Francis Lavoie). Its packages also contain other
 people's code: the Rust crates the binary links, the npm packages bundled into the interface, and
 libmpv, zapper's own LGPL build of mpv and FFmpeg (below). Their licenses require their notices

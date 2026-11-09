@@ -1,5 +1,13 @@
 # zapper on macOS
 
+> **This line is the rewrite:** it has no desktop app (the Tauri app, 0.4.x, is on the
+> [`main-tauri`](https://github.com/francislavoie/zapper/tree/main-tauri) branch), so
+> `.github/workflows/macos.yml` here builds libmpv for macos-arm64, runs the core and server tests
+> and installs and removes `zapper-server` as a LaunchAgent; it builds no `.app` or `.dmg`. The
+> sections below about the window, packaging and `scripts/check-macos-app.sh` describe the 0.4.x app
+> and stay on `main-tauri`; what they say about libmpv and the recording service still applies.
+
+
 zapper builds, packages and plays on macOS on Apple Silicon (arm64), as checked on GitHub's
 macOS runners by [.github/workflows/macos.yml](../.github/workflows/macos.yml). It has not been
 tried on a real Mac yet and is not released: there is no published macOS libmpv in

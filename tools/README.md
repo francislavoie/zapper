@@ -1,5 +1,10 @@
 # tools
 
+> **On this line** (the rewrite; the Tauri app is on `main-tauri`) `surface_check`, `shot_check`,
+> `ipc_check`, `quit_check.py` and `shot.py` belong to the app they checked (the first three bins are removed), and the sections
+> below that describe them are the 0.4.x app's. `player_check` and `catchup_check` run on a headless
+> mpv host instead of a Tauri window (see Checking everything), with the same flags.
+
 ## Test against a local stream
 
 Real streams take seconds to open, their content changes minute to minute,
@@ -320,16 +325,17 @@ ZAPPER_STREAM_URL=http://127.0.0.1:8788/motion1080p.ts \
 ## Checking everything
 
 ```sh
-tools/check_all.sh            # tests, lint, build, a fixture catalogue — no windows
-tools/check_all.sh --windowed # also GL compositing and playback
+tools/check_all.sh          # tests, lint, build, the recording and service checks
+tools/check_all.sh --host   # also the player checks, on a headless mpv host
 ```
 
-The catalogue check builds a fixture mirror rather than reading the one a
-configured copy of zapper has synced; `ZAPPER_ALLOW_REAL_ACCOUNT=1 cargo run
---features harness --bin ipc_check` checks the real one (`~/.local/share/zapper`)
-when that is what is wanted. The windowed harnesses open real
-windows and play video, which interrupts whoever is at the machine. Run them
-when surface, mpv or rect behaviour changed — not on every edit.
+`--host` runs `player_check` (live, `--movie`, `--held`, `--episode`, `--up-next`,
+`--subtitles`, `--find-subtitles`, `--captions`, `--trickplay-vod` and the rest), `catchup_check`,
+`ending_check` and `handover_check` against the fixture servers. mpv opens its own window, so the
+ones that need one run inside `tools/headless_host.sh`: a headless gnome-shell with a virtual
+monitor, a scratch HOME and XDG_RUNTIME_DIR, no sound and no core dumps. Nothing opens on the
+display of whoever is at the machine, but the run plays video for a few minutes: run it when the
+player or the mpv backend changed, not on every edit.
 
 ## Other tools
 

@@ -9,6 +9,8 @@ The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and vers
 
 ## [Unreleased]
 
+- The desktop app is being rebuilt; this line ships zapper-server and the browser interface. The Tauri app (0.4.x) lives on the `main-tauri` branch.
+
 ## [0.4.0] - 2026-11-08
 
 ### Added
