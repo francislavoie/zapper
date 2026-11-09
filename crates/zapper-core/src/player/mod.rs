@@ -10,7 +10,7 @@
 //! [`title_thumbs`] the seek bar's previews, and [`handover`] Record on the
 //! channel playing (moving the player onto the recording service), with
 //! [`captured`] the channels the service already shares. [`startup`] is how
-//! a front end opens the core.
+//! a front end opens the core, and [`shutdown`] how it lets go of it.
 
 pub mod api;
 pub mod backend;
@@ -23,6 +23,7 @@ pub mod handover;
 pub mod health;
 pub mod live_start;
 pub mod png;
+mod shutdown;
 mod startup;
 pub mod title_thumbs;
 pub mod tracks;
@@ -31,6 +32,7 @@ pub mod trickplay;
 pub use backend::{
     backend, install, uninstall, BackendCaps, Health, PlayerBackend, Probe, Signal, Stats,
 };
+pub use shutdown::{shutdown, STOP_BOUND};
 pub use startup::{startup, Startup};
 
 /// Starts the controller on `rt`: the tasks it spawns run there, and its

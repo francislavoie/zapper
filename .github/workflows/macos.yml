@@ -186,7 +186,7 @@ jobs:
         run: cargo test -p zapper-core --lib -q
 
       - name: Clippy, core
-        run: cargo clippy -p zapper-core --lib -q -- -D warnings
+        run: cargo clippy -p zapper-core --lib --features harness -q -- -D warnings
 
       - name: Clippy, libmpv backend and harnesses
         run: cargo clippy -p zapper-mpv --lib --bins --features harness -q -- -D warnings

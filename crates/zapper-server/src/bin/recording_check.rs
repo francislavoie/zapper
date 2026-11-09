@@ -2,7 +2,7 @@
 //! forced switch to the backup feed, and checks what it wrote.
 //!
 //! ```text
-//! cargo build --features harness,server --bin zapper-server --bin recording_check
+//! cargo build -p zapper-server --features harness --bin zapper-server --bin recording_check
 //! target/debug/recording_check [seconds]
 //! ```
 //!

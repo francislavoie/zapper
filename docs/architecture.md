@@ -34,12 +34,13 @@ workspace; `zapper-mpv` and `zapper-server` find it through the same code
 
 Parts of the core that used to call a window toolkit's `emit` send an `Event` (sync status, player
 state, player options, channel quality, update) through one `EventBus` (`events.rs`), a tokio
-broadcast channel. Anything that wants them subscribes: the server turns them into its
-server-sent events, a future app turns them into repaints. A subscriber that falls behind never
-stalls the sender. A forwarder that passes every kind of event on (as the Tauri app's webview
-forwarder did) uses plain `recv` and carries on past a lag, so it loses only what the channel had
-already dropped; a consumer that only wants the newest state uses `recv_latest`, which skips to
-the newest event still held.
+broadcast channel. Anything that wants them subscribes: a future app turns them into repaints.
+The server does not listen to it; browsers poll its HTTP API for what they show. A subscriber
+that falls behind never stalls the sender. A forwarder that passes every kind of event on (as the
+Tauri app's webview forwarder did) uses plain `recv` and carries on past a lag, so it loses only
+what the channel had already dropped; a consumer that only wants the player's state uses
+`recv_latest_player_state`, which skips every other kind of event and, after a lag, goes to the
+newest player state still held, so an event of another kind after it cannot hide it.
 
 ## The player backend
 
@@ -87,6 +88,13 @@ the app did, so the same interface runs in both. `recording_check`, `offair_chec
 - `player::handover::recordings()` and `noticed()` have no caller until a front end fetches the
   service's recordings through them, so tuning to a channel the service records joins its
   connection (`player::captured`) only once one does: dormant on this line.
+- At quit, call `player::shutdown()` (as the player checks do at exit): it writes where a movie
+  or an episode got to, uninstalls the backend and marks the player stopped, then stops it,
+  waiting at most two seconds. The old app's quit had a watchdog for the same reason.
+- `updates::start` (the updater's state and its periodic check) has no caller on this line.
+- What went with the Tauri app and is the desktop app's to restore: the media session
+  (souvlaki: media keys and the desktop's now-playing), remembering the window's size, and
+  quitting in order on SIGTERM, SIGINT and SIGHUP.
 - The release zip's licence notices are checked on the Windows build (`--licenses` prints them);
   the node checks of the app package's notices went with the Tauri app. A server-side check of
   the zip's notices against `scripts/licenses.sh`'s output is still to write.

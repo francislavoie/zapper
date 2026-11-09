@@ -10,7 +10,7 @@
 //! app's own two state machines, and prints when the picture first moved,
 //! how far behind live it was when it did, and any jump after.
 //!
-//! Usage: `cargo run --features harness --bin live_start_bench [fixture.ts]`
+//! Usage: `cargo run -p zapper-mpv --features harness --bin live_start_bench [fixture.ts]`
 //! (fixtures from `tools/make_fixtures.sh`). Headless and silent: `vo=null`,
 //! `ao=null`, and the only server is the one it starts.
 //!

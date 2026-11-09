@@ -3,7 +3,8 @@
 //! "Recording what you watch"; `recording::handover`, `player::handover`).
 //!
 //! ```text
-//! cargo build --features harness,server --bin zapper-server --bin handover_check
+//! cargo build -p zapper-server --bin zapper-server
+//! cargo build -p zapper-mpv --features harness --bin handover_check
 //! target/debug/handover_check
 //! ```
 //!

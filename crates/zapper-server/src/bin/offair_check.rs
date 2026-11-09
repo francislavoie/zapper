@@ -3,7 +3,7 @@
 //! --placeholder-while`), as some do when a channel is not broadcasting.
 //!
 //! ```text
-//! cargo build --features harness,server --bin zapper-server --bin offair_check
+//! cargo build -p zapper-server --features harness --bin zapper-server --bin offair_check
 //! target/debug/offair_check [base-port] [--serve-until FILE]
 //! ```
 //!

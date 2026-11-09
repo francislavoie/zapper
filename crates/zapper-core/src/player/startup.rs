@@ -30,8 +30,11 @@ impl Startup {
     pub const PLAYER_ONLY: Startup = Startup { sync: false, resume_service: false };
 }
 
-/// Opens the core for a front end, on `rt`. Once per process: returns
-/// whether this call did it, and a later one does nothing.
+/// Opens the core for a front end, on `rt`, once its player is installed.
+/// Once per process: returns whether this call did it, and a later one does
+/// nothing. Called before the player is installed, it does nothing either,
+/// and says so: the saved settings would have nowhere to go, so a call after
+/// the install is the one that counts.
 pub fn startup(rt: &tokio::runtime::Handle, what: Startup) -> bool {
     static STARTED: AtomicBool = AtomicBool::new(false);
     run(&STARTED, &Real(rt), what)
@@ -40,6 +43,7 @@ pub fn startup(rt: &tokio::runtime::Handle, what: Startup) -> bool {
 /// The steps, apart from their order and the once-only, so that a test can
 /// watch them.
 trait Steps {
+    fn has_player(&self) -> bool;
     fn apply_saved_settings(&self);
     fn start_player(&self);
     fn spawn_sync(&self);
@@ -48,6 +52,10 @@ trait Steps {
 }
 
 fn run(started: &AtomicBool, steps: &dyn Steps, what: Startup) -> bool {
+    if !steps.has_player() {
+        tracing::warn!("startup before a player is installed: nothing done yet");
+        return false;
+    }
     if started.swap(true, Ordering::AcqRel) {
         return false;
     }
@@ -73,6 +81,10 @@ fn run(started: &AtomicBool, steps: &dyn Steps, what: Startup) -> bool {
 struct Real<'a>(&'a tokio::runtime::Handle);
 
 impl Steps for Real<'_> {
+    fn has_player(&self) -> bool {
+        super::backend().is_some()
+    }
+
     fn apply_saved_settings(&self) {
         super::controller::apply_saved_settings();
     }
@@ -103,8 +115,14 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
 
-    #[derive(Default)]
-    struct Log(Mutex<Vec<&'static str>>);
+    /// The steps taken, and whether a player is installed.
+    struct Log(Mutex<Vec<&'static str>>, AtomicBool);
+
+    impl Default for Log {
+        fn default() -> Self {
+            Log(Mutex::default(), AtomicBool::new(true))
+        }
+    }
 
     impl Log {
         fn push(&self, step: &'static str) {
@@ -116,6 +134,9 @@ mod tests {
     }
 
     impl Steps for Log {
+        fn has_player(&self) -> bool {
+            self.1.load(Ordering::Acquire)
+        }
         fn apply_saved_settings(&self) {
             self.push("settings");
         }
@@ -142,6 +163,17 @@ mod tests {
         assert!(!run(&started, &log, Startup::APP));
         assert!(!run(&started, &log, Startup::PLAYER_ONLY));
         assert!(log.taken().is_empty());
+    }
+
+    #[test]
+    fn startup_before_the_player_waits_for_a_call_after_it() {
+        let (started, log) = (AtomicBool::new(false), Log::default());
+        log.1.store(false, Ordering::Release);
+        assert!(!run(&started, &log, Startup::APP));
+        assert!(log.taken().is_empty(), "nothing done, nothing marked");
+        log.1.store(true, Ordering::Release);
+        assert!(run(&started, &log, Startup::APP));
+        assert_eq!(log.taken()[0], "settings");
     }
 
     #[test]

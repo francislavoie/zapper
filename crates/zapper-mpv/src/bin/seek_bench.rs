@@ -10,7 +10,7 @@
 //!
 //! Usage:
 //!   tools/fake_stream.py &
-//!   cargo run --bin seek_bench -- http://127.0.0.1:8788/sample1080.ts
+//!   cargo run -p zapper-mpv --features harness --bin seek_bench -- http://127.0.0.1:8788/sample1080.ts
 //!
 //! A local file is a poor stand-in - it is fully seekable and has no cache
 //! to miss - so point this at the loop server, which serves a fixture as an
