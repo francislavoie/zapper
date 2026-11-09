@@ -4,7 +4,7 @@
 //! (`spawn_blocking`): a page of a catalogue of a hundred thousand titles is
 //! a real query, not a lookup. Details may ask the provider, once per title
 //! and then from the kept copy; see [`crate::catalog::vod_details`].
-//! Playing a movie is `player_cmds`'.
+//! Playing a movie is `player::controller`'.
 
 use crate::catalog::{reads, vod_details};
 use crate::ipc::types::{

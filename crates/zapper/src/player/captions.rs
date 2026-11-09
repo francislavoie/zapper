@@ -9,13 +9,13 @@
 //! place of the grid's breaks the indents. So a channel's subtitles are
 //! drawn without their positions (`sub-ass-override=strip`, which also draws
 //! them in the viewer's subtitle style; set as the channel opens, by
-//! `player_cmds`), and the placement is rebuilt here from the caption's own
+//! `player::controller`), and the placement is rebuilt here from the caption's own
 //! grid cells: its rows as `sub-pos`, its side as `sub-align-x` with a margin
 //! that keeps it inside the 4:3 frame a television would draw the grid in,
 //! measured against where the picture really is in the window.
 //!
 //! Pure but for one place to keep what was last written: the heartbeat in
-//! `player_cmds` reads the track list, `sub-text/ass` and the window's
+//! `player::controller` reads the track list, `sub-text/ass` and the window's
 //! `osd-dimensions`, and sets what [`Captions::update`] says.
 
 use crate::ipc::types::TrackDto;

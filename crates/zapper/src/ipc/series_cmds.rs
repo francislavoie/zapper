@@ -4,7 +4,7 @@
 //! Reads answer from SQLite, off the async threads (`spawn_blocking`), as
 //! the movies' do. A show's details may ask the provider, once per show and
 //! then from the kept copy; see [`crate::catalog::series_details`]. Playing
-//! an episode is `player_cmds`'.
+//! an episode is `player::controller`'.
 
 use crate::catalog::{series_details as details, series_reads};
 use crate::ipc::types::{

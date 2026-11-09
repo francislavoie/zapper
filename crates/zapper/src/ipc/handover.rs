@@ -17,10 +17,9 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use tauri::AppHandle;
 
 use crate::connections;
-use crate::ipc::player_cmds::{self, NowPlaying};
+use crate::player::controller::{self, NowPlaying};
 use crate::recording::api::{RecordingDto, RecordingState, ScheduleRequest};
 use crate::recording::client::{Client, NOT_RUNNING};
 use crate::recording::handover::{self, Facts, Plan};
@@ -50,13 +49,13 @@ pub fn captured(stream_id: i64) -> bool {
 }
 
 /// What the service's list of recordings says, as it is fetched.
-pub fn noticed(app: &AppHandle, list: &[RecordingDto]) {
+pub fn noticed(list: &[RecordingDto]) {
     if let Ok(mut c) = CAPTURED.lock() {
         *c = Some((Instant::now(), handover::captured_feeds(list)));
     }
     // A recording of the channel being watched that waits for the
     // connection the player holds: it would wait until the player stops.
-    let Some(p) = player_cmds::now_playing().filter(|p| p.live && !p.through_service) else {
+    let Some(p) = controller::now_playing().filter(|p| p.live && !p.through_service) else {
         return;
     };
     let Some(rec) = list
@@ -77,7 +76,6 @@ pub fn noticed(app: &AppHandle, list: &[RecordingDto]) {
     if !first {
         return;
     }
-    let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let Ok(client) = Client::local() else { return };
         let facts = Facts {
@@ -95,7 +93,7 @@ pub fn noticed(app: &AppHandle, list: &[RecordingDto]) {
         let (from, _) = window(rec.start, rec.stop, rec.pad_before, rec.pad_after);
         let until = rec.parts.iter().find(|part| part.bytes > 0).map(|part| part.started);
         let kept = keep_buffer(p, &feeds, from, until).await;
-        if let Err(e) = player_cmds::move_to_service(&app, &client, p.stream_id).await {
+        if let Err(e) = controller::move_to_service(&client, p.stream_id).await {
             tracing::warn!("recording {}: {e}", rec.id);
         }
         if let Some(k) = kept {
@@ -107,7 +105,7 @@ pub fn noticed(app: &AppHandle, list: &[RecordingDto]) {
 /// Whether the account has a connection beyond the player's, asked afresh.
 async fn room() -> bool {
     let declared = crate::catalog::settings::load_or_default().simultaneous_streams;
-    let limit = match player_cmds::source() {
+    let limit = match controller::source() {
         Ok(src) => connections::look(src, declared).await.limit(),
         Err(_) => connections::Limit::Unknown,
     };
@@ -123,10 +121,10 @@ async fn room() -> bool {
 /// scheduled first, it could connect for itself where the service cannot
 /// count the player's connection (a playlist's "Simultaneous streams"), and
 /// the provider would end one of the two.
-pub async fn record(app: &AppHandle, req: ScheduleRequest) -> Result<RecordingDto, String> {
+pub async fn record(req: ScheduleRequest) -> Result<RecordingDto, String> {
     let client = Client::local().map_err(|e| format!("{e:#}"))?;
     let t = now();
-    let here = player_cmds::now_playing().filter(|p| p.stream_id == req.stream_id && p.live);
+    let here = controller::now_playing().filter(|p| p.stream_id == req.stream_id && p.live);
     let direct = here.is_some_and(|p| !p.through_service);
     // When the recording starts, its padding included: the service's
     // setting unless the request says.
@@ -157,7 +155,7 @@ pub async fn record(app: &AppHandle, req: ScheduleRequest) -> Result<RecordingDt
         _ => None,
     };
     let moved = if plan == Plan::Handover {
-        player_cmds::move_to_service(app, &client, req.stream_id).await
+        controller::move_to_service(&client, req.stream_id).await
     } else {
         Ok(())
     };

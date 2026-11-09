@@ -179,7 +179,7 @@ pub struct PlayerStateDto {
     /// held still, while the server's connect burst arrives, so that the
     /// picture starts moving at live rather than twenty seconds in the past
     /// and then jumping. The state stays `Opening` meanwhile; nothing is
-    /// playing yet. See `ipc::live_start::Join`.
+    /// playing yet. See `player::live_start::Join`.
     pub joining_live: bool,
     /// Why a stream that stopped by itself stopped, when the state is
     /// `Failed` because of it: taken over by another device, refused, the
@@ -487,7 +487,7 @@ impl Default for SettingsDto {
 
 /// What a live channel does about the connect burst a server opens it
 /// with — the last twenty or thirty seconds it holds, which mpv plays from
-/// the oldest. See `ipc::live_start`.
+/// the oldest. See `player::live_start`.
 ///
 /// Read from any string, an unknown one being the default: a choice a newer
 /// build adds must not make this one throw the whole settings blob away.

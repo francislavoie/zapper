@@ -167,7 +167,7 @@ impl Player {
             tracing::warn!("could not observe the track list: {e}");
         }
         // The subtitle on screen with its ASS tags: where a closed caption
-        // sits on its grid (`ipc::captions`). Not fatal: captions are then
+        // sits on its grid (`player::captions`). Not fatal: captions are then
         // drawn at the bottom, centred.
         if let Err(e) = mpv.observe_property("sub-text/ass", libmpv2::Format::String, 1) {
             tracing::warn!("could not observe the subtitle text: {e}");
@@ -481,7 +481,7 @@ impl PlayerBackend for Player {
     }
 
     /// What the channel list remembers about a channel, read once a live
-    /// stream has been playing for a few seconds (see `ipc::player_cmds`).
+    /// stream has been playing for a few seconds (see `player::controller`).
     ///
     /// Interlacing depends on the deinterlace mode, because
     /// `video-frame-info` describes the frame as shown, after any

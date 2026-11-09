@@ -20,9 +20,9 @@ fn words(e: anyhow::Error) -> String {
 }
 
 #[tauri::command]
-pub async fn recordings(app: tauri::AppHandle) -> Result<Vec<RecordingDto>, String> {
+pub async fn recordings() -> Result<Vec<RecordingDto>, String> {
     let list = client()?.list().await.map_err(words)?;
-    crate::ipc::handover::noticed(&app, &list);
+    crate::ipc::handover::noticed(&list);
     Ok(list)
 }
 
@@ -30,11 +30,8 @@ pub async fn recordings(app: tauri::AppHandle) -> Result<Vec<RecordingDto>, Stri
 /// what the player has of it, and on an account with no connection to spare
 /// the player moves onto the service's connection (`ipc::handover`).
 #[tauri::command]
-pub async fn record_programme(
-    app: tauri::AppHandle,
-    request: ScheduleRequest,
-) -> Result<RecordingDto, String> {
-    crate::ipc::handover::record(&app, request).await
+pub async fn record_programme(request: ScheduleRequest) -> Result<RecordingDto, String> {
+    crate::ipc::handover::record(request).await
 }
 
 /// The conflicts recording a programme would bring. A service too old to

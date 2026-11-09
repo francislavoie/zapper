@@ -227,10 +227,12 @@ pub fn run() {
             // a fresh one.
             // Settings must take effect at launch, not only when changed.
             // Infallible and non-blocking; already on the main thread.
-            ipc::player_cmds::apply_saved_settings(app.handle());
+            player::controller::apply_saved_settings();
 
             // The bus's spawns are plain tokio ones; run them on Tauri's runtime.
             let _runtime = tauri::async_runtime::handle().inner().enter();
+            // The player's own tasks run there too, and its heartbeat starts.
+            player::start(tauri::async_runtime::handle().inner());
             // The one place the bus meets the webview: every event goes out
             // under the name it always had.
             {
@@ -266,7 +268,7 @@ pub fn run() {
             // The recording service on this computer shares the account file
             // and the catalogue, and a browser signed in to it can change
             // either: the window hears of both from here.
-            catalog::sync_engine::spawn_watch_elsewhere(ipc::player_cmds::forget_source);
+            catalog::sync_engine::spawn_watch_elsewhere(player::controller::forget_source);
 
             // Before the frontend can ask: its first `update_status` needs
             // the state to exist. The first check itself waits a minute.
@@ -371,7 +373,7 @@ mod quit {
         });
         // Before playback is stopped: where a movie or an episode got to,
         // as the stop command would have written it.
-        crate::ipc::player_cmds::save_progress_now();
+        crate::player::controller::save_progress_now();
         let app = app.clone();
         crate::surface::shut_down(move || {
             STATE.store(STOPPED, Ordering::Release);
@@ -515,11 +517,10 @@ fn dev_hooks(app: &tauri::AppHandle) {
 
     if let Ok(id) = std::env::var("ZAPPER_AUTOPLAY") {
         if let Ok(stream_id) = id.parse::<i64>() {
-            let handle = app.clone();
             tauri::async_runtime::spawn(async move {
                 // After the frontend has mounted and asked for its first page.
                 tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-                if let Err(e) = ipc::player_cmds::play(handle, stream_id).await {
+                if let Err(e) = player::api::play(stream_id).await {
                     tracing::error!("autoplay failed: {e}");
                 }
             });

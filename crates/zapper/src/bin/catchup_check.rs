@@ -72,10 +72,11 @@ fn main() {
                 eprintln!("FAIL: the run did not finish within 180s");
                 std::process::exit(1);
             });
-            let handle = app.handle().clone();
+            // The player's heartbeat, as the app starts it.
+            zapper_lib::player::start(tauri::async_runtime::handle().inner());
             tauri::async_runtime::spawn(async move {
-                let verdict = run(&handle, &base).await;
-                let _ = zapper_lib::ipc::player_cmds::stop(handle.clone()).await;
+                let verdict = run(&base).await;
+                let _ = zapper_lib::player::api::stop().await;
                 tokio::time::sleep(std::time::Duration::from_millis(400)).await;
                 match verdict {
                     Ok(msg) => {
@@ -128,10 +129,10 @@ async fn seen(base: &str) -> Result<Vec<Seen>, String> {
 }
 
 #[cfg(target_os = "linux")]
-async fn run(app: &tauri::AppHandle, base: &str) -> Result<String, String> {
+async fn run(base: &str) -> Result<String, String> {
     use std::time::Duration;
     use zapper_lib::catalog::{db, origin, panel_clock};
-    use zapper_lib::ipc::player_cmds as cmds;
+    use zapper_lib::player::api as cmds;
     use zapper_lib::ipc::types::PlaybackState;
     use zapper_lib::xtream::{Credentials, XtreamClient};
 
@@ -142,7 +143,7 @@ async fn run(app: &tauri::AppHandle, base: &str) -> Result<String, String> {
         password: "check".into(),
     };
     zapper_lib::catalog::credentials::save(&creds).map_err(|e| format!("saving the account: {e:#}"))?;
-    cmds::forget_source();
+    zapper_lib::player::controller::forget_source();
     let from = origin::of_xtream(&creds);
     let client = XtreamClient::new(creds.clone()).map_err(|e| e.to_string())?;
     // What a sync pass does before its phases.
@@ -174,7 +175,7 @@ async fn run(app: &tauri::AppHandle, base: &str) -> Result<String, String> {
     // to live.
     let now = zapper_lib::catalog::activity::now_secs();
     let five_ago = (now - 300) / 60 * 60;
-    cmds::play_catchup(app.clone(), STREAM, five_ago, 6).await?;
+    cmds::play_catchup(STREAM, five_ago, 6).await?;
     let opened = await_state(Duration::from_secs(25), |s| s.state != PlaybackState::Opening).await;
     if opened.state != PlaybackState::Playing {
         return Err(format!("the catch-up ended in {:?}: {:?} {:?}", opened.state, opened.ending, opened.error));
@@ -203,13 +204,13 @@ async fn run(app: &tauri::AppHandle, base: &str) -> Result<String, String> {
     if playing.at_live_edge {
         return Err("a catch-up programme reads as live, so Live is not offered".into());
     }
-    if cmds::now_playing().is_some_and(|p| p.live) {
+    if zapper_lib::player::controller::now_playing().is_some_and(|p| p.live) {
         return Err("the catch-up programme is taken for the live channel".into());
     }
 
     // --- Live -------------------------------------------------------------
     let before = seen(base).await?.len();
-    cmds::seek_live(app.clone()).await?;
+    cmds::seek_live().await?;
     let live = await_state(Duration::from_secs(25), |s| {
         s.state == PlaybackState::Playing && s.at_live_edge
     })
@@ -239,14 +240,14 @@ async fn run(app: &tauri::AppHandle, base: &str) -> Result<String, String> {
     if live.state != PlaybackState::Playing || !live.at_live_edge {
         return Err(format!("after Live: {:?}, at the live edge: {}", live.state, live.at_live_edge));
     }
-    if !cmds::now_playing().is_some_and(|p| p.live && p.stream_id == STREAM) {
+    if !zapper_lib::player::controller::now_playing().is_some_and(|p| p.live && p.stream_id == STREAM) {
         return Err("after Live, the player does not hold the channel live".into());
     }
 
     // --- the archive's far edge -------------------------------------------
     let now = zapper_lib::catalog::activity::now_secs();
     let edge = (now - ARCHIVE_DAYS * 86_400) / 60 * 60;
-    cmds::play_catchup(app.clone(), STREAM, edge, 60).await?;
+    cmds::play_catchup(STREAM, edge, 60).await?;
     let at_edge = await_state(Duration::from_secs(25), |s| s.state != PlaybackState::Opening).await;
     let asked = seen(base)
         .await?
@@ -270,7 +271,7 @@ async fn run(app: &tauri::AppHandle, base: &str) -> Result<String, String> {
         Ok(())
     })
     .map_err(|e| format!("{e:#}"))?;
-    cmds::play_catchup(app.clone(), STREAM, edge - 86_400, 60).await?;
+    cmds::play_catchup(STREAM, edge - 86_400, 60).await?;
     let refused = await_state(Duration::from_secs(25), |s| s.state == PlaybackState::Failed).await;
     println!("[too-old] state={:?} ending={:?} at_live_edge={}", refused.state, refused.ending, refused.at_live_edge);
     let kind = refused.ending.map(|e| e.kind);
@@ -282,7 +283,7 @@ async fn run(app: &tauri::AppHandle, base: &str) -> Result<String, String> {
     }
     // And Live leaves that too.
     let before = seen(base).await?.len();
-    cmds::seek_live(app.clone()).await?;
+    cmds::seek_live().await?;
     let back = await_state(Duration::from_secs(25), |s| s.state == PlaybackState::Playing && s.at_live_edge).await;
     if back.state != PlaybackState::Playing || !back.at_live_edge {
         return Err(format!(
@@ -314,7 +315,7 @@ async fn await_state(
 ) -> zapper_lib::ipc::types::PlayerStateDto {
     let deadline = std::time::Instant::now() + limit;
     loop {
-        let s = zapper_lib::ipc::player_cmds::player_state()
+        let s = zapper_lib::player::api::player_state()
             .await
             .unwrap_or_default();
         if done(&s) || std::time::Instant::now() >= deadline {
