@@ -1,6 +1,6 @@
 //! The headless host (`surface::host`) against a real stream: mpv in a
 //! window of its own, driven through the installed backend directly, with no
-//! controller and no Tauri.
+//! controller and no webview.
 //!
 //! Opens the host muted, loads a film from the fixture server and waits for
 //! it to play in mpv's own window (`gpu-next`, configured); waits for live
@@ -24,7 +24,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use zapper_lib::player::{self, PlayerBackend, Signal};
-use zapper_lib::surface::{host, mpv, trickplay};
+use zapper_lib::player::trickplay;
+use zapper_lib::surface::{host, mpv};
 
 /// Exits without unwinding: mpv's threads, its window among them, are still
 /// running, and nothing in a one-shot harness is worth cleaning up.

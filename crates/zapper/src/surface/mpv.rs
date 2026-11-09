@@ -15,7 +15,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock, PoisonError};
 
-use crate::player::{BackendCaps, PlayerBackend};
+use crate::player::{BackendCaps, PlayerBackend, NO_RECONNECT};
 pub use crate::player::{Health, Probe, Signal, Stats};
 
 /// The process's mpv. Leaked deliberately: the player outlives everything
@@ -27,10 +27,6 @@ static MPV: OnceLock<&'static Mpv> = OnceLock::new();
 /// for the same handle.
 static PUMPING: Mutex<()> = Mutex::new(());
 
-/// The player's FFmpeg options against reconnecting by itself
-/// ([`crate::player::NO_RECONNECT`]), here too for the harnesses that run
-/// an mpv of their own.
-pub use crate::player::NO_RECONNECT;
 
 /// Asks mpv for its warnings and errors as events.
 ///

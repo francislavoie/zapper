@@ -25,7 +25,8 @@ use std::time::{Duration, Instant};
 
 use zapper_lib::connections::{backoff, jitter, reconnect_verdict, xtream_status, Limit, Verdict, SECOND_LOOK};
 use zapper_lib::ipc::ending::{classify, worth_reconnecting, Clues, Ending, Flow, How};
-use zapper_lib::surface::mpv::{signal_of, Signal, DEMUXER_MAX_BYTES, NO_RECONNECT};
+use zapper_lib::player::NO_RECONNECT;
+use zapper_lib::surface::mpv::{signal_of, Signal, DEMUXER_MAX_BYTES};
 
 /// How long one open may take to end before the scenario fails.
 const DEADLINE: Duration = Duration::from_secs(45);

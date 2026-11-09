@@ -8,7 +8,3 @@
 
 pub mod host;
 pub mod mpv;
-
-// Where the seek bar's previews and their encoder lived before they moved
-// next to the controller; the harnesses still reach them here.
-pub use crate::player::{png, title_thumbs, trickplay};

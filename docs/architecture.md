@@ -22,8 +22,11 @@ Its features, all off by default, mark the seams where it will be split into thr
 Parts of the core that used to call a window toolkit's `emit` send an `Event` (sync status, player
 state, player options, channel quality, update) through one `EventBus` (`events.rs`), a tokio
 broadcast channel. Anything that wants them subscribes: the server turns them into its
-server-sent events, a future app turns them into repaints. A subscriber that falls behind does not
-stall the sender or lose the end state: `recv_latest` skips to the newest event.
+server-sent events, a future app turns them into repaints. A subscriber that falls behind never
+stalls the sender. A forwarder that passes every kind of event on (as the Tauri app's webview
+forwarder did) uses plain `recv` and carries on past a lag, so it loses only what the channel had
+already dropped; a consumer that only wants the newest state uses `recv_latest`, which skips to
+the newest event still held.
 
 ## The player backend
 
