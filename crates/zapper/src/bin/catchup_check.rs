@@ -38,6 +38,7 @@ fn finish(code: i32) -> ! {
 #[cfg(target_os = "linux")]
 fn main() {
     use tauri::Manager;
+    use zapper_lib::player::PlayerBackend;
 
     tracing_subscriber::fmt::init();
     // Never the real account: this run saves one of its own.

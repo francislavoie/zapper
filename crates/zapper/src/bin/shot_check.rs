@@ -27,6 +27,7 @@ fn main() {
 fn main() {
     use gtk::prelude::GLAreaExt;
     use tauri::Manager;
+    use zapper_lib::player::PlayerBackend;
 
     tracing_subscriber::fmt::init();
 

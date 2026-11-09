@@ -176,7 +176,7 @@ fn main() {
             // Kill the audio path entirely before anything is loaded. Muting
             // or zeroing the volume still opens the device and still leaks
             // sound on any path that resets it; `ao=null` cannot.
-            player.set_property("ao", "null")?;
+            zapper_lib::player::PlayerBackend::set_property(&*player, "ao", "null")?;
 
             // Nothing drives the GLArea until mpv's update callback fires, and
             // if mpv never decodes, that never happens. Ticking keeps the
@@ -1171,7 +1171,7 @@ async fn external_subtitle(
 ) -> Result<(Option<String>, bool, Option<String>), String> {
     let (tx, rx) = std::sync::mpsc::channel();
     app.run_on_main_thread(move || {
-        let r = zapper_lib::surface::mpv::with_player(|p| {
+        let r = zapper_lib::player::backend().map(|p| {
             let count = p.get_i64("track-list/count").unwrap_or(0);
             let external = (0..count).find_map(|i| {
                 let key = |k: &str| format!("track-list/{i}/{k}");
@@ -1422,7 +1422,7 @@ async fn run_captions(app: &tauri::AppHandle) -> Result<String, String> {
     async fn read(app: &tauri::AppHandle) -> Option<[String; 9]> {
         let (tx, rx) = std::sync::mpsc::channel();
         app.run_on_main_thread(move || {
-            let v = zapper_lib::surface::mpv::with_player(|p| KEYS.map(|k| p.get_string(k).unwrap_or_default()));
+            let v = zapper_lib::player::backend().map(|p| KEYS.map(|k| p.get_string(k).unwrap_or_default()));
             let _ = tx.send(v);
         })
         .ok()?;
@@ -1830,8 +1830,9 @@ fn active_streams(port: u16) -> Option<i64> {
 async fn note(app: &tauri::AppHandle, stage: &str) {
     let (tx, rx) = std::sync::mpsc::channel();
     let posted = app.run_on_main_thread(move || {
-        let d = zapper_lib::surface::mpv::with_player(|p| p.diagnostics())
-            .unwrap_or_else(|| "no player on the main thread".to_owned());
+        let d = zapper_lib::surface::mpv::created()
+            .map(|p| p.diagnostics())
+            .unwrap_or_else(|| "no player in this process".to_owned());
         let _ = tx.send(d);
     });
     if posted.is_err() {

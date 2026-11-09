@@ -185,7 +185,7 @@ pub(super) fn video_ready() -> bool {
 }
 
 pub(super) fn request_frame() {
-    render::kick();
+    render::kick_from_anywhere();
 }
 
 /// Reconstructs the window into `path` after `after`, prints where, and

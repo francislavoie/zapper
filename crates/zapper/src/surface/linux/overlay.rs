@@ -197,8 +197,8 @@ pub fn install(window: &tauri::WebviewWindow) -> Result<Overlay> {
                 // that the ordinary frame costs one comparison and does not
                 // read mpv's clock sixty times a second.
                 if crate::surface::trickplay::is_due() {
-                    if let Some(Some(at)) =
-                        crate::surface::mpv::with_player(|p| p.get_f64("playback-time"))
+                    if let Some(at) =
+                        crate::player::backend().and_then(|p| p.get_f64("playback-time"))
                     {
                         let scale = area.scale_factor();
                         unsafe {

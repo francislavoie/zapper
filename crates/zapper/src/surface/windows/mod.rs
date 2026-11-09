@@ -113,7 +113,7 @@ pub(super) fn install(window: &tauri::WebviewWindow) -> anyhow::Result<()> {
     // HWNDs are pointer-sized integers to mpv. The handle is the window's for
     // as long as it exists, which is the life of the process.
     let wid = child.0 as i64;
-    mpv::Player::new(|init| {
+    let player = mpv::Player::new(|init| {
         init.set_property("vo", "gpu-next".to_owned())?;
         init.set_property("gpu-api", "d3d11".to_owned())?;
         init.set_property("wid", wid)?;
@@ -126,6 +126,7 @@ pub(super) fn install(window: &tauri::WebviewWindow) -> anyhow::Result<()> {
         init.set_property("cursor-autohide", "no".to_owned())?;
         Ok(())
     })?;
+    crate::player::install(std::sync::Arc::new(player));
 
     repeat_on_main(THUMB_POLL, || {
         thumbnail_tick();
@@ -335,7 +336,7 @@ static IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 fn thumbnail_tick() {
     // Nothing loaded, nothing to photograph. Read before the clock, so that
     // an idle player does not use up the due time.
-    let Some(Some(at)) = mpv::with_player(|p| p.get_f64("playback-time")) else {
+    let Some(at) = crate::player::backend().and_then(|p| p.get_f64("playback-time")) else {
         return;
     };
     if !trickplay::is_due() || IN_FLIGHT.swap(true, Ordering::AcqRel) {
