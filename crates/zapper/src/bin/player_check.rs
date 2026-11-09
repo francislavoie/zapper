@@ -1134,11 +1134,55 @@ fn seed_film(tmdb: i64) -> Result<(), String> {
         .map_err(|e| format!("could not list the film in the scratch catalogue: {e}"))
 }
 
+/// The online services as a front end asks them: `online::subtitles`, with
+/// every error scrubbed, and a kept file added to the title playing through
+/// `player::api`.
+#[cfg(target_os = "linux")]
+mod online {
+    use zapper_lib::catalog::sync_engine::scrub;
+    use zapper_lib::catalog::vod_store::VodItem;
+    use zapper_lib::ipc::types::{
+        OnDemandKind, OnlineServicesDto, SubtitleDownloadDto, SubtitleSearchDto,
+    };
+    use zapper_lib::online::subtitles;
+
+    fn item(kind: OnDemandKind, id: i64) -> VodItem {
+        match kind {
+            OnDemandKind::Movie => VodItem::movie(id),
+            OnDemandKind::Episode => VodItem::episode(id),
+        }
+    }
+
+    pub async fn find_subtitles(
+        kind: OnDemandKind,
+        id: i64,
+        languages: Vec<String>,
+    ) -> Result<SubtitleSearchDto, String> {
+        subtitles::search(item(kind, id), languages).await.map_err(|e| scrub(&e))
+    }
+
+    pub async fn download_subtitle(
+        kind: OnDemandKind,
+        id: i64,
+        file_id: i64,
+    ) -> Result<SubtitleDownloadDto, String> {
+        subtitles::download(item(kind, id), file_id).await.map_err(|e| scrub(&e))
+    }
+
+    pub async fn opensubtitles_sign_in(
+        username: String,
+        password: String,
+    ) -> Result<OnlineServicesDto, String> {
+        subtitles::sign_in(username, password).await.map_err(|e| scrub(&e))
+    }
+
+    pub use zapper_lib::player::api::add_subtitle_file;
+}
+
 /// The `--find-subtitles --search-only` run: a search alone, which never
 /// signs in or downloads, whichever API it is pointed at.
 #[cfg(target_os = "linux")]
 async fn run_subtitle_search(tmdb: i64) -> Result<String, String> {
-    use zapper_lib::ipc::online_cmds as online;
     use zapper_lib::ipc::types::{OnDemandKind, SubtitleSearchDto};
 
     seed_film(tmdb)?;
@@ -1183,7 +1227,6 @@ async fn external_subtitle() -> Result<(Option<String>, bool, Option<String>), S
 #[cfg(target_os = "linux")]
 async fn run_find_subtitles() -> Result<String, String> {
     use std::time::{Duration, Instant};
-    use zapper_lib::ipc::online_cmds as online;
     use zapper_lib::player::api as cmds;
     use zapper_lib::ipc::types::{
         OnDemandKind, PlaybackState, PlayerStateDto, SubtitleDownloadDto, SubtitleSearchDto,
@@ -1909,7 +1952,8 @@ async fn run_trickplay_vod() -> Result<String, String> {
     use std::time::{Duration, Instant};
     use zapper_lib::player::api as cmds;
     use zapper_lib::ipc::types::PlaybackState;
-    use zapper_lib::surface::{mpv as zmpv, title_thumbs, trickplay};
+    use zapper_lib::player::{title_thumbs, trickplay};
+    use zapper_lib::surface::mpv as zmpv;
 
     let mpv = zmpv::handle().ok_or("no mpv")?;
     let ranges = || -> Vec<(f64, f64)> {

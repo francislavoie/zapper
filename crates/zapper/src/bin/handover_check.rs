@@ -46,7 +46,8 @@ use zapper_lib::recording::api::{RecordingDto, RecordingState, ScheduleRequest};
 use zapper_lib::recording::client::{Client, PlayerWatch};
 use zapper_lib::recording::handover::{keep, plan, Facts, Plan};
 use zapper_lib::recording::{now, now_ms};
-use zapper_lib::surface::mpv::{cache_span, dump_cache, DEMUXER_MAX_BYTES, NO_RECONNECT};
+use zapper_lib::player::NO_RECONNECT;
+use zapper_lib::surface::mpv::{cache_span, dump_cache, DEMUXER_MAX_BYTES};
 
 /// Seconds the player plays on its own before Record.
 const WATCH_FIRST: f64 = 14.0;

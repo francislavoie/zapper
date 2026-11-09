@@ -26,7 +26,7 @@ use std::time::{Duration, Instant};
 
 use zapper_lib::player::live_start::{Join, Settle};
 use zapper_lib::player::LIVE_CUSHION;
-use zapper_lib::surface::mpv::NO_RECONNECT;
+use zapper_lib::player::NO_RECONNECT;
 
 /// The app's heartbeat, so decisions land when the app's would.
 const TICK: Duration = Duration::from_millis(250);
