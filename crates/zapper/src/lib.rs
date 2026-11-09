@@ -237,7 +237,16 @@ pub fn run() {
                 let app = app.handle().clone();
                 let mut rx = events::bus().subscribe();
                 tokio::spawn(async move {
-                    while let Some(e) = events::recv_latest(&mut rx).await {
+                    use tokio::sync::broadcast::error::RecvError;
+                    loop {
+                        let e = match rx.recv().await {
+                            Ok(e) => e,
+                            Err(RecvError::Lagged(n)) => {
+                                tracing::debug!("the webview forwarder missed {n} events");
+                                continue;
+                            }
+                            Err(RecvError::Closed) => break,
+                        };
                         let sent = match &e {
                             events::Event::SyncStatus(p) => app.emit(e.name(), p),
                             events::Event::PlayerState(p) => app.emit(e.name(), p),

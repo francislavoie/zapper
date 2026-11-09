@@ -40,7 +40,9 @@ pub struct EventBus {
 
 impl EventBus {
     pub fn new(capacity: usize) -> Self {
-        Self { tx: broadcast::channel(capacity).0 }
+        Self {
+            tx: broadcast::channel(capacity).0,
+        }
     }
 
     /// Sends to every current subscriber; nobody listening is fine.
@@ -61,7 +63,8 @@ pub fn bus() -> &'static EventBus {
 
 /// The next event, or on a lagged receiver the newest one still held: a
 /// listener that fell behind wants where things are now, not every step
-/// it missed. `None` once the bus is gone.
+/// it missed. Only for consumers that want the newest state: it drops the
+/// events in between. `None` once the bus is gone.
 pub async fn recv_latest(rx: &mut broadcast::Receiver<Event>) -> Option<Event> {
     loop {
         match rx.recv().await {
@@ -90,7 +93,10 @@ mod tests {
     use crate::ipc::types::{SyncPhase, UpdateStateDto};
 
     fn state(pos: f64) -> Event {
-        Event::PlayerState(PlayerStateDto { buffered_back: pos, ..Default::default() })
+        Event::PlayerState(PlayerStateDto {
+            buffered_back: pos,
+            ..Default::default()
+        })
     }
 
     fn pos(e: &Event) -> f64 {
@@ -127,24 +133,36 @@ mod tests {
     #[test]
     fn event_names_match_today() {
         let cases = [
-            (Event::SyncStatus(SyncStatusDto {
+            (
+                Event::SyncStatus(SyncStatusDto {
                     phase: SyncPhase::Idle,
                     message: String::new(),
                     channels_total: 0,
                     last_synced: None,
-                }), events::SYNC_STATUS),
+                }),
+                events::SYNC_STATUS,
+            ),
             (state(0.0), events::PLAYER_STATE),
-            (Event::PlayerOptions(PlayerOptionsDto::default()), events::PLAYER_OPTIONS),
             (
-                Event::ChannelQuality(ChannelQualityDto { stream_id: 1, quality: None }),
+                Event::PlayerOptions(PlayerOptionsDto::default()),
+                events::PLAYER_OPTIONS,
+            ),
+            (
+                Event::ChannelQuality(ChannelQualityDto {
+                    stream_id: 1,
+                    quality: None,
+                }),
                 events::CHANNEL_QUALITY,
             ),
-            (Event::Update(UpdateStatusDto {
-                current: String::new(),
-                kind: String::new(),
-                last_checked: None,
-                state: UpdateStateDto::Idle,
-            }), events::UPDATE),
+            (
+                Event::Update(UpdateStatusDto {
+                    current: String::new(),
+                    kind: String::new(),
+                    last_checked: None,
+                    state: UpdateStateDto::Idle,
+                }),
+                events::UPDATE,
+            ),
         ];
         for (e, name) in cases {
             assert_eq!(e.name(), name);
