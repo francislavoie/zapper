@@ -595,8 +595,6 @@ pub mod events {
     pub const UPDATE: &str = "zapper://update";
     /// A [`super::MediaKey`] pressed on the desktop's media controls.
     pub const MEDIA_KEY: &str = "zapper://media-key";
-    /// A [`super::MenuCommand`] chosen in the macOS app menu.
-    pub const MENU: &str = "zapper://menu";
     /// A [`super::ChannelQualityDto`]: what playing a channel just added to
     /// its record.
     pub const CHANNEL_QUALITY: &str = "zapper://channel-quality";
@@ -629,15 +627,6 @@ pub enum MediaPlayback {
     Playing,
     Paused,
     Stopped,
-}
-
-/// An item chosen in the macOS app menu that the interface carries out.
-/// Emitted as `events::MENU`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum MenuCommand {
-    Settings,
-    About,
 }
 
 /// A media key, or its button on the desktop's controls. Emitted as
