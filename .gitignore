@@ -23,3 +23,6 @@ dist-app/
 # it, and `just build-libmpv`'s build trees: never committed. See docs/licensing.md.
 /src-tauri/lib/
 /target-libmpv/
+
+# Python bytecode, written when the stand-in servers under tools/ are run or checked.
+__pycache__/
