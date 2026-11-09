@@ -1,5 +1,5 @@
 # The checks that need no window, no account and no network beyond the package mirrors, on
-# pushes to main and on pull requests: Rust's unit tests and clippy, the frontend's type check
+# pushes to main and main-tauri (the Tauri app's line) and on pull requests: Rust's unit tests and clippy, the frontend's type check
 # and build, its node checks, and the release scripts' tests. tools/check_all.sh runs the same
 # locally, plus the harnesses that need a real display and mpv. Releases are release.yml.
 # Actions are pinned by commit, as in release.yml.
@@ -7,7 +7,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, main-tauri]
   pull_request:
 
 permissions: {}
@@ -65,7 +65,7 @@ jobs:
         with:
           workspaces: src-tauri
           key: ci
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/main-tauri' }}
 
       # package.json wants Node 26 (.nvmrc).
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -126,7 +126,7 @@ jobs:
         with:
           workspaces: src-tauri
           key: server
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/main-tauri' }}
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
